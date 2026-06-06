@@ -83,8 +83,9 @@ jobs:
   publish-npm:
     needs: test
     runs-on: ubuntu-latest
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,12 +95,8 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
       - run: npm install --no-audit --no-fund
-      - name: Publish to npm
-        if: env.NODE_AUTH_TOKEN != ''
+      - name: Publish to npm with trusted publishing
         run: npm publish --access public
-      - name: Skip npm publish without token
-        if: env.NODE_AUTH_TOKEN == ''
-        run: echo "NPM_TOKEN is not configured; skipping npm publish."
 
   publish-github:
     needs: test
