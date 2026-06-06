@@ -19,6 +19,54 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  github-release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - name: Build release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          npm pack --pack-destination release
+          (cd release && sha256sum *.tgz > SHA256SUMS)
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+## copilot-relay ${tag}
+
+Automated release for ${tag}.
+
+### Assets
+- npm package tarball
+- SHA256 checksums
+
+### Validation
+- TypeScript typecheck
+- Unit tests
+- Integration tests with mocked Copilot upstream
+- Build
+EOF
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/*.tgz release/SHA256SUMS --clobber
+          else
+            gh release create "$tag" release/*.tgz release/SHA256SUMS \
+              --title "$tag" \
+              --notes-file "$notes_file"
+          fi
+
   publish-npm:
     needs: test
     runs-on: ubuntu-latest
