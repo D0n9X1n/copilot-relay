@@ -1,0 +1,22 @@
+name: Question
+description: Ask a usage or configuration question.
+title: "[Question]: "
+labels: ["question", "needs-triage"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to understand?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Share relevant config, command, or behavior. Do not include tokens.
+  - type: input
+    id: version
+    attributes:
+      label: copilot-relay version
+      placeholder: "0.0.1"

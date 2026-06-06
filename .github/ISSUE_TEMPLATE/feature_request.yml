@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement for copilot-relay.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this solve?
+      placeholder: I want copilot-relay to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the change you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds or alternatives have you tried?
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This keeps copilot-relay focused on Claude Code.
+          required: true
+        - label: This does not require public OpenAI-compatible endpoints.
+          required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
