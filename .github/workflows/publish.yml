@@ -105,10 +105,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
+      - name: Use npm 11 for trusted publishing
+        run: npm install --global npm@11
       - run: npm install --no-audit --no-fund
       - name: Publish to npm with trusted publishing
-        run: npm publish --access public
+        shell: bash
+        run: |
+          unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG
+          npm publish --access public
 
   publish-github:
     needs: test
