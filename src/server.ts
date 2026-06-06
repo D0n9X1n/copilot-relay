@@ -7,6 +7,17 @@ import type { ProxyConfig, ProxyEnv } from "~/lib/config"
 import { log } from "~/lib/log"
 import { claudeRoutes } from "~/routes/claude"
 
+const formatStatusLog = (
+  method: string,
+  path: string,
+  status: number,
+  ms: number,
+  errorMessage: string | undefined,
+): string => {
+  const base = `${method} ${path} -> ${status} ${ms}ms`
+  return status >= 400 && errorMessage ? `${base} error=${JSON.stringify(errorMessage)}` : base
+}
+
 export const createServer = (config: ProxyConfig) => {
   const app = new Hono<ProxyEnv>()
 
@@ -18,12 +29,20 @@ export const createServer = (config: ProxyConfig) => {
       await next()
     } finally {
       const ms = Math.round(performance.now() - started)
-      log.info(`${c.req.method} ${c.req.path} -> ${c.res.status} ${ms}ms`)
+      // Emit exactly one info-level request summary even when downstream route
+      // handling throws; deeper diagnostics belong to debug/error logs.
+      log.info(formatStatusLog(
+        c.req.method,
+        c.req.path,
+        c.res.status,
+        ms,
+        c.get("requestErrorMessage"),
+      ))
     }
   })
 
   app.onError((error, c) => {
-    log.error(`${c.req.method} ${c.req.path} failed`, error)
+    c.set("requestErrorMessage", error.message)
     return c.json({ error: { message: "Internal server error" } }, 500)
   })
 

@@ -7,11 +7,13 @@ export class ProxyNotImplementedError extends Error {
 }
 
 export class HTTPError extends Error {
+  detail?: string
   response: Response
 
-  constructor(message: string, response: Response) {
+  constructor(message: string, response: Response, detail?: string) {
     super(message)
     this.name = "HTTPError"
+    this.detail = detail
     this.response = response
   }
 }

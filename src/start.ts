@@ -30,7 +30,7 @@ export const start = defineCommand({
       // not rebind the already-listening socket when host or port changes.
       setLogLevel(nextConfig.logLevel)
       void cleanupLogs(nextConfig.logRetentionDays)
-      runtimeState.debug = nextConfig.logLevel === "debug" || nextConfig.logLevel === "trace"
+      runtimeState.debug = nextConfig.logLevel === "debug"
       runtimeState.thinkEffort = nextConfig.thinkEffort
       config.copilotBaseUrl = nextConfig.copilotBaseUrl
       config.host = nextConfig.host
@@ -42,9 +42,6 @@ export const start = defineCommand({
     }
     applyRuntimeConfig(appConfig)
 
-    if (runtimeState.debug) {
-      log.info("Debug diagnostics enabled; upstream errors include request summaries")
-    }
     log.info(`Log level: ${appConfig.logLevel}`)
     log.info(`Think effort: ${appConfig.thinkEffort}`)
     log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
@@ -64,13 +61,13 @@ export const start = defineCommand({
     if (authSession.githubLogin) {
       log.info(`GitHub user: ${authSession.githubLogin}`)
     } else {
-      log.warn("GitHub user: unavailable")
+      log.error("GitHub user: unavailable")
     }
 
-    log.success(
+    log.info(
       `copilot-relay listening on http://${config.host}:${config.port}`,
     )
-    log.debug(`copilot base url: ${config.copilotBaseUrl}`)
+    log.info(`copilot base url: ${config.copilotBaseUrl}`)
 
     const baseUrl = `http://${config.host}:${config.port}`
     if (appConfig.claudeSetup) {
@@ -80,7 +77,7 @@ export const start = defineCommand({
           configPath: claudeConfigPath,
         })
         if (claudeResult.changed) {
-          log.success(
+          log.info(
             `claude settings ${claudeResult.created ? "created" : "updated"}: ${claudeResult.configPath}`,
           )
           if (
@@ -97,7 +94,7 @@ export const start = defineCommand({
           )
         }
       } catch (error) {
-        log.warn(
+        log.error(
           `Could not update claude settings (${claudeConfigPath}):`,
           error,
         )

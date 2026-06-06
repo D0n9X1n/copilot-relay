@@ -18,15 +18,12 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 
 # Log verbosity:
-#   silent - no logs
-#   error  - startup/preflight/request failures only
-#   warn   - error logs plus recoverable warnings
-#   info   - warn logs plus startup status, preflight status, HTTP requests,
-#            and model routing summaries
-#   debug  - info logs plus Copilot upstream timings, token refresh scheduling,
-#            and upstream error request summaries
-#   trace  - debug logs plus full Claude request payloads and full upstream
-#            Copilot request payloads without redaction
+#   error - startup/preflight/request failures only
+#   info  - error logs plus startup status, preflight status, and local HTTP
+#           status codes
+#   debug - info logs plus model routing summaries, Copilot upstream timings,
+#           token refresh scheduling, and request payloads
+# Any other value is invalid and stops startup.
 logLevel: info
 
 # Number of days to keep files in ~/.copilot-relay/logs.

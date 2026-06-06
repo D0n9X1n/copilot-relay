@@ -72,14 +72,13 @@ Log levels:
 
 | Level | Logs |
 | --- | --- |
-| `silent` | Nothing |
 | `error` | Startup, preflight, and request failures |
-| `warn` | Errors plus recoverable warnings |
-| `info` | Warnings plus startup status, preflight status, HTTP requests, and model routing summaries |
-| `debug` | Info plus Copilot upstream timings, token refresh scheduling, and upstream error request summaries |
-| `trace` | Debug plus full Claude request payloads and full upstream Copilot request payloads without redaction |
+| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
 
-At `info`, every model request must log:
+Any other `logLevel` value is invalid and must fail startup.
+
+At `debug`, every model request must log:
 
 - client type
 - requested model
@@ -88,7 +87,7 @@ At `info`, every model request must log:
 - requested thinking budget
 - effective think effort
 
-At `trace`, log the full Claude request payload and full upstream request payload without redaction.
+At `error`, log upstream failures with full request and response context in the same log file.
 
 Logs are appended to `~/.copilot-relay/logs/copilot-relay.log`. Startup cleanup removes old `.log` files according to `logRetentionDays`.
 

@@ -12,15 +12,21 @@ let logRetentionDays = 3
 let nextLogCleanupCheckAt = 0
 
 const consolaLevelByName: Record<LogLevelName, number> = {
-  silent: -Infinity,
   error: 0,
-  warn: 1,
   info: 3,
   debug: 4,
-  trace: 5,
 }
 
+const fileLevelByMethod: Record<string, number> = {
+  error: consolaLevelByName.error,
+  info: consolaLevelByName.info,
+  debug: consolaLevelByName.debug,
+}
+
+let currentLogLevel = consolaLevelByName.info
+
 export const setLogLevel = (level: LogLevelName): void => {
+  currentLogLevel = consolaLevelByName[level]
   consola.level = consolaLevelByName[level]
 }
 
@@ -56,16 +62,15 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
   fn: T,
 ): T =>
   ((...args: Array<unknown>) => {
-    void writeLogFile(level, args).catch(() => undefined)
+    if ((fileLevelByMethod[level] ?? consolaLevelByName.info) <= currentLogLevel) {
+      void writeLogFile(level, args).catch(() => undefined)
+    }
     return fn(...args)
   }) as T
 
 consola.error = wrapFileLog("error", consola.error.bind(consola))
-consola.warn = wrapFileLog("warn", consola.warn.bind(consola))
 consola.info = wrapFileLog("info", consola.info.bind(consola))
-consola.success = wrapFileLog("success", consola.success.bind(consola))
 consola.debug = wrapFileLog("debug", consola.debug.bind(consola))
-consola.trace = wrapFileLog("trace", consola.trace.bind(consola))
 
 export const cleanupLogs = async (retentionDays: number): Promise<void> => {
   logRetentionDays = retentionDays

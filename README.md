@@ -52,12 +52,11 @@ thinkEffort: xhigh
 
 | Level | Logs |
 | --- | --- |
-| `silent` | Nothing |
 | `error` | Startup, preflight, and request failures |
-| `warn` | Errors plus recoverable warnings |
-| `info` | Warnings plus startup status, preflight status, HTTP requests, and model routing summaries |
-| `debug` | Info plus Copilot upstream timings, token refresh scheduling, and upstream error request summaries |
-| `trace` | Debug plus full Claude request payloads and full upstream Copilot request payloads without redaction |
+| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
+
+Any other `logLevel` value is invalid and stops startup.
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
 
@@ -72,9 +71,9 @@ copilot-relay start
 
 ## Logging
 
-At `info`, every model request logs the requested model, upstream model, requested think effort, requested thinking, and effective think effort.
+At `debug`, every model request logs the requested model, upstream model, requested think effort, requested thinking, and effective think effort.
 
-At `trace`, copilot-relay logs the full Claude request payload and full upstream request payload without redaction.
+Upstream failures are logged at `error` with full request and response context in the same log file.
 
 Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
 

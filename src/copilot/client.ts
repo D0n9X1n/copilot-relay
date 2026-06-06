@@ -100,7 +100,7 @@ export const fetchCopilot = async (
       if (!shouldRetryResponse(response) || attempt === maxFetchAttempts) {
         return response
       }
-      log.warn(
+      log.error(
         `Copilot ${path} returned ${response.status}; retrying (${attempt}/${maxFetchAttempts})`,
       )
     } catch (error) {
@@ -108,7 +108,7 @@ export const fetchCopilot = async (
       if (attempt === maxFetchAttempts) {
         throw error
       }
-      log.warn(
+      log.error(
         `Copilot ${path} request failed; retrying (${attempt}/${maxFetchAttempts})`,
         error,
       )

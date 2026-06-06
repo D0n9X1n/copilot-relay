@@ -243,7 +243,7 @@ const isCopilotTokenError = (error: unknown): boolean =>
 const ensureGitHubToken = async (options: AuthOptions = {}) => {
   const existingToken = options.force ? "" : await readGitHubToken()
   if (existingToken) {
-    log.debug(`Using cached GitHub token at ${paths.githubTokenPath}`)
+    log.info(`Using cached GitHub token at ${paths.githubTokenPath}`)
     return existingToken
   }
 
@@ -254,7 +254,7 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
 
   const githubToken = await pollAccessToken(deviceCode)
   await writeGitHubToken(githubToken)
-  log.success(`GitHub token synced to ${paths.githubTokenPath}`)
+  log.info(`GitHub token synced to ${paths.githubTokenPath}`)
 
   return githubToken
 }
@@ -267,7 +267,7 @@ const loadGitHubLogin = async (
     const user = await getGitHubUser(githubToken, vsCodeVersion)
     return user.login
   } catch (error) {
-    log.warn("Could not load GitHub user:", error)
+    log.error("Could not load GitHub user:", error)
     return undefined
   }
 }
@@ -296,14 +296,14 @@ export const setupProxyAuth = async (
     // Refresh one minute before GitHub's `refresh_in` deadline, but keep a
     // one-minute floor so failure retries do not spin in a tight loop.
     const refreshMs = Math.max(refreshIn - 60, 60) * 1000
-    log.debug(
+    log.info(
       `Next Copilot token refresh in ${Math.round(refreshMs / 1000)}s`,
     )
 
     copilotTokenRefreshTimer = setTimeout(async () => {
       try {
         const nextRefreshIn = await applyCopilotToken()
-        log.debug("Refreshed Copilot token")
+        log.info("Refreshed Copilot token")
         scheduleCopilotTokenRefresh(nextRefreshIn)
       } catch (error) {
         log.error("Failed to refresh Copilot token:", error)
@@ -325,7 +325,7 @@ export const setupProxyAuth = async (
     // be long-running, so keep at least one minute of freshness for new calls.
     config.copilotToken = storedToken.token
     refreshIn = getStoredTokenRemainingSeconds(storedToken)
-    log.debug(`Using cached Copilot token at ${paths.copilotTokenPath}`)
+    log.info(`Using cached Copilot token at ${paths.copilotTokenPath}`)
   } else {
     try {
       refreshIn = await applyCopilotToken()
@@ -337,7 +337,7 @@ export const setupProxyAuth = async (
       // A cached GitHub token can still become unable to mint Copilot tokens
       // after revocation or account changes; only this specific failure gets
       // a fresh device-auth attempt.
-      log.warn(
+      log.error(
         "Cached GitHub auth could not get a Copilot token; running device auth again.",
       )
       githubToken = await ensureGitHubToken({
@@ -365,6 +365,6 @@ export const runProxyAuth = async (
   })
 
   const user = await getGitHubUser(githubToken, config.vsCodeVersion)
-  log.success(`GitHub token written to ${paths.githubTokenPath}`)
+  log.info(`GitHub token written to ${paths.githubTokenPath}`)
   log.info(`Logged in as ${user.login}`)
 }

@@ -143,7 +143,7 @@ claudeRoutes.get("/models", (c) =>
 claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
-  log.trace("Full Claude request payload", { payload: claudePayload })
+  log.debug("Full Claude request payload", { payload: claudePayload })
 
   try {
     const upstreamModel = translateModelName(claudePayload.model)
@@ -225,6 +225,7 @@ claudeRoutes.post("/messages", async (c) => {
     })
   } catch (error) {
     if (error instanceof ProxyNotImplementedError) {
+      c.set("requestErrorMessage", error.message)
       return c.json(
         { error: { type: error.name, message: error.message } },
         501,
@@ -233,6 +234,7 @@ claudeRoutes.post("/messages", async (c) => {
 
     if (error instanceof HTTPError) {
       const text = await error.response.text().catch(() => "")
+      c.set("requestErrorMessage", error.detail ?? text.slice(0, 240))
       return new Response(text, {
         status: error.response.status,
         headers: {
