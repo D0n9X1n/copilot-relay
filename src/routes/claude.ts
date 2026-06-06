@@ -1,0 +1,280 @@
+import { Hono } from "hono"
+import { streamSSE } from "hono/streaming"
+
+import {
+  type ClaudeAssistantContentBlock,
+  type ClaudeMessagesPayload,
+  type ClaudeResponse,
+  type ClaudeStreamEventData,
+  type ClaudeStreamState,
+} from "~/claude/types"
+import {
+  translateModelName,
+  translateToClaude,
+  translateToOpenAI,
+} from "~/claude/translate"
+import {
+  translateChunkToClaudeEvents,
+  translateErrorToClaudeErrorEvent,
+} from "~/claude/stream"
+import {
+  createClaudeToolNameMapper,
+  getToolNameMapperOptionsForModel,
+} from "~/claude/tool-names"
+import type { ProxyEnv } from "~/lib/config"
+import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
+import { log } from "~/lib/log"
+import { getExposedModelIds } from "~/lib/models"
+import { getTokenCount, type TokenizerModel } from "~/lib/tokenizer"
+import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
+import { createChatCompletions } from "~/copilot/chat"
+
+export const claudeRoutes = new Hono<ProxyEnv>()
+
+const createTokenCountModel = (modelId: string): TokenizerModel => ({
+  capabilities: { tokenizer: "o200k_base" },
+  id: modelId,
+})
+
+const isNonStreamingResponse = (
+  response: Awaited<ReturnType<typeof createChatCompletions>>,
+): response is ChatCompletionResponse =>
+  typeof response === "object"
+  && response !== null
+  && Object.hasOwn(response, "choices")
+
+const getClaudeRequestedThinkEffort = (
+  payload: ClaudeMessagesPayload,
+): string => payload.reasoning_effort ?? "none"
+
+const getClaudeRequestedThinking = (
+  payload: ClaudeMessagesPayload,
+): string => {
+  if (!payload.thinking) {
+    return "none"
+  }
+
+  return [
+    `type:${payload.thinking.type}`,
+    `budget:${payload.thinking.budget_tokens ?? "none"}`,
+  ].join(",")
+}
+
+const eventsFromClaudeResponse = (
+  response: ClaudeResponse,
+): Array<ClaudeStreamEventData> => {
+  const events: Array<ClaudeStreamEventData> = [
+    {
+      type: "message_start",
+      message: {
+        id: response.id,
+        type: response.type,
+        role: response.role,
+        content: [],
+        model: response.model,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: response.usage,
+      },
+    },
+  ]
+
+  response.content.forEach((block: ClaudeAssistantContentBlock, index) => {
+    events.push({
+      type: "content_block_start",
+      index,
+      content_block: block,
+    })
+
+    if (block.type === "text") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text: block.text },
+      })
+    } else if (block.type === "thinking") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "thinking_delta", thinking: block.thinking },
+      })
+    } else if (block.type === "tool_use") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify(block.input),
+        },
+      })
+    }
+
+    events.push({ type: "content_block_stop", index })
+  })
+
+  events.push({
+    type: "message_delta",
+    delta: {
+      stop_reason: response.stop_reason,
+      stop_sequence: response.stop_sequence,
+    },
+    usage: { output_tokens: response.usage.output_tokens },
+  })
+  events.push({ type: "message_stop" })
+  return events
+}
+
+claudeRoutes.get("/models", (c) =>
+  c.json({
+    object: "list",
+    data: getExposedModelIds().map((id) => ({
+      id,
+      object: "model",
+      created: 0,
+      owned_by: "github-copilot",
+    })),
+  }),
+)
+
+claudeRoutes.post("/messages", async (c) => {
+  const config = c.get("config")
+  const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+  log.trace("Full Claude request payload", { payload: claudePayload })
+
+  try {
+    const upstreamModel = translateModelName(claudePayload.model)
+    const toolNameMapper = createClaudeToolNameMapper(claudePayload.tools, {
+      ...getToolNameMapperOptionsForModel(upstreamModel),
+    })
+    const openAIPayload = translateToOpenAI(
+      claudePayload,
+      undefined,
+      toolNameMapper,
+    )
+    const response = await createChatCompletions(config, openAIPayload, {
+      client: "claude",
+      requestedModel: claudePayload.model,
+      requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
+      requestedThinking: getClaudeRequestedThinking(claudePayload),
+    })
+
+    if (isNonStreamingResponse(response)) {
+      const claudeResponse = translateToClaude(response, toolNameMapper)
+      if (!claudePayload.stream) {
+        return c.json(claudeResponse)
+      }
+
+      return streamSSE(c, async (stream) => {
+        for (const event of eventsFromClaudeResponse(claudeResponse)) {
+          await stream.writeSSE({
+            event: event.type,
+            data: JSON.stringify(event),
+          })
+        }
+      })
+    }
+
+    return streamSSE(c, async (stream) => {
+      const streamState: ClaudeStreamState = {
+        messageStartSent: false,
+        contentBlockIndex: 0,
+        contentBlockOpen: false,
+        thinkingBlockOpen: false,
+        toolCalls: {},
+      }
+
+      try {
+        for await (const rawEvent of response) {
+          if (rawEvent.data === "[DONE]") {
+            break
+          }
+          if (!rawEvent.data) {
+            continue
+          }
+
+          let chunk: ChatCompletionChunk
+          try {
+            chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
+          } catch {
+            continue
+          }
+
+          for (const event of translateChunkToClaudeEvents(
+            chunk,
+            streamState,
+            toolNameMapper,
+          )) {
+            await stream.writeSSE({
+              event: event.type,
+              data: JSON.stringify(event),
+            })
+          }
+        }
+      } catch (error) {
+        log.error("Error during Claude stream translation:", error)
+        const errorEvent = translateErrorToClaudeErrorEvent()
+        await stream.writeSSE({
+          event: errorEvent.type,
+          data: JSON.stringify(errorEvent),
+        })
+      }
+    })
+  } catch (error) {
+    if (error instanceof ProxyNotImplementedError) {
+      return c.json(
+        { error: { type: error.name, message: error.message } },
+        501,
+      )
+    }
+
+    if (error instanceof HTTPError) {
+      const text = await error.response.text().catch(() => "")
+      return new Response(text, {
+        status: error.response.status,
+        headers: {
+          "content-type":
+            error.response.headers.get("content-type") ?? "application/json",
+        },
+      })
+    }
+
+    throw error
+  }
+})
+
+claudeRoutes.post("/messages/count_tokens", async (c) => {
+  try {
+    const claudeBeta = c.req.header("claude-beta")
+    const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+    const openAIPayload = translateToOpenAI(claudePayload)
+    const exposedModels = getExposedModelIds()
+    const selectedModel = createTokenCountModel(
+      openAIPayload.model === exposedModels[1] ? exposedModels[1] : exposedModels[0],
+    )
+
+    const tokenCount = await getTokenCount(openAIPayload, selectedModel)
+    const effectiveModelId = selectedModel.id
+
+    if (claudePayload.tools && claudePayload.tools.length > 0) {
+      let mcpToolExist = false
+      if (claudeBeta?.startsWith("claude-code")) {
+        mcpToolExist = claudePayload.tools.some((tool) =>
+          tool.name.startsWith("mcp__"),
+        )
+      }
+      if (!mcpToolExist && effectiveModelId.startsWith("claude")) {
+        tokenCount.input += 346
+      }
+    }
+
+    const multiplier = effectiveModelId.startsWith("claude") ? 1.15 : 1
+    const finalTokenCount = Math.round(
+      (tokenCount.input + tokenCount.output) * multiplier,
+    )
+
+    return c.json({ input_tokens: Math.max(1, finalTokenCount) })
+  } catch (error) {
+    log.error("Error counting tokens:", error)
+    return c.json({ input_tokens: 1 })
+  }
+})

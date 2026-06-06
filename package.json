@@ -1,0 +1,58 @@
+{
+  "name": "copilot-relay",
+  "version": "0.0.1",
+  "description": "Small GitHub Copilot proxy for Claude Code.",
+  "keywords": [
+    "github-copilot",
+    "proxy",
+    "tunnel",
+    "claude"
+  ],
+  "homepage": "https://github.com/D0n9X1n/copilot-relay#readme",
+  "bugs": {
+    "url": "https://github.com/D0n9X1n/copilot-relay/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/D0n9X1n/copilot-relay.git"
+  },
+  "license": "MIT",
+  "author": "D0n9X1n",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "copilot-relay": "./dist/main.js"
+  },
+  "files": [
+    "config.default.yaml",
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "npm run build",
+    "start": "node dist/main.js",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:integration": "node --import tsx --test \"tests/integration/**/*.test.ts\"",
+    "test:unit": "node --import tsx --test \"tests/unit/**/*.test.ts\"",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.4",
+    "citty": "^0.1.6",
+    "consola": "^3.4.2",
+    "fetch-event-stream": "^0.1.6",
+    "gpt-tokenizer": "^3.4.0",
+    "hono": "^4.9.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsdown": "^0.15.6",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
