@@ -44,22 +44,23 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           notes_file="$(mktemp)"
           cat > "$notes_file" <<EOF
-## copilot-relay ${tag}
+          ## copilot-relay ${tag}
 
-Automated release for ${tag}.
+          Automated release for ${tag}.
 
-### Assets
-- npm package tarball
-- SHA256 checksums
+          ### Assets
+          - npm package tarball
+          - SHA256 checksums
 
-### Validation
-- TypeScript typecheck
-- Unit tests
-- Integration tests with mocked Copilot upstream
-- Build
-EOF
+          ### Validation
+          - TypeScript typecheck
+          - Unit tests
+          - Integration tests with mocked Copilot upstream
+          - Build
+          EOF
 
           if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes-file "$notes_file"
             gh release upload "$tag" release/*.tgz release/SHA256SUMS --clobber
           else
             gh release create "$tag" release/*.tgz release/SHA256SUMS \
