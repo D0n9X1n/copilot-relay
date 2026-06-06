@@ -54,11 +54,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${RELEASE_TAG}"
+          commit_message="$(git log -1 --format=%s HEAD)"
           notes_file="$(mktemp)"
           cat > "$notes_file" <<EOF
           ## copilot-relay ${tag}
 
           Automated release for ${tag}.
+
+          ### Commit
+          ${commit_message}
 
           ### Assets
           - npm package tarball
