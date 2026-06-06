@@ -43,7 +43,6 @@ export const createServer = (config: ProxyConfig) => {
 
   app.onError((error, c) => {
     c.set("requestErrorMessage", error.message)
-    log.error(`${c.req.method} ${c.req.path} failed`, error)
     return c.json({ error: { message: "Internal server error" } }, 500)
   })
 
