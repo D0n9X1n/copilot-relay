@@ -10,7 +10,7 @@ import {
 } from "~/lib/models"
 import { paths } from "~/lib/paths"
 
-export const logLevels = ["silent", "error", "warn", "info", "debug", "trace"] as const
+export const logLevels = ["error", "warn", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
 export interface AppConfig {
   claudeSetup: boolean
@@ -40,8 +40,15 @@ export const isLogLevelName = (value: unknown): value is LogLevelName =>
   typeof value === "string"
   && logLevels.includes(value.toLowerCase() as LogLevelName)
 
-const normalizeLogLevel = (value: unknown): LogLevelName | undefined =>
-  isLogLevelName(value) ? (value.toLowerCase() as LogLevelName) : undefined
+const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
+  if (typeof value !== "string") {
+    return undefined
+  }
+
+  const normalized = value.toLowerCase()
+  if (normalized === "warning") return "warn"
+  return isLogLevelName(normalized) ? normalized : undefined
+}
 
 const normalizeBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === "boolean") {
@@ -235,15 +242,12 @@ const serializeConfig = (config: AppConfig): string =>
     `claudeSetup: ${config.claudeSetup}`,
     "",
     "# Log verbosity:",
-    "#   silent - no logs",
-    "#   error  - startup/preflight/request failures only",
-    "#   warn   - error logs plus recoverable warnings",
-    "#   info   - warn logs plus startup status, preflight status, HTTP requests,",
-    "#            and model routing summaries",
-    "#   debug  - info logs plus Copilot upstream timings, token refresh scheduling,",
-    "#            and upstream error request summaries",
-    "#   trace  - debug logs plus full Claude request payloads and full upstream",
-    "#            Copilot request payloads without redaction",
+    "#   error - startup/preflight/request failures only",
+    "#   warn  - error logs plus recoverable warnings",
+    "#   info  - warn logs plus startup status, preflight status, and local HTTP",
+    "#           status codes",
+    "#   debug - info logs plus model routing summaries, Copilot upstream timings,",
+    "#           token refresh scheduling, request payloads, and upstream error details",
     `logLevel: ${config.logLevel}`,
     "",
     "# Number of days to keep files in ~/.copilot-relay/logs.",

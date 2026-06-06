@@ -7,10 +7,6 @@ import { log } from "~/lib/log"
 import { defaultReasoningEffort } from "~/lib/models"
 import { routeModelId } from "~/lib/models"
 import { runtimeState } from "~/lib/state"
-import {
-  summarizeToolsForDiagnostics,
-  type ToolDiagnostics,
-} from "~/lib/upstream-diagnostics"
 import { fetchCopilot, getCopilotProviderContext } from "~/copilot/client"
 import type {
   ChatCompletionResponse,
@@ -24,6 +20,7 @@ import {
   translateResponsesToChatCompletion,
   type ResponsesApiResponse,
   type ResponsesReasoningEffort,
+  type ResponsesRequestPayload,
 } from "./responses"
 
 const usesMaxCompletionTokens = (modelId: string): boolean =>
@@ -76,30 +73,6 @@ type ChatCompletionsRequestPayload = Omit<
   max_completion_tokens?: number | null
 }
 
-type RequestDiagnostics = {
-  max_completion_tokens?: number | null
-  max_tokens?: number | null
-  message_count: number
-  output_config_effort?: unknown
-  reasoning_effort?: unknown
-  stream?: boolean
-  tool_choice?: unknown
-  tools?: ToolDiagnostics
-}
-
-const summarizeRequestForDiagnostics = (
-  payload: ChatCompletionsRequestPayload,
-): RequestDiagnostics => ({
-  max_completion_tokens: payload.max_completion_tokens,
-  max_tokens: payload.max_tokens,
-  message_count: payload.messages.length,
-  output_config_effort: payload.output_config?.effort,
-  reasoning_effort: payload.reasoning_effort,
-  stream: payload.stream ?? undefined,
-  tool_choice: payload.tool_choice,
-  tools: summarizeToolsForDiagnostics(payload.tools),
-})
-
 const buildRequestPayload = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsRequestPayload => {
@@ -119,6 +92,8 @@ const buildRequestPayload = (
     return sanitizedPayload
   }
 
+  // GPT-5-class Copilot endpoints reject max_tokens and require the newer
+  // max_completion_tokens field; older models still use max_tokens.
   return {
     ...payload,
     max_tokens: undefined,
@@ -161,7 +136,7 @@ export const createChatCompletions = async (
   const enableVision = messagesIncludeImage(upstreamPayload.messages)
   const initiator = isAgentInitiator(upstreamPayload.messages)
   const requestPayload = buildRequestPayload(upstreamPayload)
-  log.info(
+  log.debug(
     [
       "Model request",
       `client=${client}`,
@@ -172,9 +147,12 @@ export const createChatCompletions = async (
       `effective_think_effort=${requestPayload.reasoning_effort ?? "none"}`,
     ].join(" "),
   )
-  log.trace("Full request payload", {
+  log.debug("Full request payload", {
     payload: requestPayload,
   })
+  // Choose the Copilot API surface after model routing, because aliases can
+  // resolve to a Responses-only upstream model even when the client asked for a
+  // generic Claude model name.
   if (shouldUseResponsesApiForModel(upstreamPayload.model)) {
     return createResponses(provider, upstreamPayload, {
       vision: enableVision,
@@ -204,12 +182,16 @@ export const createChatCompletions = async (
       })
     }
 
-    await logUpstreamError("Failed to create chat completions", response, {
+    const detail = await logUpstreamError("Failed to create chat completions", response, {
       model: payload.model,
       request: requestPayload,
       route: "/chat/completions",
     })
-    throw new HTTPError("Failed to create chat completions", response)
+    throw new HTTPError(
+      "Failed to create chat completions",
+      response,
+      detail,
+    )
   }
 
   if (upstreamPayload.stream) {
@@ -227,6 +209,7 @@ async function createResponses(
   const reasoningEffort = getRequestedReasoningEffort(
     payload,
   ) as ResponsesReasoningEffort | undefined
+  const requestPayload = buildResponsesRequestPayload(payload, reasoningEffort)
 
   const response = await fetchCopilot(
     provider,
@@ -237,19 +220,22 @@ async function createResponses(
         accept: payload.stream ? "text/event-stream" : "application/json",
         "content-type": "application/json",
       },
-      body: JSON.stringify(
-        buildResponsesRequestPayload(payload, reasoningEffort),
-      ),
+      body: JSON.stringify(requestPayload),
     },
     { vision: options.vision, initiator: options.initiator },
   )
 
   if (!response.ok) {
-    await logUpstreamError("Failed to create responses", response, {
+    const detail = await logUpstreamError("Failed to create responses", response, {
       model: payload.model,
+      request: requestPayload,
       route: "/responses",
     })
-    throw new HTTPError("Failed to create responses", response)
+    throw new HTTPError(
+      "Failed to create responses",
+      response,
+      detail,
+    )
   }
 
   if (payload.stream) {
@@ -266,23 +252,49 @@ async function logUpstreamError(
   response: Response,
   context: {
     model: string
-    request?: ChatCompletionsRequestPayload
+    request?: ChatCompletionsRequestPayload | ResponsesRequestPayload
     route: string
   },
-): Promise<void> {
+): Promise<string | undefined> {
   const errorBody = await response.clone().text().catch(() => "")
+  const detail = getUpstreamErrorDetail(response, errorBody)
 
-  log.error(message, {
+  log.error(`${message}: route=${context.route} model=${context.model} status=${response.status}`, {
+    message,
     route: context.route,
     model: context.model,
-    status: response.status,
-    statusText: response.statusText,
-    body: errorBody || undefined,
-    request:
-      runtimeState.debug && context.request ?
-        JSON.stringify(summarizeRequestForDiagnostics(context.request))
-      : undefined,
+    request: context.request,
+    response: {
+      status: response.status,
+      statusText: response.statusText || undefined,
+      url: response.url || undefined,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: errorBody || undefined,
+    },
   })
+
+  return detail
+}
+
+function getUpstreamErrorDetail(
+  response: Response,
+  body: string,
+): string | undefined {
+  if (!body) {
+    return response.statusText || undefined
+  }
+
+  try {
+    const payload = JSON.parse(body) as {
+      error?: {
+        code?: string
+        message?: string
+      }
+    }
+    return payload.error?.message ?? payload.error?.code ?? body.slice(0, 240)
+  } catch {
+    return body.slice(0, 240)
+  }
 }
 
 async function shouldRetryWithResponses(response: Response): Promise<boolean> {

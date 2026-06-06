@@ -12,14 +12,13 @@ Log files are cleaned according to `logRetentionDays` in `~/.copilot-relay/confi
 
 | Level | Logs |
 | --- | --- |
-| `silent` | Nothing |
 | `error` | Startup, preflight, request, token refresh, and upstream failures |
 | `warn` | Errors plus recoverable warnings |
-| `info` | Warnings plus startup status, preflight status, HTTP requests, and model routing summaries |
-| `debug` | Info plus Copilot upstream timings, token refresh scheduling, and upstream error request summaries |
-| `trace` | Debug plus full Claude request payloads and full upstream Copilot request payloads without redaction |
+| `info` | Warnings plus startup status, preflight status, and local HTTP status codes |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
 
-Use `trace` only for local debugging. It can log full prompts and tool payloads.
+Use `debug` only for local debugging. It can log prompts and tool payloads.
+File logs follow the same `logLevel` filter as console logs.
 
 ## File log line format
 
@@ -32,22 +31,22 @@ Every file log line has this shape:
 Example:
 
 ```text
-2026-06-06T04:00:00.000Z info Model request client=claude requested_model=opus upstream_model=claude-opus-4.8 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
+2026-06-06T04:00:00.000Z info POST /v1/messages -> 200 1234ms
 ```
 
 ## Startup logs
 
-Startup logs confirm the active config and startup preflight:
+At `debug`, startup logs confirm the active config and startup preflight:
 
 ```text
-info Log level: info
-info Think effort: xhigh
-info Exposed models: gpt-5.5, claude-opus-4.8
-info Running upstream preflight
-info Upstream models available: gpt-5.5, claude-opus-4.8
-info Preflight OK: model=gpt-5.5 think_effort=xhigh
-info Preflight OK: model=claude-opus-4.8 think_effort=xhigh
-success copilot-relay listening on http://127.0.0.1:4142
+debug Log level: debug
+debug Think effort: xhigh
+debug Exposed models: gpt-5.5, claude-opus-4.8
+debug Running upstream preflight
+debug Upstream models available: gpt-5.5, claude-opus-4.8
+debug Preflight OK: model=gpt-5.5 think_effort=xhigh
+debug Preflight OK: model=claude-opus-4.8 think_effort=xhigh
+debug copilot-relay listening on http://127.0.0.1:4142
 ```
 
 If startup fails, check the last `Startup preflight failed` or token refresh error.
@@ -69,10 +68,10 @@ Fields:
 
 ## Model routing logs
 
-Every model request logs:
+At `debug`, every model request logs:
 
 ```text
-info Model request client=claude requested_model=opus upstream_model=claude-opus-4.8 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
+debug Model request client=claude requested_model=opus upstream_model=claude-opus-4.8 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
 ```
 
 Fields:
@@ -105,16 +104,28 @@ Fields:
 
 If a transient 5xx happens, retries are logged as warnings.
 
-## Full payload logs
-
-At `trace`, full request payloads are logged without redaction:
+When Copilot returns a non-2xx response, `info` keeps a short status summary:
 
 ```text
-trace Full Claude request payload { payload: ... }
-trace Full request payload { payload: ... }
+info POST /v1/messages -> 400 123ms error="Invalid request"
 ```
 
-Use this only when you need to debug exact request shape. Do not share trace logs publicly without reviewing them.
+The `error` entry in the same log file keeps the full upstream context:
+
+```text
+error Failed to create responses: route=/responses model=gpt-5.5 status=400 { request: ..., response: { status: 400, headers: ..., body: ... } }
+```
+
+## Request payload logs
+
+At `debug`, request payload diagnostics are logged for local debugging:
+
+```text
+debug Full Claude request payload { payload: ... }
+debug Full request payload { payload: ... }
+```
+
+Use this only when you need to debug exact request shape. Do not share debug logs publicly without reviewing them.
 
 ## Token logs
 
@@ -140,7 +151,7 @@ If requests suddenly fail with auth errors:
 When `~/.copilot-relay/config.yaml` changes:
 
 ```text
-info Config reloaded: logLevel=debug thinkEffort=xhigh
+debug Config reloaded: logLevel=debug thinkEffort=xhigh
 ```
 
 Hot reload updates:

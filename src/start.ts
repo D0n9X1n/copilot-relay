@@ -30,7 +30,7 @@ export const start = defineCommand({
       // not rebind the already-listening socket when host or port changes.
       setLogLevel(nextConfig.logLevel)
       void cleanupLogs(nextConfig.logRetentionDays)
-      runtimeState.debug = nextConfig.logLevel === "debug" || nextConfig.logLevel === "trace"
+      runtimeState.debug = nextConfig.logLevel === "debug"
       runtimeState.thinkEffort = nextConfig.thinkEffort
       config.copilotBaseUrl = nextConfig.copilotBaseUrl
       config.host = nextConfig.host
@@ -42,12 +42,10 @@ export const start = defineCommand({
     }
     applyRuntimeConfig(appConfig)
 
-    if (runtimeState.debug) {
-      log.info("Debug diagnostics enabled; upstream errors include request summaries")
-    }
-    log.info(`Log level: ${appConfig.logLevel}`)
-    log.info(`Think effort: ${appConfig.thinkEffort}`)
-    log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
+    log.debug("Debug diagnostics enabled; request payloads and upstream errors include full context")
+    log.debug(`Log level: ${appConfig.logLevel}`)
+    log.debug(`Think effort: ${appConfig.thinkEffort}`)
+    log.debug(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
     const authSession = await setupProxyAuth(config)
 
@@ -60,14 +58,14 @@ export const start = defineCommand({
 
     const server = startServer(config)
 
-    log.info(`copilot-relay version: ${appVersion}`)
+    log.debug(`copilot-relay version: ${appVersion}`)
     if (authSession.githubLogin) {
-      log.info(`GitHub user: ${authSession.githubLogin}`)
+      log.debug(`GitHub user: ${authSession.githubLogin}`)
     } else {
       log.warn("GitHub user: unavailable")
     }
 
-    log.success(
+    log.debug(
       `copilot-relay listening on http://${config.host}:${config.port}`,
     )
     log.debug(`copilot base url: ${config.copilotBaseUrl}`)
@@ -80,19 +78,19 @@ export const start = defineCommand({
           configPath: claudeConfigPath,
         })
         if (claudeResult.changed) {
-          log.success(
+          log.debug(
             `claude settings ${claudeResult.created ? "created" : "updated"}: ${claudeResult.configPath}`,
           )
           if (
             claudeResult.previousBaseUrl
             && claudeResult.previousBaseUrl !== baseUrl
           ) {
-            log.info(
+            log.debug(
               `ANTHROPIC_BASE_URL: ${claudeResult.previousBaseUrl} → ${baseUrl}`,
             )
           }
         } else {
-          log.info(
+          log.debug(
             `claude settings already up to date: ${claudeResult.configPath}`,
           )
         }
@@ -105,7 +103,7 @@ export const start = defineCommand({
     }
     watchAppConfig((nextConfig) => {
       applyRuntimeConfig(nextConfig)
-      log.info(
+      log.debug(
         `Config reloaded: logLevel=${nextConfig.logLevel} thinkEffort=${nextConfig.thinkEffort}`,
       )
     })

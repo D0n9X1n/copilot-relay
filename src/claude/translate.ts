@@ -47,14 +47,15 @@ export function translateToOpenAI(
     ...getToolNameMapperOptionsForModel(model),
   })
   const tools = translateClaudeToolsToOpenAI(payload.tools, mapper)
+  const messages = translateClaudeMessagesToOpenAI(
+    payload.messages,
+    payload.system,
+    mapper,
+  )
 
   return {
     model,
-    messages: translateClaudeMessagesToOpenAI(
-      payload.messages,
-      payload.system,
-      mapper,
-    ),
+    messages: normalizeFinalAssistantPrefill(messages),
     max_tokens: payload.max_tokens,
     stop: payload.stop_sequences,
     stream: payload.stream,
@@ -93,6 +94,8 @@ function handleSystemPrompt(
     return [{ role: "system", content: system }]
   }
 
+  // Claude accepts multiple system text blocks; Copilot chat expects one
+  // system message, so preserve block boundaries with blank lines.
   return [{ role: "system", content: system.map((block) => block.text).join("\n\n") }]
 }
 
@@ -105,6 +108,9 @@ function handleUserMessage(message: ClaudeUserMessage): Array<Message> {
     )
     const otherBlocks = message.content.filter((block) => block.type !== "tool_result")
 
+    // Tool results must become standalone OpenAI tool messages before any
+    // remaining user content, otherwise upstream cannot associate them with
+    // prior assistant tool calls.
     for (const block of toolResultBlocks) {
       newMessages.push({
         role: "tool",
@@ -152,6 +158,8 @@ function handleAssistantMessage(
     ...thinkingBlocks.map((b) => b.thinking),
   ].join("\n\n")
 
+  // Assistant tool_use blocks bridge to OpenAI tool_calls; plain text and
+  // thinking content stay on the assistant message as context for those calls.
   return toolUseBlocks.length > 0
     ? [
         {
@@ -170,6 +178,48 @@ function handleAssistantMessage(
     : [{ role: "assistant", content: mapContent(message.content) }]
 }
 
+const continuePrefillPrompt =
+  "Continue the assistant response from the previous assistant message."
+
+const normalizeFinalAssistantPrefill = (
+  messages: Array<Message>,
+): Array<Message> => {
+  let lastAssistantIndex = -1
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "assistant") {
+      lastAssistantIndex = index
+      break
+    }
+  }
+  if (lastAssistantIndex < 0) {
+    return messages
+  }
+  if (lastAssistantIndex !== messages.length - 1) {
+    return messages
+  }
+
+  const lastAssistant = messages[lastAssistantIndex]
+  if (typeof lastAssistant.content !== "string") {
+    return messages.slice(0, -1)
+  }
+
+  const trimmedContent = lastAssistant.content.trimEnd()
+  // Claude Messages allows a final assistant message as a prefill prefix.
+  // Copilot rejects that shape, so keep the prefix as context and append a
+  // minimal user turn that asks upstream to continue from it.
+  const nextMessages = [...messages]
+  if (trimmedContent) {
+    nextMessages[lastAssistantIndex] = {
+      ...lastAssistant,
+      content: trimmedContent,
+    }
+    nextMessages.push({ role: "user", content: continuePrefillPrompt })
+  } else {
+    nextMessages.pop()
+  }
+  return nextMessages
+}
+
 function mapContent(
   content:
     | string
@@ -185,6 +235,8 @@ function mapContent(
 
   const hasImage = content.some((block) => block.type === "image")
   if (!hasImage) {
+    // Without images the OpenAI-compatible chat surface accepts plain strings;
+    // image messages must use content parts instead.
     return content
       .filter(
         (block): block is ClaudeTextBlock | ClaudeThinkingBlock =>
@@ -292,6 +344,8 @@ export function translateToClaude(
 
   stopReason = response.choices[0]?.finish_reason ?? stopReason
 
+  // Multiple choices can mix text and tool calls. Claude has one stop_reason,
+  // so prefer tool_calls when present while preserving a normal stop result.
   for (const choice of response.choices) {
     allThinkingBlocks.push(
       ...getClaudeThinkingBlocks(

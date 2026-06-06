@@ -24,6 +24,6 @@ export const auth = defineCommand({
       log.info(`Logged in as ${authSession.githubLogin}`)
     }
 
-    log.success("copilot-relay auth completed")
+    log.info("copilot-relay auth completed")
   },
 })

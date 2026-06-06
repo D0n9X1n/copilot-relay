@@ -162,7 +162,7 @@ serve Claude Code requests
 
 Logs go to both console and `~/.copilot-relay/logs/copilot-relay.log`.
 
-At `info`, every model request logs:
+At `debug`, every model request logs:
 
 - client
 - requested model
@@ -171,7 +171,7 @@ At `info`, every model request logs:
 - requested thinking budget
 - effective think effort
 
-At `trace`, the proxy logs full Claude and upstream request payloads without redaction.
+At `debug`, the proxy logs Claude and upstream request diagnostics without redaction.
 
 ## Testing strategy
 

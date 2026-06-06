@@ -254,7 +254,7 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
 
   const githubToken = await pollAccessToken(deviceCode)
   await writeGitHubToken(githubToken)
-  log.success(`GitHub token synced to ${paths.githubTokenPath}`)
+  log.info(`GitHub token synced to ${paths.githubTokenPath}`)
 
   return githubToken
 }
@@ -365,6 +365,6 @@ export const runProxyAuth = async (
   })
 
   const user = await getGitHubUser(githubToken, config.vsCodeVersion)
-  log.success(`GitHub token written to ${paths.githubTokenPath}`)
+  log.info(`GitHub token written to ${paths.githubTokenPath}`)
   log.info(`Logged in as ${user.login}`)
 }

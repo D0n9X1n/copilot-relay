@@ -14,6 +14,7 @@ export interface ProxyConfig {
 export interface ProxyEnv {
   Variables: {
     config: ProxyConfig
+    requestErrorMessage?: string
   }
 }
 
