@@ -1,6 +1,6 @@
 {
   "name": "copilot-relay",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Yet, just another relay for Claude Code to use a GitHub Copilot subscription.",
   "keywords": [
     "github-copilot",
