@@ -148,7 +148,7 @@ Publishing lives in `.github/workflows/publish.yml`.
 - `0.1.0` should be published only after local and CI checks are clean.
 - pushing a `v*` tag creates or updates the GitHub Release and uploads the npm tarball plus `SHA256SUMS`
 - npm publish uses npm Trusted Publishing with GitHub Actions OIDC, so it requires `id-token: write` in the workflow instead of `NPM_TOKEN`
-- configure npm's trusted publisher for repository `D0n9X1n/copilot-relay` and workflow `.github/workflows/publish.yml`; npm matches these fields exactly
+- configure npm's trusted publisher for repository `D0n9X1n/copilot-relay` and workflow filename `publish.yml`; npm matches these fields exactly
 - GitHub Packages publish uses `GITHUB_TOKEN`
 - the GitHub package is published as `@<owner>/copilot-relay`
 
