@@ -9,7 +9,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-supported-d97757)](https://docs.anthropic.com/en/docs/claude-code/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`copilot-relay` is a small GitHub Copilot proxy for Claude Code.
+Yet, just another relay for Claude Code to use a GitHub Copilot subscription.
 
 Public API:
 
@@ -44,6 +44,7 @@ port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
+logRetentionDays: 3
 thinkEffort: xhigh
 ```
 
@@ -60,14 +61,13 @@ thinkEffort: xhigh
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
 
-The same folder stores `copilot_token.json` for the cached Copilot bearer token and `github_token` for refresh/login.
+The same folder stores `copilot_token.json` for the cached Copilot bearer token, `github_token` for refresh/login, and `logs/` for runtime logs.
 
 ## CLI
 
 ```sh
 copilot-relay auth
 copilot-relay start
-copilot-relay start --show-token
 ```
 
 ## Logging
@@ -76,9 +76,13 @@ At `info`, every model request logs the requested model, upstream model, request
 
 At `trace`, copilot-relay logs the full Claude request payload and full upstream request payload without redaction.
 
+Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
+
 ## Development
 
 Developer notes live in [`docs/development.md`](docs/development.md).
+Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
+Logging notes live in [`docs/logging.md`](docs/logging.md).
 
 ```sh
 npm install

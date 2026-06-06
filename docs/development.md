@@ -2,7 +2,7 @@
 
 ## Goal
 
-`copilot-relay` is a Claude Code-only GitHub Copilot proxy. Do not add public OpenAI-compatible APIs unless the product direction changes.
+`copilot-relay` is just another relay for Claude Code to use a GitHub Copilot subscription. Do not add public OpenAI-compatible APIs unless the product direction changes.
 
 Public API surface:
 
@@ -14,6 +14,9 @@ Public API surface:
 The proxy may call Copilot upstream `/chat/completions` and `/responses` internally, but those routes are not public.
 
 ## Current architecture
+
+See [`architecture.md`](architecture.md) for the detailed design.
+See [`logging.md`](logging.md) for log formats and debugging workflows.
 
 ```text
 Claude Code
@@ -31,6 +34,7 @@ Runtime files:
   config.yaml          # hot-reloaded runtime config
   github_token         # GitHub OAuth/device token
   copilot_token.json   # cached Copilot bearer token + refresh metadata
+  logs/                # runtime logs
 ```
 
 ## Configuration-first rule
@@ -45,6 +49,7 @@ port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
+logRetentionDays: 3
 thinkEffort: xhigh
 gptModel: gpt-5.5
 opusModel: claude-opus-4.8
@@ -84,6 +89,8 @@ At `info`, every model request must log:
 - effective think effort
 
 At `trace`, log the full Claude request payload and full upstream request payload without redaction.
+
+Logs are appended to `~/.copilot-relay/logs/copilot-relay.log`. Startup cleanup removes old `.log` files according to `logRetentionDays`.
 
 ## Tokens
 

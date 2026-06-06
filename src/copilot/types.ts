@@ -1,3 +1,4 @@
+// Minimal Copilot chat completion types used by internal upstream calls.
 export interface ChatCompletionChunk {
   id: string
   object: "chat.completion.chunk"

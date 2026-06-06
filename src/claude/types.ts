@@ -1,3 +1,4 @@
+// Minimal Claude Messages API types used by the proxy; intentionally not a full SDK.
 export interface ClaudeMessagesPayload {
   model: string
   messages: Array<ClaudeMessage>

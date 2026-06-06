@@ -1,3 +1,4 @@
+// Stateful streaming adapter from Copilot chat completion chunks to Claude SSE events.
 import type {
   ClaudeStreamEventData,
   ClaudeStreamState,
@@ -43,6 +44,9 @@ export function translateChunkToClaudeEvents(
     undefined,
   ),
 ): Array<ClaudeStreamEventData> {
+  // This is a stateful adapter from Copilot's OpenAI-style deltas to Claude's
+  // stricter SSE protocol. Claude requires every thinking/text/tool block to
+  // be explicitly opened, filled with deltas, and then closed in order.
   const events: Array<ClaudeStreamEventData> = []
 
   if (chunk.choices.length === 0) {
@@ -79,6 +83,8 @@ export function translateChunkToClaudeEvents(
   }
 
   if (reasoningContent) {
+    // Claude allows only one open content block at a time. Switching from text
+    // or tool output into thinking must close the previous block first.
     if (state.contentBlockOpen && !state.thinkingBlockOpen) {
       closeOpenContentBlock(events, state)
     }
@@ -107,6 +113,8 @@ export function translateChunkToClaudeEvents(
   }
 
   if (delta.content) {
+    // Text deltas cannot be appended to an open thinking or tool_use block, so
+    // close whichever block is active before starting/resuming text output.
     if (state.thinkingBlockOpen || isToolBlockOpen(state)) {
       closeOpenContentBlock(events, state)
     }
@@ -136,6 +144,8 @@ export function translateChunkToClaudeEvents(
   if (delta.tool_calls) {
     for (const toolCall of delta.tool_calls) {
       if (toolCall.id && toolCall.function?.name) {
+        // The first tool delta opens a Claude tool_use block; later argument
+        // deltas are routed back to this block by Copilot's tool call index.
         if (state.contentBlockOpen) {
           closeOpenContentBlock(events, state)
         }

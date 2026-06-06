@@ -29,6 +29,9 @@ claudeSetup: true
 #            Copilot request payloads without redaction
 logLevel: info
 
+# Number of days to keep files in ~/.copilot-relay/logs.
+logRetentionDays: 3
+
 # Default upstream thinking/reasoning effort sent to Copilot.
 # Valid values: none, low, medium, high, xhigh.
 thinkEffort: xhigh

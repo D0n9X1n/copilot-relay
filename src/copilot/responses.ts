@@ -1,3 +1,4 @@
+// Internal conversion between Copilot Responses API payloads and chat-completion-like results.
 import { randomUUID } from "node:crypto"
 
 import type {
@@ -194,6 +195,8 @@ interface CreateChunkOptions {
   usage?: ChatCompletionChunk["usage"]
 }
 
+// /models does not tell us which API surface a model requires, so keep the
+// Responses-only allowlist narrow and suffix-tolerant.
 const responsesOnlyModelPattern = /^(?:gpt-5\.5)(?:-|$)/i
 
 export function shouldUseResponsesApiForModel(model: string): boolean {
@@ -273,6 +276,8 @@ export function translateResponsesToChatCompletion(
 export async function* translateResponsesStreamToChatCompletionStream(
   responseStream: AsyncIterable<ResponseStreamEventMessage>,
 ): AsyncGenerator<ResponseStreamEventMessage> {
+  // Responses streams can send deltas, done snapshots, and a final completed
+  // payload. Track emitted suffixes so chat clients do not receive duplicates.
   const state: ResponseTranslationState = {
     responseId: randomUUID(),
     createdAt: Math.floor(Date.now() / 1000),
@@ -609,6 +614,8 @@ function createChunk(
 function translateMessagesToResponsesInput(
   messages: Array<Message>,
 ): ResponsesInput {
+  // Copilot accepts a bare string for the simplest single-user prompt, but
+  // multi-turn, tool, or image conversations need structured input items.
   const items = messages.flatMap((message) => translateMessage(message))
 
   if (
@@ -784,6 +791,8 @@ function getMissingSuffix(
   alreadySent: string,
   finalValue: string | undefined,
 ): string | undefined {
+  // Responses "done" events often repeat the full text/arguments after deltas;
+  // emit only the suffix that has not already been forwarded to the chat stream.
   if (!finalValue) {
     return undefined
   }

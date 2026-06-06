@@ -1,3 +1,4 @@
+// Runtime YAML config loader/writer with hot-reload support for ~/.copilot-relay/config.yaml.
 import fs from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -17,6 +18,7 @@ export interface AppConfig {
   gptModel: string
   host: string
   logLevel: LogLevelName
+  logRetentionDays: number
   opusModel: string
   port: number
   thinkEffort: ReasoningEffort
@@ -28,6 +30,7 @@ const defaultConfig: AppConfig = {
   gptModel: "gpt-5.5",
   host: "127.0.0.1",
   logLevel: "info",
+  logRetentionDays: 3,
   opusModel: "claude-opus-4.8",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
@@ -59,6 +62,14 @@ const normalizePort = (value: unknown): number | undefined => {
     : typeof value === "string" ? Number.parseInt(value, 10)
     : Number.NaN
   return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined
+}
+
+const normalizePositiveInteger = (value: unknown): number | undefined => {
+  const number =
+    typeof value === "number" ? value
+    : typeof value === "string" ? Number.parseInt(value, 10)
+    : Number.NaN
+  return Number.isInteger(number) && number > 0 ? number : undefined
 }
 
 const normalizeString = (value: unknown): string | undefined =>
@@ -99,6 +110,8 @@ const readRawConfig = async (): Promise<Record<string, unknown>> => {
 const readDefaultConfigTemplate = async (): Promise<Record<string, unknown>> => {
   let currentDir = dirname(fileURLToPath(import.meta.url))
 
+  // Bundled code may run from src/ during development or from dist/ after
+  // packaging, so walk upward until the package-level config template is found.
   while (true) {
     try {
       const content = await fs.readFile(
@@ -166,6 +179,11 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
         config.logLevel = unquoteYamlScalar(value)
         break
       }
+      case "logRetentionDays":
+      case "log_retention_days": {
+        config.logRetentionDays = unquoteYamlScalar(value)
+        break
+      }
       case "opusModel":
       case "opus_model": {
         config.opusModel = unquoteYamlScalar(value)
@@ -228,6 +246,9 @@ const serializeConfig = (config: AppConfig): string =>
     "#            Copilot request payloads without redaction",
     `logLevel: ${config.logLevel}`,
     "",
+    "# Number of days to keep files in ~/.copilot-relay/logs.",
+    `logRetentionDays: ${config.logRetentionDays}`,
+    "",
     "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
@@ -246,6 +267,7 @@ export async function readAppConfig(): Promise<AppConfig> {
   const claudeSetup = normalizeBoolean(raw.claudeSetup)
   const host = normalizeString(raw.host)
   const logLevel = normalizeLogLevel(raw.logLevel)
+  const logRetentionDays = normalizePositiveInteger(raw.logRetentionDays)
   const port = normalizePort(raw.port)
   const thinkEffort = normalizeThinkEffort(raw.thinkEffort)
 
@@ -255,6 +277,7 @@ export async function readAppConfig(): Promise<AppConfig> {
     gptModel: normalizeString(raw.gptModel) ?? defaultConfig.gptModel,
     host: host ?? defaultConfig.host,
     logLevel: logLevel ?? defaultConfig.logLevel,
+    logRetentionDays: logRetentionDays ?? defaultConfig.logRetentionDays,
     opusModel: normalizeString(raw.opusModel) ?? defaultConfig.opusModel,
     port: port ?? defaultConfig.port,
     thinkEffort: thinkEffort ?? defaultConfig.thinkEffort,

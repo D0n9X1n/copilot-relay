@@ -1,3 +1,4 @@
+// Startup preflight: fail fast if configured models or think effort cannot be used upstream.
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
@@ -65,6 +66,8 @@ const validateModelRequest = async (
   thinkEffort: ReasoningEffort,
 ): Promise<void> => {
   try {
+    // Probe through the same internal chat path as real requests so routing,
+    // token headers, think effort, and /responses fallback are validated together.
     const response = await createChatCompletions(
       config,
       createProbePayload(model),

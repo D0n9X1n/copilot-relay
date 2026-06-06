@@ -1,3 +1,4 @@
+// Token estimator for Claude Code's /v1/messages/count_tokens endpoint.
 import type {
   ChatCompletionsPayload,
   ContentPart,

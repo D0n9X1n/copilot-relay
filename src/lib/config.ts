@@ -1,3 +1,4 @@
+// Converts hot-loaded app config into the mutable runtime config shared with routes.
 import type { AppConfig } from "~/lib/app-config"
 
 const vscodeVersion = "1.99.3"

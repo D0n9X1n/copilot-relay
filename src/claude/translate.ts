@@ -1,3 +1,4 @@
+// Non-streaming protocol translation between Claude Messages and Copilot chat completions.
 import { defaultReasoningEffort } from "~/lib/models"
 import { routeModelId } from "~/lib/models"
 import { runtimeState } from "~/lib/state"

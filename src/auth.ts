@@ -1,3 +1,4 @@
+// `copilot-relay auth`: performs an explicit device-login flow and syncs tokens.
 import { defineCommand } from "citty"
 
 import { setupProxyAuth } from "~/lib/auth"
@@ -10,21 +11,13 @@ export const auth = defineCommand({
     name: "auth",
     description: "Run GitHub device auth and cache credentials for copilot-relay.",
   },
-  args: {
-    "show-token": {
-      type: "boolean",
-      default: false,
-      description: "Print GitHub and Copilot tokens during auth.",
-    },
-  },
-  async run({ args }) {
+  async run() {
     const config = readProxyConfig(await readAppConfig())
 
     config.copilotToken = undefined
 
     const authSession = await setupProxyAuth(config, {
       force: true,
-      showToken: args["show-token"],
     })
 
     if (authSession.githubLogin) {

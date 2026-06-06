@@ -1,3 +1,4 @@
+// Static process defaults that are not intended to be user-tuned.
 import path from "node:path"
 import os from "node:os"
 
@@ -12,7 +13,7 @@ import os from "node:os"
 export const defaultHost = "127.0.0.1"
 export const defaultPort = 4142
 
-export const CLAUDE_configPath = path.join(
+export const claudeConfigPath = path.join(
   os.homedir(),
   ".claude",
   "settings.json",

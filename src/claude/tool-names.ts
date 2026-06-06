@@ -1,3 +1,4 @@
+// Maps Claude tool names to Copilot-compatible tool names and back.
 import { createHash } from "node:crypto"
 
 import type { ClaudeTool } from "~/claude/types"

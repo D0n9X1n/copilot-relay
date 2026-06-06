@@ -1,11 +1,12 @@
+// `copilot-relay start`: loads config, validates upstream access, and starts the local Claude Code proxy.
 import { defineCommand } from "citty"
 
 import { setupProxyAuth } from "~/lib/auth"
 import { readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { readProxyConfig } from "~/lib/config"
-import { CLAUDE_configPath } from "~/lib/defaults"
-import { log, setLogLevel } from "~/lib/log"
+import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
+import { cleanupLogs, log, setLogLevel } from "~/lib/log"
 import { getExposedModelIds } from "~/lib/models"
 import { validateUpstream } from "~/lib/preflight"
 import { runtimeState } from "~/lib/state"
@@ -17,21 +18,18 @@ export const start = defineCommand({
     name: "start",
     description: "Start the copilot-relay HTTP server.",
   },
-  args: {
-    "show-token": {
-      type: "boolean",
-      default: false,
-      description: "Print GitHub and Copilot tokens during startup.",
-    },
-  },
-  async run({ args }) {
+  async run() {
     const appConfig = await readAppConfig()
     setLogLevel(appConfig.logLevel)
+    await cleanupLogs(appConfig.logRetentionDays)
 
-    const claudeConfigPath = CLAUDE_configPath
+    const claudeConfigPath = defaultClaudeConfigPath
     const config = readProxyConfig(appConfig)
     const applyRuntimeConfig = (nextConfig: AppConfig) => {
+      // Hot reload updates behavior for future requests; it intentionally does
+      // not rebind the already-listening socket when host or port changes.
       setLogLevel(nextConfig.logLevel)
+      void cleanupLogs(nextConfig.logRetentionDays)
       runtimeState.debug = nextConfig.logLevel === "debug" || nextConfig.logLevel === "trace"
       runtimeState.thinkEffort = nextConfig.thinkEffort
       config.copilotBaseUrl = nextConfig.copilotBaseUrl
@@ -51,9 +49,7 @@ export const start = defineCommand({
     log.info(`Think effort: ${appConfig.thinkEffort}`)
     log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
-    const authSession = await setupProxyAuth(config, {
-      showToken: args["show-token"],
-    })
+    const authSession = await setupProxyAuth(config)
 
     try {
       await validateUpstream(config, appConfig.thinkEffort)

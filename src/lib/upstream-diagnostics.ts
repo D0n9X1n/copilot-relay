@@ -14,6 +14,7 @@ const toolSchemaSuspectKeys = new Set([
 ])
 const maxDiagnosticItems = 8
 
+// Reduces upstream tool-schema details into safe diagnostics for debug logs.
 export type ToolDiagnostics = {
   count: number
   invalidNames?: Array<string>

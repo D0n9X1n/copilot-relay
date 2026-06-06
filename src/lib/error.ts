@@ -1,3 +1,4 @@
+// Error wrappers used to preserve upstream HTTP status and response bodies.
 export class ProxyNotImplementedError extends Error {
   constructor(message: string) {
     super(message)

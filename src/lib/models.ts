@@ -1,3 +1,4 @@
+// Config-driven model routing and think-effort validation.
 import { runtimeState } from "~/lib/state"
 
 export type ReasoningEffort =

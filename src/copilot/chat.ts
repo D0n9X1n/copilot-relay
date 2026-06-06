@@ -1,3 +1,4 @@
+// Internal Copilot chat API wrapper used by the Claude route and startup preflight.
 import { events } from "fetch-event-stream"
 
 import type { ProxyConfig } from "~/lib/config"
@@ -49,6 +50,8 @@ export const sanitizeReasoningEffortForModel = (
 const getRequestedReasoningEffort = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload["reasoning_effort"] => {
+  // Configured think effort wins over client input so startup preflight and
+  // actual Claude Code traffic exercise the same upstream behavior.
   return sanitizeReasoningEffortForModel(
     payload.model,
     runtimeState.thinkEffort ?? defaultReasoningEffort,
@@ -283,6 +286,8 @@ async function logUpstreamError(
 }
 
 async function shouldRetryWithResponses(response: Response): Promise<boolean> {
+  // Copilot can list a model but reject the chat endpoint for it; only this
+  // explicit upstream code is treated as a signal to retry via /responses.
   try {
     const errorBody = (await response.clone().json()) as {
       error?: {

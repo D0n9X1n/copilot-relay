@@ -1,3 +1,4 @@
+// File-system layout for config, token cache, logs, and legacy migration paths.
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -26,6 +27,8 @@ const legacyCopilotTokenPaths = [
 const configPath = path.join(appDir, "config.yaml")
 const copilotTokenPath = path.join(appDir, "copilot_token.json")
 const githubTokenPath = path.join(appDir, "github_token")
+const logsDir = path.join(appDir, "logs")
+const logPath = path.join(logsDir, "copilot-relay.log")
 
 export const paths = {
   appDir,
@@ -38,10 +41,14 @@ export const paths = {
     path.join(homeDir, ".copilot-tennel.yaml"),
   ],
   legacyCopilotTokenPaths,
+  logPath,
+  logsDir,
 }
 
 export async function ensurePaths(): Promise<void> {
   await fs.mkdir(paths.appDir, { recursive: true })
+  // GitHub tokens are plain text and safe to migrate here. Copilot token
+  // migration is handled in auth.ts because that cache has a JSON schema.
   await ensureFile(paths.githubTokenPath, {
     legacyPaths: legacyGithubTokenPaths,
   })

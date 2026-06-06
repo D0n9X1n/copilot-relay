@@ -1,3 +1,4 @@
+// Claude Code route surface: /v1/messages, /v1/messages/count_tokens, and /v1/models.
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 
@@ -63,6 +64,9 @@ const getClaudeRequestedThinking = (
 const eventsFromClaudeResponse = (
   response: ClaudeResponse,
 ): Array<ClaudeStreamEventData> => {
+  // When Claude Code asks for streaming but Copilot returned a completed JSON
+  // response, synthesize the minimal Claude SSE sequence so client bookkeeping
+  // remains identical to a real streaming response.
   const events: Array<ClaudeStreamEventData> = [
     {
       type: "message_start",
@@ -255,6 +259,9 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     const tokenCount = await getTokenCount(openAIPayload, selectedModel)
     const effectiveModelId = selectedModel.id
 
+    // Claude Code already accounts for MCP tool payloads differently. For
+    // non-MCP local tools, add a small Claude-family overhead to avoid
+    // under-reporting context use in the UI.
     if (claudePayload.tools && claudePayload.tools.length > 0) {
       let mcpToolExist = false
       if (claudeBeta?.startsWith("claude-code")) {

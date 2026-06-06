@@ -116,6 +116,9 @@ test.afterEach(() => {
   delete runtimeState.modelRouting
 })
 
+// Why: Claude Code and humans can probe available models before sending a
+// message. This scenario verifies the public model list is served locally from
+// runtime config and does not need a real Copilot network call.
 test("GET /v1/models returns configured Claude Code models", async () => {
   const mock = await startMockCopilot()
   try {
@@ -133,6 +136,9 @@ test("GET /v1/models returns configured Claude Code models", async () => {
   }
 })
 
+// Why: Opus is the special Claude Code path. This scenario exercises the full
+// local HTTP route, Claude-to-Copilot translation, upstream mock, and response
+// translation while asserting the upstream model and effective effort.
 test("POST /v1/messages routes opus requests to configured opus model", async () => {
   const mock = await startMockCopilot()
   try {
@@ -162,6 +168,9 @@ test("POST /v1/messages routes opus requests to configured opus model", async ()
   }
 })
 
+// Why: every non-Opus requested model should still work by routing to GPT.
+// This scenario protects the default fallback path and verifies GPT requests
+// use Copilot's Responses API shape with reasoning.effort.
 test("POST /v1/messages routes non-opus requests to configured gpt model", async () => {
   const mock = await startMockCopilot()
   try {

@@ -1,3 +1,4 @@
+// Low-level GitHub Copilot HTTP client: adds required headers, retries transient failures, and logs timing.
 import { randomUUID } from "node:crypto"
 
 import type { ProxyConfig } from "~/lib/config"
@@ -30,6 +31,8 @@ export interface FetchCopilotOptions {
 }
 
 const shouldRetryResponse = (response: Response): boolean =>
+  // Retry only transient upstream failures; 4xx responses may contain routing
+  // signals, such as "unsupported_api_for_model", that callers need to inspect.
   response.status >= 500 && response.status <= 599
 
 const buildHeaders = (

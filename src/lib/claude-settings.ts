@@ -1,3 +1,4 @@
+// Optional writer for Claude Code settings so it points at the local proxy.
 import fs from "node:fs/promises"
 import path from "node:path"
 
@@ -61,6 +62,8 @@ export async function applyClaudeConfig(
       : undefined
 
   env.ANTHROPIC_BASE_URL = baseUrl
+  // Claude Code only requires a syntactically present auth token here; real
+  // upstream authentication is handled by copilot-relay's Copilot token.
   if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
     env.ANTHROPIC_AUTH_TOKEN = "dummy"
   }
