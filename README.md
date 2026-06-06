@@ -11,6 +11,13 @@
 
 Yet, just another relay for Claude Code to use a GitHub Copilot subscription.
 
+## Disclaimer
+
+This is a research-oriented project and is not affiliated with GitHub, GitHub
+Copilot, Anthropic, or Claude Code. It depends on upstream GitHub Copilot
+services and undocumented compatibility behavior, so Copilot availability, model
+access, API behavior, and runtime stability are not guaranteed.
+
 Public API:
 
 - `POST /v1/messages`
