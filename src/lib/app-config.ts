@@ -10,7 +10,7 @@ import {
 } from "~/lib/models"
 import { paths } from "~/lib/paths"
 
-export const logLevels = ["error", "warn", "info", "debug"] as const
+export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
 export interface AppConfig {
   claudeSetup: boolean
@@ -41,13 +41,24 @@ export const isLogLevelName = (value: unknown): value is LogLevelName =>
   && logLevels.includes(value.toLowerCase() as LogLevelName)
 
 const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
-  if (typeof value !== "string") {
+  if (value === undefined) {
     return undefined
   }
 
+  if (typeof value !== "string") {
+    throw new Error(
+      `Invalid logLevel: expected one of ${logLevels.join(", ")}`,
+    )
+  }
+
   const normalized = value.toLowerCase()
-  if (normalized === "warning") return "warn"
-  return isLogLevelName(normalized) ? normalized : undefined
+  if (!isLogLevelName(normalized)) {
+    throw new Error(
+      `Invalid logLevel "${value}": expected one of ${logLevels.join(", ")}`,
+    )
+  }
+
+  return normalized
 }
 
 const normalizeBoolean = (value: unknown): boolean | undefined => {
@@ -243,8 +254,7 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# Log verbosity:",
     "#   error - startup/preflight/request failures only",
-    "#   warn  - error logs plus recoverable warnings",
-    "#   info  - warn logs plus startup status, preflight status, and local HTTP",
+    "#   info  - error logs plus startup status, preflight status, and local HTTP",
     "#           status codes",
     "#   debug - info logs plus model routing summaries, Copilot upstream timings,",
     "#           token refresh scheduling, request payloads, and upstream error details",

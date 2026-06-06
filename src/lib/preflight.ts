@@ -45,7 +45,7 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
     )
   }
 
-  log.debug(`Upstream models available: ${requiredModels.join(", ")}`)
+  log.info(`Upstream models available: ${requiredModels.join(", ")}`)
 }
 
 const createProbePayload = (model: string): ChatCompletionsPayload => ({
@@ -78,7 +78,7 @@ const validateModelRequest = async (
       throw new Error(`Preflight request for ${model} unexpectedly streamed`)
     }
 
-    log.debug(`Preflight OK: model=${model} think_effort=${thinkEffort}`)
+    log.info(`Preflight OK: model=${model} think_effort=${thinkEffort}`)
   } catch (error) {
     if (error instanceof HTTPError) {
       const text = await error.response.text().catch(() => "")
@@ -94,7 +94,7 @@ export const validateUpstream = async (
   config: ProxyConfig,
   thinkEffort: ReasoningEffort,
 ): Promise<void> => {
-  log.debug("Running upstream preflight")
+  log.info("Running upstream preflight")
   await ensureRequiredModels(config)
 
   for (const model of getExposedModelIds()) {

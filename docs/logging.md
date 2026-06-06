@@ -13,12 +13,12 @@ Log files are cleaned according to `logRetentionDays` in `~/.copilot-relay/confi
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures |
-| `warn` | Errors plus recoverable warnings |
-| `info` | Warnings plus startup status, preflight status, and local HTTP status codes |
+| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
 | `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
 
 Use `debug` only for local debugging. It can log prompts and tool payloads.
 File logs follow the same `logLevel` filter as console logs.
+Any other `logLevel` value is invalid and stops startup.
 
 ## File log line format
 
@@ -102,7 +102,7 @@ Fields:
 - elapsed milliseconds
 - retry attempt
 
-If a transient 5xx happens, retries are logged as warnings.
+If a transient 5xx happens, retries are logged at `error` with retry context.
 
 When Copilot returns a non-2xx response, `info` keeps a short status summary:
 

@@ -13,14 +13,12 @@ let nextLogCleanupCheckAt = 0
 
 const consolaLevelByName: Record<LogLevelName, number> = {
   error: 0,
-  warn: 1,
   info: 3,
   debug: 4,
 }
 
 const fileLevelByMethod: Record<string, number> = {
   error: consolaLevelByName.error,
-  warn: consolaLevelByName.warn,
   info: consolaLevelByName.info,
   debug: consolaLevelByName.debug,
 }
@@ -71,7 +69,6 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
   }) as T
 
 consola.error = wrapFileLog("error", consola.error.bind(consola))
-consola.warn = wrapFileLog("warn", consola.warn.bind(consola))
 consola.info = wrapFileLog("info", consola.info.bind(consola))
 consola.debug = wrapFileLog("debug", consola.debug.bind(consola))
 

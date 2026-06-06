@@ -53,9 +53,10 @@ thinkEffort: xhigh
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, and request failures |
-| `warn` | Errors plus recoverable warnings |
-| `info` | Warnings plus startup status, preflight status, and local HTTP status codes |
+| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
 | `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
+
+Any other `logLevel` value is invalid and stops startup.
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
 
