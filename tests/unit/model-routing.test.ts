@@ -23,6 +23,7 @@ test("routes requests containing opus to configured opus model", () => {
 
   assert.equal(routeModelId("opus"), "opus-test")
   assert.equal(routeModelId("claude-opus-4.8"), "opus-test")
+  assert.equal(routeModelId("  Claude-OPUS-4.8  "), "opus-test")
   assert.equal(routeModelId("anything else"), "gpt-test")
 })
 

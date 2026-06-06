@@ -207,6 +207,9 @@ export function buildResponsesRequestPayload(
   payload: ChatCompletionsPayload,
   reasoningEffort: ResponsesReasoningEffort | undefined,
 ): ResponsesRequestPayload {
+  // Responses API uses an `input` tree instead of chat `messages`, but the
+  // rest of the bridge still reasons in chat-completion terms. Keep this as
+  // the single boundary where chat payloads become Responses payloads.
   return {
     model: payload.model,
     input: translateMessagesToResponsesInput(payload.messages),
@@ -242,6 +245,9 @@ export function translateResponsesToChatCompletion(
     .join("")
   const reasoningText = getResponsesReasoningText(response)
 
+  // Merge Responses output items back into one chat-completion choice so the
+  // Claude translation layer can stay shared for /chat/completions and
+  // /responses upstream calls.
   return {
     id: response.id,
     object: "chat.completion",

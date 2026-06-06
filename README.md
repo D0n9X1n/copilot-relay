@@ -54,7 +54,7 @@ thinkEffort: xhigh
 | --- | --- |
 | `error` | Startup, preflight, and request failures |
 | `info` | Errors plus startup status, preflight status, and local HTTP status codes |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
 
 Any other `logLevel` value is invalid and stops startup.
 
@@ -77,11 +77,21 @@ Upstream failures are logged at `error` with full request and response context i
 
 Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
 
+Quick inspection:
+
+```sh
+tail -f ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.log
+```
+
+See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common debugging workflows.
+
 ## Development
 
 Developer notes live in [`docs/development.md`](docs/development.md).
 Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
 Logging notes live in [`docs/logging.md`](docs/logging.md).
+Troubleshooting notes live in [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ```sh
 npm install

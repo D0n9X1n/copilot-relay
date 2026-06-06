@@ -17,6 +17,8 @@ const consolaLevelByName: Record<LogLevelName, number> = {
   debug: 4,
 }
 
+// Keep runtime logging intentionally small: error carries full failure context,
+// info is operational status, and debug is detailed tracing for local diagnosis.
 const fileLevelByMethod: Record<string, number> = {
   error: consolaLevelByName.error,
   info: consolaLevelByName.info,
@@ -63,6 +65,8 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
 ): T =>
   ((...args: Array<unknown>) => {
     if ((fileLevelByMethod[level] ?? consolaLevelByName.info) <= currentLogLevel) {
+      // File logging must never block the console path or fail a request. If
+      // the disk write fails, the original consola call still runs.
       void writeLogFile(level, args).catch(() => undefined)
     }
     return fn(...args)

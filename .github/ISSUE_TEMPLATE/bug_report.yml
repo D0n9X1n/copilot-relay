@@ -41,6 +41,14 @@ body:
     validations:
       required: true
   - type: input
+    id: timestamp
+    attributes:
+      label: Approximate timestamp
+      description: When did the failure happen? Include timezone if possible.
+      placeholder: "2026-06-06 01:23:45 PDT"
+    validations:
+      required: true
+  - type: input
     id: version
     attributes:
       label: copilot-relay version
@@ -75,8 +83,28 @@ body:
     id: logs
     attributes:
       label: Relevant logs
-      description: Paste relevant lines from `~/.copilot-relay/logs/copilot-relay.log`. Do not paste debug logs unless reviewed.
+      description: Paste the small log slice around the timestamp from `~/.copilot-relay/logs/copilot-relay.log`. Include the info request summary and any matching error entry. Do not paste debug logs unless reviewed.
       render: text
+  - type: dropdown
+    id: debug_enabled
+    attributes:
+      label: Was debug logging enabled?
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: preflight
+    attributes:
+      label: Did startup preflight pass?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
   - type: textarea
     id: extra
     attributes:

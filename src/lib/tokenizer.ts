@@ -51,6 +51,9 @@ const calculateContentPartsTokens = (
   let tokens = 0
   for (const part of contentParts) {
     if (part.type === "image_url") {
+      // Claude Code needs a fast local estimate, not exact upstream billing.
+      // Use a fixed image overhead plus URL token count to avoid severe
+      // under-counting when screenshots are present.
       tokens += encoder.encode(part.image_url.url).length + 85
     } else if (part.text) {
       tokens += encoder.encode(part.text).length
@@ -64,6 +67,8 @@ const calculateMessageTokens = (
   encoder: Encoder,
   constants: ReturnType<typeof getModelConstants>,
 ): number => {
+  // Mirrors OpenAI chat formatting heuristics closely enough for UI budgeting;
+  // /count_tokens is advisory and should not call real Copilot services.
   const tokensPerMessage = 3
   const tokensPerName = 1
   let tokens = tokensPerMessage
@@ -125,6 +130,8 @@ export const getTokenizerFromModel = (model: TokenizerModel): string =>
   model.capabilities.tokenizer || "o200k_base"
 
 const getModelConstants = (model: TokenizerModel) =>
+  // Tool/function overhead differs by tokenizer family. Keep these constants
+  // small and explicit so count_tokens remains deterministic in tests.
   model.id === "gpt-3.5-turbo" || model.id === "gpt-4"
     ? {
         funcInit: 10,
