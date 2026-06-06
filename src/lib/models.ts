@@ -37,6 +37,9 @@ export const getExposedModelIds = (): Array<string> => {
 
 export const routeModelId = (model: string): string => {
   const routing = getModelRouting()
+  // Keep routing intentionally predictable for Claude Code: any alias that
+  // mentions Opus gets the configured Opus upstream, all other model names use
+  // the configured GPT upstream.
   return model.trim().toLowerCase().includes("opus") ?
       routing.opusModel
     : routing.gptModel

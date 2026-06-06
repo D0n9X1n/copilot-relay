@@ -2,6 +2,8 @@
 #
 # This file is copied to ~/.copilot-relay/config.yaml on first start.
 # Edit the user config file, not this template, for local changes.
+# Most values hot-reload while the service is running. host and port still
+# require restart because the listening socket is already bound.
 
 # Local host for the Claude Code-compatible HTTP server.
 host: 127.0.0.1
@@ -22,7 +24,7 @@ claudeSetup: true
 #   info  - error logs plus startup status, preflight status, and local HTTP
 #           status codes
 #   debug - info logs plus model routing summaries, Copilot upstream timings,
-#           token refresh scheduling, and request payloads
+#           and request payloads
 # Any other value is invalid and stops startup.
 logLevel: info
 

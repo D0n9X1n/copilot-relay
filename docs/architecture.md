@@ -161,6 +161,8 @@ serve Claude Code requests
 ## Logging
 
 Logs go to both console and `~/.copilot-relay/logs/copilot-relay.log`.
+Operational debugging workflows live in [`logging.md`](logging.md) and
+[`troubleshooting.md`](troubleshooting.md).
 
 At `debug`, every model request logs:
 
@@ -175,6 +177,7 @@ At `debug`, the proxy logs Claude and upstream request diagnostics without redac
 
 ## Testing strategy
 
-Unit tests cover pure routing behavior.
+Unit tests cover pure routing behavior, config validation, and protocol
+translation edge cases that should not require a mocked upstream.
 
 Integration tests run the Hono app against a local mocked Copilot upstream. CI must never call real GitHub Copilot services.

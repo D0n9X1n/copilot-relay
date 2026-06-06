@@ -14,11 +14,32 @@ Log files are cleaned according to `logRetentionDays` in `~/.copilot-relay/confi
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures |
 | `info` | Errors plus startup status, preflight status, and local HTTP status codes |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
 
 Use `debug` only for local debugging. It can log prompts and tool payloads.
 File logs follow the same `logLevel` filter as console logs.
 Any other `logLevel` value is invalid and stops startup.
+
+## Inspecting logs
+
+Use the file log for local diagnosis:
+
+```sh
+tail -f ~/.copilot-relay/logs/copilot-relay.log
+```
+
+Useful searches:
+
+```sh
+grep -n "Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Copilot POST" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Failed to refresh Copilot token" ~/.copilot-relay/logs/copilot-relay.log
+```
+
+Start with `info`. Temporarily set `logLevel: debug` only when you need model
+routing, upstream timings, or request payloads.
 
 ## File log line format
 
@@ -36,17 +57,17 @@ Example:
 
 ## Startup logs
 
-At `debug`, startup logs confirm the active config and startup preflight:
+At `info`, startup logs confirm the active config and startup preflight:
 
 ```text
-debug Log level: debug
-debug Think effort: xhigh
-debug Exposed models: gpt-5.5, claude-opus-4.8
-debug Running upstream preflight
-debug Upstream models available: gpt-5.5, claude-opus-4.8
-debug Preflight OK: model=gpt-5.5 think_effort=xhigh
-debug Preflight OK: model=claude-opus-4.8 think_effort=xhigh
-debug copilot-relay listening on http://127.0.0.1:4142
+info Log level: info
+info Think effort: xhigh
+info Exposed models: gpt-5.5, claude-opus-4.8
+info Running upstream preflight
+info Upstream models available: gpt-5.5, claude-opus-4.8
+info Preflight OK: model=gpt-5.5 think_effort=xhigh
+info Preflight OK: model=claude-opus-4.8 think_effort=xhigh
+info copilot-relay listening on http://127.0.0.1:4142
 ```
 
 If startup fails, check the last `Startup preflight failed` or token refresh error.
@@ -65,6 +86,13 @@ Fields:
 - path
 - response status
 - elapsed milliseconds
+
+For non-2xx responses, the same line includes a short error message when one is
+available:
+
+```text
+info POST /v1/messages -> 400 123ms error="Invalid request"
+```
 
 ## Model routing logs
 
@@ -132,10 +160,10 @@ Use this only when you need to debug exact request shape. Do not share debug log
 Token values are never printed. Token lifecycle logs include paths and scheduling only:
 
 ```text
-debug Using cached GitHub token at ~/.copilot-relay/github_token
-debug Using cached Copilot token at ~/.copilot-relay/copilot_token.json
-debug Next Copilot token refresh in 1430s
-debug Refreshed Copilot token
+info Using cached GitHub token at ~/.copilot-relay/github_token
+info Using cached Copilot token at ~/.copilot-relay/copilot_token.json
+info Next Copilot token refresh in 1430s
+info Refreshed Copilot token
 error Failed to refresh Copilot token: ...
 ```
 
@@ -151,7 +179,7 @@ If requests suddenly fail with auth errors:
 When `~/.copilot-relay/config.yaml` changes:
 
 ```text
-debug Config reloaded: logLevel=debug thinkEffort=xhigh
+info Config reloaded: logLevel=debug thinkEffort=xhigh
 ```
 
 Hot reload updates:

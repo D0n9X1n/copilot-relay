@@ -40,7 +40,7 @@ export const isLogLevelName = (value: unknown): value is LogLevelName =>
   typeof value === "string"
   && logLevels.includes(value.toLowerCase() as LogLevelName)
 
-const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
+export const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
   if (value === undefined) {
     return undefined
   }
@@ -172,6 +172,9 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
     }
 
     const [, key, value] = match
+    // The runtime config intentionally supports only a flat key/value YAML
+    // subset. That keeps startup dependency-free and makes bad edits fail
+    // predictably instead of being partially interpreted.
     switch (key) {
       case "claudeSetup":
       case "claude_setup": {
@@ -257,7 +260,7 @@ const serializeConfig = (config: AppConfig): string =>
     "#   info  - error logs plus startup status, preflight status, and local HTTP",
     "#           status codes",
     "#   debug - info logs plus model routing summaries, Copilot upstream timings,",
-    "#           token refresh scheduling, request payloads, and upstream error details",
+    "#           and request payloads",
     `logLevel: ${config.logLevel}`,
     "",
     "# Number of days to keep files in ~/.copilot-relay/logs.",
@@ -327,7 +330,8 @@ export const watchAppConfig = (
       lastMtime = nextMtime
       onReload(await readAppConfig())
     } catch {
-      // Keep the active config if the file is temporarily invalid.
+      // Config editors can briefly write invalid partial files. Keep the last
+      // good runtime config rather than degrading live requests mid-edit.
     }
   }, 1000)
 

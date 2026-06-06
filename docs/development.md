@@ -17,6 +17,7 @@ The proxy may call Copilot upstream `/chat/completions` and `/responses` interna
 
 See [`architecture.md`](architecture.md) for the detailed design.
 See [`logging.md`](logging.md) for log formats and debugging workflows.
+See [`troubleshooting.md`](troubleshooting.md) for operational playbooks.
 
 ```text
 Claude Code
@@ -74,7 +75,7 @@ Log levels:
 | --- | --- |
 | `error` | Startup, preflight, and request failures |
 | `info` | Errors plus startup status, preflight status, and local HTTP status codes |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, token refresh scheduling, and request payloads |
+| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
 
 Any other `logLevel` value is invalid and must fail startup.
 
@@ -129,7 +130,10 @@ npm run build
 npm test
 ```
 
-Tests currently use Node's built-in test runner.
+Tests currently use Node's built-in test runner. Prefer unit tests for pure
+logic such as config validation, model routing, token-count heuristics, and
+Claude/Copilot protocol edge cases; use integration tests only when Hono routing
+or mocked upstream behavior is part of the contract.
 
 ## CI and publishing
 
