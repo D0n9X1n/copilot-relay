@@ -23,7 +23,7 @@
     "node": ">=22"
   },
   "bin": {
-    "copilot-relay": "./dist/main.js"
+    "copilot-relay": "dist/main.js"
   },
   "files": [
     "config.default.yaml",
