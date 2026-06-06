@@ -38,6 +38,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -54,15 +55,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${RELEASE_TAG}"
-          commit_message="$(git log -1 --format=%s HEAD)"
+          current_commit="$(git rev-list -n 1 "$tag")"
+          previous_tag="$(git describe --tags --abbrev=0 "${current_commit}^" 2>/dev/null || true)"
+          if [ -n "$previous_tag" ]; then
+            commit_range="${previous_tag}..${current_commit}"
+          else
+            commit_range="${current_commit}"
+          fi
+          commit_messages="$(git log --reverse --format='- %s' "$commit_range")"
           notes_file="$(mktemp)"
           cat > "$notes_file" <<EOF
           ## copilot-relay ${tag}
 
           Automated release for ${tag}.
 
-          ### Commit
-          ${commit_message}
+          ### Commits
+          ${commit_messages}
 
           ### Assets
           - npm package tarball
