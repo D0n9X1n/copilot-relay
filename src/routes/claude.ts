@@ -18,6 +18,7 @@ import {
   translateChunkToClaudeEvents,
   translateErrorToClaudeErrorEvent,
 } from "~/claude/stream"
+import { getUnsupportedClaudeServerTool } from "~/claude/server-tools"
 import {
   createClaudeToolNameMapper,
   getToolNameMapperOptionsForModel,
@@ -146,6 +147,20 @@ claudeRoutes.post("/messages", async (c) => {
   log.debug("Full Claude request payload", { payload: claudePayload })
 
   try {
+    const unsupportedServerTool = getUnsupportedClaudeServerTool(claudePayload)
+    if (unsupportedServerTool) {
+      log.error("Unsupported Claude API request", {
+        method: c.req.method,
+        path: c.req.path,
+        reason: unsupportedServerTool.message,
+        tool: unsupportedServerTool.name,
+        payload: claudePayload,
+      })
+      throw new ProxyNotImplementedError(
+        `${unsupportedServerTool.message} Use WebFetch or browser automation for live web data, or inspect the logged payload to implement a compatible endpoint.`,
+      )
+    }
+
     const upstreamModel = translateModelName(claudePayload.model)
     const toolNameMapper = createClaudeToolNameMapper(claudePayload.tools, {
       ...getToolNameMapperOptionsForModel(upstreamModel),

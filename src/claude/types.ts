@@ -113,8 +113,9 @@ export type ClaudeMessage = ClaudeUserMessage | ClaudeAssistantMessage
 
 export interface ClaudeTool {
   name: string
+  type?: string
   description?: string
-  input_schema: Record<string, unknown>
+  input_schema?: Record<string, unknown>
 }
 
 export interface ClaudeResponse {

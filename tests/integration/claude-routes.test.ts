@@ -202,3 +202,55 @@ test("POST /v1/messages routes non-opus requests to configured gpt model", async
     await mock.close()
   }
 })
+
+// Why: Anthropic server-side WebSearch cannot be executed by the Copilot
+// upstream. The relay must fail loudly before the model can fabricate search
+// results that look like a successful tool response.
+test("POST /v1/messages rejects unsupported Claude server-side WebSearch", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({
+        max_tokens: 16,
+        messages: [{ role: "user", content: "search the web for copilot docs" }],
+        model: "opus",
+        tools: [
+          {
+            name: "web_search",
+            type: "web_search_20250305",
+            max_uses: 1,
+          },
+        ],
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }))
+    const body = await response.json() as { error?: { message?: string } }
+
+    assert.equal(response.status, 501)
+    assert.match(body.error?.message ?? "", /WebSearch/)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+// Why: Claude Code may probe new Anthropic-compatible endpoints before the
+// relay implements them. Returning a structured 404 while logging the payload
+// gives us the API shape needed for a later implementation.
+test("unknown Claude API routes return structured 404", async () => {
+  const app = createTestProxy("http://127.0.0.1:1")
+  const response = await app.fetch(new Request("http://localhost/v1/unknown_endpoint", {
+    body: JSON.stringify({ model: "opus", input: "capture this shape" }),
+    headers: {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    method: "POST",
+  }))
+  const body = await response.json() as { error?: { message?: string } }
+
+  assert.equal(response.status, 404)
+  assert.equal(body.error?.message, "Unknown Claude API route")
+})

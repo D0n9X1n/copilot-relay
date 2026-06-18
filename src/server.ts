@@ -7,6 +7,34 @@ import type { ProxyConfig, ProxyEnv } from "~/lib/config"
 import { log } from "~/lib/log"
 import { claudeRoutes } from "~/routes/claude"
 
+const loggedRequestHeaders = [
+  "anthropic-beta",
+  "anthropic-version",
+  "claude-beta",
+  "content-type",
+]
+
+const readRequestPayloadForLog = async (request: Request): Promise<unknown> => {
+  const text = await request.clone().text().catch(() => "")
+  if (!text) {
+    return undefined
+  }
+
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
+  }
+}
+
+const getLoggedHeaders = (request: Request): Record<string, string> =>
+  Object.fromEntries(
+    loggedRequestHeaders.flatMap((name) => {
+      const value = request.headers.get(name)
+      return value ? [[name, value]] : []
+    }),
+  )
+
 const formatStatusLog = (
   method: string,
   path: string,
@@ -55,6 +83,17 @@ export const createServer = (config: ProxyConfig) => {
 
   app.get("/healthz", (c) => c.json({ ok: true }))
   app.route("/v1", claudeRoutes)
+  app.notFound(async (c) => {
+    const message = "Unknown Claude API route"
+    c.set("requestErrorMessage", message)
+    log.error("Unknown Claude API request", {
+      method: c.req.method,
+      path: c.req.path,
+      headers: getLoggedHeaders(c.req.raw),
+      payload: await readRequestPayloadForLog(c.req.raw),
+    })
+    return c.json({ error: { message } }, 404)
+  })
 
   return app
 }

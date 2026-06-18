@@ -25,6 +25,11 @@ Public API:
 - `GET /v1/models`
 - `GET /healthz`
 
+Unsupported Claude server-side tools, including WebSearch, return `501` instead
+of being silently relayed. Unknown API routes return `404`. Both cases log the
+method, path, selected headers, and request payload to help implement compatible
+endpoints later.
+
 Routing:
 
 | Requested model | Upstream model |
@@ -81,6 +86,9 @@ copilot-relay start
 At `debug`, every model request logs the requested model, upstream model, requested think effort, requested thinking, and effective think effort.
 
 Upstream failures are logged at `error` with full request and response context in the same log file.
+
+Unsupported or unknown Claude API requests are logged at `error` with the local
+method/path and detailed request payload.
 
 Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
 
