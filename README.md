@@ -29,7 +29,7 @@ Claude WebSearch is bridge-managed: when the model selects the WebSearch tool,
 the relay executes Copilot `/responses` with `web_search_preview`, then sends the
 retrieved context through a final model pass and returns Claude
 `server_tool_use` / `web_search_tool_result` blocks. Unknown API routes return
-`404` and log method, path, selected headers, and request payload to help
+`500` and log method, path, selected headers, and request payload to help
 implement compatible endpoints later.
 
 Routing:
@@ -93,8 +93,8 @@ At `debug`, every model request logs the requested model, upstream model, reques
 
 Upstream failures are logged at `error` with full request and response context in the same log file.
 
-Unknown Claude API requests are logged at `error` with the local method/path and
-detailed request payload.
+Unsupported Claude API requests are logged at `error` with the local method/path
+and detailed request payload.
 
 Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
 

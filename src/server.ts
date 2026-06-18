@@ -84,15 +84,15 @@ export const createServer = (config: ProxyConfig) => {
   app.get("/healthz", (c) => c.json({ ok: true }))
   app.route("/v1", claudeRoutes)
   app.notFound(async (c) => {
-    const message = "Unknown Claude API route"
+    const message = "Unsupported Claude API route"
     c.set("requestErrorMessage", message)
-    log.error("Unknown Claude API request", {
+    log.error("Unsupported Claude API request", {
       method: c.req.method,
       path: c.req.path,
       headers: getLoggedHeaders(c.req.raw),
       payload: await readRequestPayloadForLog(c.req.raw),
     })
-    return c.json({ error: { message } }, 404)
+    return c.json({ error: { message } }, 500)
   })
 
   return app

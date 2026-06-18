@@ -395,9 +395,9 @@ test("POST /v1/messages streams Claude WebSearch response events", async () => {
 })
 
 // Why: Claude Code may probe new Anthropic-compatible endpoints before the
-// relay implements them. Returning a structured 404 while logging the payload
-// gives us the API shape needed for a later implementation.
-test("unknown Claude API routes return structured 404", async () => {
+// relay implements them. Returning a structured 500 while logging the payload
+// makes unsupported API usage explicit and gives us the shape needed later.
+test("unsupported Claude API routes return structured 500", async () => {
   const app = createTestProxy("http://127.0.0.1:1")
   const response = await app.fetch(new Request("http://localhost/v1/unknown_endpoint", {
     body: JSON.stringify({ model: "opus", input: "capture this shape" }),
@@ -409,6 +409,6 @@ test("unknown Claude API routes return structured 404", async () => {
   }))
   const body = await response.json() as { error?: { message?: string } }
 
-  assert.equal(response.status, 404)
-  assert.equal(body.error?.message, "Unknown Claude API route")
+  assert.equal(response.status, 500)
+  assert.equal(body.error?.message, "Unsupported Claude API route")
 })
