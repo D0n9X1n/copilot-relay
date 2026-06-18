@@ -9,6 +9,7 @@ export interface ProxyConfig {
   copilotBaseUrl: string
   copilotToken: string | undefined
   vsCodeVersion: string
+  webSearchBackend?: string
 }
 
 export interface ProxyEnv {
@@ -24,4 +25,5 @@ export const readProxyConfig = (config: AppConfig): ProxyConfig => ({
   host: config.host,
   port: config.port,
   vsCodeVersion: vscodeVersion,
+  webSearchBackend: config.webSearchBackend,
 })

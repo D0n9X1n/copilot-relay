@@ -128,11 +128,12 @@ claudeSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: xhigh
+webSearchBackend:
 gptModel: gpt-5.5
 opusModel: claude-opus-4.8
 ```
 
-`host` and `port` require restart to affect the listening socket. Other values are hot-reloaded.
+`host` and `port` require restart to affect the listening socket. Other values are hot-reloaded. Empty `webSearchBackend` uses `gptModel`.
 
 ## Startup flow
 

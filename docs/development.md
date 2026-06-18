@@ -117,7 +117,6 @@ Do not reintroduce these without a product decision:
 - `/usage`
 - Codex support
 - Auto mode
-- WebSearch support
 - rate limiting
 - Bun-only scripts
 

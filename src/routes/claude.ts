@@ -22,6 +22,15 @@ import {
   createClaudeToolNameMapper,
   getToolNameMapperOptionsForModel,
 } from "~/claude/tool-names"
+import {
+  createClaudeWebSearchExecution,
+  createClaudeWebSearchResponse,
+  createFinalWebSearchPayload,
+  getClaudeWebSearchToolCallFromChatResponse,
+  hasClaudeWebSearch,
+  mergeWebSearchAndFinalResponse,
+  prepareClaudeWebSearchDecisionPayload,
+} from "~/claude/web-search"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
@@ -102,7 +111,7 @@ const eventsFromClaudeResponse = (
         index,
         delta: { type: "thinking_delta", thinking: block.thinking },
       })
-    } else if (block.type === "tool_use") {
+    } else if (block.type === "tool_use" || block.type === "server_tool_use") {
       events.push({
         type: "content_block_delta",
         index,
@@ -147,14 +156,22 @@ claudeRoutes.post("/messages", async (c) => {
 
   try {
     const upstreamModel = translateModelName(claudePayload.model)
-    const toolNameMapper = createClaudeToolNameMapper(claudePayload.tools, {
+    const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
+    const decisionPayload =
+      shouldLetModelDecideWebSearch ?
+        prepareClaudeWebSearchDecisionPayload(claudePayload)
+      : claudePayload
+    const toolNameMapper = createClaudeToolNameMapper(decisionPayload.tools, {
       ...getToolNameMapperOptionsForModel(upstreamModel),
     })
     const openAIPayload = translateToOpenAI(
-      claudePayload,
+      decisionPayload,
       undefined,
       toolNameMapper,
     )
+    if (shouldLetModelDecideWebSearch) {
+      openAIPayload.stream = false
+    }
     const response = await createChatCompletions(config, openAIPayload, {
       client: "claude",
       requestedModel: claudePayload.model,
@@ -163,7 +180,52 @@ claudeRoutes.post("/messages", async (c) => {
     })
 
     if (isNonStreamingResponse(response)) {
-      const claudeResponse = translateToClaude(response, toolNameMapper)
+      const webSearchToolCall = shouldLetModelDecideWebSearch ?
+        getClaudeWebSearchToolCallFromChatResponse(response, toolNameMapper)
+      : undefined
+      let claudeResponse: ClaudeResponse
+
+      if (webSearchToolCall) {
+        const search = await createClaudeWebSearchExecution(
+          config,
+          claudePayload,
+          webSearchToolCall.query,
+        )
+        const searchResponse = createClaudeWebSearchResponse(search)
+
+        if (search.results.length === 0) {
+          claudeResponse = searchResponse
+        } else {
+          const finalResponse = await createChatCompletions(
+            config,
+            createFinalWebSearchPayload(openAIPayload, search),
+            {
+              client: "claude",
+              requestedModel: claudePayload.model,
+              requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
+              requestedThinking: getClaudeRequestedThinking(claudePayload),
+            },
+          )
+
+          if (!isNonStreamingResponse(finalResponse)) {
+            throw new HTTPError(
+              "Claude web search final answer request unexpectedly streamed",
+              new Response("Claude web search final answer request unexpectedly streamed", {
+                status: 502,
+                headers: { "content-type": "text/plain" },
+              }),
+            )
+          }
+
+          claudeResponse = mergeWebSearchAndFinalResponse(
+            searchResponse,
+            translateToClaude(finalResponse, toolNameMapper),
+          )
+        }
+      } else {
+        claudeResponse = translateToClaude(response, toolNameMapper)
+      }
+
       if (!claudePayload.stream) {
         return c.json(claudeResponse)
       }
@@ -176,6 +238,16 @@ claudeRoutes.post("/messages", async (c) => {
           })
         }
       })
+    }
+
+    if (shouldLetModelDecideWebSearch) {
+      throw new HTTPError(
+        "Claude web search model-decision request unexpectedly streamed",
+        new Response("Claude web search model-decision request unexpectedly streamed", {
+          status: 502,
+          headers: { "content-type": "text/plain" },
+        }),
+      )
     }
 
     return streamSSE(c, async (stream) => {

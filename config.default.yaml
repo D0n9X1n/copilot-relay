@@ -35,6 +35,10 @@ logRetentionDays: 3
 # Valid values: none, low, medium, high, xhigh.
 thinkEffort: xhigh
 
+# Copilot model used for bridge-managed Claude WebSearch.
+# Leave empty to use gptModel.
+webSearchBackend:
+
 # Model routing: requests containing "opus" use opusModel; all others use gptModel.
 #
 # Upstream Copilot model used for non-Opus requests.
