@@ -19,6 +19,25 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   return body ? JSON.parse(body) as unknown : undefined
 }
 
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
+
 const startMockCopilot = async () => {
   const requests: Array<CapturedRequest> = []
   let webSearchChatCalls = 0
@@ -274,6 +293,105 @@ test("POST /v1/messages routes non-opus requests to configured gpt model", async
     )
   } finally {
     await mock.close()
+  }
+})
+
+// Why: one slow upstream request must not serialize the relay. Claude Code can
+// issue multiple model requests at once, so the server needs to accept and
+// forward later requests even while an earlier upstream response is still open.
+test("POST /v1/messages forwards concurrent requests without waiting for earlier responses", async () => {
+  const requests: Array<CapturedRequest> = []
+  let releaseFirstResponse: () => void = () => {}
+  let sawSecondRequest: () => void = () => {}
+  const firstResponseCanFinish = new Promise<void>((resolve) => {
+    releaseFirstResponse = resolve
+  })
+  const secondRequestArrived = new Promise<void>((resolve) => {
+    sawSecondRequest = resolve
+  })
+  let chatRequestCount = 0
+  const server = createHttpServer(async (request, response) => {
+    const path = request.url ?? "/"
+    const body = await readJsonBody(request)
+    requests.push({ body, path })
+    response.setHeader("content-type", "application/json")
+
+    if (path !== "/chat/completions") {
+      response.statusCode = 404
+      response.end(JSON.stringify({ error: "not found" }))
+      return
+    }
+
+    chatRequestCount += 1
+    const requestNumber = chatRequestCount
+    const payload = body as { model?: string }
+    if (requestNumber === 1) {
+      await firstResponseCanFinish
+    } else if (requestNumber === 2) {
+      sawSecondRequest()
+    }
+
+    response.end(JSON.stringify({
+      id: `chat_${requestNumber}`,
+      created: 1,
+      model: payload.model,
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: `OK ${requestNumber}` },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }))
+  })
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  const close = () => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+  })
+
+  try {
+    const app = createTestProxy(`http://127.0.0.1:${address.port}`)
+    const makeRequest = (content: string) =>
+      app.fetch(new Request("http://localhost/v1/messages", {
+        body: JSON.stringify({
+          max_tokens: 16,
+          messages: [{ role: "user", content }],
+          model: "opus",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }))
+
+    const first = makeRequest("first request waits upstream")
+    const second = makeRequest("second request should still forward")
+
+    await withTimeout(
+      secondRequestArrived,
+      1000,
+      "Second request was not forwarded while the first upstream response was pending",
+    )
+
+    const secondBody = await (await second).json() as {
+      content: Array<{ text?: string }>
+    }
+    assert.equal(secondBody.content[0]?.text, "OK 2")
+
+    releaseFirstResponse()
+    const firstBody = await (await first).json() as {
+      content: Array<{ text?: string }>
+    }
+    assert.equal(firstBody.content[0]?.text, "OK 1")
+    assert.equal(requests.filter((entry) => entry.path === "/chat/completions").length, 2)
+  } finally {
+    releaseFirstResponse()
+    await close()
   }
 })
 
