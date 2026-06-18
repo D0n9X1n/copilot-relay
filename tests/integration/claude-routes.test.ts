@@ -21,6 +21,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
 
 const startMockCopilot = async () => {
   const requests: Array<CapturedRequest> = []
+  let webSearchChatCalls = 0
   const server = createHttpServer(async (request, response) => {
     const path = request.url ?? "/"
     const body = await readJsonBody(request)
@@ -37,7 +38,46 @@ const startMockCopilot = async () => {
     }
 
     if (path === "/chat/completions") {
-      const payload = body as { model?: string }
+      const payload = body as {
+        model?: string
+        tools?: Array<{ function?: { name?: string } }>
+      }
+      const webSearchTool = payload.tools?.find(
+        (tool) =>
+          tool.function?.name === "web_search"
+          || tool.function?.name === "WebSearch",
+      )
+      if (webSearchTool) {
+        webSearchChatCalls += 1
+        response.end(JSON.stringify({
+          id: "chat_web_search_call",
+          created: 1,
+          model: payload.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: `call_web_search_${webSearchChatCalls}`,
+                    type: "function",
+                    function: {
+                      name: webSearchTool.function?.name,
+                      arguments: JSON.stringify({ query: "GitHub Copilot docs" }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }))
+        return
+      }
+
       response.end(JSON.stringify({
         id: "chat_1",
         created: 1,
@@ -55,7 +95,41 @@ const startMockCopilot = async () => {
     }
 
     if (path === "/responses") {
-      const payload = body as { model?: string }
+      const payload = body as {
+        model?: string
+        tools?: Array<{ type?: string }>
+      }
+      if (payload.tools?.some((tool) => tool.type === "web_search_preview")) {
+        response.end(JSON.stringify({
+          id: "resp_web_search",
+          created_at: 1,
+          model: payload.model,
+          output: [
+            {
+              type: "web_search_call",
+              action: {
+                type: "search",
+                query: "GitHub Copilot docs",
+                queries: ["GitHub Copilot docs"],
+              },
+            },
+            {
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text:
+                    "1. GitHub Copilot documentation - https://docs.github.com/en/copilot",
+                },
+              ],
+            },
+          ],
+          usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
+        }))
+        return
+      }
+
       response.end(JSON.stringify({
         id: "resp_1",
         created_at: 1,
@@ -203,10 +277,12 @@ test("POST /v1/messages routes non-opus requests to configured gpt model", async
   }
 })
 
-// Why: Anthropic server-side WebSearch cannot be executed by the Copilot
-// upstream. The relay must fail loudly before the model can fabricate search
-// results that look like a successful tool response.
-test("POST /v1/messages rejects unsupported Claude server-side WebSearch", async () => {
+// Why: Anthropic server-side WebSearch must be executed by the relay because
+// Copilot cannot handle that Claude server-side tool directly. The route should
+// run search through Copilot Responses web_search_preview, then send the
+// retrieved context through a final model pass and return Claude-shaped server
+// tool blocks.
+test("POST /v1/messages handles Claude server-side WebSearch", async () => {
   const mock = await startMockCopilot()
   try {
     const app = createTestProxy(mock.baseUrl)
@@ -226,11 +302,93 @@ test("POST /v1/messages rejects unsupported Claude server-side WebSearch", async
       headers: { "content-type": "application/json" },
       method: "POST",
     }))
-    const body = await response.json() as { error?: { message?: string } }
+    const body = await response.json() as {
+      content: Array<{
+        content?: Array<{ title?: string; type?: string; url?: string }>
+        input?: { query?: string }
+        name?: string
+        text?: string
+        type: string
+      }>
+      usage?: { server_tool_use?: { web_search_requests?: number } }
+    }
+    const decisionRequest = mock.requests[0]?.body as {
+      stream?: boolean
+      tools?: Array<{ function?: { name?: string } }>
+    }
+    const searchRequest = mock.requests[1]?.body as {
+      model?: string
+      tools?: Array<{ type?: string }>
+    }
+    const finalRequest = mock.requests[2]?.body as {
+      messages?: Array<{ content?: string; role?: string }>
+      tools?: unknown
+    }
 
-    assert.equal(response.status, 501)
-    assert.match(body.error?.message ?? "", /WebSearch/)
-    assert.equal(mock.requests.length, 0)
+    assert.equal(response.status, 200)
+    assert.equal(mock.requests.length, 3)
+    assert.equal(mock.requests[0]?.path, "/chat/completions")
+    assert.equal(decisionRequest.stream, false)
+    assert.equal(decisionRequest.tools?.[0]?.function?.name, "web_search")
+    assert.equal(mock.requests[1]?.path, "/responses")
+    assert.equal(searchRequest.model, "gpt-5.5")
+    assert.deepEqual(searchRequest.tools, [{ type: "web_search_preview" }])
+    assert.equal(mock.requests[2]?.path, "/chat/completions")
+    assert.equal(finalRequest.tools, undefined)
+    assert.equal(finalRequest.messages?.at(-1)?.role, "system")
+    assert.match(finalRequest.messages?.at(-1)?.content ?? "", /Trusted bridge retrieval context/)
+    assert.equal(body.content[0]?.type, "server_tool_use")
+    assert.equal(body.content[0]?.name, "web_search")
+    assert.equal(body.content[0]?.input?.query, "GitHub Copilot docs")
+    assert.equal(body.content[1]?.type, "web_search_tool_result")
+    assert.deepEqual(body.content[1]?.content, [
+      {
+        type: "web_search_result",
+        title: "GitHub Copilot documentation",
+        url: "https://docs.github.com/en/copilot",
+        encrypted_content: "",
+        page_age: null,
+      },
+    ])
+    assert.equal(body.content[2]?.text, "OK")
+    assert.equal(body.usage?.server_tool_use?.web_search_requests, 1)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("POST /v1/messages streams Claude WebSearch response events", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({
+        max_tokens: 16,
+        messages: [{ role: "user", content: "search the web for copilot docs" }],
+        model: "opus",
+        stream: true,
+        tools: [
+          {
+            name: "WebSearch",
+            description: "Search the web",
+            input_schema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          },
+        ],
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }))
+    const text = await response.text()
+
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/)
+    assert.match(text, /"type":"server_tool_use"/)
+    assert.match(text, /"type":"web_search_tool_result"/)
+    assert.match(text, /"type":"input_json_delta"/)
   } finally {
     await mock.close()
   }

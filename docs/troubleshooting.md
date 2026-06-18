@@ -106,6 +106,22 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.log
 reasoning effort so startup preflight and real traffic exercise the same
 upstream behavior.
 
+## WebSearch fails or returns no results
+
+Claude WebSearch is executed by the relay through Copilot `/responses` with
+`web_search_preview`. If search returns an error result, check:
+
+```sh
+grep -n "web_search_preview\\|Failed to create responses\\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.log
+```
+
+By default, WebSearch uses `gptModel`. To use a different Copilot Responses model,
+set:
+
+```yaml
+webSearchBackend: gpt-5.5
+```
+
 ## Slow responses
 
 At `info`, check local request latency:

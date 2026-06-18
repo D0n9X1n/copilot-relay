@@ -25,10 +25,12 @@ Public API:
 - `GET /v1/models`
 - `GET /healthz`
 
-Unsupported Claude server-side tools, including WebSearch, return `501` instead
-of being silently relayed. Unknown API routes return `404`. Both cases log the
-method, path, selected headers, and request payload to help implement compatible
-endpoints later.
+Claude WebSearch is bridge-managed: when the model selects the WebSearch tool,
+the relay executes Copilot `/responses` with `web_search_preview`, then sends the
+retrieved context through a final model pass and returns Claude
+`server_tool_use` / `web_search_tool_result` blocks. Unknown API routes return
+`404` and log method, path, selected headers, and request payload to help
+implement compatible endpoints later.
 
 Routing:
 
@@ -58,6 +60,7 @@ claudeSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: xhigh
+webSearchBackend:
 ```
 
 `logLevel` controls verbosity:
@@ -71,6 +74,9 @@ thinkEffort: xhigh
 Any other `logLevel` value is invalid and stops startup.
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
+
+`webSearchBackend` controls bridge-managed Claude WebSearch. Leave it empty to
+use `gptModel`, or set a Copilot Responses model ID such as `gpt-5.5`.
 
 The same folder stores `copilot_token.json` for the cached Copilot bearer token, `github_token` for refresh/login, and `logs/` for runtime logs.
 
@@ -87,8 +93,8 @@ At `debug`, every model request logs the requested model, upstream model, reques
 
 Upstream failures are logged at `error` with full request and response context in the same log file.
 
-Unsupported or unknown Claude API requests are logged at `error` with the local
-method/path and detailed request payload.
+Unknown Claude API requests are logged at `error` with the local method/path and
+detailed request payload.
 
 Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
 

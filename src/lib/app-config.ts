@@ -22,6 +22,7 @@ export interface AppConfig {
   opusModel: string
   port: number
   thinkEffort: ReasoningEffort
+  webSearchBackend?: string
 }
 
 const defaultConfig: AppConfig = {
@@ -34,6 +35,7 @@ const defaultConfig: AppConfig = {
   opusModel: "claude-opus-4.8",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
+  webSearchBackend: undefined,
 }
 
 export const isLogLevelName = (value: unknown): value is LogLevelName =>
@@ -219,6 +221,11 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
         config.thinkEffort = unquoteYamlScalar(value)
         break
       }
+      case "webSearchBackend":
+      case "web_search_backend": {
+        config.webSearchBackend = unquoteYamlScalar(value)
+        break
+      }
       default: {
         break
       }
@@ -269,6 +276,9 @@ const serializeConfig = (config: AppConfig): string =>
     "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
+    "# Copilot model used for bridge-managed Claude WebSearch. Empty uses gptModel.",
+    `webSearchBackend: ${config.webSearchBackend ?? ""}`,
+    "",
     "# Model routing: requests containing \"opus\" use opusModel; all others use gptModel.",
     "",
     "# Upstream Copilot model used for non-Opus requests.",
@@ -298,6 +308,7 @@ export async function readAppConfig(): Promise<AppConfig> {
     opusModel: normalizeString(raw.opusModel) ?? defaultConfig.opusModel,
     port: port ?? defaultConfig.port,
     thinkEffort: thinkEffort ?? defaultConfig.thinkEffort,
+    webSearchBackend: normalizeString(raw.webSearchBackend),
   }
 
   await writeConfig(config)
