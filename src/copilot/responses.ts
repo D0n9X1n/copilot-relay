@@ -1,5 +1,5 @@
 // Internal conversion between Copilot Responses API payloads and chat-completion-like results.
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 import type {
   ChatCompletionChunk,
@@ -96,6 +96,7 @@ export interface ResponsesRequestPayload {
   temperature?: number | null
   top_p?: number | null
   user?: string | null
+  prompt_cache_key?: string | null
   reasoning?: {
     effort: ResponsesReasoningEffort
   }
@@ -218,6 +219,13 @@ export function buildResponsesRequestPayload(
     temperature: payload.temperature,
     top_p: payload.top_p,
     user: sanitizeUserIdentifier(payload.user),
+    // Copilot /responses only returns prompt cache hits when a stable
+    // prompt_cache_key pins repeated requests to the same backend. Without it,
+    // cached_tokens randomly drops to 0 across turns even for identical
+    // prefixes (measured). Derive a per-conversation key so a Claude Code
+    // session keeps hitting its own warm cache while staying isolated from
+    // other sessions.
+    prompt_cache_key: deriveResponsesCacheKey(payload),
     tools: translateTools(payload.tools),
     tool_choice: translateToolChoice(payload.tool_choice),
     reasoning: reasoningEffort ? { effort: reasoningEffort } : undefined,
@@ -226,6 +234,33 @@ export function buildResponsesRequestPayload(
         { format: { type: "json_object" } }
       : undefined,
   }
+}
+
+function deriveResponsesCacheKey(
+  payload: ChatCompletionsPayload,
+): string | undefined {
+  // Prefer the client-supplied conversation id (Claude Code sends a stable
+  // metadata.user_id per session). Fall back to a hash of the system prompt so
+  // even clients without a user id still route a stable prefix to one cache.
+  const user = sanitizeUserIdentifier(payload.user)
+  if (user) {
+    return `cr-${createHash("sha256").update(user).digest("hex").slice(0, 32)}`
+  }
+
+  const systemPrompt = payload.messages.find((message) => message.role === "system")
+  const systemText =
+    typeof systemPrompt?.content === "string" ? systemPrompt.content
+    : Array.isArray(systemPrompt?.content) ?
+      systemPrompt.content
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .join("")
+    : ""
+
+  if (!systemText) {
+    return undefined
+  }
+
+  return `cr-sys-${createHash("sha256").update(systemText).digest("hex").slice(0, 32)}`
 }
 
 export function translateResponsesToChatCompletion(
