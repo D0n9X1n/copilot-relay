@@ -82,6 +82,8 @@ Internal chat abstraction used by routes and startup preflight. It applies model
 
 Internal translation between Copilot Responses API and chat-completion-like results. This exists because `gpt-5.5` uses Copilot `/responses` upstream.
 
+It also attaches a stable `prompt_cache_key` to every `/responses` request. See [Prompt caching](#prompt-caching) for why this matters.
+
 ### `src/lib/app-config.ts`
 
 Loads and writes `~/.copilot-relay/config.yaml`. The file is hot-reloaded while the proxy is running. Missing user config is created from `config.default.yaml`.
@@ -174,6 +176,44 @@ At `debug`, every model request logs:
 - effective think effort
 
 At `debug`, the proxy logs Claude and upstream request diagnostics without redaction.
+
+## Prompt caching
+
+Long Claude Code sessions resend a large, mostly-stable prefix (system prompt,
+tool definitions, prior turns) every request. Prompt cache hits on that prefix
+are the main lever for input-token cost and latency. Two relay behaviors are
+load-bearing here; both were verified against live Copilot upstream.
+
+### `/responses` needs a stable `prompt_cache_key`
+
+`gpt-5.5` (and other `/responses`-only models) only returns prompt cache hits
+when each request carries a stable `prompt_cache_key` that pins it to the same
+backend. Without the key, `cached_tokens` randomly drops to 0 across turns even
+for a byte-identical prefix. `buildResponsesRequestPayload` derives a
+per-conversation key:
+
+- prefer the client conversation id (Claude Code sends a stable
+  `metadata.user_id`, surfaced as `payload.user`);
+- fall back to a hash of the system prompt when there is no user id.
+
+Keys are SHA-256 hashed, so the raw id is never forwarded upstream. Measured
+end-to-end (`gpt-5.5`, stable user id, large prefix): steady-state `cache_read`
+hits ~100% once warm, versus a flat 0 without the key.
+
+There is no caching difference to recover by switching `gptModel` away from
+`gpt-5.5`: `/chat/completions` models (e.g. `gpt-5.4`) also cache only because
+their prefix is stable, and `gpt-5.5` reaches the same hit rate with the key.
+
+### Assistant `thinking` stays in upstream history
+
+Cache hits depend on the prefix being byte-stable across turns. Claude Code
+replays `thinking` blocks in assistant history, and the relay forwards them as
+upstream assistant content. Stripping `thinking` before forwarding would rewrite
+that prefix and *invalidate* the cache: measured on an 8-turn session above the
+cache threshold, forwarding `thinking` held ~99% hit rate (130 full-price tokens
+per turn) while stripping it dropped to ~88% and ~1066 full-price tokens. So
+`thinking` is kept in upstream history deliberately; it is part of what keeps the
+prefix stable, not overhead to trim.
 
 ## Testing strategy
 
