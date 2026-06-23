@@ -22,6 +22,7 @@ export interface AppConfig {
   opusModel: string
   port: number
   thinkEffort: ReasoningEffort
+  upstreamTimeoutSeconds: number
   webSearchBackend?: string
 }
 
@@ -35,6 +36,7 @@ const defaultConfig: AppConfig = {
   opusModel: "claude-opus-4.8",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
+  upstreamTimeoutSeconds: 180,
   webSearchBackend: undefined,
 }
 
@@ -103,6 +105,21 @@ export const normalizeThinkEffort = (
   }
   const normalized = value.toLowerCase() === "minimal" ? "low" : value.toLowerCase()
   return isReasoningEffort(normalized) ? normalized : undefined
+}
+
+export const normalizeUpstreamTimeoutSeconds = (
+  value: unknown,
+): number | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const timeout = normalizePositiveInteger(value)
+  if (timeout === undefined) {
+    throw new Error("Invalid upstreamTimeoutSeconds: expected a positive integer")
+  }
+
+  return timeout
 }
 
 const readRawConfig = async (): Promise<Record<string, unknown>> => {
@@ -221,6 +238,11 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
         config.thinkEffort = unquoteYamlScalar(value)
         break
       }
+      case "upstreamTimeoutSeconds":
+      case "upstream_timeout_seconds": {
+        config.upstreamTimeoutSeconds = unquoteYamlScalar(value)
+        break
+      }
       case "webSearchBackend":
       case "web_search_backend": {
         config.webSearchBackend = unquoteYamlScalar(value)
@@ -276,6 +298,9 @@ const serializeConfig = (config: AppConfig): string =>
     "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
+    "# Max seconds to wait for a single Claude request's upstream Copilot calls.",
+    `upstreamTimeoutSeconds: ${config.upstreamTimeoutSeconds}`,
+    "",
     "# Copilot model used for bridge-managed Claude WebSearch. Empty uses gptModel.",
     `webSearchBackend: ${config.webSearchBackend ?? ""}`,
     "",
@@ -297,6 +322,9 @@ export async function readAppConfig(): Promise<AppConfig> {
   const logRetentionDays = normalizePositiveInteger(raw.logRetentionDays)
   const port = normalizePort(raw.port)
   const thinkEffort = normalizeThinkEffort(raw.thinkEffort)
+  const upstreamTimeoutSeconds = normalizeUpstreamTimeoutSeconds(
+    raw.upstreamTimeoutSeconds,
+  )
 
   const config: AppConfig = {
     claudeSetup: claudeSetup ?? defaultConfig.claudeSetup,
@@ -308,6 +336,8 @@ export async function readAppConfig(): Promise<AppConfig> {
     opusModel: normalizeString(raw.opusModel) ?? defaultConfig.opusModel,
     port: port ?? defaultConfig.port,
     thinkEffort: thinkEffort ?? defaultConfig.thinkEffort,
+    upstreamTimeoutSeconds:
+      upstreamTimeoutSeconds ?? defaultConfig.upstreamTimeoutSeconds,
     webSearchBackend: normalizeString(raw.webSearchBackend),
   }
 

@@ -60,6 +60,7 @@ claudeSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: xhigh
+upstreamTimeoutSeconds: 180
 webSearchBackend:
 ```
 
@@ -74,6 +75,10 @@ webSearchBackend:
 Any other `logLevel` value is invalid and stops startup.
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
+
+`upstreamTimeoutSeconds` controls the maximum time a single Claude request can
+spend waiting on upstream Copilot calls, including chat, Responses, preflight,
+and bridge-managed WebSearch calls. The default is `180`.
 
 `webSearchBackend` controls bridge-managed Claude WebSearch. Leave it empty to
 use `gptModel`, or set a Copilot Responses model ID such as `gpt-5.5`.

@@ -124,6 +124,12 @@ webSearchBackend: gpt-5.5
 
 ## Slow responses
 
+Each Claude request has a configurable upstream timeout. The default is:
+
+```yaml
+upstreamTimeoutSeconds: 180
+```
+
 At `info`, check local request latency:
 
 ```text

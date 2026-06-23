@@ -35,6 +35,8 @@ export const start = defineCommand({
       config.copilotBaseUrl = nextConfig.copilotBaseUrl
       config.host = nextConfig.host
       config.port = nextConfig.port
+      config.upstreamTimeoutMs = nextConfig.upstreamTimeoutSeconds * 1000
+      config.webSearchBackend = nextConfig.webSearchBackend
       runtimeState.modelRouting = {
         gptModel: nextConfig.gptModel,
         opusModel: nextConfig.opusModel,
@@ -44,6 +46,7 @@ export const start = defineCommand({
 
     log.info(`Log level: ${appConfig.logLevel}`)
     log.info(`Think effort: ${appConfig.thinkEffort}`)
+    log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
     log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
     const authSession = await setupProxyAuth(config)
@@ -103,7 +106,7 @@ export const start = defineCommand({
     watchAppConfig((nextConfig) => {
       applyRuntimeConfig(nextConfig)
       log.info(
-        `Config reloaded: logLevel=${nextConfig.logLevel} thinkEffort=${nextConfig.thinkEffort}`,
+        `Config reloaded: logLevel=${nextConfig.logLevel} thinkEffort=${nextConfig.thinkEffort} upstreamTimeoutSeconds=${nextConfig.upstreamTimeoutSeconds}`,
       )
     })
 

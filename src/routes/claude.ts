@@ -153,7 +153,10 @@ claudeRoutes.get("/models", (c) =>
 claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
-  const requestSignal = createCopilotRequestSignal(c.req.raw.signal)
+  const requestSignal = createCopilotRequestSignal(
+    c.req.raw.signal,
+    config.upstreamTimeoutMs,
+  )
   log.debug("Full Claude request payload", { payload: claudePayload })
 
   try {
@@ -180,6 +183,7 @@ claudeRoutes.post("/messages", async (c) => {
       requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
       requestedThinking: getClaudeRequestedThinking(claudePayload),
       signal: requestSignal,
+      timeoutMs: config.upstreamTimeoutMs,
     })
 
     if (isNonStreamingResponse(response)) {
@@ -193,7 +197,7 @@ claudeRoutes.post("/messages", async (c) => {
           config,
           claudePayload,
           webSearchToolCall.query,
-          { signal: requestSignal },
+          { signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
         )
         const searchResponse = createClaudeWebSearchResponse(search)
 
@@ -209,6 +213,7 @@ claudeRoutes.post("/messages", async (c) => {
               requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
               requestedThinking: getClaudeRequestedThinking(claudePayload),
               signal: requestSignal,
+              timeoutMs: config.upstreamTimeoutMs,
             },
           )
 

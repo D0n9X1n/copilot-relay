@@ -94,6 +94,7 @@ test("normalizes final assistant prefill before chat completions upstream calls"
       copilotToken: "test-token",
       host: "127.0.0.1",
       port: 0,
+      upstreamTimeoutMs: 180_000,
       vsCodeVersion: "1.99.3",
     }
 
@@ -135,6 +136,7 @@ test("times out hung chat completions upstream calls", async () => {
       copilotToken: "test-token",
       host: "127.0.0.1",
       port: 0,
+      upstreamTimeoutMs: 180_000,
       vsCodeVersion: "1.99.3",
     }
 

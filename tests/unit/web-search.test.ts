@@ -25,6 +25,7 @@ const createConfig = (baseUrl: string): ProxyConfig => ({
   copilotToken: "test-token",
   host: "127.0.0.1",
   port: 0,
+  upstreamTimeoutMs: 180_000,
   vsCodeVersion: "1.99.3",
 })
 
