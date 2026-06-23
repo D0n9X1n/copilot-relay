@@ -146,7 +146,7 @@ test("times out hung chat completions upstream calls", async () => {
         messages: [{ role: "user", content: "hang" }],
         model: "claude-opus-4.8",
         stream: false,
-      }, { client: "claude", requestedModel: "opus", timeoutMs: 20 }),
+      }, { client: "claude", requestedModel: "opus", timeoutMs: 500 }),
       (error: unknown) =>
         error instanceof HTTPError && error.response.status === 504,
     )

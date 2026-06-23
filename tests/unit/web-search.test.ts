@@ -152,7 +152,7 @@ test("times out hung Claude WebSearch upstream calls", async () => {
         createConfig(mock.baseUrl),
         payload,
         "GitHub Copilot docs",
-        { timeoutMs: 20 },
+        { timeoutMs: 500 },
       ),
       (error: unknown) =>
         error instanceof HTTPError && error.response.status === 504,
