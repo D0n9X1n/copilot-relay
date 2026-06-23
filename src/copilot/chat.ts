@@ -7,7 +7,13 @@ import { log } from "~/lib/log"
 import { defaultReasoningEffort } from "~/lib/models"
 import { routeModelId } from "~/lib/models"
 import { runtimeState } from "~/lib/state"
-import { fetchCopilot, getCopilotProviderContext } from "~/copilot/client"
+import {
+  createCopilotRequestSignal,
+  fetchCopilot,
+  getCopilotProviderContext,
+  readCopilotJson,
+  readCopilotText,
+} from "~/copilot/client"
 import type {
   ChatCompletionResponse,
   ChatCompletionsPayload,
@@ -26,6 +32,9 @@ import {
 const usesMaxCompletionTokens = (modelId: string): boolean =>
   modelId.startsWith("gpt-5")
 
+const continuePrefillPrompt =
+  "Continue the assistant response from the previous assistant message."
+
 type ClientKind = "claude" | "generic"
 
 interface CreateChatCompletionsOptions {
@@ -33,6 +42,8 @@ interface CreateChatCompletionsOptions {
   requestedModel?: string
   requestedThinkEffort?: string
   requestedThinking?: string
+  signal?: AbortSignal
+  timeoutMs?: number
 }
 
 const maxUserLength = 64
@@ -103,6 +114,34 @@ const buildRequestPayload = (
   }
 }
 
+const normalizeFinalAssistantPrefill = (
+  payload: ChatCompletionsPayload,
+): ChatCompletionsPayload => {
+  const lastMessage = payload.messages.at(-1)
+  if (lastMessage?.role !== "assistant") {
+    return payload
+  }
+
+  const messages = [...payload.messages]
+  if (typeof lastMessage.content !== "string") {
+    messages.pop()
+    return { ...payload, messages }
+  }
+
+  const content = lastMessage.content.trimEnd()
+  if (!content) {
+    messages.pop()
+    return { ...payload, messages }
+  }
+
+  messages[messages.length - 1] = {
+    ...lastMessage,
+    content,
+  }
+  messages.push({ role: "user", content: continuePrefillPrompt })
+  return { ...payload, messages }
+}
+
 const isAgentInitiator = (
   messages: ChatCompletionsPayload["messages"],
 ): "agent" | "user" =>
@@ -129,19 +168,23 @@ export const createChatCompletions = async (
   const requestedThinkEffort =
     options.requestedThinkEffort ?? payload.reasoning_effort ?? "none"
   const requestedThinking = options.requestedThinking ?? "none"
+  const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
   const upstreamModelId = routeModelId(payload.model)
   const upstreamPayload =
     upstreamModelId === payload.model ? payload : { ...payload, model: upstreamModelId }
+  const useResponsesApi = shouldUseResponsesApiForModel(upstreamPayload.model)
+  const compatiblePayload =
+    useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(upstreamPayload)
   const provider = getCopilotProviderContext(config)
-  const enableVision = messagesIncludeImage(upstreamPayload.messages)
-  const initiator = isAgentInitiator(upstreamPayload.messages)
-  const requestPayload = buildRequestPayload(upstreamPayload)
+  const enableVision = messagesIncludeImage(compatiblePayload.messages)
+  const initiator = isAgentInitiator(compatiblePayload.messages)
+  const requestPayload = buildRequestPayload(compatiblePayload)
   log.debug(
     [
       "Model request",
       `client=${client}`,
       `requested_model=${requestedModel}`,
-      `upstream_model=${upstreamPayload.model}`,
+      `upstream_model=${compatiblePayload.model}`,
       `requested_think_effort=${requestedThinkEffort}`,
       `requested_thinking=${requestedThinking}`,
       `effective_think_effort=${requestPayload.reasoning_effort ?? "none"}`,
@@ -153,10 +196,12 @@ export const createChatCompletions = async (
   // Choose the Copilot API surface after model routing, because aliases can
   // resolve to a Responses-only upstream model even when the client asked for a
   // generic Claude model name.
-  if (shouldUseResponsesApiForModel(upstreamPayload.model)) {
-    return createResponses(provider, upstreamPayload, {
+  if (useResponsesApi) {
+    return createResponses(provider, compatiblePayload, {
       vision: enableVision,
       initiator,
+      signal,
+      timeoutMs: options.timeoutMs,
     })
   }
 
@@ -166,19 +211,21 @@ export const createChatCompletions = async (
     {
       method: "POST",
       headers: {
-        accept: upstreamPayload.stream ? "text/event-stream" : "application/json",
+        accept: compatiblePayload.stream ? "text/event-stream" : "application/json",
         "content-type": "application/json",
       },
       body: JSON.stringify(requestPayload),
     },
-    { vision: enableVision, initiator },
+    { vision: enableVision, initiator, signal, timeoutMs: options.timeoutMs },
   )
 
   if (!response.ok) {
-    if (await shouldRetryWithResponses(response)) {
-      return createResponses(provider, upstreamPayload, {
+    if (await shouldRetryWithResponses(response, signal, options.timeoutMs)) {
+      return createResponses(provider, compatiblePayload, {
         vision: enableVision,
         initiator,
+        signal,
+        timeoutMs: options.timeoutMs,
       })
     }
 
@@ -186,7 +233,7 @@ export const createChatCompletions = async (
       model: payload.model,
       request: requestPayload,
       route: "/chat/completions",
-    })
+    }, signal, options.timeoutMs)
     throw new HTTPError(
       "Failed to create chat completions",
       response,
@@ -194,17 +241,26 @@ export const createChatCompletions = async (
     )
   }
 
-  if (upstreamPayload.stream) {
+  if (compatiblePayload.stream) {
     return events(response)
   }
 
-  return (await response.json()) as ChatCompletionResponse
+  return readCopilotJson<ChatCompletionResponse>(
+    response,
+    signal,
+    options.timeoutMs,
+  )
 }
 
 async function createResponses(
   provider: ReturnType<typeof getCopilotProviderContext>,
   payload: ChatCompletionsPayload,
-  options: { vision: boolean; initiator: "agent" | "user" },
+  options: {
+    vision: boolean
+    initiator: "agent" | "user"
+    signal?: AbortSignal
+    timeoutMs?: number
+  },
 ) {
   const reasoningEffort = getRequestedReasoningEffort(
     payload,
@@ -222,7 +278,12 @@ async function createResponses(
       },
       body: JSON.stringify(requestPayload),
     },
-    { vision: options.vision, initiator: options.initiator },
+    {
+      vision: options.vision,
+      initiator: options.initiator,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+    },
   )
 
   if (!response.ok) {
@@ -230,7 +291,7 @@ async function createResponses(
       model: payload.model,
       request: requestPayload,
       route: "/responses",
-    })
+    }, options.signal, options.timeoutMs)
     throw new HTTPError(
       "Failed to create responses",
       response,
@@ -243,7 +304,11 @@ async function createResponses(
   }
 
   return translateResponsesToChatCompletion(
-    (await response.json()) as ResponsesApiResponse,
+    await readCopilotJson<ResponsesApiResponse>(
+      response,
+      options.signal,
+      options.timeoutMs,
+    ),
   )
 }
 
@@ -255,8 +320,14 @@ async function logUpstreamError(
     request?: ChatCompletionsRequestPayload | ResponsesRequestPayload
     route: string
   },
+  signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<string | undefined> {
-  const errorBody = await response.clone().text().catch(() => "")
+  const errorBody = await readCopilotText(
+    response.clone(),
+    signal,
+    timeoutMs,
+  ).catch(() => "")
   const detail = getUpstreamErrorDetail(response, errorBody)
 
   log.error(`${message}: route=${context.route} model=${context.model} status=${response.status}`, {
@@ -297,16 +368,19 @@ function getUpstreamErrorDetail(
   }
 }
 
-async function shouldRetryWithResponses(response: Response): Promise<boolean> {
+async function shouldRetryWithResponses(
+  response: Response,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<boolean> {
   // Copilot can list a model but reject the chat endpoint for it; only this
   // explicit upstream code is treated as a signal to retry via /responses.
   try {
-    const errorBody = (await response.clone().json()) as {
+    const errorBody = await readCopilotJson<{
       error?: {
         code?: string
       }
-    }
-
+    }>(response.clone(), signal, timeoutMs)
     return errorBody.error?.code === "unsupported_api_for_model"
   } catch {
     return false

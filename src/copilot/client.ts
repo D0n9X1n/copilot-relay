@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto"
 
 import type { ProxyConfig } from "~/lib/config"
-import { ProxyNotImplementedError } from "~/lib/error"
+import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
 
 const copilotVersion = "0.26.7"
@@ -10,6 +10,7 @@ const editorPluginVersion = `copilot-chat/${copilotVersion}`
 const userAgent = `GitHubCopilotChat/${copilotVersion}`
 const apiVersion = "2025-04-01"
 const maxFetchAttempts = 2
+export const copilotRequestTimeoutMs = 180_000
 
 export interface CopilotProviderContext {
   baseUrl: string
@@ -28,12 +29,95 @@ export const getCopilotProviderContext = (
 export interface FetchCopilotOptions {
   vision?: boolean
   initiator?: "agent" | "user"
+  signal?: AbortSignal
+  timeoutMs?: number
 }
 
 const shouldRetryResponse = (response: Response): boolean =>
   // Retry only transient upstream failures; 4xx responses may contain routing
   // signals, such as "unsupported_api_for_model", that callers need to inspect.
   response.status >= 500 && response.status <= 599
+
+export const createCopilotRequestSignal = (
+  signal?: AbortSignal,
+  timeoutMs = copilotRequestTimeoutMs,
+): AbortSignal | undefined => {
+  const signals = [
+    signal,
+    timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+  ].filter((value): value is AbortSignal => value !== undefined)
+
+  if (signals.length === 0) {
+    return undefined
+  }
+
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+}
+
+const getAbortName = (value: unknown): string | undefined =>
+  typeof value === "object"
+  && value !== null
+  && "name" in value
+  && typeof value.name === "string" ?
+    value.name
+  : undefined
+
+const isAbortLikeError = (error: unknown): boolean => {
+  const name = getAbortName(error)
+  return name === "AbortError" || name === "TimeoutError"
+}
+
+export const toCopilotAbortHTTPError = (
+  error: unknown,
+  signal: AbortSignal | undefined,
+  timeoutMs = copilotRequestTimeoutMs,
+): HTTPError | undefined => {
+  if (!signal?.aborted && !isAbortLikeError(error)) {
+    return undefined
+  }
+
+  const timedOut =
+    getAbortName(signal?.reason) === "TimeoutError"
+    || getAbortName(error) === "TimeoutError"
+  const message =
+    timedOut ?
+      `Copilot upstream request timed out after ${Math.round(timeoutMs / 1000)}s.`
+    : "Client request cancelled before Copilot upstream completed."
+  const code = timedOut ? "upstream_timeout" : "request_cancelled"
+
+  return new HTTPError(
+    message,
+    new Response(JSON.stringify({ error: { message, code } }), {
+      status: timedOut ? 504 : 499,
+      headers: { "content-type": "application/json" },
+    }),
+    message,
+  )
+}
+
+export const readCopilotJson = async <T>(
+  response: Response,
+  signal: AbortSignal | undefined,
+  timeoutMs = copilotRequestTimeoutMs,
+): Promise<T> => {
+  try {
+    return (await response.json()) as T
+  } catch (error) {
+    throw toCopilotAbortHTTPError(error, signal, timeoutMs) ?? error
+  }
+}
+
+export const readCopilotText = async (
+  response: Response,
+  signal: AbortSignal | undefined,
+  timeoutMs = copilotRequestTimeoutMs,
+): Promise<string> => {
+  try {
+    return await response.text()
+  } catch (error) {
+    throw toCopilotAbortHTTPError(error, signal, timeoutMs) ?? error
+  }
+}
 
 const buildHeaders = (
   provider: CopilotProviderContext,
@@ -83,6 +167,8 @@ export const fetchCopilot = async (
     )
   }
 
+  const timeoutMs = options.timeoutMs ?? copilotRequestTimeoutMs
+  const signal = createCopilotRequestSignal(options.signal, timeoutMs)
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
@@ -91,6 +177,7 @@ export const fetchCopilot = async (
       const response = await fetch(`${provider.baseUrl}${path}`, {
         ...init,
         headers: buildHeaders(provider, init, options),
+        signal,
       })
       const ms = Math.round(performance.now() - started)
       log.debug(
@@ -104,6 +191,11 @@ export const fetchCopilot = async (
         `Copilot ${path} returned ${response.status}; retrying (${attempt}/${maxFetchAttempts})`,
       )
     } catch (error) {
+      const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
+      if (abortError) {
+        throw abortError
+      }
+
       lastError = error
       if (attempt === maxFetchAttempts) {
         throw error

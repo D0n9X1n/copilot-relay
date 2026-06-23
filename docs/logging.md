@@ -179,14 +179,16 @@ If requests suddenly fail with auth errors:
 When `~/.copilot-relay/config.yaml` changes:
 
 ```text
-info Config reloaded: logLevel=debug thinkEffort=xhigh
+info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=180
 ```
 
 Hot reload updates:
 
 - `logLevel`
 - `thinkEffort`
+- `upstreamTimeoutSeconds`
 - `copilotBaseUrl`
+- `webSearchBackend`
 - `gptModel`
 - `opusModel`
 

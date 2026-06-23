@@ -52,11 +52,13 @@ claudeSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: xhigh
+upstreamTimeoutSeconds: 180
+webSearchBackend:
 gptModel: gpt-5.5
 opusModel: claude-opus-4.8
 ```
 
-The config file is hot-reloaded. Runtime reload currently updates log level, think effort, host/port values held in config, Copilot base URL, and model routing. A listening socket cannot move ports without restart, so changing `host` or `port` still requires restart to affect the bound server.
+The config file is hot-reloaded. Runtime reload currently updates log level, think effort, upstream timeout, host/port values held in config, Copilot base URL, WebSearch backend, and model routing. A listening socket cannot move ports without restart, so changing `host` or `port` still requires restart to affect the bound server.
 
 ## Model routing
 

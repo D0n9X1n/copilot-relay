@@ -4,6 +4,7 @@ import test from "node:test"
 import {
   logLevels,
   normalizeLogLevel,
+  normalizeUpstreamTimeoutSeconds,
 } from "../../src/lib/app-config"
 
 // Why: log level names are part of the user config contract. Unknown values
@@ -29,4 +30,15 @@ test("rejects removed log levels", () => {
 test("distinguishes missing and invalid log levels", () => {
   assert.equal(normalizeLogLevel(undefined), undefined)
   assert.throws(() => normalizeLogLevel(3), /expected one of/)
+})
+
+// Why: upstream timeouts are part of the runtime config contract. Missing values
+// use the default, while malformed values should stop startup instead of
+// silently disabling request cancellation.
+test("accepts only positive upstream timeout seconds", () => {
+  assert.equal(normalizeUpstreamTimeoutSeconds(undefined), undefined)
+  assert.equal(normalizeUpstreamTimeoutSeconds("180"), 180)
+  assert.equal(normalizeUpstreamTimeoutSeconds(45), 45)
+  assert.throws(() => normalizeUpstreamTimeoutSeconds("0"), /positive integer/)
+  assert.throws(() => normalizeUpstreamTimeoutSeconds("abc"), /positive integer/)
 })

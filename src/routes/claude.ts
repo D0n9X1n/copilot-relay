@@ -38,6 +38,7 @@ import { getExposedModelIds } from "~/lib/models"
 import { getTokenCount, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
+import { createCopilotRequestSignal } from "~/copilot/client"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
@@ -152,6 +153,10 @@ claudeRoutes.get("/models", (c) =>
 claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+  const requestSignal = createCopilotRequestSignal(
+    c.req.raw.signal,
+    config.upstreamTimeoutMs,
+  )
   log.debug("Full Claude request payload", { payload: claudePayload })
 
   try {
@@ -177,6 +182,8 @@ claudeRoutes.post("/messages", async (c) => {
       requestedModel: claudePayload.model,
       requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
       requestedThinking: getClaudeRequestedThinking(claudePayload),
+      signal: requestSignal,
+      timeoutMs: config.upstreamTimeoutMs,
     })
 
     if (isNonStreamingResponse(response)) {
@@ -190,6 +197,7 @@ claudeRoutes.post("/messages", async (c) => {
           config,
           claudePayload,
           webSearchToolCall.query,
+          { signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
         )
         const searchResponse = createClaudeWebSearchResponse(search)
 
@@ -204,6 +212,8 @@ claudeRoutes.post("/messages", async (c) => {
               requestedModel: claudePayload.model,
               requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
               requestedThinking: getClaudeRequestedThinking(claudePayload),
+              signal: requestSignal,
+              timeoutMs: config.upstreamTimeoutMs,
             },
           )
 
