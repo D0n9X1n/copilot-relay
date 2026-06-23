@@ -5,8 +5,10 @@ import { log } from "~/lib/log"
 import type { ReasoningEffort } from "~/lib/models"
 import { getExposedModelIds } from "~/lib/models"
 import {
+  createCopilotRequestSignal,
   fetchCopilot,
   getCopilotProviderContext,
+  readCopilotJson,
 } from "~/copilot/client"
 import type { ChatCompletionsPayload } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
@@ -17,16 +19,17 @@ interface CopilotModelsResponse {
 
 const getUpstreamModelIds = async (config: ProxyConfig): Promise<Set<string>> => {
   const provider = getCopilotProviderContext(config)
+  const signal = createCopilotRequestSignal()
   const response = await fetchCopilot(provider, "/models", {
     method: "GET",
     headers: { accept: "application/json" },
-  })
+  }, { signal })
 
   if (!response.ok) {
     throw new HTTPError("Failed to validate upstream models", response)
   }
 
-  const payload = (await response.json()) as CopilotModelsResponse
+  const payload = await readCopilotJson<CopilotModelsResponse>(response, signal)
   return new Set(
     (payload.data ?? [])
       .map((model) => model.id)

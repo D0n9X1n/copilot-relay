@@ -358,11 +358,16 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
 
   try {
     const app = createTestProxy(`http://127.0.0.1:${address.port}`)
-    const makeRequest = (content: string) =>
+    const makeRequest = (content: string, includeAssistantPrefill = false) =>
       app.fetch(new Request("http://localhost/v1/messages", {
         body: JSON.stringify({
           max_tokens: 16,
-          messages: [{ role: "user", content }],
+          messages: [
+            { role: "user", content },
+            ...includeAssistantPrefill ?
+              [{ role: "assistant" as const, content: "partial retry answer" }]
+            : [],
+          ],
           model: "opus",
         }),
         headers: { "content-type": "application/json" },
@@ -370,7 +375,7 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
       }))
 
     const first = makeRequest("first request waits upstream")
-    const second = makeRequest("second request should still forward")
+    const second = makeRequest("second request should still forward", true)
 
     await withTimeout(
       secondRequestArrived,
@@ -389,6 +394,17 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
     }
     assert.equal(firstBody.content[0]?.text, "OK 1")
     assert.equal(requests.filter((entry) => entry.path === "/chat/completions").length, 2)
+    const secondUpstreamRequest = requests.filter(
+      (entry) => entry.path === "/chat/completions",
+    )[1]?.body as {
+      messages?: Array<{ content?: string; role?: string }>
+    }
+    assert.equal(secondUpstreamRequest.messages?.at(-2)?.role, "assistant")
+    assert.equal(secondUpstreamRequest.messages?.at(-1)?.role, "user")
+    assert.match(
+      secondUpstreamRequest.messages?.at(-1)?.content ?? "",
+      /Continue the assistant response/,
+    )
   } finally {
     releaseFirstResponse()
     await close()

@@ -10,7 +10,13 @@ import type {
   ClaudeWebSearchResultBlock,
 } from "~/claude/types"
 import type { ClaudeToolNameMapper } from "~/claude/tool-names"
-import { fetchCopilot, getCopilotProviderContext } from "~/copilot/client"
+import {
+  createCopilotRequestSignal,
+  fetchCopilot,
+  getCopilotProviderContext,
+  readCopilotJson,
+  readCopilotText,
+} from "~/copilot/client"
 import type {
   ChatCompletionResponse,
   ChatCompletionsPayload,
@@ -323,8 +329,10 @@ export const createClaudeWebSearchExecution = async (
   config: ProxyConfig,
   payload: ClaudeMessagesPayload,
   requestedQuery: string,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<WebSearchExecutionResult> => {
   const backendModel = getWebSearchBackendModel(config)
+  const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
   const response = await fetchCopilot(
     getCopilotProviderContext(config),
     "/responses",
@@ -338,11 +346,15 @@ export const createClaudeWebSearchExecution = async (
         buildWebSearchRequestPayload(payload, requestedQuery, backendModel),
       ),
     },
-    { initiator: "agent" },
+    { initiator: "agent", signal, timeoutMs: options.timeoutMs },
   )
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => "")
+    const detail = await readCopilotText(
+      response,
+      signal,
+      options.timeoutMs,
+    ).catch(() => "")
     return createFailedSearchExecution(
       payload,
       requestedQuery,
@@ -356,7 +368,11 @@ export const createClaudeWebSearchExecution = async (
     )
   }
 
-  const upstream = (await response.json()) as ResponsesWebSearchResponse
+  const upstream = await readCopilotJson<ResponsesWebSearchResponse>(
+    response,
+    signal,
+    options.timeoutMs,
+  )
   const text = getResponseText(upstream)
   const query = getSearchQuery(upstream, requestedQuery)
   const results = parseSearchResults(text)
