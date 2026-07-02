@@ -1,5 +1,7 @@
 // HTTP server assembly: exposes only Claude Code-compatible public routes.
-import { serve } from "@hono/node-server"
+import { randomUUID } from "node:crypto"
+
+import { createAdaptorServer, type ServerType } from "@hono/node-server"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
 
@@ -36,22 +38,27 @@ const getLoggedHeaders = (request: Request): Record<string, string> =>
   )
 
 const formatStatusLog = (
+  requestId: string,
   method: string,
   path: string,
   status: number,
   ms: number,
   errorMessage: string | undefined,
 ): string => {
-  const base = `${method} ${path} -> ${status} ${ms}ms`
+  const base = `request_id=${requestId} ${method} ${path} -> ${status} ${ms}ms`
   return status >= 400 && errorMessage ? `${base} error=${JSON.stringify(errorMessage)}` : base
 }
 
 export const createServer = (config: ProxyConfig) => {
   const app = new Hono<ProxyEnv>()
 
-  app.use("*", cors())
   app.use("*", async (c, next) => {
+    const requestId = randomUUID()
     c.set("config", config)
+    c.set("requestId", requestId)
+    c.header("x-copilot-relay-request-id", requestId)
+    log.info(`request_id=${requestId} request received method=${c.req.method} path=${c.req.path}`)
+
     const started = performance.now()
     try {
       await next()
@@ -60,6 +67,7 @@ export const createServer = (config: ProxyConfig) => {
       // Emit exactly one info-level request summary even when downstream route
       // handling throws; deeper diagnostics belong to debug/error logs.
       log.info(formatStatusLog(
+        requestId,
         c.req.method,
         c.req.path,
         c.res.status,
@@ -68,9 +76,16 @@ export const createServer = (config: ProxyConfig) => {
       ))
     }
   })
+  app.use("*", cors())
 
   app.onError((error, c) => {
     c.set("requestErrorMessage", error.message)
+    log.error("Unhandled Claude API request error", {
+      method: c.req.method,
+      path: c.req.path,
+      requestId: c.get("requestId"),
+      error,
+    })
     return c.json({ error: { message: "Internal server error" } }, 500)
   })
 
@@ -89,6 +104,7 @@ export const createServer = (config: ProxyConfig) => {
     log.error("Unsupported Claude API request", {
       method: c.req.method,
       path: c.req.path,
+      requestId: c.get("requestId"),
       headers: getLoggedHeaders(c.req.raw),
       payload: await readRequestPayloadForLog(c.req.raw),
     })
@@ -98,9 +114,24 @@ export const createServer = (config: ProxyConfig) => {
   return app
 }
 
-export const startServer = (config: ProxyConfig) =>
-  serve({
-    fetch: createServer(config).fetch,
-    hostname: config.host,
-    port: config.port,
+export const startServer = (config: ProxyConfig): Promise<ServerType> =>
+  new Promise((resolve, reject) => {
+    const server = createAdaptorServer({
+      fetch: createServer(config).fetch,
+      hostname: config.host,
+      port: config.port,
+    })
+
+    const onError = (error: Error) => {
+      server.off("listening", onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      server.off("error", onError)
+      resolve(server)
+    }
+
+    server.once("error", onError)
+    server.once("listening", onListening)
+    server.listen(config.port, config.host)
   })

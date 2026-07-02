@@ -11,6 +11,9 @@ interface CapturedRequest {
   path: string
 }
 
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   let body = ""
   for await (const chunk of request) {
@@ -221,6 +224,10 @@ test("GET /v1/models returns configured Claude Code models", async () => {
     const body = await response.json() as { data: Array<{ id: string }> }
 
     assert.equal(response.status, 200)
+    assert.match(
+      response.headers.get("x-copilot-relay-request-id") ?? "",
+      uuidPattern,
+    )
     assert.deepEqual(body.data.map((model) => model.id), [
       "gpt-5.5",
       "claude-opus-4.8",

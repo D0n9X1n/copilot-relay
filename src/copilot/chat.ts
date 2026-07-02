@@ -39,6 +39,7 @@ type ClientKind = "claude" | "generic"
 
 interface CreateChatCompletionsOptions {
   client?: ClientKind
+  requestId?: string
   requestedModel?: string
   requestedThinkEffort?: string
   requestedThinking?: string
@@ -184,6 +185,7 @@ export const createChatCompletions = async (
       "Model request",
       `client=${client}`,
       `requested_model=${requestedModel}`,
+      ...(options.requestId ? [`request_id=${options.requestId}`] : []),
       `upstream_model=${compatiblePayload.model}`,
       `requested_think_effort=${requestedThinkEffort}`,
       `requested_thinking=${requestedThinking}`,
@@ -200,6 +202,7 @@ export const createChatCompletions = async (
     return createResponses(provider, compatiblePayload, {
       vision: enableVision,
       initiator,
+      requestId: options.requestId,
       signal,
       timeoutMs: options.timeoutMs,
     })
@@ -216,7 +219,13 @@ export const createChatCompletions = async (
       },
       body: JSON.stringify(requestPayload),
     },
-    { vision: enableVision, initiator, signal, timeoutMs: options.timeoutMs },
+    {
+      vision: enableVision,
+      initiator,
+      requestId: options.requestId,
+      signal,
+      timeoutMs: options.timeoutMs,
+    },
   )
 
   if (!response.ok) {
@@ -224,6 +233,7 @@ export const createChatCompletions = async (
       return createResponses(provider, compatiblePayload, {
         vision: enableVision,
         initiator,
+        requestId: options.requestId,
         signal,
         timeoutMs: options.timeoutMs,
       })
@@ -233,6 +243,7 @@ export const createChatCompletions = async (
       model: payload.model,
       request: requestPayload,
       route: "/chat/completions",
+      requestId: options.requestId,
     }, signal, options.timeoutMs)
     throw new HTTPError(
       "Failed to create chat completions",
@@ -258,6 +269,7 @@ async function createResponses(
   options: {
     vision: boolean
     initiator: "agent" | "user"
+    requestId?: string
     signal?: AbortSignal
     timeoutMs?: number
   },
@@ -281,6 +293,7 @@ async function createResponses(
     {
       vision: options.vision,
       initiator: options.initiator,
+      requestId: options.requestId,
       signal: options.signal,
       timeoutMs: options.timeoutMs,
     },
@@ -291,6 +304,7 @@ async function createResponses(
       model: payload.model,
       request: requestPayload,
       route: "/responses",
+      requestId: options.requestId,
     }, options.signal, options.timeoutMs)
     throw new HTTPError(
       "Failed to create responses",
@@ -319,6 +333,7 @@ async function logUpstreamError(
     model: string
     request?: ChatCompletionsRequestPayload | ResponsesRequestPayload
     route: string
+    requestId?: string
   },
   signal?: AbortSignal,
   timeoutMs?: number,
@@ -330,10 +345,11 @@ async function logUpstreamError(
   ).catch(() => "")
   const detail = getUpstreamErrorDetail(response, errorBody)
 
-  log.error(`${message}: route=${context.route} model=${context.model} status=${response.status}`, {
+  log.error(`${message}: route=${context.route} model=${context.model} status=${response.status}${context.requestId ? ` request_id=${context.requestId}` : ""}`, {
     message,
     route: context.route,
     model: context.model,
+    requestId: context.requestId,
     request: context.request,
     response: {
       status: response.status,

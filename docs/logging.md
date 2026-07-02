@@ -13,7 +13,7 @@ Log files are cleaned according to `logRetentionDays` in `~/.copilot-relay/confi
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures |
-| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
+| `info` | Errors plus startup status, preflight status, request IDs, upstream lifecycle, and local HTTP status codes |
 | `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
 
 Use `debug` only for local debugging. It can log prompts and tool payloads.
@@ -33,6 +33,7 @@ Useful searches:
 ```sh
 grep -n "Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.log
 grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "request_id=" ~/.copilot-relay/logs/copilot-relay.log
 grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.log
 grep -n "Copilot POST" ~/.copilot-relay/logs/copilot-relay.log
 grep -n "Failed to refresh Copilot token" ~/.copilot-relay/logs/copilot-relay.log
@@ -52,7 +53,7 @@ Every file log line has this shape:
 Example:
 
 ```text
-2026-06-06T04:00:00.000Z info POST /v1/messages -> 200 1234ms
+2026-06-06T04:00:00.000Z info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 200 1234ms
 ```
 
 ## Startup logs
@@ -74,10 +75,16 @@ If startup fails, check the last `Startup preflight failed` or token refresh err
 
 ## HTTP request logs
 
-Every local HTTP request logs:
+Every local HTTP request gets a GUID `request_id` and logs when it is received:
 
 ```text
-info POST /v1/messages -> 200 1234ms
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 request received method=POST path=/v1/messages
+```
+
+The same `request_id` appears on the final local status summary:
+
+```text
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 200 1234ms
 ```
 
 Fields:
@@ -86,12 +93,13 @@ Fields:
 - path
 - response status
 - elapsed milliseconds
+- request ID
 
 For non-2xx responses, the same line includes a short error message when one is
 available:
 
 ```text
-info POST /v1/messages -> 400 123ms error="Invalid request"
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 123ms error="Invalid request"
 ```
 
 ## Model routing logs
@@ -115,11 +123,11 @@ Use this log line first when debugging "why did my request use this model/effort
 
 ## Upstream Copilot logs
 
-At `debug`, every Copilot upstream call logs:
+At `info`, every Copilot upstream call made for a local request logs send and return lifecycle lines:
 
 ```text
-debug Copilot POST /chat/completions -> 200 850ms (attempt 1)
-debug Copilot POST /responses -> 200 9200ms (attempt 1)
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 send upstream method=POST path=/responses attempt=1 upstream_request_id=5a0f91b1-e0d3-4fd3-81a3-116238688754
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 return from upstream method=POST path=/responses status=200 ms=9200 attempt=1 upstream_request_id=5a0f91b1-e0d3-4fd3-81a3-116238688754
 ```
 
 Fields:
@@ -129,13 +137,21 @@ Fields:
 - upstream response status
 - elapsed milliseconds
 - retry attempt
+- local `request_id`
+- per-upstream-call `upstream_request_id`
+
+At `debug`, the compact upstream timing summary is also emitted:
+
+```text
+debug request_id=3b241101-e2bb-4255-8caf-4136c566a962 Copilot POST /responses -> 200 9200ms (attempt 1) upstream_request_id=5a0f91b1-e0d3-4fd3-81a3-116238688754
+```
 
 If a transient 5xx happens, retries are logged at `error` with retry context.
 
 When Copilot returns a non-2xx response, `info` keeps a short status summary:
 
 ```text
-info POST /v1/messages -> 400 123ms error="Invalid request"
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 123ms error="Invalid request"
 ```
 
 The `error` entry in the same log file keeps the full upstream context:

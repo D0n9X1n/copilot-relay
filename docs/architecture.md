@@ -112,6 +112,7 @@ Runs at startup before binding the server. It verifies configured upstream model
   config.yaml
   github_token
   copilot_token.json
+  copilot-relay.pid
   logs/
     copilot-relay.log
 ```
