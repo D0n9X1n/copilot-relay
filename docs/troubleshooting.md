@@ -146,9 +146,9 @@ At `info`, check local request latency:
 info request_id=... POST /v1/messages -> 200 8291ms
 ```
 
-For streaming requests, the relay opens the local SSE response immediately and
-sends periodic Claude `ping` events while waiting for upstream response headers.
-Use the `stream completed` line for end-to-end stream duration:
+For streaming requests, the relay opens the local SSE response immediately while
+waiting for upstream response headers. Use the `stream completed` line for
+end-to-end stream duration:
 
 ```text
 info request_id=... stream completed 8291ms

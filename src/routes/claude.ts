@@ -42,8 +42,6 @@ import { createCopilotRequestSignal } from "~/copilot/client"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
-const streamKeepAliveIntervalMs = 15_000
-
 const createTokenCountModel = (modelId: string): TokenizerModel => ({
   capabilities: { tokenizer: "o200k_base" },
   id: modelId,
@@ -152,24 +150,6 @@ const createQueuedClaudeStreamWriter = (
   return (event) => {
     pending = pending.then(() => write(event))
     return pending
-  }
-}
-
-const startClaudeStreamKeepAlive = (
-  writeEvent: ClaudeStreamEventWriter,
-): (() => void) => {
-  const writePing = () => {
-    void writeEvent({ type: "ping" }).catch(() => undefined)
-  }
-  writePing()
-
-  const timer = setInterval(writePing, streamKeepAliveIntervalMs)
-  if (typeof timer.unref === "function") {
-    timer.unref()
-  }
-
-  return () => {
-    clearInterval(timer)
   }
 }
 
@@ -365,7 +345,6 @@ claudeRoutes.post("/messages", async (c) => {
           data: JSON.stringify(event),
         }),
       )
-      const stopKeepAlive = startClaudeStreamKeepAlive(writeEvent)
 
       try {
         await handleClaudeMessageRequest(
@@ -380,7 +359,6 @@ claudeRoutes.post("/messages", async (c) => {
         const errorEvent = translateErrorToClaudeErrorEvent()
         await writeEvent(errorEvent)
       } finally {
-        stopKeepAlive()
         log.info(
           `request_id=${requestId} stream completed ${Math.round(performance.now() - streamStarted)}ms`,
         )

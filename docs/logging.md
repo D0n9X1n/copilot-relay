@@ -87,7 +87,7 @@ The same `request_id` appears on the final local status summary:
 info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 200 1234ms
 ```
 
-For streaming requests, the local HTTP response opens immediately and the relay
+For streaming requests, the local HTTP response opens immediately. The relay
 also logs end-to-end stream duration:
 
 ```text

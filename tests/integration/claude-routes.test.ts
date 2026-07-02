@@ -565,10 +565,10 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
   }
 })
 
-// Why: Claude Code can cancel requests after 60s without response bytes. The
-// relay should open local SSE immediately and send a Claude ping while waiting
-// for slow Copilot response headers, so the client-side idle timer stays alive.
-test("POST /v1/messages streaming sends ping before delayed upstream responds", async () => {
+// Why: Claude Code can cancel requests after 60s before response headers. The
+// relay should open local SSE immediately, but it must not emit synthetic ping
+// events before real upstream content because some clients reject them.
+test("POST /v1/messages streaming opens before delayed upstream without ping", async () => {
   const mock = await startDelayedStreamingCopilot()
   try {
     const app = createTestProxy(mock.baseUrl)
@@ -592,16 +592,24 @@ test("POST /v1/messages streaming sends ping before delayed upstream responds", 
 
     const reader = response.body?.getReader()
     assert.ok(reader)
-    const firstChunk = await withTimeout(
-      reader.read(),
-      500,
-      "Streaming response did not send an early ping",
+    const pendingRead = reader.read()
+    await assert.rejects(
+      withTimeout(
+        pendingRead,
+        100,
+        "No early SSE payload before upstream responded",
+      ),
+      /No early SSE payload/,
     )
-    assert.equal(firstChunk.done, false)
-    assert.match(new TextDecoder().decode(firstChunk.value), /event: ping/)
 
     mock.releaseResponse()
-    const chunks: Array<string> = []
+    const firstChunk = await withTimeout(
+      pendingRead,
+      1_000,
+      "Streaming response did not send upstream content after upstream responded",
+    )
+    assert.equal(firstChunk.done, false)
+    const chunks: Array<string> = [new TextDecoder().decode(firstChunk.value)]
     while (true) {
       const chunk = await withTimeout(
         reader.read(),
