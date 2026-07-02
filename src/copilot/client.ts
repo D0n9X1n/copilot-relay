@@ -1,6 +1,8 @@
 // Low-level GitHub Copilot HTTP client: adds required headers, retries transient failures, and logs timing.
 import { randomUUID } from "node:crypto"
 
+import { Agent, fetch as undiciFetch } from "undici"
+
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
@@ -11,6 +13,10 @@ const userAgent = `GitHubCopilotChat/${copilotVersion}`
 const apiVersion = "2025-04-01"
 const maxFetchAttempts = 2
 export const copilotRequestTimeoutMs = 180_000
+const copilotDispatcher = new Agent({
+  allowH2: false,
+  connect: { allowH2: false },
+})
 
 export interface CopilotProviderContext {
   baseUrl: string
@@ -32,6 +38,12 @@ export interface FetchCopilotOptions {
   requestId?: string
   signal?: AbortSignal
   timeoutMs?: number
+}
+
+interface CopilotRequestInit {
+  body?: string
+  headers?: RequestInit["headers"]
+  method?: string
 }
 
 const shouldRetryResponse = (response: Response): boolean =>
@@ -67,6 +79,23 @@ const isAbortLikeError = (error: unknown): boolean => {
   const name = getAbortName(error)
   return name === "AbortError" || name === "TimeoutError"
 }
+
+const getErrorCode = (value: unknown): string | undefined =>
+  typeof value === "object"
+  && value !== null
+  && "code" in value
+  && typeof value.code === "string" ?
+    value.code
+  : undefined
+
+export const isRetryableFetchError = (error: unknown): boolean =>
+  getErrorCode(error) === "ERR_HTTP2_INVALID_SESSION"
+  || (
+    typeof error === "object"
+    && error !== null
+    && "cause" in error
+    && getErrorCode(error.cause) === "ERR_HTTP2_INVALID_SESSION"
+  )
 
 export const toCopilotAbortHTTPError = (
   error: unknown,
@@ -122,10 +151,10 @@ export const readCopilotText = async (
 
 const buildHeaders = (
   provider: CopilotProviderContext,
-  init: RequestInit,
+  init: CopilotRequestInit,
   options: FetchCopilotOptions,
   upstreamRequestId: string,
-): Headers => {
+): Record<string, string> => {
   const headers = new Headers(init.headers)
 
   headers.set("authorization", `Bearer ${provider.token}`)
@@ -154,7 +183,7 @@ const buildHeaders = (
     headers.set("accept", "application/json")
   }
 
-  return headers
+  return Object.fromEntries(headers.entries())
 }
 
 const formatRequestId = (requestId: string | undefined): string =>
@@ -175,7 +204,7 @@ const logUpstreamLifecycle = (
 export const fetchCopilot = async (
   provider: CopilotProviderContext,
   path: string,
-  init: RequestInit,
+  init: CopilotRequestInit,
   options: FetchCopilotOptions = {},
 ) => {
   if (!provider.token) {
@@ -196,9 +225,10 @@ export const fetchCopilot = async (
         options.requestId,
         `send upstream method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
       )
-      const response = await fetch(`${provider.baseUrl}${path}`, {
+      const response = await undiciFetch(`${provider.baseUrl}${path}`, {
         ...init,
         headers: buildHeaders(provider, init, options, upstreamRequestId),
+        dispatcher: copilotDispatcher,
         signal,
       })
       const ms = Math.round(performance.now() - started)

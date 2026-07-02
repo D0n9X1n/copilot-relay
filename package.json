@@ -47,7 +47,8 @@
     "consola": "^3.4.2",
     "fetch-event-stream": "^0.1.6",
     "gpt-tokenizer": "^3.4.0",
-    "hono": "^4.9.9"
+    "hono": "^4.9.9",
+    "undici": "^7.28.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -29,6 +29,7 @@ test("recognizes local dist start only from relay working directories", () => {
 
 test("does not treat non-start commands as relay instances", () => {
   assert.equal(isRelayStartProcess("copilot-relay restart"), false)
+  assert.equal(isRelayStartProcess("copilot-relay stop"), false)
   assert.equal(
     isRelayStartProcess(
       "node /usr/local/lib/node_modules/copilot-relay/dist/main.js auth",

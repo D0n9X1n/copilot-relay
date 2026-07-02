@@ -45,6 +45,7 @@ Routing:
 npx copilot-relay@latest auth
 npx copilot-relay@latest start
 npx copilot-relay@latest restart
+npx copilot-relay@latest stop
 ```
 
 `start` writes `ANTHROPIC_BASE_URL` and a dummy `ANTHROPIC_AUTH_TOKEN` into `~/.claude/settings.json`.
@@ -92,6 +93,7 @@ The same folder stores `copilot_token.json` for the cached Copilot bearer token,
 copilot-relay auth
 copilot-relay start
 copilot-relay restart
+copilot-relay stop
 ```
 
 ## Logging

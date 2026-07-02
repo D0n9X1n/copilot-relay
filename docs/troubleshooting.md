@@ -130,16 +130,34 @@ Each Claude request has a configurable upstream timeout. The default is:
 upstreamTimeoutSeconds: 180
 ```
 
+If a request fails with `499`, the client disconnected first. For example:
+
+```text
+info request_id=... POST /v1/messages -> 499 60004ms error="Client request cancelled before Copilot upstream completed."
+```
+
+That is different from the relay's upstream timeout, which returns `504` with
+`upstream_timeout`. A `499` at about 60 seconds means the caller closed the local
+HTTP request before the 180 second upstream timeout could fire.
+
 At `info`, check local request latency:
 
 ```text
-info POST /v1/messages -> 200 8291ms
+info request_id=... POST /v1/messages -> 200 8291ms
 ```
 
-At `debug`, compare that with upstream latency:
+For streaming requests, the relay opens the local SSE response immediately and
+sends periodic Claude `ping` events while waiting for upstream response headers.
+Use the `stream completed` line for end-to-end stream duration:
 
 ```text
-debug Copilot POST /chat/completions -> 200 8287ms (attempt 1)
+info request_id=... stream completed 8291ms
+```
+
+At `info`, compare that with upstream latency:
+
+```text
+info request_id=... return from upstream method=POST path=/chat/completions status=200 ms=8287 attempt=1 upstream_request_id=...
 ```
 
 If local and upstream timings are close, the delay is upstream/model latency. If

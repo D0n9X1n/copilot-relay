@@ -41,6 +41,72 @@ const withTimeout = async <T>(
   }
 }
 
+const startDelayedStreamingCopilot = async () => {
+  let releaseResponse: () => void = () => {}
+  const responseCanFinish = new Promise<void>((resolve) => {
+    releaseResponse = resolve
+  })
+  const requests: Array<CapturedRequest> = []
+  const server = createHttpServer(async (request, response) => {
+    const path = request.url ?? "/"
+    const body = await readJsonBody(request)
+    requests.push({ body, path })
+
+    if (path !== "/chat/completions") {
+      response.statusCode = 404
+      response.end(JSON.stringify({ error: "not found" }))
+      return
+    }
+
+    await responseCanFinish
+    response.writeHead(200, { "content-type": "text/event-stream" })
+    response.write(`data: ${JSON.stringify({
+      id: "chat_stream_1",
+      created: 1,
+      model: "claude-opus-4.8",
+      choices: [
+        {
+          index: 0,
+          delta: { content: "OK" },
+          finish_reason: null,
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 0, total_tokens: 1 },
+    })}\n\n`)
+    response.write(`data: ${JSON.stringify({
+      id: "chat_stream_1",
+      created: 1,
+      model: "claude-opus-4.8",
+      choices: [
+        {
+          index: 0,
+          delta: {},
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })}\n\n`)
+    response.write("data: [DONE]\n\n")
+    response.end()
+  })
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
+    releaseResponse,
+    requests,
+  }
+}
+
 const startMockCopilot = async () => {
   const requests: Array<CapturedRequest> = []
   let webSearchChatCalls = 0
@@ -495,6 +561,63 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
     assert.equal(body.content[2]?.text, "OK")
     assert.equal(body.usage?.server_tool_use?.web_search_requests, 1)
   } finally {
+    await mock.close()
+  }
+})
+
+// Why: Claude Code can cancel requests after 60s without response bytes. The
+// relay should open local SSE immediately and send a Claude ping while waiting
+// for slow Copilot response headers, so the client-side idle timer stays alive.
+test("POST /v1/messages streaming sends ping before delayed upstream responds", async () => {
+  const mock = await startDelayedStreamingCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await withTimeout(
+      Promise.resolve(app.fetch(new Request("http://localhost/v1/messages", {
+        body: JSON.stringify({
+          max_tokens: 16,
+          messages: [{ role: "user", content: "Reply OK only." }],
+          model: "opus",
+          stream: true,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }))),
+      500,
+      "Streaming response did not open before upstream responded",
+    )
+
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/)
+
+    const reader = response.body?.getReader()
+    assert.ok(reader)
+    const firstChunk = await withTimeout(
+      reader.read(),
+      500,
+      "Streaming response did not send an early ping",
+    )
+    assert.equal(firstChunk.done, false)
+    assert.match(new TextDecoder().decode(firstChunk.value), /event: ping/)
+
+    mock.releaseResponse()
+    const chunks: Array<string> = []
+    while (true) {
+      const chunk = await withTimeout(
+        reader.read(),
+        1_000,
+        "Streaming response did not finish after upstream responded",
+      )
+      if (chunk.done) {
+        break
+      }
+      chunks.push(new TextDecoder().decode(chunk.value))
+    }
+
+    assert.match(chunks.join(""), /event: message_stop/)
+    assert.equal(mock.requests[0]?.path, "/chat/completions")
+  } finally {
+    mock.releaseResponse()
     await mock.close()
   }
 })

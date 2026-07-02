@@ -1,4 +1,4 @@
-// Process lifecycle helpers for restarting stale local relay instances.
+// Process lifecycle helpers for stopping stale local relay instances.
 import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
 import { promisify } from "node:util"

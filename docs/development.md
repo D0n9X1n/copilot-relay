@@ -39,6 +39,14 @@ Runtime files:
   logs/                # runtime logs
 ```
 
+CLI lifecycle commands:
+
+```sh
+copilot-relay start
+copilot-relay stop
+copilot-relay restart
+```
+
 ## Configuration-first rule
 
 Prefer config over hardcoded behavior. If a behavior can reasonably be configured, add it to `~/.copilot-relay/config.yaml` and `config.default.yaml`.

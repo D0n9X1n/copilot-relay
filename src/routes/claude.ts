@@ -42,6 +42,8 @@ import { createCopilotRequestSignal } from "~/copilot/client"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
+const streamKeepAliveIntervalMs = 15_000
+
 const createTokenCountModel = (modelId: string): TokenizerModel => ({
   capabilities: { tokenizer: "o200k_base" },
   id: modelId,
@@ -138,6 +140,200 @@ const eventsFromClaudeResponse = (
   return events
 }
 
+type ClaudeStreamEventWriter = (
+  event: ClaudeStreamEventData,
+) => Promise<void>
+
+const createQueuedClaudeStreamWriter = (
+  write: ClaudeStreamEventWriter,
+): ClaudeStreamEventWriter => {
+  let pending = Promise.resolve()
+
+  return (event) => {
+    pending = pending.then(() => write(event))
+    return pending
+  }
+}
+
+const startClaudeStreamKeepAlive = (
+  writeEvent: ClaudeStreamEventWriter,
+): (() => void) => {
+  const writePing = () => {
+    void writeEvent({ type: "ping" }).catch(() => undefined)
+  }
+  writePing()
+
+  const timer = setInterval(writePing, streamKeepAliveIntervalMs)
+  if (typeof timer.unref === "function") {
+    timer.unref()
+  }
+
+  return () => {
+    clearInterval(timer)
+  }
+}
+
+const writeClaudeStreamEvents = async (
+  events: Array<ClaudeStreamEventData>,
+  writeEvent: ClaudeStreamEventWriter,
+): Promise<void> => {
+  for (const event of events) {
+    await writeEvent(event)
+  }
+}
+
+const handleClaudeMessageRequest = async (
+  config: ProxyEnv["Variables"]["config"],
+  claudePayload: ClaudeMessagesPayload,
+  requestSignal: AbortSignal | undefined,
+  requestId: string,
+  writeEvent?: ClaudeStreamEventWriter,
+): Promise<ClaudeResponse | undefined> => {
+  const upstreamModel = translateModelName(claudePayload.model)
+  const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
+  const decisionPayload =
+    shouldLetModelDecideWebSearch ?
+      prepareClaudeWebSearchDecisionPayload(claudePayload)
+    : claudePayload
+  const toolNameMapper = createClaudeToolNameMapper(decisionPayload.tools, {
+    ...getToolNameMapperOptionsForModel(upstreamModel),
+  })
+  const openAIPayload = translateToOpenAI(
+    decisionPayload,
+    undefined,
+    toolNameMapper,
+  )
+  if (shouldLetModelDecideWebSearch) {
+    openAIPayload.stream = false
+  }
+  const response = await createChatCompletions(config, openAIPayload, {
+    client: "claude",
+    requestedModel: claudePayload.model,
+    requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
+    requestedThinking: getClaudeRequestedThinking(claudePayload),
+    requestId,
+    signal: requestSignal,
+    timeoutMs: config.upstreamTimeoutMs,
+  })
+
+  if (isNonStreamingResponse(response)) {
+    const webSearchToolCall = shouldLetModelDecideWebSearch ?
+      getClaudeWebSearchToolCallFromChatResponse(response, toolNameMapper)
+    : undefined
+    let claudeResponse: ClaudeResponse
+
+    if (webSearchToolCall) {
+      const search = await createClaudeWebSearchExecution(
+        config,
+        claudePayload,
+        webSearchToolCall.query,
+        { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
+      )
+      const searchResponse = createClaudeWebSearchResponse(search)
+
+      if (search.results.length === 0) {
+        claudeResponse = searchResponse
+      } else {
+        const finalResponse = await createChatCompletions(
+          config,
+          createFinalWebSearchPayload(openAIPayload, search),
+          {
+            client: "claude",
+            requestedModel: claudePayload.model,
+            requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
+            requestedThinking: getClaudeRequestedThinking(claudePayload),
+            requestId,
+            signal: requestSignal,
+            timeoutMs: config.upstreamTimeoutMs,
+          },
+        )
+
+        if (!isNonStreamingResponse(finalResponse)) {
+          throw new HTTPError(
+            "Claude web search final answer request unexpectedly streamed",
+            new Response("Claude web search final answer request unexpectedly streamed", {
+              status: 502,
+              headers: { "content-type": "text/plain" },
+            }),
+          )
+        }
+
+        claudeResponse = mergeWebSearchAndFinalResponse(
+          searchResponse,
+          translateToClaude(finalResponse, toolNameMapper),
+        )
+      }
+    } else {
+      claudeResponse = translateToClaude(response, toolNameMapper)
+    }
+
+    if (writeEvent) {
+      await writeClaudeStreamEvents(
+        eventsFromClaudeResponse(claudeResponse),
+        writeEvent,
+      )
+      return undefined
+    }
+
+    return claudeResponse
+  }
+
+  if (shouldLetModelDecideWebSearch) {
+    throw new HTTPError(
+      "Claude web search model-decision request unexpectedly streamed",
+      new Response("Claude web search model-decision request unexpectedly streamed", {
+        status: 502,
+        headers: { "content-type": "text/plain" },
+      }),
+    )
+  }
+
+  if (!writeEvent) {
+    throw new HTTPError(
+      "Claude non-streaming request unexpectedly streamed",
+      new Response("Claude non-streaming request unexpectedly streamed", {
+        status: 502,
+        headers: { "content-type": "text/plain" },
+      }),
+    )
+  }
+
+  const streamState: ClaudeStreamState = {
+    messageStartSent: false,
+    contentBlockIndex: 0,
+    contentBlockOpen: false,
+    thinkingBlockOpen: false,
+    toolCalls: {},
+  }
+
+  for await (const rawEvent of response) {
+    if (rawEvent.data === "[DONE]") {
+      break
+    }
+    if (!rawEvent.data) {
+      continue
+    }
+
+    let chunk: ChatCompletionChunk
+    try {
+      chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
+    } catch {
+      continue
+    }
+
+    await writeClaudeStreamEvents(
+      translateChunkToClaudeEvents(
+        chunk,
+        streamState,
+        toolNameMapper,
+      ),
+      writeEvent,
+    )
+  }
+
+  return undefined
+}
+
 claudeRoutes.get("/models", (c) =>
   c.json({
     object: "list",
@@ -160,154 +356,45 @@ claudeRoutes.post("/messages", async (c) => {
   )
   log.debug("Full Claude request payload", { payload: claudePayload })
 
-  try {
-    const upstreamModel = translateModelName(claudePayload.model)
-    const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
-    const decisionPayload =
-      shouldLetModelDecideWebSearch ?
-        prepareClaudeWebSearchDecisionPayload(claudePayload)
-      : claudePayload
-    const toolNameMapper = createClaudeToolNameMapper(decisionPayload.tools, {
-      ...getToolNameMapperOptionsForModel(upstreamModel),
-    })
-    const openAIPayload = translateToOpenAI(
-      decisionPayload,
-      undefined,
-      toolNameMapper,
-    )
-    if (shouldLetModelDecideWebSearch) {
-      openAIPayload.stream = false
-    }
-    const response = await createChatCompletions(config, openAIPayload, {
-      client: "claude",
-      requestedModel: claudePayload.model,
-      requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
-      requestedThinking: getClaudeRequestedThinking(claudePayload),
-      requestId,
-      signal: requestSignal,
-      timeoutMs: config.upstreamTimeoutMs,
-    })
-
-    if (isNonStreamingResponse(response)) {
-      const webSearchToolCall = shouldLetModelDecideWebSearch ?
-        getClaudeWebSearchToolCallFromChatResponse(response, toolNameMapper)
-      : undefined
-      let claudeResponse: ClaudeResponse
-
-      if (webSearchToolCall) {
-        const search = await createClaudeWebSearchExecution(
-          config,
-          claudePayload,
-          webSearchToolCall.query,
-          { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
-        )
-        const searchResponse = createClaudeWebSearchResponse(search)
-
-        if (search.results.length === 0) {
-          claudeResponse = searchResponse
-        } else {
-          const finalResponse = await createChatCompletions(
-            config,
-            createFinalWebSearchPayload(openAIPayload, search),
-            {
-              client: "claude",
-              requestedModel: claudePayload.model,
-              requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
-              requestedThinking: getClaudeRequestedThinking(claudePayload),
-              requestId,
-              signal: requestSignal,
-              timeoutMs: config.upstreamTimeoutMs,
-            },
-          )
-
-          if (!isNonStreamingResponse(finalResponse)) {
-            throw new HTTPError(
-              "Claude web search final answer request unexpectedly streamed",
-              new Response("Claude web search final answer request unexpectedly streamed", {
-                status: 502,
-                headers: { "content-type": "text/plain" },
-              }),
-            )
-          }
-
-          claudeResponse = mergeWebSearchAndFinalResponse(
-            searchResponse,
-            translateToClaude(finalResponse, toolNameMapper),
-          )
-        }
-      } else {
-        claudeResponse = translateToClaude(response, toolNameMapper)
-      }
-
-      if (!claudePayload.stream) {
-        return c.json(claudeResponse)
-      }
-
-      return streamSSE(c, async (stream) => {
-        for (const event of eventsFromClaudeResponse(claudeResponse)) {
-          await stream.writeSSE({
-            event: event.type,
-            data: JSON.stringify(event),
-          })
-        }
-      })
-    }
-
-    if (shouldLetModelDecideWebSearch) {
-      throw new HTTPError(
-        "Claude web search model-decision request unexpectedly streamed",
-        new Response("Claude web search model-decision request unexpectedly streamed", {
-          status: 502,
-          headers: { "content-type": "text/plain" },
+  if (claudePayload.stream) {
+    return streamSSE(c, async (stream) => {
+      const streamStarted = performance.now()
+      const writeEvent = createQueuedClaudeStreamWriter((event) =>
+        stream.writeSSE({
+          event: event.type,
+          data: JSON.stringify(event),
         }),
       )
-    }
-
-    return streamSSE(c, async (stream) => {
-      const streamState: ClaudeStreamState = {
-        messageStartSent: false,
-        contentBlockIndex: 0,
-        contentBlockOpen: false,
-        thinkingBlockOpen: false,
-        toolCalls: {},
-      }
+      const stopKeepAlive = startClaudeStreamKeepAlive(writeEvent)
 
       try {
-        for await (const rawEvent of response) {
-          if (rawEvent.data === "[DONE]") {
-            break
-          }
-          if (!rawEvent.data) {
-            continue
-          }
-
-          let chunk: ChatCompletionChunk
-          try {
-            chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
-          } catch {
-            continue
-          }
-
-          for (const event of translateChunkToClaudeEvents(
-            chunk,
-            streamState,
-            toolNameMapper,
-          )) {
-            await stream.writeSSE({
-              event: event.type,
-              data: JSON.stringify(event),
-            })
-          }
-        }
+        await handleClaudeMessageRequest(
+          config,
+          claudePayload,
+          requestSignal,
+          requestId,
+          writeEvent,
+        )
       } catch (error) {
-        log.error("Error during Claude stream translation:", error)
+        log.error("Error during Claude stream request:", error)
         const errorEvent = translateErrorToClaudeErrorEvent()
-        await stream.writeSSE({
-          event: errorEvent.type,
-          data: JSON.stringify(errorEvent),
-        })
+        await writeEvent(errorEvent)
+      } finally {
+        stopKeepAlive()
+        log.info(
+          `request_id=${requestId} stream completed ${Math.round(performance.now() - streamStarted)}ms`,
+        )
       }
     })
+  }
+
+  try {
+    return c.json(await handleClaudeMessageRequest(
+      config,
+      claudePayload,
+      requestSignal,
+      requestId,
+    ))
   } catch (error) {
     if (error instanceof ProxyNotImplementedError) {
       c.set("requestErrorMessage", error.message)

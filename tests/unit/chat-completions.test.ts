@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type IncomingMessage } from "node:htt
 import test from "node:test"
 
 import { createChatCompletions } from "../../src/copilot/chat"
+import { isRetryableFetchError } from "../../src/copilot/client"
 import type { ProxyConfig } from "../../src/lib/config"
 import { HTTPError } from "../../src/lib/error"
 
@@ -155,4 +156,17 @@ test("times out hung chat completions upstream calls", async () => {
   } finally {
     await mock.close()
   }
+})
+
+// Why: Node's built-in fetch can surface a stale HTTP/2 pool as a TypeError
+// whose cause is ERR_HTTP2_INVALID_SESSION. The Copilot client should classify
+// that as retryable instead of treating it like a bad request shape.
+test("treats destroyed HTTP/2 sessions as retryable fetch errors", () => {
+  const error = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    }),
+  })
+
+  assert.equal(isRetryableFetchError(error), true)
 })
