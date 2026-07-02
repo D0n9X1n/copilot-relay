@@ -35,6 +35,7 @@ Runtime files:
   config.yaml          # hot-reloaded runtime config
   github_token         # GitHub OAuth/device token
   copilot_token.json   # cached Copilot bearer token + refresh metadata
+  copilot-relay.pid    # running relay process metadata for restart
   logs/                # runtime logs
 ```
 

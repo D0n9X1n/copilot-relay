@@ -29,6 +29,7 @@ const copilotTokenPath = path.join(appDir, "copilot_token.json")
 const githubTokenPath = path.join(appDir, "github_token")
 const logsDir = path.join(appDir, "logs")
 const logPath = path.join(logsDir, "copilot-relay.log")
+const pidPath = path.join(appDir, "copilot-relay.pid")
 
 export const paths = {
   appDir,
@@ -43,6 +44,7 @@ export const paths = {
   legacyCopilotTokenPaths,
   logPath,
   logsDir,
+  pidPath,
 }
 
 export async function ensurePaths(): Promise<void> {

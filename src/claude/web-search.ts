@@ -329,7 +329,7 @@ export const createClaudeWebSearchExecution = async (
   config: ProxyConfig,
   payload: ClaudeMessagesPayload,
   requestedQuery: string,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { requestId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<WebSearchExecutionResult> => {
   const backendModel = getWebSearchBackendModel(config)
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
@@ -346,7 +346,12 @@ export const createClaudeWebSearchExecution = async (
         buildWebSearchRequestPayload(payload, requestedQuery, backendModel),
       ),
     },
-    { initiator: "agent", signal, timeoutMs: options.timeoutMs },
+    {
+      initiator: "agent",
+      requestId: options.requestId,
+      signal,
+      timeoutMs: options.timeoutMs,
+    },
   )
 
   if (!response.ok) {

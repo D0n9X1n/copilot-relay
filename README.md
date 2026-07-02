@@ -44,6 +44,7 @@ Routing:
 ```sh
 npx copilot-relay@latest auth
 npx copilot-relay@latest start
+npx copilot-relay@latest restart
 ```
 
 `start` writes `ANTHROPIC_BASE_URL` and a dummy `ANTHROPIC_AUTH_TOKEN` into `~/.claude/settings.json`.
@@ -69,7 +70,7 @@ webSearchBackend:
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, and request failures |
-| `info` | Errors plus startup status, preflight status, and local HTTP status codes |
+| `info` | Errors plus startup status, preflight status, request IDs, upstream lifecycle, and local HTTP status codes |
 | `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
 
 Any other `logLevel` value is invalid and stops startup.
@@ -90,6 +91,7 @@ The same folder stores `copilot_token.json` for the cached Copilot bearer token,
 ```sh
 copilot-relay auth
 copilot-relay start
+copilot-relay restart
 ```
 
 ## Logging

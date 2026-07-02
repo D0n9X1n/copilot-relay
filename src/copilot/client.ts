@@ -29,6 +29,7 @@ export const getCopilotProviderContext = (
 export interface FetchCopilotOptions {
   vision?: boolean
   initiator?: "agent" | "user"
+  requestId?: string
   signal?: AbortSignal
   timeoutMs?: number
 }
@@ -123,6 +124,7 @@ const buildHeaders = (
   provider: CopilotProviderContext,
   init: RequestInit,
   options: FetchCopilotOptions,
+  upstreamRequestId: string,
 ): Headers => {
   const headers = new Headers(init.headers)
 
@@ -133,7 +135,7 @@ const buildHeaders = (
   headers.set("user-agent", userAgent)
   headers.set("openai-intent", "conversation-panel")
   headers.set("x-github-api-version", apiVersion)
-  headers.set("x-request-id", randomUUID())
+  headers.set("x-request-id", upstreamRequestId)
   headers.set("x-vscode-user-agent-library-version", "electron-fetch")
 
   if (options.vision) {
@@ -155,6 +157,21 @@ const buildHeaders = (
   return headers
 }
 
+const formatRequestId = (requestId: string | undefined): string =>
+  requestId ? `request_id=${requestId} ` : ""
+
+const logUpstreamLifecycle = (
+  requestId: string | undefined,
+  message: string,
+): void => {
+  if (requestId) {
+    log.info(`${formatRequestId(requestId)}${message}`)
+    return
+  }
+
+  log.debug(message)
+}
+
 export const fetchCopilot = async (
   provider: CopilotProviderContext,
   path: string,
@@ -172,36 +189,57 @@ export const fetchCopilot = async (
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+    const upstreamRequestId = randomUUID()
     try {
       const started = performance.now()
+      logUpstreamLifecycle(
+        options.requestId,
+        `send upstream method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
+      )
       const response = await fetch(`${provider.baseUrl}${path}`, {
         ...init,
-        headers: buildHeaders(provider, init, options),
+        headers: buildHeaders(provider, init, options, upstreamRequestId),
         signal,
       })
       const ms = Math.round(performance.now() - started)
+      logUpstreamLifecycle(
+        options.requestId,
+        `return from upstream method=${init.method ?? "GET"} path=${path} status=${response.status} ms=${ms} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
+      )
       log.debug(
-        `Copilot ${init.method ?? "GET"} ${path} -> ${response.status} ${ms}ms (attempt ${attempt})`,
+        `${formatRequestId(options.requestId)}Copilot ${init.method ?? "GET"} ${path} -> ${response.status} ${ms}ms (attempt ${attempt}) upstream_request_id=${upstreamRequestId}`,
       )
 
       if (!shouldRetryResponse(response) || attempt === maxFetchAttempts) {
         return response
       }
       log.error(
-        `Copilot ${path} returned ${response.status}; retrying (${attempt}/${maxFetchAttempts})`,
+        `${formatRequestId(options.requestId)}Copilot ${path} returned ${response.status}; retrying (${attempt}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
       )
     } catch (error) {
       const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
       if (abortError) {
+        logUpstreamLifecycle(
+          options.requestId,
+          `upstream failed method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
+        )
         throw abortError
       }
 
+      logUpstreamLifecycle(
+        options.requestId,
+        `upstream failed method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
+      )
       lastError = error
       if (attempt === maxFetchAttempts) {
+        log.error(
+          `${formatRequestId(options.requestId)}Copilot ${path} request failed after ${attempt} attempts upstream_request_id=${upstreamRequestId}`,
+          error,
+        )
         throw error
       }
       log.error(
-        `Copilot ${path} request failed; retrying (${attempt}/${maxFetchAttempts})`,
+        `${formatRequestId(options.requestId)}Copilot ${path} request failed; retrying (${attempt}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
         error,
       )
     }
