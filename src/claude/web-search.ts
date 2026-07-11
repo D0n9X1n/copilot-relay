@@ -24,7 +24,11 @@ import type {
   ToolCall,
 } from "~/copilot/types"
 import type { ProxyConfig } from "~/lib/config"
-import { getModelRouting } from "~/lib/models"
+import {
+  getModelRouting,
+  normalizeClaudeModelId,
+  normalizeCopilotModelId,
+} from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
 const claudeCodeWebSearchToolName = "WebSearch"
@@ -111,7 +115,9 @@ const isClaudeWebSearchToolName = (name: string): boolean =>
   name === "web_search" || name === claudeCodeWebSearchToolName
 
 export const getWebSearchBackendModel = (config: ProxyConfig): string =>
-  config.webSearchBackend?.trim() || getModelRouting().gptModel
+  normalizeCopilotModelId(
+    config.webSearchBackend?.trim() || getModelRouting().gptModel,
+  )
 
 export const prepareClaudeWebSearchDecisionPayload = (
   payload: ClaudeMessagesPayload,
@@ -446,7 +452,7 @@ export const createClaudeWebSearchResponse = (
     type: "message",
     role: "assistant",
     content,
-    model: search.model,
+    model: normalizeClaudeModelId(search.model),
     stop_reason: "end_turn",
     stop_sequence: null,
     usage: {

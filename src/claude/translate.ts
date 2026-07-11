@@ -1,6 +1,9 @@
 // Non-streaming protocol translation between Claude Messages and Copilot chat completions.
-import { defaultReasoningEffort } from "~/lib/models"
-import { routeModelId } from "~/lib/models"
+import {
+  defaultReasoningEffort,
+  normalizeClaudeModelId,
+  routeModelId,
+} from "~/lib/models"
 import { runtimeState } from "~/lib/state"
 import type {
   ChatCompletionResponse,
@@ -366,7 +369,7 @@ export function translateToClaude(
     id: response.id,
     type: "message",
     role: "assistant",
-    model: response.model,
+    model: normalizeClaudeModelId(response.model),
     content: [...allThinkingBlocks, ...allTextBlocks, ...allToolUseBlocks],
     stop_reason: mapOpenAIStopReasonToClaude(stopReason),
     stop_sequence: null,

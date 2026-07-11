@@ -37,7 +37,17 @@ Routing:
 | Requested model | Upstream model |
 | --- | --- |
 | contains `opus` | `claude-opus-4.8` |
-| anything else | `gpt-5.6-sol` |
+| `gpt-5.6-sol[1m]`, plain `gpt-5.6-sol`, or another non-Opus alias | `gpt-5.6-sol` |
+
+The relay advertises `gpt-5.6-sol[1m]` to Claude Code. The `[1m]` selector
+changes Claude Code's client-side context budgeting only; every Copilot request
+still uses `gpt-5.6-sol`, and the relay cannot enlarge GitHub Copilot's upstream
+capacity. An explicit CLI or API model override that bypasses the managed Claude
+settings is outside this guarantee.
+
+Claude Code can still show its built-in Haiku and Sonnet picker entries. The
+managed `model` field sets the startup default but does not restrict
+`availableModels`; selecting any non-Opus alias still follows the GPT route.
 
 ## Install & run
 
@@ -48,7 +58,11 @@ npx copilot-relay@latest restart
 npx copilot-relay@latest stop
 ```
 
-`start` writes `ANTHROPIC_BASE_URL` and a dummy `ANTHROPIC_AUTH_TOKEN` into `~/.claude/settings.json`.
+With `claudeSetup: true`, `start` manages `ANTHROPIC_BASE_URL`, a dummy
+`ANTHROPIC_AUTH_TOKEN` when auth is absent, and the configured GPT default via
+the top-level `model` field in `~/.claude/settings.json`. Exact
+`gpt-5.6-sol` model overrides are normalized to the Claude-facing
+`gpt-5.6-sol[1m]` identity; unrelated model choices are preserved.
 
 ## Config
 

@@ -75,6 +75,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       const claudeResult = await applyClaudeConfig({
         baseUrl,
         configPath: claudeConfigPath,
+        gptModel: appConfig.gptModel,
       })
       if (claudeResult.changed) {
         log.info(

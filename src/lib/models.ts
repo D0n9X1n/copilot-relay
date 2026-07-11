@@ -29,10 +29,33 @@ export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   || value === "xhigh"
   || value === "max"
 
-export const getModelRouting = (): ModelRoutingConfig =>
+const exactGpt56SolPattern = /^gpt-5\.6-sol(?:\[1m\])*$/i
+const claudeContextModelId = "gpt-5.6-sol[1m]"
+const copilotModelId = "gpt-5.6-sol"
+
+export const normalizeClaudeModelId = (model: string): string =>
+  exactGpt56SolPattern.test(model) ? claudeContextModelId : model
+
+export const normalizeCopilotModelId = (model: string): string =>
+  exactGpt56SolPattern.test(model) ? copilotModelId : model
+
+const getConfiguredModelRouting = (): ModelRoutingConfig =>
   runtimeState.modelRouting ?? defaultModelRouting
 
+export const getModelRouting = (): ModelRoutingConfig => {
+  const routing = getConfiguredModelRouting()
+  return {
+    gptModel: normalizeCopilotModelId(routing.gptModel),
+    opusModel: normalizeCopilotModelId(routing.opusModel),
+  }
+}
+
 export const getExposedModelIds = (): Array<string> => {
+  const routing = getConfiguredModelRouting()
+  return [normalizeClaudeModelId(routing.gptModel), routing.opusModel]
+}
+
+export const getUpstreamModelIds = (): Array<string> => {
   const routing = getModelRouting()
   return [routing.gptModel, routing.opusModel]
 }

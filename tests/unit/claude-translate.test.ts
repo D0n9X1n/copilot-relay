@@ -1,7 +1,43 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { translateToOpenAI } from "../../src/claude/translate"
+import {
+  translateToClaude,
+  translateToOpenAI,
+} from "../../src/claude/translate"
+import type { ChatCompletionResponse } from "../../src/copilot/types"
+
+const createChatResponse = (model: string): ChatCompletionResponse => ({
+  id: "chat_test",
+  created: 1,
+  model,
+  choices: [
+    {
+      index: 0,
+      message: { role: "assistant", content: "OK" },
+      finish_reason: "stop",
+    },
+  ],
+  usage: {
+    prompt_tokens: 1,
+    completion_tokens: 1,
+    total_tokens: 2,
+  },
+})
+
+// Why: completed Copilot responses carry canonical upstream IDs. Claude Code
+// must receive the client-facing context identity without rewriting unrelated
+// model names.
+test("normalizes completed response model metadata for Claude", () => {
+  assert.equal(
+    translateToClaude(createChatResponse("gpt-5.6-sol")).model,
+    "gpt-5.6-sol[1m]",
+  )
+  assert.equal(
+    translateToClaude(createChatResponse("claude-opus-4.8")).model,
+    "claude-opus-4.8",
+  )
+})
 
 // Why: Claude supports final assistant prefill, but GitHub Copilot rejects
 // conversations ending with assistant content, so the bridge must preserve the

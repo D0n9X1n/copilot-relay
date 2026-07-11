@@ -9,6 +9,7 @@ import {
 } from "~/claude/tool-names"
 import { mapOpenAIStopReasonToClaude } from "~/claude/utils"
 import type { ChatCompletionChunk } from "~/copilot/types"
+import { normalizeClaudeModelId } from "~/lib/models"
 
 function isToolBlockOpen(state: ClaudeStreamState): boolean {
   if (!state.contentBlockOpen) {
@@ -65,7 +66,7 @@ export function translateChunkToClaudeEvents(
         type: "message",
         role: "assistant",
         content: [],
-        model: chunk.model,
+        model: normalizeClaudeModelId(chunk.model),
         stop_reason: null,
         stop_sequence: null,
         usage: {

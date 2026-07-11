@@ -2,7 +2,11 @@ import assert from "node:assert/strict"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
 import test from "node:test"
 
-import { createClaudeWebSearchExecution } from "../../src/claude/web-search"
+import {
+  createClaudeWebSearchExecution,
+  createClaudeWebSearchResponse,
+  getWebSearchBackendModel,
+} from "../../src/claude/web-search"
 import type { ClaudeMessagesPayload } from "../../src/claude/types"
 import type { ProxyConfig } from "../../src/lib/config"
 import { HTTPError } from "../../src/lib/error"
@@ -110,6 +114,34 @@ const startHangingMockCopilot = async () => {
     requests,
   }
 }
+
+// Why: WebSearch is a direct Copilot Responses call, so an explicitly configured
+// Claude-facing context suffix must never survive into its model field.
+test("canonicalizes the configured WebSearch backend model", () => {
+  assert.equal(
+    getWebSearchBackendModel({
+      ...createConfig("http://127.0.0.1:1"),
+      webSearchBackend: "GPT-5.6-SOL[1M][1m]",
+    }),
+    "gpt-5.6-sol",
+  )
+})
+
+// Why: WebSearch response metadata returns to Claude Code, so the canonical
+// Copilot ID must be restored to the Claude-facing context-selector identity.
+test("exposes the 1M identity in Claude WebSearch responses", () => {
+  const response = createClaudeWebSearchResponse({
+    id: "resp_web_search",
+    inputTokens: 1,
+    model: "gpt-5.6-sol",
+    outputTokens: 1,
+    query: "test",
+    results: [],
+    text: "unavailable",
+  })
+
+  assert.equal(response.model, "gpt-5.6-sol[1m]")
+})
 
 // Why: bridge-managed Claude WebSearch depends on Copilot /responses
 // web_search_preview. Keep direct coverage for that upstream payload and result

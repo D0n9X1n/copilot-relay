@@ -3,7 +3,7 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import type { ReasoningEffort } from "~/lib/models"
-import { getExposedModelIds } from "~/lib/models"
+import { getUpstreamModelIds } from "~/lib/models"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -17,7 +17,7 @@ interface CopilotModelsResponse {
   data?: Array<{ id?: string }>
 }
 
-const getUpstreamModelIds = async (config: ProxyConfig): Promise<Set<string>> => {
+const fetchUpstreamModelIds = async (config: ProxyConfig): Promise<Set<string>> => {
   const provider = getCopilotProviderContext(config)
   const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
   const response = await fetchCopilot(provider, "/models", {
@@ -42,8 +42,8 @@ const getUpstreamModelIds = async (config: ProxyConfig): Promise<Set<string>> =>
 }
 
 const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
-  const upstreamModels = await getUpstreamModelIds(config)
-  const requiredModels = getExposedModelIds()
+  const upstreamModels = await fetchUpstreamModelIds(config)
+  const requiredModels = getUpstreamModelIds()
   const missingModels = requiredModels.filter((model) => !upstreamModels.has(model))
 
   if (missingModels.length > 0) {
@@ -108,7 +108,7 @@ export const validateUpstream = async (
   log.info("Running upstream preflight")
   await ensureRequiredModels(config)
 
-  for (const model of getExposedModelIds()) {
+  for (const model of getUpstreamModelIds()) {
     await validateModelRequest(config, model, thinkEffort)
   }
 }
