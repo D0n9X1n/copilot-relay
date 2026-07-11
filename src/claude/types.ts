@@ -21,7 +21,7 @@ export interface ClaudeMessagesPayload {
     type: "enabled" | "adaptive"
     budget_tokens?: number
   }
-  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh"
+  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh" | "max"
   service_tier?: "auto" | "standard_only"
 }
 

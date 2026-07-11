@@ -7,16 +7,17 @@ export type ReasoningEffort =
   | "medium"
   | "high"
   | "xhigh"
+  | "max"
 
 export interface ModelRoutingConfig {
   gptModel: string
   opusModel: string
 }
 
-export const defaultReasoningEffort: ReasoningEffort = "xhigh"
+export const defaultReasoningEffort: ReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
-  gptModel: "gpt-5.5",
+  gptModel: "gpt-5.6-sol",
   opusModel: "claude-opus-4.8",
 }
 
@@ -26,6 +27,7 @@ export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   || value === "medium"
   || value === "high"
   || value === "xhigh"
+  || value === "max"
 
 export const getModelRouting = (): ModelRoutingConfig =>
   runtimeState.modelRouting ?? defaultModelRouting

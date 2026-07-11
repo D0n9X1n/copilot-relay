@@ -80,7 +80,7 @@ Internal chat abstraction used by routes and startup preflight. It applies model
 
 ### `src/copilot/responses.ts`
 
-Internal translation between Copilot Responses API and chat-completion-like results. This exists because `gpt-5.5` uses Copilot `/responses` upstream.
+Internal translation between Copilot Responses API and chat-completion-like results. This exists because `gpt-5.6-sol` (the default `gptModel`) and the rest of the `gpt-5.5`/`gpt-5.6` family use Copilot `/responses` upstream.
 
 It also attaches a stable `prompt_cache_key` to every `/responses` request. See [Prompt caching](#prompt-caching) for why this matters.
 
@@ -130,10 +130,10 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
-thinkEffort: xhigh
+thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.5
+gptModel: gpt-5.6-sol
 opusModel: claude-opus-4.8
 ```
 
@@ -189,7 +189,8 @@ load-bearing here; both were verified against live Copilot upstream.
 
 ### `/responses` needs a stable `prompt_cache_key`
 
-`gpt-5.5` (and other `/responses`-only models) only returns prompt cache hits
+`gpt-5.6-sol` (and other `/responses`-only models such as the rest of the
+`gpt-5.5`/`gpt-5.6` family) only return prompt cache hits
 when each request carries a stable `prompt_cache_key` that pins it to the same
 backend. Without the key, `cached_tokens` randomly drops to 0 across turns even
 for a byte-identical prefix. `buildResponsesRequestPayload` derives a
@@ -201,11 +202,13 @@ per-conversation key:
 
 Keys are SHA-256 hashed, so the raw id is never forwarded upstream. Measured
 end-to-end (`gpt-5.5`, stable user id, large prefix): steady-state `cache_read`
-hits ~100% once warm, versus a flat 0 without the key.
+hits ~100% once warm, versus a flat 0 without the key. `gpt-5.6-sol` uses the
+same `/responses` path and cache-key mechanism, so the behavior carries over.
 
-There is no caching difference to recover by switching `gptModel` away from
-`gpt-5.5`: `/chat/completions` models (e.g. `gpt-5.4`) also cache only because
-their prefix is stable, and `gpt-5.5` reaches the same hit rate with the key.
+There is no caching difference to recover by switching `gptModel` between
+`/responses` models: `/chat/completions` models (e.g. `gpt-5.4`) also cache only
+because their prefix is stable, and the `gpt-5.5`/`gpt-5.6` family reaches the
+same hit rate with the key.
 
 ### Assistant `thinking` stays in upstream history
 

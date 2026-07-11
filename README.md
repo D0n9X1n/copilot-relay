@@ -37,7 +37,7 @@ Routing:
 | Requested model | Upstream model |
 | --- | --- |
 | contains `opus` | `claude-opus-4.8` |
-| anything else | `gpt-5.5` |
+| anything else | `gpt-5.6-sol` |
 
 ## Install & run
 
@@ -61,7 +61,7 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
-thinkEffort: xhigh
+thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 ```
@@ -76,7 +76,7 @@ webSearchBackend:
 
 Any other `logLevel` value is invalid and stops startup.
 
-Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`.
+Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 `upstreamTimeoutSeconds` controls the maximum time a single Claude request can
 spend waiting on upstream Copilot calls, including chat, Responses, preflight,

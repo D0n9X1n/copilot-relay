@@ -60,10 +60,10 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
-thinkEffort: xhigh
+thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.5
+gptModel: gpt-5.6-sol
 opusModel: claude-opus-4.8
 ```
 
@@ -76,7 +76,7 @@ The default routing is:
 - requested model containing `opus` -> `opusModel`
 - anything else -> `gptModel`
 
-Startup preflight must validate configured upstream models and configured `thinkEffort`. Valid efforts are `none`, `low`, `medium`, `high`, and `xhigh`.
+Startup preflight must validate configured upstream models and configured `thinkEffort`. Valid efforts are `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
 ## Logging
 

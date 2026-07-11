@@ -29,7 +29,7 @@ export interface AppConfig {
 const defaultConfig: AppConfig = {
   claudeSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
-  gptModel: "gpt-5.5",
+  gptModel: "gpt-5.6-sol",
   host: "127.0.0.1",
   logLevel: "info",
   logRetentionDays: 3,
@@ -295,7 +295,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# Number of days to keep files in ~/.copilot-relay/logs.",
     `logRetentionDays: ${config.logRetentionDays}`,
     "",
-    "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh.",
+    "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh, max.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
     "# Max seconds to wait for a single Claude request's upstream Copilot calls.",

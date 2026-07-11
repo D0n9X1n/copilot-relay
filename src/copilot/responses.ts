@@ -45,6 +45,7 @@ export type ResponsesReasoningEffort =
   | "medium"
   | "high"
   | "xhigh"
+  | "max"
 
 type ResponsesInput = string | Array<ResponsesInputItem>
 
@@ -197,8 +198,10 @@ interface CreateChunkOptions {
 }
 
 // /models does not tell us which API surface a model requires, so keep the
-// Responses-only allowlist narrow and suffix-tolerant.
-const responsesOnlyModelPattern = /^(?:gpt-5\.5)(?:-|$)/i
+// Responses-only allowlist narrow and suffix-tolerant. gpt-5.5 and the gpt-5.6
+// family (luna/sol/terra) reject /chat/completions with unsupported_api_for_model
+// and must go straight to /responses.
+const responsesOnlyModelPattern = /^(?:gpt-5\.5|gpt-5\.6)(?:-|$)/i
 
 export function shouldUseResponsesApiForModel(model: string): boolean {
   return responsesOnlyModelPattern.test(model)
