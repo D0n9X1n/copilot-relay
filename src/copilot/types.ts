@@ -88,9 +88,9 @@ export interface ChatCompletionsPayload {
     budget_tokens?: number
   } | null
   output_config?: {
-    effort?: "low" | "medium" | "high" | "xhigh"
+    effort?: "low" | "medium" | "high" | "xhigh" | "max"
   } | null
-  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh" | null
+  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | null
   stop?: string | Array<string> | null
   n?: number | null
   stream?: boolean | null
