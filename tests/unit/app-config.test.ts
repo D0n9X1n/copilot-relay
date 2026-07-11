@@ -4,6 +4,7 @@ import test from "node:test"
 import {
   logLevels,
   normalizeLogLevel,
+  normalizeThinkEffort,
   normalizeUpstreamTimeoutSeconds,
 } from "../../src/lib/app-config"
 
@@ -41,4 +42,32 @@ test("accepts only positive upstream timeout seconds", () => {
   assert.equal(normalizeUpstreamTimeoutSeconds(45), 45)
   assert.throws(() => normalizeUpstreamTimeoutSeconds("0"), /positive integer/)
   assert.throws(() => normalizeUpstreamTimeoutSeconds("abc"), /positive integer/)
+})
+
+// Why: thinkEffort is the user's reasoning-effort knob. Every documented tier
+// (including the newest "max") must normalize to itself, case-insensitively, so
+// a valid config value is never silently downgraded to the default.
+test("normalizes every supported think effort tier", () => {
+  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+    assert.equal(normalizeThinkEffort(effort), effort)
+    assert.equal(normalizeThinkEffort(effort.toUpperCase()), effort)
+  }
+})
+
+// Why: "minimal" is a legacy alias some clients still send; it must map to "low"
+// rather than being rejected, to stay backward compatible.
+test("maps legacy 'minimal' think effort to low", () => {
+  assert.equal(normalizeThinkEffort("minimal"), "low")
+  assert.equal(normalizeThinkEffort("MINIMAL"), "low")
+})
+
+// Why: an unknown or non-string think effort should return undefined so the
+// caller falls back to the default instead of forwarding a value Copilot would
+// reject upstream.
+test("returns undefined for invalid think effort values", () => {
+  assert.equal(normalizeThinkEffort("ultra"), undefined)
+  assert.equal(normalizeThinkEffort("maximum"), undefined)
+  assert.equal(normalizeThinkEffort(""), undefined)
+  assert.equal(normalizeThinkEffort(5), undefined)
+  assert.equal(normalizeThinkEffort(undefined), undefined)
 })

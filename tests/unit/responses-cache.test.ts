@@ -66,3 +66,22 @@ test("prompt_cache_key falls back to system prompt when no user id", () => {
   assert.equal(noUser.prompt_cache_key, sameSystem.prompt_cache_key)
   assert.ok((noUser.prompt_cache_key as string).startsWith("cr-sys-"))
 })
+
+// Why: the Responses API expects reasoning effort nested as reasoning.effort,
+// not the flat chat-completions reasoning_effort field. The newest "max" tier in
+// particular must survive this translation so gpt-5.6 requests actually reason at
+// the configured effort upstream.
+test("maps reasoning effort into the nested reasoning.effort field", () => {
+  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"] as const) {
+    const payload = buildResponsesRequestPayload(basePayload(), effort)
+    assert.deepEqual(payload.reasoning, { effort })
+  }
+})
+
+// Why: when no effort is resolved the relay must omit the reasoning field
+// entirely rather than send reasoning: { effort: undefined }, which Copilot
+// would reject.
+test("omits reasoning when effort is undefined", () => {
+  const payload = buildResponsesRequestPayload(basePayload(), undefined)
+  assert.equal(payload.reasoning, undefined)
+})
