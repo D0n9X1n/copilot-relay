@@ -6,6 +6,7 @@ import { createChatCompletions } from "../../src/copilot/chat"
 import { isRetryableFetchError } from "../../src/copilot/client"
 import type { ProxyConfig } from "../../src/lib/config"
 import { HTTPError } from "../../src/lib/error"
+import { runtimeState } from "../../src/lib/state"
 
 interface CapturedRequest {
   body: unknown
@@ -122,6 +123,40 @@ test("normalizes final assistant prefill before chat completions upstream calls"
       /Continue the assistant response/,
     )
   } finally {
+    await mock.close()
+  }
+})
+
+// Why: the configured think effort must win over client input and reach the
+// upstream body, or the "max" default would be silently dropped. This drives the
+// real createChatCompletions path and asserts reasoning_effort on the captured
+// /chat/completions request.
+test("injects configured max think effort into the upstream chat body", async () => {
+  const mock = await startMockCopilot()
+  runtimeState.thinkEffort = "max"
+  try {
+    const config: ProxyConfig = {
+      copilotBaseUrl: mock.baseUrl,
+      copilotToken: "test-token",
+      host: "127.0.0.1",
+      port: 0,
+      upstreamTimeoutMs: 180_000,
+      vsCodeVersion: "1.99.3",
+    }
+
+    await createChatCompletions(config, {
+      max_tokens: 16,
+      messages: [{ role: "user", content: "Reply OK only." }],
+      model: "claude-opus-4.8",
+      reasoning_effort: "low",
+      stream: false,
+    }, { client: "claude", requestedModel: "opus" })
+
+    const request = mock.requests[0]?.body as { reasoning_effort?: string }
+    assert.equal(mock.requests[0]?.path, "/chat/completions")
+    assert.equal(request.reasoning_effort, "max")
+  } finally {
+    delete runtimeState.thinkEffort
     await mock.close()
   }
 })

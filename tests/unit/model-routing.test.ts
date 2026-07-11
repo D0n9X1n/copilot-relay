@@ -3,7 +3,9 @@ import assert from "node:assert/strict"
 
 import {
   defaultModelRouting,
+  defaultReasoningEffort,
   getExposedModelIds,
+  isReasoningEffort,
   routeModelId,
 } from "../../src/lib/models"
 import { runtimeState } from "../../src/lib/state"
@@ -47,4 +49,23 @@ test("falls back to default routing when runtime config is unset", () => {
     defaultModelRouting.gptModel,
     defaultModelRouting.opusModel,
   ])
+})
+
+// Why: isReasoningEffort is the single guard that validates configured think
+// effort. It must accept every documented tier (including "max") and reject
+// anything else, so an invalid config value can never reach Copilot upstream.
+test("accepts every valid reasoning effort tier and rejects the rest", () => {
+  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+    assert.equal(isReasoningEffort(effort), true)
+  }
+  for (const value of ["", "ultra", "maximum", "MAX", 5, null, undefined, {}]) {
+    assert.equal(isReasoningEffort(value), false)
+  }
+})
+
+// Why: the shipped default reasoning effort is a user-facing contract. Pin it so
+// a change to the default is a deliberate, reviewed edit rather than an accident.
+test("defaults reasoning effort to max", () => {
+  assert.equal(defaultReasoningEffort, "max")
+  assert.equal(isReasoningEffort(defaultReasoningEffort), true)
 })
