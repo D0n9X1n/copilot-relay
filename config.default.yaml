@@ -4,10 +4,10 @@
 # Edit the user config file, not this template, for local changes.
 # Most values hot-reload while the service is running. host and port still
 # require restart because the listening socket is already bound.
-
-# Config schema version. Managed by copilot-relay; do not edit.
-# Used to apply one-time migrations when a shipped default changes.
-configVersion: 2
+#
+# Values here apply to a fresh install only. copilot-relay writes the resolved
+# config back to disk, so once a key exists in your config.yaml it is yours:
+# changing a shipped default never rewrites it.
 
 # Local host for the Claude Code-compatible HTTP server.
 host: 127.0.0.1

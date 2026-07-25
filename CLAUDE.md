@@ -1,0 +1,83 @@
+# CLAUDE.md
+
+Working conventions for `copilot-relay`. Read before opening a PR or cutting a release.
+
+## Workflow
+
+**Milestone → issue → PR → release.** This is the standard for all work.
+
+1. **Milestone first.** Titled exactly like the release tag it ships in (`v0.2.4`). Create it before the issues that target it.
+2. **Issue.** Every change gets one, on the milestone. Labels: `bug`, `enhancement`, `documentation`, `question`.
+3. **PR.** Branch off `main`, `Closes #N` in the commit body so the issue auto-closes on merge. Put the PR on the milestone too. Fill in `.github/pull_request_template.md`. Merge commit, delete the branch — the remote keeps only `main` plus active branches.
+4. **Release.** Bump `package.json`, commit as `Release vX.Y.Z`, tag, push. Close the milestone.
+
+Nothing lands on `main` without an issue and a PR. (Some history predates this — `v0.2.2` shipped by direct push and has no PR — but it is the rule going forward.)
+
+## Releasing
+
+**Pushing a tag is irreversible.** `.github/workflows/publish.yml` fires on any `v*` tag and publishes to **npm** and **GitHub Packages**. npm cannot be meaningfully unpublished. There is no dry run.
+
+The workflow's `test` job gates the three publish jobs, but run the full gate locally on the exact tree being tagged anyway — CI passing on the PR is not the same tree as the release commit.
+
+```sh
+gh pr checks <N>                          # all legs green first
+gh pr merge <N> --merge --delete-branch
+git checkout main && git pull --ff-only
+npm version X.Y.Z --no-git-tag-version
+npm run typecheck && npm test && npm run build   # on the exact tree to be tagged
+git commit -am "Release vX.Y.Z" && git push origin main
+git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # ← point of no return
+```
+
+Then verify it actually shipped — `npm view copilot-relay version` and `gh release view vX.Y.Z` — and close the milestone.
+
+CI runs `ubuntu-latest`, `macos-latest`, **and `windows-latest`**. All three must be green.
+
+## Milestones
+
+- One per release tag, same title.
+- **Membership is decided by commit ancestry, not close dates.** Use `git tag --contains <merge-sha>` and take the earliest tag. Close timestamps are misleading: an issue closed minutes after a tag ships in the *next* release, and three issues were assigned wrongly this way before being corrected.
+- Items closed `wontfix` / `NOT_PLANNED` get **no milestone** — they shipped nothing, and attaching them misrepresents the release.
+- Description links to the release notes for that tag.
+- Close the milestone when its release ships.
+
+## Config
+
+`readAppConfig()` writes the resolved config back to `~/.copilot-relay/config.yaml`, so an existing install has **every key materialized**. A `?? defaultConfig.x` fallback is never consulted again there.
+
+Consequence: **changing a shipped default reaches fresh installs only.** That is intended. A user's config value is theirs; do not add migration machinery to push a new default onto existing installs. A `configVersion` mechanism existed briefly for exactly that and was removed in #26 as unnecessary complexity.
+
+Configuration-first rule: if behavior might reasonably vary per user, add a config key rather than hardcoding. Reflect any new key in `config.default.yaml`, README, and `docs/`.
+
+## Logging
+
+Two invariants, both learned from a log that reached 9.3 GB:
+
+**One entry, one physical line.** `formatLogValue` needs *both* `compact: true` and `breakLength: Infinity`. The Node docs read as though the default `compact: 3` suffices — it does not. The number counts inner elements united, not a threshold, so it only collapses payloads nesting no deeper than that count. On a real 4-level error payload: `compact: 3` → 10 lines, `compact: 1` → **22**, `compact: true` → 1. `tests/unit/log-format.test.ts` pins this; do not "simplify" it away. Multi-line dumps also break every `grep` recipe in `docs/logging.md`.
+
+**Retention needs rotation.** The active file is `copilot-relay.<local-date>.log`, resolved per write so it rotates at local midnight with no timer. Retention ages files by the **filename date**, falling back to mtime for undated files. Before rotation existed, retention aged one never-rotated file by mtime, every append refreshed that mtime, and it was never once eligible for deletion. Local date, not UTC — `logRetentionDays` is a human "how many days" setting.
+
+Log volume is bounded by time, not size. Accepted (#25).
+
+## Tests
+
+```sh
+npm run typecheck
+npm run test:unit
+npm run test:integration
+npm run build
+```
+
+Any suite that touches the log or config path **must redirect the home directory before importing** `src/` — `paths.ts` resolves from `os.homedir()` at import time, so use a dynamic `import()` after setting it.
+
+Set **both `HOME` and `USERPROFILE`**. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
+
+Integration tests mock upstream Copilot. They must never call the real service.
+
+## Public API
+
+Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`. Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision.
+
+Model IDs are Copilot upstream IDs. Verify against the live `/models` endpoint rather than assuming a name exists.
+
+Never log token values.

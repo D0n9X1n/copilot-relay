@@ -69,7 +69,6 @@ the top-level `model` field in `~/.claude/settings.json`. Exact
 Config lives at `~/.copilot-relay/config.yaml` and is hot-reloaded:
 
 ```yaml
-configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -81,9 +80,10 @@ upstreamTimeoutSeconds: 180
 webSearchBackend:
 ```
 
-`configVersion` is managed by copilot-relay. It gates one-time migrations that
-update a shipped default on installs which already persisted the previous value;
-do not edit it.
+copilot-relay writes the resolved config back to this file, so every key is
+present after the first start. Shipped defaults therefore apply to fresh
+installs only — once a value is in your `config.yaml` it is never rewritten by
+an upgrade. To pick up a changed default, edit the key yourself.
 
 `logLevel` controls verbosity:
 
