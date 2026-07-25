@@ -1,4 +1,5 @@
 // `copilot-relay start`: loads config, validates upstream access, and starts the local Claude Code proxy.
+import { type ServerType } from "@hono/node-server"
 import { defineCommand } from "citty"
 
 import { setupProxyAuth } from "~/lib/auth"
@@ -13,6 +14,27 @@ import { validateUpstream } from "~/lib/preflight"
 import { runtimeState } from "~/lib/state"
 import { appVersion } from "~/lib/version"
 import { startServer } from "~/server"
+
+/**
+ * Narrows the server to one that can close connections directly.
+ *
+ * `ServerType` from @hono/node-server is a union that includes `Http2Server`,
+ * which has neither method, so this cannot be a plain property access. The relay
+ * runs over HTTP/1.1 in practice; the guard keeps the HTTP/2 case correct rather
+ * than assumed.
+ */
+interface ConnectionClosable {
+  closeAllConnections: () => void
+  closeIdleConnections: () => void
+}
+
+const canCloseConnections = (
+  server: ServerType,
+): server is ServerType & ConnectionClosable =>
+  typeof (server as Partial<ConnectionClosable>).closeIdleConnections
+    === "function"
+  && typeof (server as Partial<ConnectionClosable>).closeAllConnections
+    === "function"
 
 export async function startRelay(appConfig?: AppConfig): Promise<void> {
   appConfig ??= await readAppConfig()
@@ -108,6 +130,10 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     )
   })
 
+  // Shorter than stopProcess's 5s SIGTERM timeout, so a clean exit reliably
+  // wins that race and `stop` never has to escalate to SIGKILL.
+  const shutdownGraceMs = 2_000
+
   const shutdown = (signal: NodeJS.Signals) => {
     log.info(`Received ${signal}; shutting down copilot-relay`)
     server.close((error) => {
@@ -116,6 +142,26 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
         process.exitCode = 1
       }
     })
+
+    // server.close() stops accepting new connections but waits for existing
+    // ones to finish. A Claude Code keep-alive socket sitting idle between
+    // requests never finishes on its own, so without this the close hangs, the
+    // 5s timeout expires, and the process is SIGKILLed - skipping the cleanup
+    // in the finally below and severing any in-flight stream anyway.
+    //
+    // Releasing idle sockets immediately and active ones after a grace period
+    // means a request in flight still gets time to drain.
+    if (canCloseConnections(server)) {
+      server.closeIdleConnections()
+
+      const forceClose = setTimeout(() => {
+        log.info("Grace period elapsed; closing remaining connections")
+        server.closeAllConnections()
+      }, shutdownGraceMs)
+      // Must not itself hold the event loop open, or it would delay the exit
+      // it exists to accelerate.
+      forceClose.unref()
+    }
   }
   process.once("SIGINT", shutdown)
   process.once("SIGTERM", shutdown)

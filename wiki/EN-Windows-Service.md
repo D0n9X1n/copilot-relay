@@ -141,8 +141,8 @@ is opt-in:
 copilot-relay status --deep
 ```
 
-Exit codes, for scripting: `0` running, `1` not running, `2` running but the
-deep check failed. `--json` emits machine-readable output.
+Exit codes, for scripting: `0` running and reachable, `1` not running, `2`
+running but not usable — the health probe failed, or `--deep` failed. `--json` emits machine-readable output.
 
 This is worth preferring on Windows in particular — the manual layer 3 below is
 a multi-line `Invoke-RestMethod` with a hand-built JSON body, and `status --deep`

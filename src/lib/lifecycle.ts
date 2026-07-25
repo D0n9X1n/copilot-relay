@@ -288,6 +288,49 @@ const isRelayPid = async (pid: number): Promise<boolean> => {
   return isRelayStartProcess(command, await getProcessCwd(pid))
 }
 
+/**
+ * The relay serving `config.port`, or undefined if nothing is.
+ *
+ * Deliberately narrower than findRelayProcessIds: it never consults the global
+ * process list. `stop` wants "any relay anywhere" so it can clean up strays;
+ * `status` is asked about one configured relay, and answering with a different
+ * one is worse than answering "not running" because it looks authoritative.
+ *
+ * Returns pid and address as a single coherent record, so a pid discovered one
+ * way can never be printed next to an address taken from another.
+ */
+export const findRelayOnPort = async (
+  config: Pick<ProxyConfig, "host" | "port">,
+): Promise<RelayPidFile | undefined> => {
+  // The pid file is preferred when it describes this port: it is the only
+  // source carrying host and startedAt, and its port is where the socket is
+  // actually bound - hot reload changes config.port without rebinding.
+  const entry = await readRelayPidFileEntry()
+  if (
+    entry
+    && entry.port === config.port
+    && isProcessAlive(entry.pid)
+    && (await isRelayPid(entry.pid))
+  ) {
+    return entry
+  }
+
+  // No usable pid file - fall back to whoever holds the port. Covers a relay
+  // started before pid files, or one whose pid file was removed.
+  for (const pid of await getPortListenerPids(config.port)) {
+    if (await isRelayPid(pid)) {
+      return {
+        host: config.host,
+        pid,
+        port: config.port,
+        startedAt: "",
+      }
+    }
+  }
+
+  return undefined
+}
+
 export const findRelayProcessIds = async (
   config: Pick<ProxyConfig, "port">,
 ): Promise<Array<number>> => {

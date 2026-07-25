@@ -123,8 +123,8 @@ copilot-relay status --deep
   upstream   ok (1191ms) — end-to-end Copilot round trip
 ```
 
-Exit codes, for scripting: `0` running, `1` not running, `2` running but the
-deep check failed. `--json` emits machine-readable output.
+Exit codes, for scripting: `0` running and reachable, `1` not running, `2`
+running but not usable — the health probe failed, or `--deep` failed. `--json` emits machine-readable output.
 
 ### The three layers, by hand
 

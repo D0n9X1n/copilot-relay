@@ -116,7 +116,7 @@ copilot-relay status --deep
   upstream   ok (1191ms) — end-to-end Copilot round trip
 ```
 
-退出码便于脚本使用：`0` 运行中，`1` 未运行，`2` 运行中但 `--deep` 失败。`--json` 输出
+退出码便于脚本使用：`0` 运行中且可达，`1` 未运行，`2` 运行中但不可用（健康检查失败，或 `--deep` 失败）。`--json` 输出
 机器可读格式。
 
 ### 手动执行这三层

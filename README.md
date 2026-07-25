@@ -135,8 +135,10 @@ check that proves the relay can actually serve Claude Code — a relay whose
 Copilot token expired an hour ago still answers `/healthz` and `/v1/models`,
 because neither contacts upstream. It is opt-in because it spends a few tokens.
 
-`--json` emits machine-readable output. Exit codes: `0` running, `1` not
-running, `2` running but the deep check failed.
+`--json` emits machine-readable output. Exit codes: `0` running and reachable,
+`1` not running, `2` running but not usable — the health probe failed, or
+`--deep` was requested and failed. `0` requires a live process *and* a passing
+health probe, so a relay that cannot answer `/healthz` never reports success.
 
 ## Logging
 

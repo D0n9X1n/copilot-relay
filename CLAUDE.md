@@ -93,7 +93,13 @@ Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_token
 
 **`/healthz` and `/v1/models` prove nothing about upstream.** The first is a static handler; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes both. Only `POST /v1/messages` exercises token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
 
-`status` shares process detection with `stop` (`findRelayProcessIds`). Keep it that way: two implementations that disagree about what counts as a running relay would be worse than having no `status`. It also reads the listening address from the pid file rather than config, because hot reload updates `config.port` without rebinding the socket.
+**`status` and `stop` ask different questions, and must detect differently.** `status` uses `findRelayOnPort` — pid file when its port matches, else the port-listener check, never the global process scan. `stop` uses `findRelayProcessIds`, which does scan globally, because cleaning up strays on any port is the point. Do not "unify" these: giving `status` the global scan makes it report a relay on a port nothing is listening on (#33), and scoping `stop` would leave strays behind.
+
+Whatever `status` reports, pid and address must come from the same record. Pairing a pid found one way with an address taken from another is how #33 printed a live pid next to a dead port.
+
+**Exit codes are a contract.** `0` requires a live process *and* a passing health probe; `1` is no relay; `2` is running but not usable. Printing `FAILED` while exiting `0` makes every scripted caller treat a broken relay as fine (#34).
+
+**`server.close()` alone does not shut down.** It waits for existing connections, and an idle Claude Code keep-alive socket never finishes on its own — so shutdown hangs until `stop` escalates to `SIGKILL`, which skips pid-file cleanup and severs streams anyway (#35). The handler must call `closeIdleConnections()` immediately and `closeAllConnections()` after a grace period shorter than `stopProcess`'s 5s timeout.
 
 Model IDs are Copilot upstream IDs. Verify against the live `/models` endpoint rather than assuming a name exists.
 
