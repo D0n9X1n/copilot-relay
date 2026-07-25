@@ -14,6 +14,7 @@ export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
 export interface AppConfig {
   claudeSetup: boolean
+  configVersion: number
   copilotBaseUrl: string
   gptModel: string
   host: string
@@ -26,14 +27,33 @@ export interface AppConfig {
   webSearchBackend?: string
 }
 
+/**
+ * Schema version of ~/.copilot-relay/config.yaml.
+ *
+ * Bumped whenever a shipped default changes in a way that must reach installs
+ * that already persisted the previous value. See supersededOpusModels.
+ */
+const currentConfigVersion = 2
+
+/**
+ * Opus defaults shipped by earlier releases.
+ *
+ * readAppConfig() writes the resolved config back to disk, so every install
+ * that ever ran an older build has the superseded default sitting in its
+ * config.yaml. Without this set, bumping defaultConfig.opusModel would only
+ * ever reach fresh installs.
+ */
+const supersededOpusModels = new Set(["claude-opus-4.8"])
+
 const defaultConfig: AppConfig = {
   claudeSetup: true,
+  configVersion: currentConfigVersion,
   copilotBaseUrl: "https://api.githubcopilot.com",
   gptModel: "gpt-5.6-sol",
   host: "127.0.0.1",
   logLevel: "info",
   logRetentionDays: 3,
-  opusModel: "claude-opus-4.8",
+  opusModel: "claude-opus-5",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,
@@ -200,6 +220,11 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
         config.claudeSetup = unquoteYamlScalar(value)
         break
       }
+      case "configVersion":
+      case "config_version": {
+        config.configVersion = unquoteYamlScalar(value)
+        break
+      }
       case "copilotBaseUrl":
       case "copilot_base_url": {
         config.copilotBaseUrl = unquoteYamlScalar(value)
@@ -272,6 +297,9 @@ const serializeConfig = (config: AppConfig): string =>
     "#",
     "# This file is hot-reloaded while copilot-relay is running.",
     "",
+    "# Config schema version. Managed by copilot-relay; do not edit.",
+    `configVersion: ${config.configVersion}`,
+    "",
     "# Local host for the Claude Code-compatible HTTP server.",
     `host: ${config.host}`,
     "",
@@ -314,6 +342,29 @@ const serializeConfig = (config: AppConfig): string =>
     "",
   ].join("\n")
 
+/**
+ * Resolve opusModel, applying the one-time superseded-default migration.
+ *
+ * Gated on configVersion so it runs exactly once. Without that gate the rewrite
+ * would re-run on every start, which would make a superseded model impossible
+ * to pin deliberately - the user's edit would be reverted underneath them.
+ */
+const resolveOpusModel = (
+  rawOpusModel: string | undefined,
+  configVersion: number,
+): string => {
+  if (rawOpusModel === undefined) {
+    return defaultConfig.opusModel
+  }
+
+  return (
+      configVersion < currentConfigVersion
+      && supersededOpusModels.has(rawOpusModel)
+    ) ?
+      defaultConfig.opusModel
+    : rawOpusModel
+}
+
 export async function readAppConfig(): Promise<AppConfig> {
   const raw = await readRawConfig()
   const claudeSetup = normalizeBoolean(raw.claudeSetup)
@@ -325,15 +376,19 @@ export async function readAppConfig(): Promise<AppConfig> {
   const upstreamTimeoutSeconds = normalizeUpstreamTimeoutSeconds(
     raw.upstreamTimeoutSeconds,
   )
+  // Absent configVersion means the file predates versioning, so it is treated
+  // as version 1 and becomes eligible for the superseded-default migration.
+  const configVersion = normalizePositiveInteger(raw.configVersion) ?? 1
 
   const config: AppConfig = {
     claudeSetup: claudeSetup ?? defaultConfig.claudeSetup,
+    configVersion: currentConfigVersion,
     copilotBaseUrl: normalizeString(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
     gptModel: normalizeString(raw.gptModel) ?? defaultConfig.gptModel,
     host: host ?? defaultConfig.host,
     logLevel: logLevel ?? defaultConfig.logLevel,
     logRetentionDays: logRetentionDays ?? defaultConfig.logRetentionDays,
-    opusModel: normalizeString(raw.opusModel) ?? defaultConfig.opusModel,
+    opusModel: resolveOpusModel(normalizeString(raw.opusModel), configVersion),
     port: port ?? defaultConfig.port,
     thinkEffort: thinkEffort ?? defaultConfig.thinkEffort,
     upstreamTimeoutSeconds:

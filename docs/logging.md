@@ -1,12 +1,52 @@
 # Logging
 
-`copilot-relay` writes logs to both the console and a file:
+`copilot-relay` writes logs to both the console and a dated file:
 
 ```text
-~/.copilot-relay/logs/copilot-relay.log
+~/.copilot-relay/logs/copilot-relay.2026-07-24.log
 ```
 
-Log files are cleaned according to `logRetentionDays` in `~/.copilot-relay/config.yaml`. The default is 3 days.
+The active file is stamped with the **local** calendar date and rotates at local
+midnight. The path is resolved per write, so a relay running across midnight
+starts the next day's file on its own — there is no rotation timer to drift.
+
+Local rather than UTC on purpose: `logRetentionDays` is a human-facing "how many
+days do I keep" setting, and a UTC stamp would roll the file over in the middle
+of the local afternoon for anyone west of Greenwich.
+
+## Retention
+
+Files are deleted according to `logRetentionDays` in `~/.copilot-relay/config.yaml`.
+The default is 3.
+
+Retention counts **local calendar days including today**, so `3` keeps today,
+yesterday, and the day before. Eligibility is decided by the date in the
+filename, falling back to mtime for files that carry no stamp. The filename is
+preferred because mtime is rewritten by backups, `cp`, and editors touching a
+file, any of which would silently extend or shorten the window.
+
+Installs upgrading from a pre-rotation build have a single undated
+`copilot-relay.log`. It carries no filename date, so it ages out by mtime once
+the relay stops appending to it — no manual cleanup needed.
+
+Rotation is what makes retention work at all. Before it existed, every append
+refreshed the one log file's mtime, so it never aged past the cutoff and nothing
+was ever deleted; one observed install reached 9.3 GB with `logRetentionDays: 3`
+configured the whole time.
+
+## One entry, one line
+
+Every log entry — including error entries carrying full request/response
+context — is written as a single physical line. Object payloads are rendered
+with a bounded depth and no pretty-printing.
+
+This matters for searching as much as for size. Multi-line object dumps
+previously made the `grep` recipes below return the first fragment of a payload
+rather than the matching entry, and accounted for roughly two thirds of log
+volume by bytes.
+
+Payloads are bounded at depth 6, 100 array elements, and 4000 characters per
+string. A value past those limits is truncated in the log, not dropped.
 
 ## Log levels
 
@@ -25,18 +65,24 @@ Any other `logLevel` value is invalid and stops startup.
 Use the file log for local diagnosis:
 
 ```sh
-tail -f ~/.copilot-relay/logs/copilot-relay.log
+tail -f ~/.copilot-relay/logs/copilot-relay.$(date +%F).log
 ```
 
-Useful searches:
+Useful searches — the glob spans every retained day:
 
 ```sh
-grep -n "Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.log
-grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.log
-grep -n "request_id=" ~/.copilot-relay/logs/copilot-relay.log
-grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.log
-grep -n "Copilot POST" ~/.copilot-relay/logs/copilot-relay.log
-grep -n "Failed to refresh Copilot token" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.*.log
+grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.*.log
+grep -n "request_id=" ~/.copilot-relay/logs/copilot-relay.*.log
+grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.*.log
+grep -n "Copilot POST" ~/.copilot-relay/logs/copilot-relay.*.log
+grep -n "Failed to refresh Copilot token" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+To follow one request end to end across a day boundary:
+
+```sh
+grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 ```
 
 Start with `info`. Temporarily set `logLevel: debug` only when you need model
@@ -63,11 +109,11 @@ At `info`, startup logs confirm the active config and startup preflight:
 ```text
 info Log level: info
 info Think effort: xhigh
-info Exposed models: gpt-5.5, claude-opus-4.8
+info Exposed models: gpt-5.6-sol[1m], claude-opus-5
 info Running upstream preflight
-info Upstream models available: gpt-5.5, claude-opus-4.8
-info Preflight OK: model=gpt-5.5 think_effort=xhigh
-info Preflight OK: model=claude-opus-4.8 think_effort=xhigh
+info Upstream models available: gpt-5.6-sol, claude-opus-5
+info Preflight OK: model=gpt-5.6-sol think_effort=xhigh
+info Preflight OK: model=claude-opus-5 think_effort=xhigh
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 
@@ -114,7 +160,7 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 At `debug`, every model request logs:
 
 ```text
-debug Model request client=claude requested_model=opus upstream_model=claude-opus-4.8 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
+debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
 ```
 
 Fields:
@@ -161,10 +207,11 @@ When Copilot returns a non-2xx response, `info` keeps a short status summary:
 info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 123ms error="Invalid request"
 ```
 
-The `error` entry in the same log file keeps the full upstream context:
+The `error` entry in the same log file keeps the full upstream context on one
+line:
 
 ```text
-error Failed to create responses: route=/responses model=gpt-5.5 status=400 { request: ..., response: { status: 400, headers: ..., body: ... } }
+error Failed to create responses: route=/responses model=gpt-5.6-sol status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
 ```
 
 ## Request payload logs

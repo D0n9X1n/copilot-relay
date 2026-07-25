@@ -18,7 +18,7 @@ export const defaultReasoningEffort: ReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
   gptModel: "gpt-5.6-sol",
-  opusModel: "claude-opus-4.8",
+  opusModel: "claude-opus-5",
 }
 
 export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>

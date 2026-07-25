@@ -36,7 +36,7 @@ Routing:
 
 | Requested model | Upstream model |
 | --- | --- |
-| contains `opus` | `claude-opus-4.8` |
+| contains `opus` | `claude-opus-5` |
 | `gpt-5.6-sol[1m]`, plain `gpt-5.6-sol`, or another non-Opus alias | `gpt-5.6-sol` |
 
 The relay advertises `gpt-5.6-sol[1m]` to Claude Code. The `[1m]` selector
@@ -69,6 +69,7 @@ the top-level `model` field in `~/.claude/settings.json`. Exact
 Config lives at `~/.copilot-relay/config.yaml` and is hot-reloaded:
 
 ```yaml
+configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -79,6 +80,10 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 ```
+
+`configVersion` is managed by copilot-relay. It gates one-time migrations that
+update a shipped default on installs which already persisted the previous value;
+do not edit it.
 
 `logLevel` controls verbosity:
 
@@ -119,13 +124,17 @@ Upstream failures are logged at `error` with full request and response context i
 Unsupported Claude API requests are logged at `error` with the local method/path
 and detailed request payload.
 
-Logs are written to `~/.copilot-relay/logs/copilot-relay.log`; old `.log` files are cleaned according to `logRetentionDays`.
+Logs are written to `~/.copilot-relay/logs/copilot-relay.<local-date>.log`. The
+active file rotates at local midnight, and files older than `logRetentionDays`
+local calendar days are deleted. Rotation is what makes retention take effect:
+without it the single log file's mtime was refreshed by every append, so nothing
+ever aged out.
 
 Quick inspection:
 
 ```sh
-tail -f ~/.copilot-relay/logs/copilot-relay.log
-grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.log
+tail -f ~/.copilot-relay/logs/copilot-relay.$(date +%F).log
+grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common debugging workflows.

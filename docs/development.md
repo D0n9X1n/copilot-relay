@@ -54,6 +54,7 @@ Prefer config over hardcoded behavior. If a behavior can reasonably be configure
 Current config keys:
 
 ```yaml
+configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -64,7 +65,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-5.6-sol
-opusModel: claude-opus-4.8
+opusModel: claude-opus-5
 ```
 
 The config file is hot-reloaded. Runtime reload currently updates log level, think effort, upstream timeout, host/port values held in config, Copilot base URL, WebSearch backend, and model routing. A listening socket cannot move ports without restart, so changing `host` or `port` still requires restart to affect the bound server.
@@ -101,7 +102,16 @@ At `debug`, every model request must log:
 
 At `error`, log upstream failures with full request and response context in the same log file.
 
-Logs are appended to `~/.copilot-relay/logs/copilot-relay.log`. Startup cleanup removes old `.log` files according to `logRetentionDays`.
+Logs are appended to `~/.copilot-relay/logs/copilot-relay.<local-date>.log`. The
+path is resolved per write, so the active file rotates at local midnight without
+a timer. Retention deletes files older than `logRetentionDays` local calendar
+days, deciding age from the filename stamp and falling back to mtime for undated
+files left by pre-rotation builds.
+
+Each entry is written as a single physical line with bounded payload rendering
+(`compact: true`, `breakLength: Infinity`, `depth: 6`). Keep it that way: the
+`grep` recipes in the docs assume one entry per line, and unbounded
+pretty-printing previously accounted for about two thirds of log volume.
 
 ## Tokens
 
