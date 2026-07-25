@@ -28,8 +28,32 @@ const configPath = path.join(appDir, "config.yaml")
 const copilotTokenPath = path.join(appDir, "copilot_token.json")
 const githubTokenPath = path.join(appDir, "github_token")
 const logsDir = path.join(appDir, "logs")
-const logPath = path.join(logsDir, "copilot-relay.log")
+const logFileBaseName = "copilot-relay"
+// Pre-rotation installs wrote every line to this single undated file. Retention
+// still sweeps it, so upgrading installs drain themselves without manual steps.
+const legacyLogPath = path.join(logsDir, `${logFileBaseName}.log`)
 const pidPath = path.join(appDir, "copilot-relay.pid")
+
+/**
+ * Local-date stamp used in log file names.
+ *
+ * Local rather than UTC on purpose: `logRetentionDays` is a human-facing "how
+ * many days do I keep" setting, and a UTC stamp would roll the active file over
+ * in the middle of the local afternoon for anyone west of Greenwich.
+ */
+export const formatLogDate = (date: Date): string =>
+  [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-")
+
+/**
+ * Path of the log file that owns `date`. Resolved per write rather than cached,
+ * so a long-running relay rotates at local midnight with no timer to drift.
+ */
+export const getLogPath = (date: Date = new Date()): string =>
+  path.join(logsDir, `${logFileBaseName}.${formatLogDate(date)}.log`)
 
 export const paths = {
   appDir,
@@ -42,7 +66,8 @@ export const paths = {
     path.join(homeDir, ".copilot-tennel.yaml"),
   ],
   legacyCopilotTokenPaths,
-  logPath,
+  legacyLogPath,
+  logFileBaseName,
   logsDir,
   pidPath,
 }

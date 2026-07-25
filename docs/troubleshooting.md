@@ -15,7 +15,7 @@ to the wrong model, or feel slow.
 2. Follow the log:
 
    ```sh
-   tail -f ~/.copilot-relay/logs/copilot-relay.log
+   tail -f ~/.copilot-relay/logs/copilot-relay.$(date +%F).log
    ```
 
 3. Check config:
@@ -32,7 +32,7 @@ is a configuration error and stops startup.
 Search for:
 
 ```sh
-grep -n "Startup preflight failed\\|Preflight failed\\|Required Copilot model" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Startup preflight failed\\|Preflight failed\\|Required Copilot model" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 Common causes:
@@ -64,7 +64,7 @@ response body.
 Search for:
 
 ```sh
-grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 If the response body mentions request shape, check the surrounding `request`
@@ -82,7 +82,7 @@ logLevel: debug
 Then search:
 
 ```sh
-grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 Check:
@@ -99,7 +99,7 @@ everything else uses `gptModel`.
 Search at `debug`:
 
 ```sh
-grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 `thinkEffort` in `~/.copilot-relay/config.yaml` wins over client-provided
@@ -112,7 +112,7 @@ Claude WebSearch is executed by the relay through Copilot `/responses` with
 `web_search_preview`. If search returns an error result, check:
 
 ```sh
-grep -n "web_search_preview\\|Failed to create responses\\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "web_search_preview\\|Failed to create responses\\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 By default, WebSearch uses `gptModel`. To use a different Copilot Responses model,
@@ -197,7 +197,7 @@ short-lived bearer token cache refreshed before expiry.
 Search for:
 
 ```sh
-grep -n "Failed to refresh Copilot token\\|Using cached Copilot token\\|Next Copilot token refresh" ~/.copilot-relay/logs/copilot-relay.log
+grep -n "Failed to refresh Copilot token\\|Using cached Copilot token\\|Next Copilot token refresh" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 If refresh fails repeatedly, rerun:

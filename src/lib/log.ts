@@ -1,15 +1,22 @@
-// Central logger: writes to console and ~/.copilot-relay/logs with retention cleanup.
+// Central logger: writes to console and ~/.copilot-relay/logs with daily
+// rotation and retention cleanup.
 import fs from "node:fs/promises"
 import { inspect } from "node:util"
 
 import consola from "consola"
 
 import type { LogLevelName } from "~/lib/app-config"
-import { paths } from "~/lib/paths"
+import { getLogPath, paths } from "~/lib/paths"
 
 const logCleanupCheckIntervalMs = 60 * 60 * 1000
+const millisecondsPerDay = 24 * 60 * 60 * 1000
 let logRetentionDays = 3
 let nextLogCleanupCheckAt = 0
+
+// Matches the dated files getLogPath() writes, e.g. copilot-relay.2026-07-24.log.
+const datedLogFilePattern = new RegExp(
+  `^${paths.logFileBaseName}\\.(\\d{4})-(\\d{2})-(\\d{2})\\.log$`,
+)
 
 const consolaLevelByName: Record<LogLevelName, number> = {
   error: 0,
@@ -32,8 +39,41 @@ export const setLogLevel = (level: LogLevelName): void => {
   consola.level = consolaLevelByName[level]
 }
 
+/**
+ * Render one logged value as a single physical line.
+ *
+ * `breakLength: Infinity` matters as much as the depth cap. The previous
+ * `inspect(value, { depth: null })` pretty-printed each payload across
+ * thousands of physical lines, which was both the dominant source of log volume
+ * and the reason the `grep` recipes in docs/logging.md returned a fragment of an
+ * object instead of the matching entry. One entry is now one line.
+ */
 const formatLogValue = (value: unknown): string =>
-  typeof value === "string" ? value : inspect(value, { depth: null })
+  typeof value === "string" ? value : (
+    inspect(value, {
+      breakLength: Infinity,
+      // compact: true is load-bearing next to breakLength, not redundant with
+      // it. The Node docs say breakLength: Infinity formats input on one line
+      // "in combination with compact set to true or any number >= 1", which
+      // reads as though the default compact: 3 would suffice. It does not: the
+      // number is a count of inner elements united, not a threshold, so it only
+      // collapses payloads nesting no deeper than that count. Measured on
+      // v26.5.0 with a real Copilot error payload (4 levels deep):
+      //
+      //   compact: 3  + breakLength: Infinity -> 10 lines
+      //   compact: 1  + breakLength: Infinity -> 22 lines
+      //   compact: 10 + breakLength: Infinity ->  1 line
+      //   compact: true + breakLength: Infinity -> 1 line
+      //
+      // Lowering the number makes it worse, which no threshold reading
+      // predicts. compact: true is depth-independent, so it holds for payloads
+      // deeper than any fixed count we might pick.
+      compact: true,
+      depth: 6,
+      maxArrayLength: 100,
+      maxStringLength: 4000,
+    })
+  )
 
 const writeLogFile = async (
   level: string,
@@ -46,7 +86,9 @@ const writeLogFile = async (
     level,
     values.map(formatLogValue).join(" "),
   ].join(" ")
-  await fs.appendFile(paths.logPath, `${line}\n`)
+  // Resolved per write, so a relay running across local midnight starts the next
+  // dated file on its own; there is no rotation timer to drift or miss.
+  await fs.appendFile(getLogPath(), `${line}\n`)
 }
 
 const cleanupLogsIfDue = async (): Promise<void> => {
@@ -76,21 +118,59 @@ consola.error = wrapFileLog("error", consola.error.bind(consola))
 consola.info = wrapFileLog("info", consola.info.bind(consola))
 consola.debug = wrapFileLog("debug", consola.debug.bind(consola))
 
+/**
+ * Calendar day a log file belongs to, or undefined when its name carries no
+ * date stamp.
+ *
+ * The filename stamp is preferred over mtime because mtime is rewritten by
+ * backups, `cp`, and editors touching the file, any of which would silently
+ * extend or shorten the retention window.
+ */
+const parseLogFileDate = (fileName: string): Date | undefined => {
+  const match = datedLogFilePattern.exec(fileName)
+  if (!match) {
+    return undefined
+  }
+
+  const [, year, month, day] = match
+  const date = new Date(Number(year), Number(month) - 1, Number(day))
+  // Rejects impossible stamps such as 2026-13-45, which Date would otherwise
+  // roll forward into a plausible-looking day.
+  return (
+      date.getFullYear() === Number(year)
+      && date.getMonth() === Number(month) - 1
+      && date.getDate() === Number(day)
+    ) ?
+      date
+    : undefined
+}
+
 export const cleanupLogs = async (retentionDays: number): Promise<void> => {
   logRetentionDays = retentionDays
   await fs.mkdir(paths.logsDir, { recursive: true })
-  // Retention uses file mtime rather than per-line timestamps; the active log
-  // naturally remains fresh while the long-running proxy keeps appending to it.
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+
+  // retentionDays counts today plus the preceding retentionDays - 1 days, so the
+  // default of 3 keeps today, yesterday, and the day before.
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const cutoff =
+    startOfToday.getTime() - (retentionDays - 1) * millisecondsPerDay
+
   const entries = await fs.readdir(paths.logsDir, { withFileTypes: true })
   await Promise.all(
     entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".log"))
       .map(async (entry) => {
         const filePath = `${paths.logsDir}/${entry.name}`
-        const stat = await fs.stat(filePath)
-        if (stat.mtimeMs < cutoff) {
-          await fs.unlink(filePath)
+        const fileDate = parseLogFileDate(entry.name)
+        // Undated files - notably the pre-rotation copilot-relay.log - keep the
+        // original mtime rule, so upgrading installs drain without manual steps.
+        const timestamp =
+          fileDate?.getTime() ?? (await fs.stat(filePath)).mtimeMs
+        if (timestamp < cutoff) {
+          // Two relay processes can sweep the same directory; losing that race
+          // is not a failure worth surfacing.
+          await fs.rm(filePath, { force: true })
         }
       }),
   )

@@ -114,7 +114,9 @@ Runs at startup before binding the server. It verifies configured upstream model
   copilot_token.json
   copilot-relay.pid
   logs/
-    copilot-relay.log
+    copilot-relay.2026-07-24.log   <- active, local date
+    copilot-relay.2026-07-23.log
+    copilot-relay.2026-07-22.log
 ```
 
 ## Configuration model
@@ -124,6 +126,7 @@ The project follows a configuration-first rule: if behavior is likely to vary pe
 Current config keys:
 
 ```yaml
+configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -134,10 +137,12 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-5.6-sol
-opusModel: claude-opus-4.8
+opusModel: claude-opus-5
 ```
 
 `host` and `port` require restart to affect the listening socket. Other values are hot-reloaded. Empty `webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total upstream wait budget for a single Claude request.
+
+`configVersion` is managed by copilot-relay, not the user. Because `readAppConfig()` writes the resolved config back to disk, every install carries a copy of whatever defaults it first started with; a shipped default therefore cannot reach existing installs by changing `defaultConfig` alone. `configVersion` gates one-time migrations that rewrite a superseded default, and gating matters in both directions: an ungated rewrite would re-run on every start and make the superseded value impossible to pin deliberately.
 
 ## Startup flow
 
@@ -165,7 +170,10 @@ serve Claude Code requests
 
 ## Logging
 
-Logs go to both console and `~/.copilot-relay/logs/copilot-relay.log`.
+Logs go to both console and `~/.copilot-relay/logs/copilot-relay.<local-date>.log`.
+The active file is resolved per write, so it rotates at local midnight without a
+timer, and retention deletes files older than `logRetentionDays` local calendar
+days. Each entry is one physical line with bounded payload rendering.
 Operational debugging workflows live in [`logging.md`](logging.md) and
 [`troubleshooting.md`](troubleshooting.md).
 

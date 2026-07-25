@@ -5,6 +5,10 @@
 # Most values hot-reload while the service is running. host and port still
 # require restart because the listening socket is already bound.
 
+# Config schema version. Managed by copilot-relay; do not edit.
+# Used to apply one-time migrations when a shipped default changes.
+configVersion: 2
+
 # Local host for the Claude Code-compatible HTTP server.
 host: 127.0.0.1
 
@@ -29,6 +33,9 @@ claudeSetup: true
 logLevel: info
 
 # Number of days to keep files in ~/.copilot-relay/logs.
+# Counted in local calendar days: 3 keeps today plus the previous two days.
+# The active log file is copilot-relay.<local-date>.log and rotates at local
+# midnight, which is what makes this setting take effect at all.
 logRetentionDays: 3
 
 # Default upstream thinking/reasoning effort sent to Copilot.
@@ -48,4 +55,4 @@ webSearchBackend:
 gptModel: gpt-5.6-sol
 
 # Upstream Copilot model used for requests containing "opus".
-opusModel: claude-opus-4.8
+opusModel: claude-opus-5
