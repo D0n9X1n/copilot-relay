@@ -125,7 +125,7 @@ copilot-relay 0.2.5
 copilot-relay status --deep
 ```
 
-退出码便于脚本使用：`0` 运行中，`1` 未运行，`2` 运行中但 `--deep` 失败。`--json` 输出
+退出码便于脚本使用：`0` 运行中且可达，`1` 未运行，`2` 运行中但不可用（健康检查失败，或 `--deep` 失败）。`--json` 输出
 机器可读格式。
 
 在 Windows 上尤其推荐用它 —— 下面手动的第三层是一段多行 `Invoke-RestMethod` 加手写 JSON

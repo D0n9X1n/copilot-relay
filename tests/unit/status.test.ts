@@ -10,7 +10,9 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-status-"
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { renderStatus } = await import("../../src/status")
+const { renderStatus, resolveExitCode } = await import("../../src/status")
+const { findRelayOnPort } = await import("../../src/lib/lifecycle")
+const { paths } = await import("../../src/lib/paths")
 type RelayStatus = Awaited<
   ReturnType<typeof import("../../src/status").collectStatus>
 >
@@ -136,6 +138,75 @@ test("shows the dated log path", () => {
 
   assert.match(out, /copilot-relay\.\d{4}-\d{2}-\d{2}\.log/)
   assert.doesNotMatch(out, /logs\/copilot-relay\.log/)
+})
+
+// Why (#34): the exit code is the contract every scripted caller depends on.
+// It exited 0 while printing "health FAILED", so anything gating on it treated
+// an unreachable relay as fine.
+test("exits non-zero when the health probe fails", () => {
+  assert.equal(
+    resolveExitCode({
+      ...runningStatus,
+      health: { detail: "fetch failed", ok: false },
+    }),
+    2,
+  )
+})
+
+// Why: absent health is not passing health. Defaulting to 0 on missing data
+// would reintroduce #34 through a different door.
+test("treats absent health as not usable", () => {
+  const status = { ...runningStatus }
+  delete status.health
+  assert.equal(resolveExitCode(status), 2)
+})
+
+// Why: 1 and 2 mean different things — no relay at all versus a relay that is
+// up but cannot serve. They call for different responses.
+test("separates not-running from running-but-broken", () => {
+  assert.equal(resolveExitCode(baseStatus), 1)
+  assert.equal(
+    resolveExitCode({ ...runningStatus, deep: { detail: "http 401", ok: false } }),
+    2,
+  )
+})
+
+test("exits 0 only when running and healthy", () => {
+  assert.equal(resolveExitCode(runningStatus), 0)
+  assert.equal(resolveExitCode({ ...runningStatus, deep: { ms: 8, ok: true } }), 0)
+})
+
+// Why (#33): status paired a pid found by scanning every process on the machine
+// with an address taken from config, so it reported a relay "running" on a port
+// nothing was listening on. Detection must be scoped to the port asked about.
+test("ignores a pid file describing a different port", async () => {
+  await fs.mkdir(paths.appDir, { recursive: true })
+  await fs.writeFile(
+    paths.pidPath,
+    JSON.stringify({
+      host: "127.0.0.1",
+      pid: process.pid,
+      port: 4142,
+      startedAt: new Date().toISOString(),
+    }),
+  )
+
+  // Asked about 4199; the pid file describes 4142. Must not answer with it.
+  assert.equal(
+    await findRelayOnPort({ host: "127.0.0.1", port: 4199 }),
+    undefined,
+  )
+
+  await fs.rm(paths.pidPath, { force: true })
+})
+
+test("returns nothing when no pid file and nothing is listening", async () => {
+  await fs.rm(paths.pidPath, { force: true })
+
+  assert.equal(
+    await findRelayOnPort({ host: "127.0.0.1", port: 4199 }),
+    undefined,
+  )
 })
 
 test.after(async () => {

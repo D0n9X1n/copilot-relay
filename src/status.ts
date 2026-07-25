@@ -3,7 +3,7 @@ import { defineCommand } from "citty"
 
 import { readAppConfig } from "~/lib/app-config"
 import { readProxyConfig } from "~/lib/config"
-import { findRelayProcessIds, readRelayPidFileEntry } from "~/lib/lifecycle"
+import { findRelayOnPort } from "~/lib/lifecycle"
 import { setLogLevel } from "~/lib/log"
 import { getLogPath, paths } from "~/lib/paths"
 import { appVersion } from "~/lib/version"
@@ -13,10 +13,13 @@ import { appVersion } from "~/lib/version"
  *
  * 2 is distinct from 1 on purpose: "running but broken" and "not running" call
  * for different responses - restart the service versus re-authenticate.
+ *
+ * A failed health probe is a 2, not a 0. Printing FAILED while exiting 0 would
+ * make every scripted caller treat an unreachable relay as fine. See #34.
  */
 const exitCodes = {
-  deepCheckFailed: 2,
   notRunning: 1,
+  notUsable: 2,
   running: 0,
 } as const
 
@@ -45,6 +48,20 @@ export interface RelayStatus {
   thinkEffort: string
   version: string
 }
+
+/**
+ * Status to exit code. Pure, because this mapping is the contract every
+ * scripted caller depends on and deserves direct coverage.
+ *
+ * 0 requires a live process *and* a passing health probe. Printing FAILED while
+ * exiting 0 would make every scripted caller treat an unreachable relay as
+ * fine. See #34.
+ */
+export const resolveExitCode = (status: RelayStatus): number =>
+  !status.running ? exitCodes.notRunning
+  : !status.health?.ok ? exitCodes.notUsable
+  : status.deep && !status.deep.ok ? exitCodes.notUsable
+  : exitCodes.running
 
 const formatUptime = (startedAt: string | undefined): string => {
   if (!startedAt) {
@@ -239,20 +256,19 @@ export const collectStatus = async (options: {
     version: appVersion,
   }
 
-  // Share detection with `stop` rather than reimplementing it, so the two can
-  // never disagree about what counts as a running relay.
-  const pids = await findRelayProcessIds(readProxyConfig(appConfig))
-  if (pids.length === 0) {
+  // Scoped to the configured port on purpose. `stop` scans globally so it can
+  // clean up strays; `status` was asked about one relay, and reporting a
+  // different one is worse than reporting nothing because it looks
+  // authoritative. See #33.
+  const relay = await findRelayOnPort(readProxyConfig(appConfig))
+  if (!relay) {
     return { ...base, running: false }
   }
 
-  const entry = await readRelayPidFileEntry()
-  // The pid file is authoritative for the address, not the config: hot reload
-  // updates config.port but deliberately does not rebind the listening socket,
-  // so a config edited while the relay runs would send us at the wrong port.
-  const host = entry?.host ?? appConfig.host
-  const port = entry?.port ?? appConfig.port
-  const baseUrl = `http://${host}:${port}`
+  // Address comes from the same record as the pid, so the two can never
+  // describe different processes. The pid file's port is where the socket is
+  // actually bound: hot reload updates config.port without rebinding.
+  const baseUrl = `http://${relay.host}:${relay.port}`
 
   const health = await checkHealth(baseUrl)
   const models = health.ok ? await readModels(baseUrl) : []
@@ -267,10 +283,10 @@ export const collectStatus = async (options: {
     ...(deep ? { deep } : {}),
     health,
     models,
-    pid: entry?.pid ?? pids[0],
-    port,
+    pid: relay.pid,
+    port: relay.port,
     running: true,
-    ...(entry?.startedAt ? { startedAt: entry.startedAt } : {}),
+    ...(relay.startedAt ? { startedAt: relay.startedAt } : {}),
   }
 }
 
@@ -301,9 +317,8 @@ export const status = defineCommand({
       console.log(renderStatus(result).join("\n"))
     }
 
-    process.exitCode =
-      !result.running ? exitCodes.notRunning
-      : result.deep && !result.deep.ok ? exitCodes.deepCheckFailed
-      : exitCodes.running
+    // 0 requires both a live process and a passing health probe. A relay that
+    // cannot answer /healthz is running but not usable, which is a 2.
+    process.exitCode = resolveExitCode(result)
   },
 })
