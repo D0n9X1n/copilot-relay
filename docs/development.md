@@ -54,7 +54,6 @@ Prefer config over hardcoded behavior. If a behavior can reasonably be configure
 Current config keys:
 
 ```yaml
-configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -67,6 +66,8 @@ webSearchBackend:
 gptModel: gpt-5.6-sol
 opusModel: claude-opus-5
 ```
+
+Shipped defaults apply to fresh installs only. `readAppConfig()` persists the resolved config, so an existing install already holds every key and will not pick up a changed default. Do not add migration machinery to force one through: a user's config value is theirs.
 
 The config file is hot-reloaded. Runtime reload currently updates log level, think effort, upstream timeout, host/port values held in config, Copilot base URL, WebSearch backend, and model routing. A listening socket cannot move ports without restart, so changing `host` or `port` still requires restart to affect the bound server.
 

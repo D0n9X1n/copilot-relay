@@ -126,7 +126,6 @@ The project follows a configuration-first rule: if behavior is likely to vary pe
 Current config keys:
 
 ```yaml
-configVersion: 2
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
@@ -142,7 +141,7 @@ opusModel: claude-opus-5
 
 `host` and `port` require restart to affect the listening socket. Other values are hot-reloaded. Empty `webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total upstream wait budget for a single Claude request.
 
-`configVersion` is managed by copilot-relay, not the user. Because `readAppConfig()` writes the resolved config back to disk, every install carries a copy of whatever defaults it first started with; a shipped default therefore cannot reach existing installs by changing `defaultConfig` alone. `configVersion` gates one-time migrations that rewrite a superseded default, and gating matters in both directions: an ungated rewrite would re-run on every start and make the superseded value impossible to pin deliberately.
+`readAppConfig()` writes the resolved config back to disk, so an existing install has every key materialized and a `?? defaultConfig.x` fallback is never consulted again. A shipped default therefore reaches fresh installs only. That is deliberate: copilot-relay does not rewrite a value the user's config already holds, so a deliberate pin survives every upgrade.
 
 ## Startup flow
 
