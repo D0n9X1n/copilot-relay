@@ -41,6 +41,19 @@ CI runs `ubuntu-latest`, `macos-latest`, **and `windows-latest`**. All three mus
 - Description links to the release notes for that tag.
 - Close the milestone when its release ships.
 
+## Documentation
+
+Two audiences, two folders. Keep the split clean.
+
+- **`docs/`** — developer-facing: architecture, development workflow, internals.
+- **`wiki/`** — user-facing: configuration, running as a service, troubleshooting. English and 中文, kept in sync.
+
+`wiki/` is the source of truth for the GitHub wiki tab. `.github/workflows/publish-wiki.yml` publishes it on every merge to `main`, renaming `README.md` to `Home.md` and stripping `.md` from internal links, since wiki links resolve without the extension and repo-folder links require it.
+
+**One-way.** Edits made in the wiki tab's browser editor are overwritten on the next publish. Change `wiki/`.
+
+The wiki used to be a separate repo, outside the PR surface. #21 changed the log filename in v0.2.3, the wiki was not updated, and 30 stale log paths survived two releases before #29 caught them — every documented `tail` and `grep` silently matching nothing. In-repo, that change and its doc update land in the same review. Treat a user-visible path, flag, or command change as incomplete until `wiki/` reflects it.
+
 ## Config
 
 `readAppConfig()` writes the resolved config back to `~/.copilot-relay/config.yaml`, so an existing install has **every key materialized**. A `?? defaultConfig.x` fallback is never consulted again there.
@@ -77,6 +90,10 @@ Integration tests mock upstream Copilot. They must never call the real service.
 ## Public API
 
 Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`. Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision.
+
+**`/healthz` and `/v1/models` prove nothing about upstream.** The first is a static handler; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes both. Only `POST /v1/messages` exercises token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
+
+`status` shares process detection with `stop` (`findRelayProcessIds`). Keep it that way: two implementations that disagree about what counts as a running relay would be worse than having no `status`. It also reads the listening address from the pid file rather than config, because hot reload updates `config.port` without rebinding the socket.
 
 Model IDs are Copilot upstream IDs. Verify against the live `/models` endpoint rather than assuming a name exists.
 
