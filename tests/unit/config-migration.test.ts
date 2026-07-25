@@ -4,9 +4,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-// See log-rotation.test.ts: HOME must be redirected before paths.ts loads.
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-cfg-"))
 process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
 
 const { readAppConfig } = await import("../../src/lib/app-config")
 const { paths } = await import("../../src/lib/paths")

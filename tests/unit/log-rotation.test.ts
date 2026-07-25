@@ -4,11 +4,15 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-// paths.ts resolves everything from os.homedir() at import time, so HOME must be
-// redirected before the module graph loads. Node runs each test file in its own
-// process, so this cannot leak into another file.
+// paths.ts resolves everything from os.homedir() at import time, so the home
+// directory must be redirected before the module graph loads. Node reads HOME on
+// POSIX and USERPROFILE on Windows, and CI runs windows-latest, so both are set:
+// HOME alone would silently write into the real profile on the Windows leg.
+// Node runs each test file in its own process, so this cannot leak into another
+// file.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-log-"))
 process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
 
 const { cleanupLogs } = await import("../../src/lib/log")
 const { formatLogDate, getLogPath, paths } = await import("../../src/lib/paths")

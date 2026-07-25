@@ -1,10 +1,27 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
-import { createServer } from "../../src/server"
-import type { ProxyConfig } from "../../src/lib/config"
-import { runtimeState } from "../../src/lib/state"
+// paths.ts resolves the log directory from os.homedir() at import time, and
+// these tests exercise the real server, which logs. Without this redirect the
+// suite appends to the developer's live ~/.copilot-relay/logs on every run.
+// Static imports hoist above assignments, so the module graph must load via
+// dynamic import after the home directory is set. Node reads HOME on POSIX and
+// USERPROFILE on Windows, and CI runs windows-latest, so both are set.
+const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-itest-"))
+process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
+
+const { createServer } = await import("../../src/server")
+const { runtimeState } = await import("../../src/lib/state")
+type ProxyConfig = import("../../src/lib/config").ProxyConfig
+
+test.after(async () => {
+  await fs.rm(tempHome, { force: true, recursive: true })
+})
 
 interface CapturedRequest {
   body: unknown
