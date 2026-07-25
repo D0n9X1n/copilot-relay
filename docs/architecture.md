@@ -170,7 +170,10 @@ serve Claude Code requests
 
 ## Logging
 
-Logs go to both console and `~/.copilot-relay/logs/copilot-relay.log`.
+Logs go to both console and `~/.copilot-relay/logs/copilot-relay.<local-date>.log`.
+The active file is resolved per write, so it rotates at local midnight without a
+timer, and retention deletes files older than `logRetentionDays` local calendar
+days. Each entry is one physical line with bounded payload rendering.
 Operational debugging workflows live in [`logging.md`](logging.md) and
 [`troubleshooting.md`](troubleshooting.md).
 
