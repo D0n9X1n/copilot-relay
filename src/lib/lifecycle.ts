@@ -11,7 +11,7 @@ const execFileAsync = promisify(execFile)
 const stopTimeoutMs = 5_000
 const stopPollMs = 100
 
-interface RelayPidFile {
+export interface RelayPidFile {
   host: string
   pid: number
   port: number
@@ -99,6 +99,48 @@ const isProcessAlive = (pid: number): boolean => {
     return true
   } catch (error) {
     return isNodeErrno(error) && error.code === "EPERM"
+  }
+}
+
+/**
+ * Full pid-file record, for callers that need the listening address or start
+ * time rather than just the pid.
+ *
+ * Deliberately tolerant: a corrupt or half-written pid file yields undefined
+ * rather than throwing, because `status` must be able to report "not running"
+ * instead of crashing on a file the user may have been mid-edit on.
+ *
+ * Returns undefined for the legacy bare-pid format, which carries no address.
+ */
+export const readRelayPidFileEntry = async (): Promise<
+  RelayPidFile | undefined
+> => {
+  try {
+    const content = await fs.readFile(paths.pidPath, "utf8")
+    const trimmed = content.trim()
+    if (!trimmed || !trimmed.startsWith("{")) {
+      return undefined
+    }
+
+    const payload = JSON.parse(trimmed) as Partial<RelayPidFile>
+    const pid = parsePid(payload.pid)
+    if (
+      pid === undefined
+      || typeof payload.host !== "string"
+      || typeof payload.port !== "number"
+    ) {
+      return undefined
+    }
+
+    return {
+      host: payload.host,
+      pid,
+      port: payload.port,
+      startedAt:
+        typeof payload.startedAt === "string" ? payload.startedAt : "",
+    }
+  } catch {
+    return undefined
   }
 }
 
@@ -246,7 +288,7 @@ const isRelayPid = async (pid: number): Promise<boolean> => {
   return isRelayStartProcess(command, await getProcessCwd(pid))
 }
 
-const findRelayProcessIds = async (
+export const findRelayProcessIds = async (
   config: Pick<ProxyConfig, "port">,
 ): Promise<Array<number>> => {
   const candidates = new Set<number>()

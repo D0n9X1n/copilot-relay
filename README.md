@@ -112,8 +112,31 @@ The same folder stores `copilot_token.json` for the cached Copilot bearer token,
 copilot-relay auth
 copilot-relay start
 copilot-relay restart
+copilot-relay status
 copilot-relay stop
 ```
+
+`status` reports whether a relay is running, where it is listening, and whether
+it is reachable:
+
+```text
+copilot-relay 0.2.5
+  process    running (pid 93744, up 1h 16m)
+  listening  http://127.0.0.1:4142
+  health     ok (9ms)
+  models     gpt-5.6-sol[1m], claude-opus-5
+  upstream   not checked (use --deep)
+  log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
+  config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
+```
+
+`--deep` additionally sends a real request through Copilot. That is the only
+check that proves the relay can actually serve Claude Code — a relay whose
+Copilot token expired an hour ago still answers `/healthz` and `/v1/models`,
+because neither contacts upstream. It is opt-in because it spends a few tokens.
+
+`--json` emits machine-readable output. Exit codes: `0` running, `1` not
+running, `2` running but the deep check failed.
 
 ## Logging
 
@@ -139,12 +162,23 @@ grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copi
 
 See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common debugging workflows.
 
+## Running it as a service
+
+To keep the relay running across reboots, see [`wiki/`](wiki/) — per-platform
+setup for macOS, Windows, and Linux, in English and 中文, each covering
+registration, how to verify it is *actually* working rather than merely
+listening, and how to stop it.
+
+The same pages are published to the [wiki tab](https://github.com/D0n9X1n/copilot-relay/wiki),
+which is generated from `wiki/` on every merge. Edit the folder, not the tab.
+
 ## Development
 
 Developer notes live in [`docs/development.md`](docs/development.md).
 Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
 Logging notes live in [`docs/logging.md`](docs/logging.md).
 Troubleshooting notes live in [`docs/troubleshooting.md`](docs/troubleshooting.md).
+User-facing guides live in [`wiki/`](wiki/).
 
 ```sh
 npm install

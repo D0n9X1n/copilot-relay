@@ -1,0 +1,76 @@
+name: Publish wiki
+
+# The wiki tab stays live, but its content is owned by wiki/ in this repo, so a
+# doc change is reviewed in the same PR as the code it describes. This publishes
+# that folder to the wiki tab on merge.
+#
+# One-way. Edits made in the wiki tab's browser editor are overwritten on the
+# next push to wiki/ - edit wiki/ instead.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - ".github/workflows/publish-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the wiki repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" \
+            wiki-repo
+
+      - name: Publish wiki/ to the wiki tab
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Replace wholesale rather than merge: wiki/ is the source of truth, so
+          # a page deleted there must disappear from the tab. Keep .git.
+          find wiki-repo -maxdepth 1 -name '*.md' -delete
+
+          cp wiki/*.md wiki-repo/
+
+          cd wiki-repo
+
+          # The tab's landing page must be Home.md; a repo folder wants README.md
+          # so GitHub renders it when you open wiki/. Same file, renamed here.
+          if [ -f README.md ]; then
+            mv README.md Home.md
+          fi
+
+          # Wiki links omit the extension - ](EN-Configuration) resolves on the
+          # tab, ](EN-Configuration.md) does not. In the repo folder it is the
+          # reverse. Source keeps .md; strip it for the tab.
+          sed -i -E 's/\]\(([A-Za-z0-9-]+)\.md\)/](\1)/g' ./*.md
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki tab already matches wiki/; nothing to publish"
+            exit 0
+          fi
+
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Publish wiki from ${GITHUB_SHA::7}
+
+          Source of truth is wiki/ in the code repo. Do not edit here - browser
+          edits are overwritten on the next publish."
+
+          git push origin HEAD
