@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { inspect, type InspectOptions } from "node:util"
 
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
@@ -105,6 +106,38 @@ test("passes string messages through unchanged", async () => {
   const content = await readActiveLog()
 
   assert.match(content, /info request_id=abc123 POST \/v1\/messages -> 200 1234ms/)
+})
+
+// Why: guards against "simplifying" the logger back to Node's default compact.
+// The Node docs say breakLength: Infinity formats on one line "in combination
+// with compact set to true or any number >= 1", which reads as though the
+// default compact: 3 would do. It does not - the number counts inner elements
+// united, not a threshold - so it only collapses payloads nesting no deeper
+// than that count. Asserted directly against inspect so the reason this option
+// is set survives independently of the logger's own output.
+test("compact: true is required beyond the default compact depth", () => {
+  // Four levels deep, the shape a Copilot upstream error actually logs.
+  const payload = {
+    request: {
+      messages: [{ content: "hello", role: "user" }],
+      tools: [{ function: { name: "Read", parameters: { type: "object" } } }],
+    },
+    response: { body: { error: { message: "bad request" } }, status: 400 },
+  }
+
+  const lines = (options: InspectOptions): number =>
+    inspect(payload, { breakLength: Infinity, depth: 6, ...options }).split("\n")
+      .length
+
+  // The default does not collapse this payload, breakLength notwithstanding.
+  assert.ok(
+    lines({ compact: 3 }) > 1,
+    "expected default compact: 3 to leave this payload multi-line",
+  )
+  // Lowering the count makes it worse, which no threshold reading predicts.
+  assert.ok(lines({ compact: 1 }) > lines({ compact: 3 }))
+  // compact: true is depth-independent and is what the logger relies on.
+  assert.equal(lines({ compact: true }), 1)
 })
 
 test.after(async () => {

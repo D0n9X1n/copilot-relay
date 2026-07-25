@@ -53,10 +53,21 @@ const formatLogValue = (value: unknown): string =>
     inspect(value, {
       breakLength: Infinity,
       // compact: true is load-bearing next to breakLength, not redundant with
-      // it. Node's default compact: 3 unites only the three inner-most levels
-      // and still prints one property per line at outer levels, so breakLength
-      // alone left nested payloads spread across lines - the exact shape this
-      // is meant to collapse.
+      // it. The Node docs say breakLength: Infinity formats input on one line
+      // "in combination with compact set to true or any number >= 1", which
+      // reads as though the default compact: 3 would suffice. It does not: the
+      // number is a count of inner elements united, not a threshold, so it only
+      // collapses payloads nesting no deeper than that count. Measured on
+      // v26.5.0 with a real Copilot error payload (4 levels deep):
+      //
+      //   compact: 3  + breakLength: Infinity -> 10 lines
+      //   compact: 1  + breakLength: Infinity -> 22 lines
+      //   compact: 10 + breakLength: Infinity ->  1 line
+      //   compact: true + breakLength: Infinity -> 1 line
+      //
+      // Lowering the number makes it worse, which no threshold reading
+      // predicts. compact: true is depth-independent, so it holds for payloads
+      // deeper than any fixed count we might pick.
       compact: true,
       depth: 6,
       maxArrayLength: 100,
