@@ -42,6 +42,12 @@ Only Claude Code-facing endpoints are public:
 `src/server.ts` directly and never contacts Copilot, so — like `/healthz` — a
 200 from it says the relay is listening, not that it can serve a request.
 
+`/healthz` returns `{ok: true, version}`, where `version` is the build of the
+process answering. It is the only surface that reports the running daemon's
+version rather than the caller's, which is what `copilot-relay status` uses to
+tell the two apart (#43). Reporting it costs nothing extra: `status` already
+probes this endpoint. It stays process-local — it never contacts Copilot.
+
 The proxy calls Copilot `/chat/completions` and `/responses` internally, but it does not expose public OpenAI-compatible routes.
 
 ## Main modules
@@ -149,6 +155,14 @@ Runs at startup before binding the server. It verifies configured upstream model
     copilot-relay.2026-07-23.log
     copilot-relay.2026-07-22.log
 ```
+
+`copilot-relay.pid` holds `{host, pid, port, startedAt, version}` — written by
+the daemon at startup, so `version` is the build actually serving. It is the
+second of the two daemon-version sources: `/healthz` is preferred because a live
+process cannot report a stale answer, and the pid file covers the window where
+the daemon is up but not yet healthy. Both absent means a daemon older than
+v0.3.1, reported as `unknown` rather than silently filled in with the CLI's own
+version — that substitution was #43.
 
 ## Configuration model
 

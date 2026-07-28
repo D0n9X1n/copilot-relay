@@ -10,9 +10,13 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-status-"
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { renderStatus, resolveExitCode } = await import("../../src/status")
-const { findRelayOnPort } = await import("../../src/lib/lifecycle")
+const { hasVersionMismatch, renderStatus, resolveExitCode } = await import(
+  "../../src/status"
+)
+const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
+  await import("../../src/lib/lifecycle")
 const { paths } = await import("../../src/lib/paths")
+const { appVersion } = await import("../../src/lib/version")
 type RelayStatus = Awaited<
   ReturnType<typeof import("../../src/status").collectStatus>
 >
@@ -29,6 +33,7 @@ const baseStatus: RelayStatus = {
 const runningStatus: RelayStatus = {
   ...baseStatus,
   baseUrl: "http://127.0.0.1:4142",
+  daemonVersion: "0.2.5",
   health: { ms: 2, ok: true },
   models: ["gpt-5.6-sol[1m]", "claude-opus-5"],
   pid: 93_744,
@@ -174,6 +179,106 @@ test("separates not-running from running-but-broken", () => {
 test("exits 0 only when running and healthy", () => {
   assert.equal(resolveExitCode(runningStatus), 0)
   assert.equal(resolveExitCode({ ...runningStatus, deep: { ms: 8, ok: true } }), 0)
+})
+
+// Why (#43): status reported the version of the CLI being invoked, never
+// asking the daemon. After `npm i -g copilot-relay@X` without a restart it
+// confidently printed the new version while the old process kept serving —
+// wrong in exactly the situation you would run it to check.
+test("reports the daemon's version, not the CLI's", () => {
+  const out = render({ ...runningStatus, daemonVersion: "0.2.6", version: "0.3.0" })
+
+  assert.match(out, /version\s+0\.2\.6/)
+})
+
+// Why: the mismatch is the finding, and a bare version row reads as trivia
+// beside a green health line. It has to say which build is serving, which is
+// installed, and what to do about it.
+test("surfaces a version mismatch and names the next step", () => {
+  const out = render({ ...runningStatus, daemonVersion: "0.2.6", version: "0.3.0" })
+
+  assert.match(out, /MISMATCH/)
+  assert.match(out, /running relay is 0\.2\.6; 0\.3\.0 is installed/)
+  assert.match(out, /copilot-relay restart/)
+})
+
+// Why: a stale build still serves traffic. Mapping that to 2 would tell every
+// scripted caller the relay is broken when it is merely not the build you
+// installed, so the mismatch is surfaced in text and the contract holds.
+test("keeps exit code 0 on a version mismatch", () => {
+  const mismatched = { ...runningStatus, daemonVersion: "0.2.6", version: "0.3.0" }
+
+  assert.equal(hasVersionMismatch(mismatched), true)
+  assert.equal(resolveExitCode(mismatched), 0)
+})
+
+// Why: the warning must fire only on a real difference. Warning when the
+// versions agree would train users to ignore it.
+test("stays quiet when daemon and CLI versions agree", () => {
+  const matched = { ...runningStatus, daemonVersion: "0.3.0", version: "0.3.0" }
+  const out = render(matched)
+
+  assert.equal(hasVersionMismatch(matched), false)
+  assert.match(out, /version\s+0\.3\.0/)
+  assert.doesNotMatch(out, /MISMATCH/)
+  assert.doesNotMatch(out, /is installed/)
+})
+
+// Why: a daemon older than v0.3.1 reports no version at all. Unknown is not a
+// mismatch — filling the gap with the CLI's version is precisely the bug, and
+// warning on every old daemon would be noise.
+test("reports unknown for a daemon that predates version reporting", () => {
+  const unknown = { ...runningStatus }
+  delete unknown.daemonVersion
+  const out = render(unknown)
+
+  assert.equal(hasVersionMismatch(unknown), false)
+  assert.match(out, /version\s+unknown/)
+  assert.doesNotMatch(out, /MISMATCH/)
+  assert.equal(resolveExitCode(unknown), 0)
+})
+
+// Why: a stopped relay has no version to report, and printing a row about one
+// would imply something was inspected.
+test("omits the daemon version row when not running", () => {
+  const out = render(baseStatus)
+
+  assert.doesNotMatch(out, /version\s+unknown/)
+  assert.doesNotMatch(out, /MISMATCH/)
+})
+
+// Why: the pid file is the source that covers a daemon which is up but not yet
+// answering /healthz. It records the version of the process that wrote it, so
+// it must survive the write/read round trip.
+test("round-trips the daemon version through the pid file", async () => {
+  await writeRelayPidFile({ host: "127.0.0.1", port: 4142 })
+
+  const entry = await readRelayPidFileEntry()
+  assert.equal(entry?.version, appVersion)
+
+  await fs.rm(paths.pidPath, { force: true })
+})
+
+// Why: a pid file written before v0.3.1 has no version field. It must still
+// parse — degrading to "unknown" — rather than being discarded as corrupt,
+// which would make status report "not running" for a live relay.
+test("reads a pre-v0.3.1 pid file without a version", async () => {
+  await fs.mkdir(paths.appDir, { recursive: true })
+  await fs.writeFile(
+    paths.pidPath,
+    JSON.stringify({
+      host: "127.0.0.1",
+      pid: process.pid,
+      port: 4142,
+      startedAt: new Date().toISOString(),
+    }),
+  )
+
+  const entry = await readRelayPidFileEntry()
+  assert.equal(entry?.pid, process.pid)
+  assert.equal(entry?.version, undefined)
+
+  await fs.rm(paths.pidPath, { force: true })
 })
 
 // Why (#33): status paired a pid found by scanning every process on the machine

@@ -76,6 +76,35 @@ copilot-relay auth
 copilot-relay start
 ```
 
+## A new version did not take effect
+
+A fix shipped in a release you installed, but nothing changed. Check which build
+is actually serving:
+
+```sh
+copilot-relay status
+```
+
+```text
+copilot-relay 0.3.0
+  process    running (pid 30516, up 1h 58m)
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+```
+
+The first line is the CLI you just ran; `version` is what the running relay
+reports about itself. Installing a new version replaces the command on disk and
+leaves the already-running process alone, so the two disagree until you restart
+it:
+
+```sh
+copilot-relay restart
+```
+
+If you run it as a service, restart it through the service manager instead —
+see the macOS, Linux, or Windows page. `version unknown` means the relay is
+older than v0.3.1 and cannot report its version; restart it and the row becomes
+meaningful.
+
 ## Request returned 400/500
 
 At `info`, you see a short summary:

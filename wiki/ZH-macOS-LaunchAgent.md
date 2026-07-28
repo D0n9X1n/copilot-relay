@@ -97,6 +97,7 @@ copilot-relay status
 ```text
 copilot-relay 0.2.5
   process    running (pid 93744, up 1h 16m)
+  version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
   models     gpt-5.6-sol[1m], claude-opus-5
@@ -104,6 +105,19 @@ copilot-relay 0.2.5
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
 ```
+
+`version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行
+是你刚刚调用的那个 CLI。执行 `npm i -g copilot-relay@latest` 之后，在 agent 真正重启
+之前，两者会不一致：
+
+```text
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+```
+
+这一点在 launchd 下尤其重要：配置了 `KeepAlive` 时，job 可能在 `copilot-relay restart`
+执行的过程中被 launchd 抢先拉起，于是升级悄无声息地没有生效。`version` 这一行正是你分辨
+这种情况的依据。执行 `launchctl kickstart -k "gui/$(id -u)/com.d0n9x1n.copilot-relay"`
+后再查一次。版本不一致不会改变退出码 —— relay 仍然可用，只是它不是你刚装上的那个版本。
 
 加上 `--deep` 会额外发一个真实请求经由 Copilot 走一遍 —— 这是唯一能证明 relay 真的可以
 为 Claude Code 服务的检查。它会消耗少量 token，所以默认不做：

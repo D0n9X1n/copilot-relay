@@ -75,6 +75,31 @@ copilot-relay auth
 copilot-relay start
 ```
 
+## 新版本似乎没有生效
+
+某个修复在你已经安装的版本里发布了，但行为没有变化。先看看真正在服务的是哪个版本：
+
+```sh
+copilot-relay status
+```
+
+```text
+copilot-relay 0.3.0
+  process    running (pid 30516, up 1h 58m)
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+```
+
+第一行是你刚刚运行的那个 CLI；`version` 是**正在运行的 relay** 自己报告的版本。安装新版本
+只会替换磁盘上的命令，不会动已经在跑的进程，所以在你重启它之前，两者会不一致：
+
+```sh
+copilot-relay restart
+```
+
+如果你是以服务方式运行的，请改用对应的服务管理器重启 —— 参见 macOS、Linux 或 Windows
+页面。`version unknown` 表示这个 relay 比 v0.3.1 更旧，无法报告自己的版本；重启之后这一行
+才有意义。
+
 ## 请求返回 400/500
 
 `info` 里会看到短摘要：

@@ -7,6 +7,7 @@ import { cors } from "hono/cors"
 
 import type { ProxyConfig, ProxyEnv } from "~/lib/config"
 import { log } from "~/lib/log"
+import { appVersion } from "~/lib/version"
 import { claudeRoutes } from "~/routes/claude"
 
 const loggedRequestHeaders = [
@@ -96,7 +97,11 @@ export const createServer = (config: ProxyConfig) => {
     }),
   )
 
-  app.get("/healthz", (c) => c.json({ ok: true }))
+  // `version` is the build answering this request, which is what makes it
+  // worth serving here: `status` already probes /healthz, so reporting the
+  // daemon's own version costs no extra round trip and no new route. See #43.
+  // Still static — process-local data, never an upstream call.
+  app.get("/healthz", (c) => c.json({ ok: true, version: appVersion }))
 
   // Claude Code probes this before and around real traffic. Three call sites in
   // the CLI: a fire-and-forget HEAD connection warmup that reads

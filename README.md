@@ -134,6 +134,7 @@ it is reachable:
 ```text
 copilot-relay 0.2.5
   process    running (pid 93744, up 1h 16m)
+  version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
   models     gpt-5.6-sol[1m], claude-opus-5
@@ -141,6 +142,23 @@ copilot-relay 0.2.5
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
 ```
+
+The first line is the CLI you invoked; the `version` row is the build the
+running daemon reports about itself. They differ after an upgrade that has not
+been restarted yet — the new CLI is installed, the old process is still
+serving — and `status` says so rather than letting the header imply the upgrade
+took effect:
+
+```text
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+  ...
+  The running relay is 0.2.6; 0.3.0 is installed.
+  Restart it to serve the installed version: copilot-relay restart
+```
+
+A mismatch does not change the exit code: the relay works, it is just not the
+build you installed. A daemon older than v0.3.1 does not report a version at
+all, which shows as `unknown`.
 
 `--deep` additionally sends a real request through Copilot. That is the only
 check that proves the relay can actually serve Claude Code — a relay whose

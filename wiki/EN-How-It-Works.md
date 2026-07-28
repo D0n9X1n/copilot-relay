@@ -51,6 +51,11 @@ real traffic. Like `/healthz`, it is answered locally and never contacts
 Copilot, so a `200` means the relay is listening — not that it can serve a
 request. Use `copilot-relay status --deep` for that.
 
+`/healthz` answers `{"ok": true, "version": "..."}`, where `version` is the
+build of the process answering — the running relay, not whichever CLI asked.
+That is what lets `copilot-relay status` tell you an upgrade has been installed
+but not restarted.
+
 OpenAI-compatible routes are intentionally not public.
 
 ## Model routing

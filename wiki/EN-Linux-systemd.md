@@ -94,6 +94,7 @@ copilot-relay status
 ```text
 copilot-relay 0.2.5
   process    running (pid 93744, up 1h 16m)
+  version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
   models     gpt-5.6-sol[1m], claude-opus-5
@@ -101,6 +102,19 @@ copilot-relay 0.2.5
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
 ```
+
+The `version` row is the build the running daemon reports about itself, which is
+not the same thing as the first line — that is the CLI you just invoked. After
+`npm i -g copilot-relay@latest` the two disagree until the service is actually
+restarted:
+
+```text
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+```
+
+Under systemd that usually means the unit was never reloaded. `systemctl --user
+restart copilot-relay` and check again. A mismatch does not change the exit
+code — the relay still works, it is just not the build you installed.
 
 Add `--deep` to also send a real request through Copilot — the only check that
 proves the relay can serve Claude Code. It spends a few tokens, which is why it
