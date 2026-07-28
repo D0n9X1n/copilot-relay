@@ -21,6 +21,7 @@ import type {
   ChatCompletionResponse,
   ChatCompletionsPayload,
   Message,
+  Tool,
   ToolCall,
 } from "~/copilot/types"
 import type { ProxyConfig } from "~/lib/config"
@@ -477,13 +478,18 @@ const getWebSearchResultText = (search: WebSearchExecutionResult): string => {
   ].join("\n")
 }
 
+// Delivered as a user turn, not a system turn, for two reasons. Copilot's
+// Claude-family models reject a conversation that does not end with a user
+// message ("This model does not support assistant message prefill"), and this
+// message is appended last. Anthropic removed prefill support in Opus 4.7+ /
+// Sonnet 4.6+, so this is an upstream constraint rather than a Copilot quirk.
 const createWebSearchResultContextMessage = (
   search: WebSearchExecutionResult,
 ): Message => ({
-  role: "system",
+  role: "user",
   content: [
     "Trusted bridge retrieval context: the assistant selected web_search, and copilot-relay executed it.",
-    "Use this context for the final answer. Do not describe it as user-provided or injected. Do not call web_search again.",
+    "Use this context to complete the request. Do not describe it as user-provided or injected.",
     "If the user requested a specific output format, answer using only matching information from this context.",
     "If the user asked for a URL only, output only that URL with no surrounding text.",
     "",
@@ -493,37 +499,82 @@ const createWebSearchResultContextMessage = (
   ].join("\n"),
 })
 
+const isWebSearchTool = (
+  tool: Tool,
+  toolNameMapper: ClaudeToolNameMapper,
+): boolean =>
+  isClaudeWebSearchToolName(toolNameMapper.toClaude(tool.function.name))
+
+// The search already ran, so re-advertising it would let the model select it a
+// second time. The final response is never re-checked for a web-search call, so
+// that selection would reach Claude Code as a client tool_use named WebSearch
+// instead of a server_tool_use block. Removing the tool makes that structurally
+// impossible instead of relying on a prompt instruction.
+const removeWebSearchTool = (
+  tools: ChatCompletionsPayload["tools"],
+  toolNameMapper: ClaudeToolNameMapper,
+): ChatCompletionsPayload["tools"] => {
+  if (!tools || tools.length === 0) {
+    return undefined
+  }
+
+  const remaining = tools.filter((tool) => !isWebSearchTool(tool, toolNameMapper))
+  // An empty array is not the same as an absent field upstream.
+  return remaining.length > 0 ? remaining : undefined
+}
+
+const normalizeFinalToolChoice = (
+  toolChoice: ChatCompletionsPayload["tool_choice"],
+  tools: ChatCompletionsPayload["tools"],
+  toolNameMapper: ClaudeToolNameMapper,
+): ChatCompletionsPayload["tool_choice"] => {
+  if (!tools || tools.length === 0) {
+    return undefined
+  }
+
+  // "required" would force a tool call on a pass whose job is to answer.
+  if (toolChoice === "required") {
+    return "auto"
+  }
+
+  // A choice pinned to the now-removed search tool would be unsatisfiable.
+  if (
+    toolChoice
+    && typeof toolChoice === "object"
+    && isClaudeWebSearchToolName(
+      toolNameMapper.toClaude(toolChoice.function.name),
+    )
+  ) {
+    return "auto"
+  }
+
+  return toolChoice
+}
+
 export const createFinalWebSearchPayload = (
   payload: ChatCompletionsPayload,
   search: WebSearchExecutionResult,
+  toolNameMapper: ClaudeToolNameMapper,
 ): ChatCompletionsPayload => {
-  const messages = payload.messages.flatMap<Message>((message) => {
-    if (message.role === "tool") {
-      return [
-        {
-          role: "developer",
-          content: [
-            "Prior local tool result from the conversation:",
-            String(message.content ?? ""),
-          ].join("\n"),
-        },
-      ]
-    }
+  const tools = removeWebSearchTool(payload.tools, toolNameMapper)
 
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      return message.content ? [{ ...message, tool_calls: undefined }] : []
-    }
-
-    return [message]
-  })
-
+  // payload.messages is passed through untouched. An earlier version rewrote
+  // tool messages to developer messages and stripped assistant tool_calls,
+  // because removing every tool definition would have orphaned those
+  // references and produced a 400. The definitions now survive, so the rewrite
+  // is unnecessary — and keeping the history byte-identical preserves the
+  // prompt-cache prefix shared with the decision pass.
   return {
     ...payload,
     stream: false,
-    tools: undefined,
-    tool_choice: undefined,
+    tools,
+    tool_choice: normalizeFinalToolChoice(
+      payload.tool_choice,
+      tools,
+      toolNameMapper,
+    ),
     messages: [
-      ...messages,
+      ...payload.messages,
       createWebSearchResultContextMessage(search),
     ],
   }

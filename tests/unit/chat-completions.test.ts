@@ -205,3 +205,78 @@ test("treats destroyed HTTP/2 sessions as retryable fetch errors", () => {
 
   assert.equal(isRetryableFetchError(error), true)
 })
+
+// Why: Copilot's Claude-family models reject a conversation that does not end
+// with a user message. The bridge-managed WebSearch path used to append its
+// retrieval context as a trailing system message, which reached upstream and
+// 400'd (#37). The same class of bug has been reported elsewhere as a fixup
+// applied on one code path and missed on another, so the guard lives at the
+// shared chat layer rather than in a single caller.
+test("appends a user turn when the payload ends on a non-user role", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const config: ProxyConfig = {
+      copilotBaseUrl: mock.baseUrl,
+      copilotToken: "test-token",
+      host: "127.0.0.1",
+      port: 0,
+      upstreamTimeoutMs: 180_000,
+      vsCodeVersion: "1.99.3",
+    }
+
+    await createChatCompletions(config, {
+      max_tokens: 16,
+      messages: [
+        { role: "user", content: "compare rust async runtimes" },
+        { role: "system", content: "Trusted bridge retrieval context: ..." },
+      ],
+      model: "claude-opus-4.8",
+      stream: false,
+    }, { client: "claude", requestedModel: "opus" })
+
+    const request = mock.requests[0]?.body as {
+      messages?: Array<{ content?: string; role?: string }>
+    }
+
+    assert.equal(request.messages?.at(-2)?.role, "system")
+    assert.equal(request.messages?.at(-1)?.role, "user")
+  } finally {
+    await mock.close()
+  }
+})
+
+// Why: the guard sits on the path every non-search request already uses, so a
+// conversation that is already well-formed must reach upstream untouched. An
+// extra turn here would alter ~90% of traffic and break prompt-cache prefixes.
+test("leaves a payload that already ends on a user message unchanged", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const config: ProxyConfig = {
+      copilotBaseUrl: mock.baseUrl,
+      copilotToken: "test-token",
+      host: "127.0.0.1",
+      port: 0,
+      upstreamTimeoutMs: 180_000,
+      vsCodeVersion: "1.99.3",
+    }
+    const messages = [
+      { role: "system" as const, content: "You are a helpful assistant." },
+      { role: "user" as const, content: "compare rust async runtimes" },
+    ]
+
+    await createChatCompletions(config, {
+      max_tokens: 16,
+      messages,
+      model: "claude-opus-4.8",
+      stream: false,
+    }, { client: "claude", requestedModel: "opus" })
+
+    const request = mock.requests[0]?.body as {
+      messages?: Array<{ content?: string; role?: string }>
+    }
+
+    assert.deepEqual(request.messages, messages)
+  } finally {
+    await mock.close()
+  }
+})

@@ -35,6 +35,9 @@ const usesMaxCompletionTokens = (modelId: string): boolean =>
 const continuePrefillPrompt =
   "Continue the assistant response from the previous assistant message."
 
+const continueAfterNonUserPrompt =
+  "Continue based on the context above."
+
 type ClientKind = "claude" | "generic"
 
 interface CreateChatCompletionsOptions {
@@ -115,12 +118,35 @@ const buildRequestPayload = (
   }
 }
 
+// Copilot's Claude-family models reject a conversation that does not end with a
+// user message: "This model does not support assistant message prefill. The
+// conversation must end with a user message." Anthropic removed prefill support
+// in Opus 4.7+ / Sonnet 4.6+, so this is an upstream constraint, not a Copilot
+// quirk.
+//
+// A trailing assistant message is the prefill case and keeps its dedicated
+// handling below. Any other non-user trailing role (system, developer, tool)
+// gets a short user turn appended. This guard is deliberately at the shared
+// /chat/completions layer rather than in one caller: the same bug has been
+// reported elsewhere as a fixup applied on one code path and missed on another
+// (openclaw#75395), and a payload that reaches here ending on a non-user role is
+// rejected no matter which caller built it.
 const normalizeFinalAssistantPrefill = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload => {
   const lastMessage = payload.messages.at(-1)
-  if (lastMessage?.role !== "assistant") {
+  if (!lastMessage || lastMessage.role === "user") {
     return payload
+  }
+
+  if (lastMessage.role !== "assistant") {
+    return {
+      ...payload,
+      messages: [
+        ...payload.messages,
+        { role: "user", content: continueAfterNonUserPrompt },
+      ],
+    }
   }
 
   const messages = [...payload.messages]
