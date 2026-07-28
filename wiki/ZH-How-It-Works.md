@@ -52,6 +52,10 @@ copilot-relay start
 监听，并不代表它能够正常处理请求。若需确认后者，请使用
 `copilot-relay status --deep`。
 
+`/healthz` 返回 `{"ok": true, "version": "..."}`，其中 `version` 是**正在应答的那个
+进程**的版本 —— 也就是运行中的中继本身，而不是发起询问的那个 CLI。正因如此，
+`copilot-relay status` 才能告诉你：新版本已经装上了，但进程还没有重启。
+
 OpenAI 兼容接口不会对外公开。
 
 ## 模型路由

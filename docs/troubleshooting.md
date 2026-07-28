@@ -49,6 +49,41 @@ copilot-relay auth
 copilot-relay start
 ```
 
+## A new version does not seem to have taken effect
+
+Symptom: a fix shipped in a release you installed, but the behavior is
+unchanged.
+
+Check which build is actually serving:
+
+```sh
+copilot-relay status
+```
+
+```text
+copilot-relay 0.3.0
+  process    running (pid 30516, up 1h 58m)
+  version    0.2.6 — MISMATCH, 0.3.0 is installed
+```
+
+The first line is the CLI you invoked; `version` is what the running daemon
+reports about itself. `npm i -g` replaces the binary on disk and does not touch
+the process already running, so the two disagree until it restarts.
+
+```sh
+copilot-relay restart
+```
+
+Under a service manager, restart through it rather than through the CLI. On
+macOS with `KeepAlive`, launchd can relaunch the job out from under
+`copilot-relay restart`, so the restart silently does not take — use
+`launchctl kickstart -k "gui/$(id -u)/com.d0n9x1n.copilot-relay"` and re-check
+`status`.
+
+`version unknown` means the daemon predates v0.3.1 and does not report its
+version at all; restarting it makes the row meaningful. A mismatch never changes
+the exit code — the relay works, it is simply not the build you installed.
+
 ## Request returns 400 or 500
 
 At `info`, local failures look like:

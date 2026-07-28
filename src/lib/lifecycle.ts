@@ -6,6 +6,7 @@ import { promisify } from "node:util"
 import type { ProxyConfig } from "~/lib/config"
 import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
+import { appVersion } from "~/lib/version"
 
 const execFileAsync = promisify(execFile)
 const stopTimeoutMs = 5_000
@@ -16,6 +17,12 @@ export interface RelayPidFile {
   pid: number
   port: number
   startedAt: string
+  /**
+   * The version of the build that wrote this file — the daemon's, never the
+   * caller's. Optional because a file written before v0.3.1 has no such field,
+   * and because it must be readable even when the daemon is not yet healthy.
+   */
+  version?: string
 }
 
 const isNodeErrno = (error: unknown): error is NodeJS.ErrnoException =>
@@ -138,6 +145,9 @@ export const readRelayPidFileEntry = async (): Promise<
       port: payload.port,
       startedAt:
         typeof payload.startedAt === "string" ? payload.startedAt : "",
+      ...(typeof payload.version === "string" && payload.version ?
+        { version: payload.version }
+      : {}),
     }
   } catch {
     return undefined
@@ -175,6 +185,10 @@ export const writeRelayPidFile = async (
     pid: process.pid,
     port: config.port,
     startedAt: new Date().toISOString(),
+    // Written by the daemon at startup, so it is the build actually serving —
+    // unlike `status`, which used to report the version of whichever CLI was
+    // invoked. See #43. Covers the window before the daemon answers /healthz.
+    version: appVersion,
   }
   await fs.writeFile(paths.pidPath, `${JSON.stringify(payload, null, 2)}\n`, {
     mode: 0o600,
@@ -316,7 +330,9 @@ export const findRelayOnPort = async (
   }
 
   // No usable pid file - fall back to whoever holds the port. Covers a relay
-  // started before pid files, or one whose pid file was removed.
+  // started before pid files, or one whose pid file was removed. No version
+  // here on purpose: nothing in this path knows the daemon's build, and
+  // borrowing the caller's would recreate #43.
   for (const pid of await getPortListenerPids(config.port)) {
     if (await isRelayPid(pid)) {
       return {

@@ -36,6 +36,13 @@ interface ProbeResult {
 export interface RelayStatus {
   baseUrl?: string
   configPath: string
+  /**
+   * The version the running daemon reports about itself, which is not
+   * necessarily `version` — that one is whichever CLI was invoked. Undefined
+   * when nothing is running, or when the daemon predates version reporting.
+   * See #43.
+   */
+  daemonVersion?: string
   deep?: ProbeResult
   health?: ProbeResult
   logPath: string
@@ -46,8 +53,22 @@ export interface RelayStatus {
   running: boolean
   startedAt?: string
   thinkEffort: string
+  /** The CLI binary being invoked. Says nothing about what is serving. */
   version: string
 }
+
+/**
+ * True when the daemon is serving a different build than the invoked CLI.
+ *
+ * Pure and exported because it drives both the rendered warning and the
+ * deliberate decision to leave the exit code at 0; both deserve direct
+ * coverage. Undefined daemonVersion is not a mismatch - unknown is not
+ * different, and claiming otherwise would warn on every pre-v0.3.1 daemon.
+ */
+export const hasVersionMismatch = (status: RelayStatus): boolean =>
+  status.running
+  && status.daemonVersion !== undefined
+  && status.daemonVersion !== status.version
 
 /**
  * Status to exit code. Pure, because this mapping is the contract every
@@ -56,6 +77,11 @@ export interface RelayStatus {
  * 0 requires a live process *and* a passing health probe. Printing FAILED while
  * exiting 0 would make every scripted caller treat an unreachable relay as
  * fine. See #34.
+ *
+ * A version mismatch stays 0 on purpose (#43). The relay works; it is just not
+ * the build that was installed. Mapping it to 2 would overstate it and break
+ * every scripted caller that treats non-zero as broken. It is surfaced in the
+ * text instead.
  */
 export const resolveExitCode = (status: RelayStatus): number =>
   !status.running ? exitCodes.notRunning
@@ -102,8 +128,21 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
 
   lines.push(
     `  process    running (pid ${status.pid}, up ${formatUptime(status.startedAt)})`,
-    `  listening  ${status.baseUrl}`,
   )
+
+  // The daemon's own build, distinct from the header line above, which is the
+  // CLI that was invoked. Always shown when running: the case this exists for
+  // is an upgrade the user believes landed, and a row that appears only on
+  // mismatch would leave "did it even check?" unanswered. See #43.
+  lines.push(
+    status.daemonVersion === undefined ?
+      "  version    unknown (daemon predates version reporting — restart to report it)"
+    : hasVersionMismatch(status) ?
+      `  version    ${status.daemonVersion} — MISMATCH, ${status.version} is installed`
+    : `  version    ${status.daemonVersion}`,
+  )
+
+  lines.push(`  listening  ${status.baseUrl}`)
 
   const health = status.health
   lines.push(
@@ -143,6 +182,18 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
     )
   }
 
+  // A mismatch is nearly always an upgrade that installed but never restarted,
+  // so the next step is named rather than left to be inferred. Surfaced, not
+  // just recorded: the version row alone reads as trivia next to a green
+  // health line. See #43.
+  if (hasVersionMismatch(status)) {
+    lines.push(
+      "",
+      `  The running relay is ${status.daemonVersion}; ${status.version} is installed.`,
+      "  Restart it to serve the installed version: copilot-relay restart",
+    )
+  }
+
   return lines
 }
 
@@ -171,14 +222,30 @@ const describeError = (error: unknown): string =>
     : error.message
   : String(error)
 
-const checkHealth = async (baseUrl: string): Promise<ProbeResult> => {
+/**
+ * Probes /healthz, which also reports the daemon's own version.
+ *
+ * The version rides along on a probe `status` already makes, so asking what is
+ * running costs nothing extra. Absent for a daemon older than v0.3.1, which is
+ * itself informative, so it stays optional rather than defaulting to the
+ * caller's version - that substitution is the bug. See #43.
+ */
+const checkHealth = async (
+  baseUrl: string,
+): Promise<{ result: ProbeResult; version?: string }> => {
   try {
-    const result = await probe(`${baseUrl}/healthz`, {}, localProbeTimeoutMs)
-    return result.ok ?
-        { ms: result.ms, ok: true }
-      : { detail: `http ${result.status}`, ms: result.ms, ok: false }
+    const probeResult = await probe(`${baseUrl}/healthz`, {}, localProbeTimeoutMs)
+    const version = (probeResult.body as { version?: unknown } | undefined)
+      ?.version
+    return {
+      result:
+        probeResult.ok ?
+          { ms: probeResult.ms, ok: true }
+        : { detail: `http ${probeResult.status}`, ms: probeResult.ms, ok: false },
+      ...(typeof version === "string" && version ? { version } : {}),
+    }
   } catch (error) {
-    return { detail: describeError(error), ok: false }
+    return { result: { detail: describeError(error), ok: false } }
   }
 }
 
@@ -271,17 +338,25 @@ export const collectStatus = async (options: {
   const baseUrl = `http://${relay.host}:${relay.port}`
 
   const health = await checkHealth(baseUrl)
-  const models = health.ok ? await readModels(baseUrl) : []
+  const models = health.result.ok ? await readModels(baseUrl) : []
   const deep =
-    options.deep && health.ok ?
+    options.deep && health.result.ok ?
       await checkDeep(baseUrl, models[0] ?? appConfig.gptModel)
     : undefined
+
+  // /healthz first: it is answered by the process itself, so it cannot be
+  // stale. The pid file backs it up for a daemon that is up but not yet
+  // healthy, which is exactly when the two sources are complementary. Both
+  // absent means a daemon older than v0.3.1 — reported as unknown rather than
+  // silently filled in with the CLI's version. See #43.
+  const daemonVersion = health.version ?? relay.version
 
   return {
     ...base,
     baseUrl,
+    ...(daemonVersion ? { daemonVersion } : {}),
     ...(deep ? { deep } : {}),
-    health,
+    health: health.result,
     models,
     pid: relay.pid,
     port: relay.port,

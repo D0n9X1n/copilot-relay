@@ -17,6 +17,7 @@ process.env.USERPROFILE = tempHome
 
 const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
+const { appVersion } = await import("../../src/lib/version")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 test.after(async () => {
@@ -984,6 +985,27 @@ test("HEAD and GET /api/hello return 200 without contacting upstream", async () 
 
     assert.equal(head.status, 200)
     assert.equal(get.status, 200)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+// Why (#43): /healthz is the source `status` prefers for the daemon's version,
+// because it is answered by the process itself and so cannot be stale. It has
+// to carry the running build's version, and — like every other thing /healthz
+// does — must not contact Copilot to do it.
+test("GET /healthz reports the running version without contacting upstream", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+
+    const response = await app.fetch(new Request("http://localhost/healthz"))
+    const body = (await response.json()) as { ok?: boolean; version?: string }
+
+    assert.equal(response.status, 200)
+    assert.equal(body.ok, true)
+    assert.equal(body.version, appVersion)
     assert.equal(mock.requests.length, 0)
   } finally {
     await mock.close()
