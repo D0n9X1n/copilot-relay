@@ -71,6 +71,32 @@ It also maps tool calls and thinking/text blocks between protocol shapes.
 
 Converts streaming Copilot chat chunks into Claude SSE events. It keeps state because Claude requires explicit content block start/delta/stop events.
 
+### `src/claude/web-search-stream.ts`
+
+Lets a turn that advertises WebSearch stream. The relay must know whether the
+model selected `web_search` before it can choose between an ordinary completion
+and the bridge path, and that used to be settled by forcing `stream: false` on
+any request that merely *advertised* the tool. Claude Code advertises it on every
+turn, so nearly all traffic paid for a buffered completion replayed as synthetic
+SSE.
+
+`resolveWebSearchStreamDecision` reads the decision pass only as far as it takes
+to rule a search call in or out, emitting each consumed chunk as it goes:
+
+- no search — the turn is indistinguishable from an ordinary stream
+- search — the response is accumulated and handed to the bridge path unchanged
+
+**Text never settles the question.** Copilot routinely writes a preamble ("I'll
+search for that now.") before calling the tool, so treating content as proof that
+no search is coming lets the later `web_search` call escape unintercepted and
+reach Claude Code as a *client* `tool_use` named `WebSearch` — a malformed turn,
+since the client expects the server to have executed it. Only a named tool call
+or a `finish_reason` settles it. `tests/unit/web-search-stream.test.ts` pins this.
+
+When a search is detected after a preamble has already streamed, the search
+blocks continue the open message rather than starting a second one, giving the
+native order `text` → `server_tool_use` → `web_search_tool_result` → `text`.
+
 ### `src/claude/tool-names.ts`
 
 Normalizes Claude tool names into Copilot-compatible names and maps them back in responses.

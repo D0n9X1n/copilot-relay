@@ -28,9 +28,11 @@ import {
   createFinalWebSearchPayload,
   getClaudeWebSearchToolCallFromChatResponse,
   hasClaudeWebSearch,
+  isClaudeWebSearchToolName,
   mergeWebSearchAndFinalResponse,
   prepareClaudeWebSearchDecisionPayload,
 } from "~/claude/web-search"
+import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
@@ -138,6 +140,71 @@ const eventsFromClaudeResponse = (
   return events
 }
 
+// Emits a completed response into a stream that is already open.
+//
+// Used when the web-search decision pass streamed a preamble before the search
+// was detected: message_start has gone out and some block indices are spent, so
+// the search blocks have to continue that message. Mirrors
+// eventsFromClaudeResponse minus message_start, with indices taken from the
+// live stream state. The result is the native shape for a search turn —
+// text -> server_tool_use -> web_search_tool_result -> text.
+const continuationEventsFromClaudeResponse = (
+  response: ClaudeResponse,
+  state: ClaudeStreamState,
+): Array<ClaudeStreamEventData> => {
+  const events: Array<ClaudeStreamEventData> = []
+
+  // The preamble block may still be open if the tool call arrived mid-text.
+  if (state.contentBlockOpen) {
+    events.push({ type: "content_block_stop", index: state.contentBlockIndex })
+    state.contentBlockIndex += 1
+    state.contentBlockOpen = false
+    state.thinkingBlockOpen = false
+  }
+
+  for (const block of response.content) {
+    const index = state.contentBlockIndex
+    events.push({ type: "content_block_start", index, content_block: block })
+
+    if (block.type === "text") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "text_delta", text: block.text },
+      })
+    } else if (block.type === "thinking") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: { type: "thinking_delta", thinking: block.thinking },
+      })
+    } else if (block.type === "tool_use" || block.type === "server_tool_use") {
+      events.push({
+        type: "content_block_delta",
+        index,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify(block.input),
+        },
+      })
+    }
+
+    events.push({ type: "content_block_stop", index })
+    state.contentBlockIndex += 1
+  }
+
+  events.push({
+    type: "message_delta",
+    delta: {
+      stop_reason: response.stop_reason,
+      stop_sequence: response.stop_sequence,
+    },
+    usage: { output_tokens: response.usage.output_tokens },
+  })
+  events.push({ type: "message_stop" })
+  return events
+}
+
 type ClaudeStreamEventWriter = (
   event: ClaudeStreamEventData,
 ) => Promise<void>
@@ -183,7 +250,14 @@ const handleClaudeMessageRequest = async (
     undefined,
     toolNameMapper,
   )
-  if (shouldLetModelDecideWebSearch) {
+  // A streaming client that advertises WebSearch used to be forced into a full
+  // non-streaming completion, because the relay had to know whether the model
+  // selected web_search before it could decide how to answer. Claude Code
+  // advertises WebSearch by default, so that penalised most turns for a branch
+  // few of them took. The decision pass now streams, and resolveWebSearchStreamDecision
+  // buffers only as far as it takes to rule a search call in or out.
+  const canStreamWebSearchDecision = shouldLetModelDecideWebSearch && !!writeEvent
+  if (shouldLetModelDecideWebSearch && !canStreamWebSearchDecision) {
     openAIPayload.stream = false
   }
   const response = await createChatCompletions(config, openAIPayload, {
@@ -196,9 +270,53 @@ const handleClaudeMessageRequest = async (
     timeoutMs: config.upstreamTimeoutMs,
   })
 
-  if (isNonStreamingResponse(response)) {
+  // Streamed decision pass: classify the turn, then either replay the buffered
+  // chunks and keep streaming, or hand the accumulated response to the bridge
+  // path below exactly as the non-streaming route would have.
+  let decidedResponse: ChatCompletionResponse | undefined
+  let bufferedChunks: Array<ChatCompletionChunk> = []
+  let remainingStream: AsyncIterable<{ data?: string }> | undefined
+  // Shared with the streaming tail so block indices stay monotonic across a
+  // decision pass that streamed some content before a search was detected.
+  const streamState: ClaudeStreamState = {
+    messageStartSent: false,
+    contentBlockIndex: 0,
+    contentBlockOpen: false,
+    thinkingBlockOpen: false,
+    toolCalls: {},
+  }
+  let streamedBeforeDecision = false
+
+  if (canStreamWebSearchDecision && !isNonStreamingResponse(response)) {
+    const { decision, rest, alreadyStreamed } =
+      await resolveWebSearchStreamDecision(
+        response,
+        toolNameMapper,
+        isClaudeWebSearchToolName,
+        // Emit while classifying so a turn that never searches streams in real
+        // time. Copilot often writes a preamble before calling a tool, so the
+        // classifier cannot treat text as proof that no search is coming.
+        async (chunk) => {
+          await writeClaudeStreamEvents(
+            translateChunkToClaudeEvents(chunk, streamState, toolNameMapper),
+            writeEvent!,
+          )
+        },
+      )
+    streamedBeforeDecision = alreadyStreamed
+    if (decision.kind === "webSearch") {
+      decidedResponse = decision.response
+    } else {
+      bufferedChunks = decision.buffered
+      remainingStream = rest
+    }
+  }
+
+  const effectiveResponse = decidedResponse ?? response
+
+  if (isNonStreamingResponse(effectiveResponse)) {
     const webSearchToolCall = shouldLetModelDecideWebSearch ?
-      getClaudeWebSearchToolCallFromChatResponse(response, toolNameMapper)
+      getClaudeWebSearchToolCallFromChatResponse(effectiveResponse, toolNameMapper)
     : undefined
     let claudeResponse: ClaudeResponse
 
@@ -244,12 +362,18 @@ const handleClaudeMessageRequest = async (
         )
       }
     } else {
-      claudeResponse = translateToClaude(response, toolNameMapper)
+      claudeResponse = translateToClaude(effectiveResponse, toolNameMapper)
     }
 
     if (writeEvent) {
       await writeClaudeStreamEvents(
-        eventsFromClaudeResponse(claudeResponse),
+        // When the decision pass already streamed a preamble, the message is
+        // open and its early block indices are spent. Continue it instead of
+        // starting a second one, which would leave the client with two
+        // message_start events and colliding indices.
+        streamedBeforeDecision ?
+          continuationEventsFromClaudeResponse(claudeResponse, streamState)
+        : eventsFromClaudeResponse(claudeResponse),
         writeEvent,
       )
       return undefined
@@ -258,7 +382,10 @@ const handleClaudeMessageRequest = async (
     return claudeResponse
   }
 
-  if (shouldLetModelDecideWebSearch) {
+  // Only reachable when the decision pass was forced non-streaming and came back
+  // streamed anyway. A streamed decision that found no search falls through to
+  // the normal streaming path below with its buffered chunks.
+  if (shouldLetModelDecideWebSearch && !canStreamWebSearchDecision) {
     throw new HTTPError(
       "Claude web search model-decision request unexpectedly streamed",
       new Response("Claude web search model-decision request unexpectedly streamed", {
@@ -278,15 +405,24 @@ const handleClaudeMessageRequest = async (
     )
   }
 
-  const streamState: ClaudeStreamState = {
-    messageStartSent: false,
-    contentBlockIndex: 0,
-    contentBlockOpen: false,
-    thinkingBlockOpen: false,
-    toolCalls: {},
+  // streamState is declared above and shared with the decision pass, so block
+  // indices stay monotonic when classification already emitted content.
+
+  // Chunks consumed while classifying the turn, replayed in order so the client
+  // sees an unbroken stream.
+  for (const chunk of bufferedChunks) {
+    await writeClaudeStreamEvents(
+      translateChunkToClaudeEvents(chunk, streamState, toolNameMapper),
+      writeEvent,
+    )
   }
 
-  for await (const rawEvent of response) {
+  // Past the isNonStreamingResponse guard, so this is the streamed form. Either
+  // the remainder left by the decision classifier, or the whole stream when the
+  // turn never advertised WebSearch.
+  const upstreamStream = remainingStream ?? effectiveResponse
+
+  for await (const rawEvent of upstreamStream) {
     if (rawEvent.data === "[DONE]") {
       break
     }

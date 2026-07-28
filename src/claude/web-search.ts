@@ -112,7 +112,7 @@ export const isClaudeWebSearchTool = (tool: ClaudeTool): boolean =>
 export const hasClaudeWebSearch = (payload: ClaudeMessagesPayload): boolean =>
   payload.tools?.some(isClaudeWebSearchTool) ?? false
 
-const isClaudeWebSearchToolName = (name: string): boolean =>
+export const isClaudeWebSearchToolName = (name: string): boolean =>
   name === "web_search" || name === claudeCodeWebSearchToolName
 
 export const getWebSearchBackendModel = (config: ProxyConfig): string =>
