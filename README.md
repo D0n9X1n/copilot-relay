@@ -24,6 +24,11 @@ Public API:
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
+- `GET|HEAD /api/hello`
+
+`/api/hello` is a static reachability probe Claude Code sends on startup and
+around real traffic. Like `/healthz` it never contacts Copilot, so it proves the
+relay is listening and nothing more.
 
 Claude WebSearch is bridge-managed: when the model selects the WebSearch tool,
 the relay executes Copilot `/responses` with `web_search_preview`, then sends the

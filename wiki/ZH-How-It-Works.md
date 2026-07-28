@@ -45,6 +45,12 @@ copilot-relay start
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
+- `GET|HEAD /api/hello`
+
+`/api/hello` 是 Claude Code 在启动以及正常请求前后发送的连通性探测接口。它与
+`/healthz` 一样由本地直接返回，不会访问 Copilot，因此返回 `200` 只说明中继正在
+监听，并不代表它能够正常处理请求。若需确认后者，请使用
+`copilot-relay status --deep`。
 
 OpenAI 兼容接口不会对外公开。
 

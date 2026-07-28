@@ -874,3 +874,27 @@ test("POST /v1/messages keeps client tools usable after a WebSearch turn", async
     await mock.close()
   }
 })
+
+// Why: Claude Code probes /api/hello on startup and around real traffic. The
+// relay used to answer 500 from the unsupported-route handler. The call site
+// that reaches us discards its result, but a sibling call site in the same CLI
+// gates on status !== 200 and exits the process, so answering 200 removes a
+// hard-failure mode that is one refactor away. Static by design: it must not
+// contact Copilot, for the same reason /healthz does not.
+test("HEAD and GET /api/hello return 200 without contacting upstream", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+
+    const head = await app.fetch(new Request("http://localhost/api/hello", {
+      method: "HEAD",
+    }))
+    const get = await app.fetch(new Request("http://localhost/api/hello"))
+
+    assert.equal(head.status, 200)
+    assert.equal(get.status, 200)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
