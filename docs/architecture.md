@@ -36,6 +36,11 @@ Only Claude Code-facing endpoints are public:
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
+- `GET|HEAD /api/hello`
+
+`/api/hello` is a static reachability probe Claude Code sends. It is answered by
+`src/server.ts` directly and never contacts Copilot, so — like `/healthz` — a
+200 from it says the relay is listening, not that it can serve a request.
 
 The proxy calls Copilot `/chat/completions` and `/responses` internally, but it does not expose public OpenAI-compatible routes.
 

@@ -216,7 +216,7 @@ const handleClaudeMessageRequest = async (
       } else {
         const finalResponse = await createChatCompletions(
           config,
-          createFinalWebSearchPayload(openAIPayload, search),
+          createFinalWebSearchPayload(openAIPayload, search, toolNameMapper),
           {
             client: "claude",
             requestedModel: claudePayload.model,

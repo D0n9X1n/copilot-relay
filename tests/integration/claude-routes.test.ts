@@ -183,6 +183,42 @@ const startMockCopilot = async () => {
         return
       }
 
+      // The recompose pass after a search. Emitting a client tool call here is
+      // the behavior #37 made impossible: with no tools on the wire the model
+      // could only describe what it intended to do.
+      const clientTool = payload.tools?.find(
+        (tool) => tool.function?.name === "Write",
+      )
+      if (clientTool) {
+        response.end(JSON.stringify({
+          id: "chat_client_tool_call",
+          created: 1,
+          model: payload.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "call_write_1",
+                    type: "function",
+                    function: {
+                      name: "Write",
+                      arguments: JSON.stringify({ path: "out.md" }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }))
+        return
+      }
+
       response.end(JSON.stringify({
         id: "chat_1",
         created: 1,
@@ -630,8 +666,10 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
     assert.equal(searchRequest.model, "gpt-5.5")
     assert.deepEqual(searchRequest.tools, [{ type: "web_search_preview" }])
     assert.equal(mock.requests[2]?.path, "/chat/completions")
+    // The native web_search schema arrives on Claude Code's nested search call,
+    // which carries no other tools, so there is nothing left to advertise here.
     assert.equal(finalRequest.tools, undefined)
-    assert.equal(finalRequest.messages?.at(-1)?.role, "system")
+    assert.equal(finalRequest.messages?.at(-1)?.role, "user")
     assert.match(finalRequest.messages?.at(-1)?.content ?? "", /Trusted bridge retrieval context/)
     assert.equal(body.content[0]?.type, "server_tool_use")
     assert.equal(body.content[0]?.name, "web_search")
@@ -772,4 +810,91 @@ test("unsupported Claude API routes return structured 500", async () => {
 
   assert.equal(response.status, 500)
   assert.equal(body.error?.message, "Unsupported Claude API route")
+})
+
+// Why: regression coverage for #37. Claude Code advertises WebSearch alongside
+// its own tools, and the relay's recompose pass used to send `tools: undefined`,
+// so the model could not emit a tool_use block and every search turn ended as an
+// unactioned plan. The recompose request must keep the client's tools, drop only
+// the search tool, and end on a user message so Copilot's Claude-family models
+// accept it.
+test("POST /v1/messages keeps client tools usable after a WebSearch turn", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({
+        max_tokens: 16,
+        messages: [
+          {
+            role: "user",
+            content: "search the web for copilot docs then write a summary file",
+          },
+        ],
+        model: "opus",
+        tools: [
+          { name: "WebSearch", input_schema: { type: "object" } },
+          { name: "Write", input_schema: { type: "object" } },
+        ],
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }))
+    const body = await response.json() as {
+      content: Array<{ name?: string; type: string }>
+      stop_reason?: string
+    }
+    const finalRequest = mock.requests[2]?.body as {
+      messages?: Array<{ content?: string; role?: string }>
+      tool_choice?: unknown
+      tools?: Array<{ function?: { name?: string } }>
+    }
+
+    assert.equal(response.status, 200)
+    assert.equal(mock.requests.length, 3)
+
+    // The recompose pass keeps Write and drops only WebSearch.
+    assert.deepEqual(
+      finalRequest.tools?.map((tool) => tool.function?.name),
+      ["Write"],
+    )
+    assert.equal(finalRequest.messages?.at(-1)?.role, "user")
+    assert.match(
+      finalRequest.messages?.at(-1)?.content ?? "",
+      /Trusted bridge retrieval context/,
+    )
+
+    // The model can now act on what it found, in the same turn.
+    assert.equal(body.content.at(-1)?.type, "tool_use")
+    assert.equal(body.content.at(-1)?.name, "Write")
+    assert.equal(body.stop_reason, "tool_use")
+    assert.equal(body.content[0]?.type, "server_tool_use")
+    assert.equal(body.content[1]?.type, "web_search_tool_result")
+  } finally {
+    await mock.close()
+  }
+})
+
+// Why: Claude Code probes /api/hello on startup and around real traffic. The
+// relay used to answer 500 from the unsupported-route handler. The call site
+// that reaches us discards its result, but a sibling call site in the same CLI
+// gates on status !== 200 and exits the process, so answering 200 removes a
+// hard-failure mode that is one refactor away. Static by design: it must not
+// contact Copilot, for the same reason /healthz does not.
+test("HEAD and GET /api/hello return 200 without contacting upstream", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+
+    const head = await app.fetch(new Request("http://localhost/api/hello", {
+      method: "HEAD",
+    }))
+    const get = await app.fetch(new Request("http://localhost/api/hello"))
+
+    assert.equal(head.status, 200)
+    assert.equal(get.status, 200)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
 })

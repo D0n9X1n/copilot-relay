@@ -97,6 +97,19 @@ export const createServer = (config: ProxyConfig) => {
   )
 
   app.get("/healthz", (c) => c.json({ ok: true }))
+
+  // Claude Code probes this before and around real traffic. Three call sites in
+  // the CLI: a fire-and-forget HEAD connection warmup that reads
+  // ANTHROPIC_BASE_URL and lands here, plus a connectivity diagnostic and a
+  // startup preflight that currently read the first-party base URL. The
+  // preflight gates on status !== 200 and exits the process on failure, so the
+  // cost of answering is a static 200 and the cost of not answering is a client
+  // that hard-fails if that call site is ever pointed at a configured base URL.
+  //
+  // Static by design, like /healthz: it must not contact Copilot upstream. It
+  // proves the relay is reachable, nothing more.
+  app.on(["GET", "HEAD"], "/api/hello", (c) => c.body(null, 200))
+
   app.route("/v1", claudeRoutes)
   app.notFound(async (c) => {
     const message = "Unsupported Claude API route"

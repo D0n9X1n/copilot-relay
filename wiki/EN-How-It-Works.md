@@ -44,6 +44,12 @@ Only Claude Code-compatible endpoints are public:
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
+- `GET|HEAD /api/hello`
+
+`/api/hello` is a reachability probe Claude Code sends on startup and around
+real traffic. Like `/healthz`, it is answered locally and never contacts
+Copilot, so a `200` means the relay is listening — not that it can serve a
+request. Use `copilot-relay status --deep` for that.
 
 OpenAI-compatible routes are intentionally not public.
 
