@@ -145,15 +145,85 @@ const startMockCopilot = async () => {
     if (path === "/chat/completions") {
       const payload = body as {
         model?: string
+        stream?: boolean
         tools?: Array<{ function?: { name?: string } }>
       }
-      const webSearchTool = payload.tools?.find(
-        (tool) =>
-          tool.function?.name === "web_search"
-          || tool.function?.name === "WebSearch",
+      // Real Copilot honors the stream flag. The relay branches on what it
+      // asked for, not on what came back, so a mock that always returns JSON
+      // would make a streamed request silently yield nothing.
+      const writeSse = (...payloadObjects: Array<unknown>) => {
+        response.setHeader("content-type", "text/event-stream")
+        for (const payloadObject of payloadObjects) {
+          response.write(`data: ${JSON.stringify(payloadObject)}\n\n`)
+        }
+        response.write("data: [DONE]\n\n")
+        response.end()
+      }
+      // A real model selects web_search based on intent, not on the tool merely
+      // being advertised. Gating on intent lets a test represent the common
+      // Claude Code case: WebSearch is offered every turn and used on few.
+      const messagesText = JSON.stringify(
+        (body as { messages?: unknown }).messages ?? [],
       )
+      const webSearchTool =
+        /search/i.test(messagesText) ?
+          payload.tools?.find(
+            (tool) =>
+              tool.function?.name === "web_search"
+              || tool.function?.name === "WebSearch",
+          )
+        : undefined
       if (webSearchTool) {
         webSearchChatCalls += 1
+        const toolCallId = `call_web_search_${webSearchChatCalls}`
+        if (payload.stream) {
+          // Real Copilot writes a preamble before calling the tool. Emitting the
+          // tool call alone would let a classifier that mistakes text for "no
+          // search coming" pass this test while leaking a client tool_use named
+          // WebSearch on live traffic.
+          writeSse(
+            {
+              id: "chat_web_search_call",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: payload.model,
+              choices: [
+                {
+                  index: 0,
+                  delta: { role: "assistant", content: "I'll search for that now." },
+                  finish_reason: null,
+                },
+              ],
+            },
+            {
+              id: "chat_web_search_call",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: payload.model,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: toolCallId,
+                        type: "function",
+                        function: {
+                          name: webSearchTool.function?.name,
+                          arguments: JSON.stringify({ query: "GitHub Copilot docs" }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            },
+          )
+          return
+        }
         response.end(JSON.stringify({
           id: "chat_web_search_call",
           created: 1,
@@ -185,10 +255,13 @@ const startMockCopilot = async () => {
 
       // The recompose pass after a search. Emitting a client tool call here is
       // the behavior #37 made impossible: with no tools on the wire the model
-      // could only describe what it intended to do.
-      const clientTool = payload.tools?.find(
-        (tool) => tool.function?.name === "Write",
-      )
+      // could only describe what it intended to do. Non-streaming only: the
+      // recompose pass is always buffered, so a streamed request that reaches
+      // here is an ordinary turn and should fall through to the text response.
+      const clientTool =
+        payload.stream ? undefined : (
+          payload.tools?.find((tool) => tool.function?.name === "Write")
+        )
       if (clientTool) {
         response.end(JSON.stringify({
           id: "chat_client_tool_call",
@@ -216,6 +289,24 @@ const startMockCopilot = async () => {
           ],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }))
+        return
+      }
+
+      if (payload.stream) {
+        writeSse({
+          id: "chat_1",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: payload.model,
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "OK" },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        })
         return
       }
 
@@ -894,6 +985,47 @@ test("HEAD and GET /api/hello return 200 without contacting upstream", async () 
     assert.equal(head.status, 200)
     assert.equal(get.status, 200)
     assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+// Why: regression coverage for #40. Advertising WebSearch used to force
+// `stream: false` on the decision pass, even when the model never selected it.
+// Claude Code advertises WebSearch by default, so most streaming turns paid for
+// a full non-streaming completion that was then replayed as synthetic SSE. The
+// decision pass must now go upstream as a real stream.
+test("POST /v1/messages streams turns that advertise WebSearch but do not use it", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({
+        max_tokens: 16,
+        // WebSearch is advertised, as Claude Code does on every turn, but the
+        // prompt carries no search intent so the model never selects it.
+        messages: [{ role: "user", content: "say OK" }],
+        model: "opus",
+        stream: true,
+        tools: [
+          { name: "WebSearch", input_schema: { type: "object" } },
+          { name: "Write", input_schema: { type: "object" } },
+        ],
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }))
+    const text = await response.text()
+    const upstream = mock.requests[0]?.body as { stream?: boolean }
+
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/)
+    // The decision pass went upstream as a stream, not a buffered completion.
+    assert.equal(upstream.stream, true)
+    // Exactly one upstream call: no search, no recompose pass.
+    assert.equal(mock.requests.length, 1)
+    assert.match(text, /"type":"message_start"/)
+    assert.match(text, /"type":"message_stop"/)
   } finally {
     await mock.close()
   }

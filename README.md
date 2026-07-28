@@ -33,9 +33,16 @@ relay is listening and nothing more.
 Claude WebSearch is bridge-managed: when the model selects the WebSearch tool,
 the relay executes Copilot `/responses` with `web_search_preview`, then sends the
 retrieved context through a final model pass and returns Claude
-`server_tool_use` / `web_search_tool_result` blocks. Unknown API routes return
-`500` and log method, path, selected headers, and request payload to help
-implement compatible endpoints later.
+`server_tool_use` / `web_search_tool_result` blocks. The final pass keeps your
+other tools available, so the model can act on what it found in the same turn.
+
+Advertising WebSearch no longer costs streaming. The relay reads the model's
+response only as far as it takes to tell whether a search is coming, so a turn
+that never searches streams normally — which is most of them, since Claude Code
+offers the tool on every request.
+
+Unknown API routes return `500` and log method, path, selected headers, and
+request payload to help implement compatible endpoints later.
 
 Routing:
 
