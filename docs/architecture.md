@@ -184,7 +184,7 @@ gptModel: gpt-5.6-sol
 opusModel: claude-opus-5
 ```
 
-`host` and `port` require restart to affect the listening socket. Other values are hot-reloaded. Empty `webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total upstream wait budget for a single Claude request.
+`host` and `port` require restart to affect the listening socket, and `claudeSetup` is read once at startup. The other eight values are hot-reloaded, applying to work that starts after the change. Empty `webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total upstream wait budget for a single Claude request.
 
 `readAppConfig()` writes the resolved config back to disk, so an existing install has every key materialized and a `?? defaultConfig.x` fallback is never consulted again. A shipped default therefore reaches fresh installs only. That is deliberate: copilot-relay does not rewrite a value the user's config already holds, so a deliberate pin survives every upgrade.
 
