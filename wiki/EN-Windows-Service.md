@@ -131,8 +131,17 @@ copilot-relay 0.2.5
   models     gpt-5.6-sol[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        C:\Users\you\.copilot-relay\logs\copilot-relay.2026-07-25.log
-  config     C:\Users\you\.copilot-relay\config.yaml (logLevel=info, thinkEffort=max)
+  config     C:\Users\you\.copilot-relay\config.yaml
+    host                    127.0.0.1
+    port                    4142
+    …
+    gptModel                gpt-5.6-sol
+    opusModel               claude-opus-5
+    host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```
+
+The `config` block is abridged above; `status` prints all eleven resolved keys.
+See [Configuration](EN-Configuration.md).
 
 The `version` row is the build the running daemon reports about itself, which is
 not the same thing as the first line — that is the CLI you just invoked. After

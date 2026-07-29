@@ -1,6 +1,8 @@
 // `copilot-relay status`: report whether a relay is running, and whether it works.
 import { defineCommand } from "citty"
 
+import type { AppConfig } from "~/lib/app-config"
+
 import { readAppConfig } from "~/lib/app-config"
 import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort } from "~/lib/lifecycle"
@@ -33,8 +35,42 @@ interface ProbeResult {
   ok: boolean
 }
 
+/**
+ * The resolved config as `status` reports it.
+ *
+ * Mirrors AppConfig except that `webSearchBackend` is null rather than
+ * undefined when unset. JSON.stringify drops undefined properties, so leaving
+ * it optional would make `status --json` emit 10 config keys on a default
+ * install and 11 on a customized one; anything parsing that deserves a stable
+ * key set.
+ */
+export interface StatusConfig {
+  claudeSetup: boolean
+  copilotBaseUrl: string
+  gptModel: string
+  host: string
+  logLevel: string
+  logRetentionDays: number
+  opusModel: string
+  port: number
+  thinkEffort: string
+  upstreamTimeoutSeconds: number
+  webSearchBackend: string | null
+}
+
+export const toStatusConfig = (config: AppConfig): StatusConfig => ({
+  ...config,
+  webSearchBackend: config.webSearchBackend ?? null,
+})
+
 export interface RelayStatus {
   baseUrl?: string
+  /**
+   * Every key readAppConfig() resolved — not the two that happened to fit in a
+   * parenthetical. These are the values on disk; see renderConfig for why that
+   * distinction is printed rather than assumed.
+   */
+  config: StatusConfig
   configPath: string
   /**
    * The version the running daemon reports about itself, which is not
@@ -109,6 +145,59 @@ const formatUptime = (startedAt: string | undefined): string => {
 }
 
 /**
+ * Config keys in config.default.yaml order rather than alphabetical, so the
+ * block reads like the file it was resolved from.
+ */
+const configRowOrder: Array<keyof StatusConfig> = [
+  "host",
+  "port",
+  "copilotBaseUrl",
+  "claudeSetup",
+  "logLevel",
+  "logRetentionDays",
+  "thinkEffort",
+  "upstreamTimeoutSeconds",
+  "webSearchBackend",
+  "gptModel",
+  "opusModel",
+]
+
+/**
+ * The resolved config, one key per line.
+ *
+ * These are the values on disk. That is not the same question as "what is the
+ * running daemon honouring", and the footnote says so rather than leaving it
+ * implied: applyRuntimeConfig() in start.ts hot-reloads eight of these keys,
+ * never reads claudeSetup, and deliberately does not rebind the listening
+ * socket when host or port changes. Printing all eleven without that line
+ * would imply a live daemon had read values it has not.
+ *
+ * Only shown when running, because with nothing up every value applies at the
+ * next start and the note would be noise.
+ */
+const renderConfig = (
+  config: StatusConfig,
+  running: boolean,
+): Array<string> => {
+  const lines = configRowOrder.map((key) => {
+    const value = config[key]
+    const rendered =
+      key === "webSearchBackend" && value === null ?
+        "(unset — uses gptModel)"
+      : String(value)
+    return `    ${key.padEnd(24)}${rendered}`
+  })
+
+  if (running) {
+    lines.push(
+      "    host, port and claudeSetup take effect on restart; the rest hot-reload.",
+    )
+  }
+
+  return lines
+}
+
+/**
  * Pure state-to-lines mapping, kept free of IO so it can be tested directly
  * without spawning a relay or opening a socket.
  */
@@ -118,8 +207,9 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
   if (!status.running) {
     lines.push(
       "  process    not running",
-      `  config     ${status.configPath} (logLevel=${status.logLevel}, thinkEffort=${status.thinkEffort})`,
       `  log        ${status.logPath}`,
+      `  config     ${status.configPath}`,
+      ...renderConfig(status.config, false),
       "",
       "  Start it with: copilot-relay start",
     )
@@ -169,7 +259,8 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
 
   lines.push(
     `  log        ${status.logPath}`,
-    `  config     ${status.configPath} (logLevel=${status.logLevel}, thinkEffort=${status.thinkEffort})`,
+    `  config     ${status.configPath}`,
+    ...renderConfig(status.config, true),
   )
 
   // Only /v1/messages proves the relay can serve Claude Code; the first two
@@ -316,6 +407,10 @@ export const collectStatus = async (options: {
   setLogLevel(appConfig.logLevel)
 
   const base = {
+    // Both of these are derived from the same appConfig as `config`, so they
+    // cannot drift from it. They predate the config block and something may
+    // parse them out of `status --json`, so they stay.
+    config: toStatusConfig(appConfig),
     configPath: paths.configPath,
     logLevel: appConfig.logLevel,
     logPath: getLogPath(),

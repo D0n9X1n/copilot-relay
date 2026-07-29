@@ -140,8 +140,27 @@ copilot-relay 0.2.5
   models     gpt-5.6-sol[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
-  config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
+  config     ~/.copilot-relay/config.yaml
+    host                    127.0.0.1
+    port                    4142
+    copilotBaseUrl          https://api.githubcopilot.com
+    claudeSetup             true
+    logLevel                info
+    logRetentionDays        3
+    thinkEffort             max
+    upstreamTimeoutSeconds  180
+    webSearchBackend        (unset — uses gptModel)
+    gptModel                gpt-5.6-sol
+    opusModel               claude-opus-5
+    host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```
+
+The `config` block is every key `readAppConfig()` resolved, in
+`config.default.yaml` order. These are the values on disk: eight of them reload
+while the relay runs, while `host`, `port` and `claudeSetup` are read once at
+startup — the block says so rather than leaving you to discover it after an
+edit. `--json` emits the same values under `config`, with `webSearchBackend` as
+`null` when unset so the key set stays the same shape either way.
 
 The first line is the CLI you invoked; the `version` row is the build the
 running daemon reports about itself. They differ after an upgrade that has not

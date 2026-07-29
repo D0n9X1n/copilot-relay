@@ -8,6 +8,10 @@
 
 The file is created from the package template on first start.
 
+To see the values actually in effect — every key after defaults are resolved,
+and which of them need a restart — run `copilot-relay status`. It prints the
+resolved config rather than making you read the file back.
+
 ## Example
 
 ```yaml

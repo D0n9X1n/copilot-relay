@@ -103,8 +103,17 @@ copilot-relay 0.2.5
   models     gpt-5.6-sol[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
-  config     ~/.copilot-relay/config.yaml (logLevel=info, thinkEffort=max)
+  config     ~/.copilot-relay/config.yaml
+    host                    127.0.0.1
+    port                    4142
+    …
+    gptModel                gpt-5.6-sol
+    opusModel               claude-opus-5
+    host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```
+
+上面的 `config` 块是节选；`status` 会打印全部 11 个解析后的配置项。参见
+[配置说明](ZH-Configuration.md)。
 
 `version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行
 是你刚刚调用的那个 CLI。执行 `npm i -g copilot-relay@latest` 之后，在 agent 真正重启

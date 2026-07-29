@@ -10,9 +10,8 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-status-"
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { hasVersionMismatch, renderStatus, resolveExitCode } = await import(
-  "../../src/status"
-)
+const { hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
+  await import("../../src/status")
 const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
   await import("../../src/lib/lifecycle")
 const { paths } = await import("../../src/lib/paths")
@@ -21,7 +20,24 @@ type RelayStatus = Awaited<
   ReturnType<typeof import("../../src/status").collectStatus>
 >
 
+// Routed through toStatusConfig so every render below exercises the real
+// AppConfig -> StatusConfig mapping rather than a hand-written parallel shape.
+const baseConfig = toStatusConfig({
+  claudeSetup: true,
+  copilotBaseUrl: "https://api.githubcopilot.com",
+  gptModel: "gpt-5.6-sol",
+  host: "127.0.0.1",
+  logLevel: "info",
+  logRetentionDays: 3,
+  opusModel: "claude-opus-5",
+  port: 4142,
+  thinkEffort: "max",
+  upstreamTimeoutSeconds: 180,
+  webSearchBackend: undefined,
+})
+
 const baseStatus: RelayStatus = {
+  config: baseConfig,
   configPath: "/home/u/.copilot-relay/config.yaml",
   logLevel: "info",
   logPath: "/home/u/.copilot-relay/logs/copilot-relay.2026-07-25.log",
@@ -55,12 +71,15 @@ test("reports not running with a next step", () => {
 })
 
 // Why: with no relay there is nothing to have measured, so claiming health or
-// models would be fabrication.
+// models would be fabrication. Anchored to the rows themselves, not to a model
+// name: the config block legitimately prints gptModel whether or not anything
+// is running, and matching on the bare string would conflate "configured to
+// route here" with "discovered from a live relay".
 test("claims no health or models when not running", () => {
   const out = render(baseStatus)
 
   assert.doesNotMatch(out, /health\s+ok/)
-  assert.doesNotMatch(out, /gpt-5\.6-sol/)
+  assert.doesNotMatch(out, /^\s+models\s/m)
 })
 
 test("reports pid, address, and uptime when running", () => {
@@ -312,6 +331,115 @@ test("returns nothing when no pid file and nothing is listening", async () => {
     await findRelayOnPort({ host: "127.0.0.1", port: 4199 }),
     undefined,
   )
+})
+
+// Why (#45): status collapsed the whole resolved config into
+// "(logLevel=info, thinkEffort=max)" — 2 of 11 keys. The other nine were
+// invisible in text and in --json, so the command you run when something looks
+// wrong could not answer "which model is this actually routing to?".
+test("renders every resolved config key", () => {
+  const out = render(runningStatus)
+
+  const expected: Array<[string, string]> = [
+    ["host", "127.0.0.1"],
+    ["port", "4142"],
+    ["copilotBaseUrl", "https://api.githubcopilot.com"],
+    ["claudeSetup", "true"],
+    ["logLevel", "info"],
+    ["logRetentionDays", "3"],
+    ["thinkEffort", "max"],
+    ["upstreamTimeoutSeconds", "180"],
+    ["gptModel", "gpt-5.6-sol"],
+    ["opusModel", "claude-opus-5"],
+  ]
+
+  for (const [key, value] of expected) {
+    assert.match(out, new RegExp(`^\\s+${key}\\s+${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"))
+  }
+})
+
+// Why: an unset optional key rendered as a blank value is indistinguishable
+// from a bug that dropped it. It has to say it is unset *and* what happens
+// instead, because the fallback is not guessable from the key name.
+test("names the fallback for an unset webSearchBackend", () => {
+  const out = render(runningStatus)
+
+  assert.match(out, /webSearchBackend\s+\(unset — uses gptModel\)/)
+})
+
+test("prints webSearchBackend when it is set", () => {
+  const out = render({
+    ...runningStatus,
+    config: { ...baseConfig, webSearchBackend: "gpt-5.6-sol" },
+  })
+
+  assert.match(out, /^\s+webSearchBackend\s+gpt-5\.6-sol$/m)
+  assert.doesNotMatch(out, /unset/)
+})
+
+// Why: these are the values on disk, which is not the same question as what a
+// live daemon is honouring. applyRuntimeConfig() hot-reloads eight keys, never
+// reads claudeSetup, and does not rebind the socket on host/port changes — so
+// printing all eleven beside a green health line would imply the running
+// process had read values it has not.
+test("flags the restart-only keys while running", () => {
+  const out = render(runningStatus)
+
+  assert.match(out, /host, port and claudeSetup take effect on restart/)
+})
+
+// Why: with nothing running every value applies at the next start, so the
+// footnote would be noise. The config itself still shows — it is usually what
+// you want to check before starting the relay again.
+test("shows the config but not the restart note when not running", () => {
+  const out = render(baseStatus)
+
+  assert.match(out, /^\s+gptModel\s+gpt-5\.6-sol$/m)
+  assert.match(out, /^\s+upstreamTimeoutSeconds\s+180$/m)
+  assert.doesNotMatch(out, /take effect on restart/)
+})
+
+// Why: JSON.stringify drops undefined properties. Leaving webSearchBackend
+// optional would emit 10 config keys on a default install and 11 on a
+// customized one, so anything parsing `status --json` would see the key set
+// change under it. null keeps it stable at 11.
+test("keeps the --json config key set stable when webSearchBackend is unset", () => {
+  const parsed = JSON.parse(JSON.stringify(baseStatus)) as {
+    config: Record<string, unknown>
+  }
+
+  assert.equal(Object.keys(parsed.config).length, 11)
+  assert.ok("webSearchBackend" in parsed.config)
+  assert.equal(parsed.config.webSearchBackend, null)
+})
+
+// Why: the top-level logLevel/thinkEffort predate the config block and may be
+// parsed by something, so they stay. They are safe to keep only because both
+// they and config.* are derived from one appConfig — this pins that the
+// mapping passes values through rather than transforming them, which is what
+// makes the two impossible to disagree.
+test("passes config values through unchanged except webSearchBackend", () => {
+  const appConfig = {
+    claudeSetup: false,
+    copilotBaseUrl: "https://example.invalid",
+    gptModel: "gpt-x",
+    host: "0.0.0.0",
+    logLevel: "debug" as const,
+    logRetentionDays: 7,
+    opusModel: "opus-x",
+    port: 4199,
+    thinkEffort: "low" as const,
+    upstreamTimeoutSeconds: 42,
+    webSearchBackend: undefined,
+  }
+
+  const status = toStatusConfig(appConfig)
+
+  assert.equal(status.logLevel, appConfig.logLevel)
+  assert.equal(status.thinkEffort, appConfig.thinkEffort)
+  assert.equal(status.port, appConfig.port)
+  assert.equal(status.claudeSetup, false)
+  assert.equal(status.webSearchBackend, null)
 })
 
 test.after(async () => {
