@@ -38,23 +38,14 @@ interface ProbeResult {
 /**
  * The resolved config as `status` reports it.
  *
- * Mirrors AppConfig except that `webSearchBackend` is null rather than
- * undefined when unset. JSON.stringify drops undefined properties, so leaving
- * it optional would make `status --json` emit 10 config keys on a default
- * install and 11 on a customized one; anything parsing that deserves a stable
- * key set.
+ * Derived from AppConfig rather than restated, so a twelfth config key cannot
+ * be added without this type following it automatically. The one deliberate
+ * difference: `webSearchBackend` is null rather than undefined when unset.
+ * JSON.stringify drops undefined properties, so leaving it optional would make
+ * `status --json` emit 10 config keys on a default install and 11 on a
+ * customized one; anything parsing that deserves a stable key set.
  */
-export interface StatusConfig {
-  claudeSetup: boolean
-  copilotBaseUrl: string
-  gptModel: string
-  host: string
-  logLevel: string
-  logRetentionDays: number
-  opusModel: string
-  port: number
-  thinkEffort: string
-  upstreamTimeoutSeconds: number
+export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
   webSearchBackend: string | null
 }
 
@@ -145,22 +136,31 @@ const formatUptime = (startedAt: string | undefined): string => {
 }
 
 /**
- * Config keys in config.default.yaml order rather than alphabetical, so the
- * block reads like the file it was resolved from.
+ * Every config key with its position in the block, in config.default.yaml order
+ * rather than alphabetical so it reads like the file it was resolved from.
+ *
+ * A Record keyed by StatusConfig rather than an array of keys: an array only
+ * checks that each entry *is* a key, so a twelfth config key would type-check
+ * while silently never appearing in `status` — the exact failure this command
+ * exists to prevent. Keyed this way, adding one fails the build here.
  */
-const configRowOrder: Array<keyof StatusConfig> = [
-  "host",
-  "port",
-  "copilotBaseUrl",
-  "claudeSetup",
-  "logLevel",
-  "logRetentionDays",
-  "thinkEffort",
-  "upstreamTimeoutSeconds",
-  "webSearchBackend",
-  "gptModel",
-  "opusModel",
-]
+const configRowOrder: Record<keyof StatusConfig, number> = {
+  host: 0,
+  port: 1,
+  copilotBaseUrl: 2,
+  claudeSetup: 3,
+  logLevel: 4,
+  logRetentionDays: 5,
+  thinkEffort: 6,
+  upstreamTimeoutSeconds: 7,
+  webSearchBackend: 8,
+  gptModel: 9,
+  opusModel: 10,
+}
+
+const configRowKeys = (
+  Object.keys(configRowOrder) as Array<keyof StatusConfig>
+).sort((a, b) => configRowOrder[a] - configRowOrder[b])
 
 /**
  * The resolved config, one key per line.
@@ -179,7 +179,7 @@ const renderConfig = (
   config: StatusConfig,
   running: boolean,
 ): Array<string> => {
-  const lines = configRowOrder.map((key) => {
+  const lines = configRowKeys.map((key) => {
     const value = config[key]
     const rendered =
       key === "webSearchBackend" && value === null ?

@@ -8,8 +8,9 @@
 
 第一次启动时会从包内模板生成。
 
-想看**实际生效**的值 —— 补齐默认值之后的全部配置项，以及其中哪些需要重启才生效 ——
-直接运行 `copilot-relay status`，它会把解析后的配置打印出来，不用再回头翻文件。
+想看补齐默认值之后的全部配置项、以及其中哪些需要重启才生效，直接运行
+`copilot-relay status`，它会把解析后的配置打印出来，不用再回头翻文件。注意那是**磁盘上**
+的值：如果守护进程在你上次编辑之前就已经在跑了，它未必已经读到这些值。
 
 ## 示例
 
@@ -45,23 +46,28 @@ opusModel: claude-opus-4.8
 
 ## 热重载与重启
 
-会热重载：
+会热重载（对改动之后开始的请求生效）：
 
 - `logLevel`
+- `logRetentionDays`
 - `thinkEffort`
 - `upstreamTimeoutSeconds`
 - `copilotBaseUrl`
 - `webSearchBackend`
 - `gptModel`
 - `opusModel`
-- `claudeSetup`
 
 需要重启：
 
 - `host`
 - `port`
+- `claudeSetup`
 
-原因是 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的 host/port。
+`host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
+host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。
+
+改 `gptModel` 会立刻改变上游路由，但不会重写 `~/.claude/settings.json` 里已经写好的模型
+—— 那个是启动时写的。
 
 ## Claude Code 配置
 

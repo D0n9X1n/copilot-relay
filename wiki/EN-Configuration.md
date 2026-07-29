@@ -8,9 +8,10 @@
 
 The file is created from the package template on first start.
 
-To see the values actually in effect — every key after defaults are resolved,
-and which of them need a restart — run `copilot-relay status`. It prints the
-resolved config rather than making you read the file back.
+To see every key after defaults are resolved, and which of them need a
+restart, run `copilot-relay status`. It prints the resolved config rather than
+making you read the file back. Those are the values *on disk*: a daemon that has
+been running since before your last edit has not necessarily read them.
 
 ## Example
 
@@ -46,23 +47,30 @@ opusModel: claude-opus-4.8
 
 ## Hot reload vs restart
 
-Hot-reloaded:
+Hot-reloaded, applying to work that starts after the change:
 
 - `logLevel`
+- `logRetentionDays`
 - `thinkEffort`
 - `upstreamTimeoutSeconds`
 - `copilotBaseUrl`
 - `webSearchBackend`
 - `gptModel`
 - `opusModel`
-- `claudeSetup`
 
 Requires restart:
 
 - `host`
 - `port`
+- `claudeSetup`
 
 `host` and `port` require restart because the listening socket is already bound.
+`claudeSetup` is read once during startup, so toggling it changes nothing until
+the relay starts again.
+
+Changing `gptModel` reroutes upstream requests immediately, but does not rewrite
+the model already saved in `~/.claude/settings.json` — that is written at
+startup.
 
 ## Claude Code settings
 
