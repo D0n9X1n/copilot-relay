@@ -8,6 +8,10 @@ import {
   normalizeThinkEffort,
   normalizeUpstreamTimeoutSeconds,
 } from "../../src/lib/app-config"
+import {
+  registerSensitiveOrigin,
+  scrubSensitiveUrls,
+} from "../../src/lib/redact"
 
 // Why: log level names are part of the user config contract. Unknown values
 // should fail fast instead of silently changing production observability.
@@ -191,4 +195,74 @@ test("accepts a backslash-normalized copilot base url unchanged", () => {
   // path, so it is sent upstream and comes back in error payloads.
   assert.equal(new URL(backslashUrl).pathname, "/tenant/TOKEN")
   assert.equal(new URL(backslashUrl).origin, "https://gateway.example")
+})
+
+
+// Why (#47): WHATWG accepts scheme-shorthand forms - `https:host/path`,
+// `https:/host/path`, `https:\\host\path` - and normalizes every one of them to
+// a real origin with the tail in the path, so each passes a protocol check and
+// works upstream. None of them can be found again in arbitrary log text:
+// practical URL detection anchors on a literal "://", and loosening it to chase
+// a bare "https:" would match ordinary prose. Requiring the authority prefix is
+// the one place this question has a definite answer.
+test("rejects http(s) urls written without an explicit authority prefix", () => {
+  for (const value of [
+    "https:gateway.example/tenant/v1",
+    "https:/gateway.example/tenant/v1",
+    "https:\\\\gateway.example\\tenant\\v1",
+    "http:gateway.example",
+    "https:",
+  ]) {
+    assert.throws(() => normalizeCopilotBaseUrl(value), /Invalid copilotBaseUrl/)
+  }
+})
+
+// Why: the scheme is case-insensitive to both the URL parser and the log
+// scanner, so an uppercase conventional URL is an ordinary value. It must keep
+// working and come back byte-for-byte, exactly like any other accepted form.
+test("accepts an uppercase conventional scheme unchanged", () => {
+  assert.equal(
+    normalizeCopilotBaseUrl("HTTPS://gateway.example/tenant/v1"),
+    "HTTPS://gateway.example/tenant/v1",
+  )
+  assert.equal(
+    normalizeCopilotBaseUrl("Http://localhost:8080"),
+    "Http://localhost:8080",
+  )
+})
+
+// Why: this fix belongs at the validation boundary, and this test is the
+// reason. The shorthand used to be accepted and stored verbatim, and no
+// downstream redaction can rescue it - the scrubber anchors on "://", which the
+// shorthand does not contain, so it silently no-ops. The value has to be
+// refused before it can ever be registered as a policy or written to a log.
+test("refuses shorthand at validation because redaction cannot catch it", () => {
+  const shorthand = "https:gateway.example/tenant/SHORTHAND_SENTINEL"
+
+  // 1. Rejected now, before anything could register a policy from it.
+  assert.throws(
+    () => normalizeCopilotBaseUrl(shorthand),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /Invalid copilotBaseUrl/)
+      assert.ok(
+        !error.message.includes("SHORTHAND_SENTINEL"),
+        `error leaked the sentinel: ${error.message}`,
+      )
+      assert.ok(
+        !error.message.includes("gateway.example"),
+        `error leaked the host: ${error.message}`,
+      )
+      return true
+    },
+  )
+
+  // 2. And this is why it must be rejected: even with the origin registered,
+  // the scrubber leaves the shorthand completely untouched. Sole scrubber user
+  // in this file, so the process-wide policy set stays order-independent here.
+  registerSensitiveOrigin("https://gateway.example/tenant/SHORTHAND_SENTINEL")
+  assert.equal(
+    scrubSensitiveUrls(`copilot base url: ${shorthand}`),
+    `copilot base url: ${shorthand}`,
+  )
 })

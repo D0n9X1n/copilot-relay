@@ -106,13 +106,42 @@ const normalizeString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined
 
 /**
- * Validates copilotBaseUrl as an absolute HTTP(S) URL without credentials.
+ * A conventional http(s) URL: scheme followed by a literal "//" authority.
  *
- * Two rules, both learned from #47:
+ * WHATWG is far more permissive than this. `https:host/path`, `https:/host/path`
+ * and `https:\\host\path` all parse, all normalize to a real origin with the
+ * tail in the path, and all work upstream - so a protocol check alone lets them
+ * through. None of them can be found again in arbitrary log text: practical URL
+ * detection anchors on a literal "://", and loosening that to chase a bare
+ * "https:" would start matching ordinary prose. Requiring the authority prefix
+ * is the one boundary where this has a definite answer. See #47.
+ */
+const conventionalHttpUrlPattern = /^https?:\/\//i
+
+/**
+ * Both fixed strings. The rejected value is never interpolated: these messages
+ * reach the terminal and, via the startup failure path, the log file, which is
+ * exactly the disclosure being prevented.
+ */
+const invalidCopilotBaseUrlMessage =
+  "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com"
+const copilotBaseUrlCredentialsMessage =
+  "Invalid copilotBaseUrl: URL credentials (user:password@host) are not supported; remove them and use a plain https URL"
+
+/**
+ * Validates copilotBaseUrl as a conventional HTTP(S) URL without credentials.
+ *
+ * Three rules, all learned from #47:
  *
  * The value is concatenated as `${base}${path}` for every upstream call, so it
  * must be something Undici will accept. A relative or non-HTTP value fails at
  * request time as an unrelated-looking fetch error; failing here names the key.
+ *
+ * It must be written with an explicit `http://` or `https://` authority. See
+ * conventionalHttpUrlPattern: the shorthand forms WHATWG also accepts are
+ * unfindable in log text, so a configured secret in one of them cannot be
+ * redacted by anything downstream. Rejecting is the only safe answer, and this
+ * is the only place with enough context to give it.
  *
  * URL userinfo (`https://user:pass@host`) is rejected rather than passed
  * through. Undici refuses it at request time anyway, so accepting it buys only
@@ -122,10 +151,6 @@ const normalizeString = (value: unknown): string | undefined =>
  * Round-tripping through URL would add a trailing slash, lowercase the host and
  * re-encode the path, silently changing both the request URL and what gets
  * written back to config.yaml.
- *
- * Errors are fixed strings. The rejected value is never interpolated: this
- * message reaches the terminal and, via the startup failure path, the log file,
- * which is exactly the disclosure being prevented.
  */
 export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
   const trimmed = normalizeString(value)
@@ -133,25 +158,25 @@ export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
     return undefined
   }
 
+  // Before new URL(), because the shorthand this rejects parses successfully -
+  // it is a valid URL, just not one that can be redacted later.
+  if (!conventionalHttpUrlPattern.test(trimmed)) {
+    throw new Error(invalidCopilotBaseUrlMessage)
+  }
+
   let parsed: URL
   try {
     parsed = new URL(trimmed)
   } catch {
-    throw new Error(
-      "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com",
-    )
+    throw new Error(invalidCopilotBaseUrlMessage)
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(
-      "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com",
-    )
+    throw new Error(invalidCopilotBaseUrlMessage)
   }
 
   if (parsed.username || parsed.password) {
-    throw new Error(
-      "Invalid copilotBaseUrl: URL credentials (user:password@host) are not supported; remove them and use a plain https URL",
-    )
+    throw new Error(copilotBaseUrlCredentialsMessage)
   }
 
   return trimmed
