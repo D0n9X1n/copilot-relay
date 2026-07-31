@@ -61,45 +61,50 @@ const isSilenceTarget = (node: ts.Expression): boolean =>
 // Text search cannot tell an assignment from a comment or a string that merely
 // spells one, and only an assignment silences anything. Match the statement
 // structurally instead: process.env.CONSOLA_LEVEL = "0", and nothing weaker.
-const findSilenceAssignmentOffsets = (code: string): Array<number> => {
+//
+// Only a top-level statement counts. Nested anywhere -- an if, a loop, a bare
+// block, a function body -- whether the assignment runs at all, and whether it
+// runs before src/ loads, depends on control flow this guard cannot evaluate:
+// an "if (false)" wrapper reads exactly like configuration and silences
+// nothing. Unconditional at module scope is the one shape guaranteed to have
+// run by the time the dynamic imports below it execute, so it is the only
+// shape accepted.
+const findTopLevelSilenceOffset = (code: string): number | undefined => {
   const parsed = parse(code)
-  const offsets: Array<number> = []
 
-  const visit = (node: ts.Node): void => {
-    // Type positions are erased before anything runs, so they silence nothing.
-    if (ts.isTypeNode(node)) {
-      return
+  for (const statement of parsed.statements) {
+    if (!ts.isExpressionStatement(statement)) {
+      continue
     }
+    const { expression } = statement
     if (
-      ts.isBinaryExpression(node)
-      && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-      && isSilenceTarget(node.left)
-      && ts.isStringLiteral(node.right)
-      && node.right.text === silenceValue
+      ts.isBinaryExpression(expression)
+      && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && isSilenceTarget(expression.left)
+      && ts.isStringLiteral(expression.right)
+      && expression.right.text === silenceValue
     ) {
-      offsets.push(node.getStart(parsed))
+      return statement.getStart(parsed)
     }
-    ts.forEachChild(node, visit)
   }
 
-  visit(parsed)
-  return offsets.sort((left, right) => left - right)
+  return undefined
 }
 
 const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
-  const [firstSilenceOffset] = findSilenceAssignmentOffsets(code)
+  const silenceOffset = findTopLevelSilenceOffset(code)
   const [firstSrcImportOffset] = findDynamicSrcImportOffsets(code)
 
   assert.ok(
-    firstSilenceOffset !== undefined,
-    `claude-routes.test.ts must contain ${silenceAssignment}`,
+    silenceOffset !== undefined,
+    `claude-routes.test.ts must contain a top-level ${silenceAssignment}`,
   )
   assert.ok(
     firstSrcImportOffset !== undefined,
     `claude-routes.test.ts must dynamically import ${srcSpecifierPrefix}`,
   )
   assert.ok(
-    firstSilenceOffset < firstSrcImportOffset,
+    silenceOffset < firstSrcImportOffset,
     "CONSOLA_LEVEL must be set before the first ../../src/ dynamic import",
   )
 }
@@ -159,23 +164,24 @@ test("ignores type-position import() when finding runtime src imports", () => {
   ])
 })
 
-// Only a statement that runs can silence anything. The three decoys below all
-// contain the assignment as text, and none of them executes.
-test("finds only executable silence assignments, sorted", () => {
+// Only an unconditional top-level statement silences anything. The comment, the
+// string and the type merely spell the assignment. The conditional and the
+// function body do contain the real thing, but reaching either is control flow
+// this guard cannot evaluate -- so of the five decoys below, none counts.
+test("finds only a top-level silence assignment", () => {
   const fixture = [
     `// ${silenceAssignment}`,
     `const doc = '${silenceAssignment}'`,
     `type Doc = \`${silenceAssignment}\``,
-    silenceAssignment,
     `if (true) { ${silenceAssignment} }`,
+    `function configure() { ${silenceAssignment} }`,
+    silenceAssignment,
   ].join("\n")
 
-  const offsets = findSilenceAssignmentOffsets(fixture)
-
-  assert.deepEqual(offsets, [
-    fixture.indexOf(`\n${silenceAssignment}`) + 1,
+  assert.equal(
+    findTopLevelSilenceOffset(fixture),
     fixture.lastIndexOf(silenceAssignment),
-  ])
+  )
 })
 
 test("rejects a dynamic src import before logger configuration", () => {
@@ -218,8 +224,37 @@ test("rejects a logger configuration only spelled inside a string", () => {
   )
 })
 
+// An "if (false)" wrapper reads exactly like configuration and silences
+// nothing. Deciding otherwise means evaluating the condition, which a syntactic
+// guard cannot do, so a conditional form is rejected rather than guessed at.
+test("rejects a logger configuration guarded by a conditional", () => {
+  const fixture = [
+    `if (false) { ${silenceAssignment} }`,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /must contain a top-level/,
+  )
+})
+
+// A function body runs where it is called, not where it is written, and nothing
+// calls this one. Its position above the import therefore proves no ordering.
+test("rejects a logger configuration inside a function body", () => {
+  const fixture = [
+    `function configure() { ${silenceAssignment} }`,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /must contain a top-level/,
+  )
+})
+
 // The shape the suite actually uses must stay acceptable.
-test("accepts an executable logger configuration before the import", () => {
+test("accepts a top-level logger configuration before the import", () => {
   const fixture = [
     silenceAssignment,
     'await import("../../src/server")',
