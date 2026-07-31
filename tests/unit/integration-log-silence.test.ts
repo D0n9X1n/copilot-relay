@@ -69,8 +69,12 @@ const isSilenceTarget = (node: ts.Expression): boolean =>
 // nothing. Unconditional at module scope is the one shape guaranteed to have
 // run by the time the dynamic imports below it execute, so it is the only
 // shape accepted.
-const findTopLevelSilenceOffset = (code: string): number | undefined => {
+// Every match is collected, not just the first: stopping at the first cannot
+// see a second assignment, and the caller has to count them to reject a
+// duplicate. parsed.statements is in source order, so the offsets are ascending.
+const findTopLevelSilenceOffsets = (code: string): Array<number> => {
   const parsed = parse(code)
+  const offsets: Array<number> = []
 
   for (const statement of parsed.statements) {
     if (!ts.isExpressionStatement(statement)) {
@@ -84,21 +88,30 @@ const findTopLevelSilenceOffset = (code: string): number | undefined => {
       && ts.isStringLiteral(expression.right)
       && expression.right.text === silenceValue
     ) {
-      return statement.getStart(parsed)
+      offsets.push(statement.getStart(parsed))
     }
   }
 
-  return undefined
+  return offsets
 }
 
 const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
-  const silenceOffset = findTopLevelSilenceOffset(code)
+  const silenceOffsets = findTopLevelSilenceOffsets(code)
   const [firstSrcImportOffset] = findDynamicSrcImportOffsets(code)
 
   assert.ok(
-    silenceOffset !== undefined,
+    silenceOffsets.length > 0,
     `claude-routes.test.ts must contain a top-level ${silenceAssignment}`,
   )
+  // One assignment decides the level. Two mean the last one wins, so the
+  // ordering checked below is not necessarily the ordering that takes effect.
+  assert.equal(
+    silenceOffsets.length,
+    1,
+    `claude-routes.test.ts must contain exactly one top-level ${silenceAssignment}, found ${silenceOffsets.length}`,
+  )
+  const [silenceOffset] = silenceOffsets
+
   assert.ok(
     firstSrcImportOffset !== undefined,
     `claude-routes.test.ts must dynamically import ${srcSpecifierPrefix}`,
@@ -178,9 +191,9 @@ test("finds only a top-level silence assignment", () => {
     silenceAssignment,
   ].join("\n")
 
-  assert.equal(
-    findTopLevelSilenceOffset(fixture),
-    fixture.lastIndexOf(silenceAssignment),
+  assert.deepEqual(
+    findTopLevelSilenceOffsets(fixture),
+    [fixture.lastIndexOf(silenceAssignment)],
   )
 })
 
@@ -250,6 +263,24 @@ test("rejects a logger configuration inside a function body", () => {
   assert.throws(
     () => assertSilencedBeforeDynamicSrcImports(fixture),
     /must contain a top-level/,
+  )
+})
+
+// Two assignments are one edit away from disagreeing: a later duplicate set to
+// a different level, or moved below the import, silently overrides the first
+// while the first still satisfies the ordering check on its own. Only one
+// assignment can decide the level, so more than one is rejected outright rather
+// than resolved by guessing which was meant.
+test("rejects duplicate top-level logger configuration", () => {
+  const fixture = [
+    silenceAssignment,
+    silenceAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /exactly one top-level/,
   )
 })
 
