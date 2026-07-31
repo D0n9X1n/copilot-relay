@@ -14,6 +14,8 @@ import test from "node:test"
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-itest-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
+// Why (#48): application stdout can corrupt the Node test-runner IPC framing.
+process.env.CONSOLA_LEVEL = "0"
 
 const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
