@@ -15,6 +15,7 @@ const integrationSuiteUrl = new URL(
 )
 
 const silenceAssignment = "process.env.CONSOLA_LEVEL = \"0\""
+const silenceValue = "0"
 const srcSpecifierPrefix = "../../src/"
 
 const source = await fs.readFile(integrationSuiteUrl, "utf8")
@@ -48,22 +49,57 @@ const findDynamicSrcImportOffsets = (code: string): Array<number> => {
   return offsets.sort((left, right) => left - right)
 }
 
-const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
-  const silenceIndex = code.indexOf(silenceAssignment)
-  const [firstSrcImportIndex] = findDynamicSrcImportOffsets(code)
+// process.env.CONSOLA_LEVEL, written as a property-access chain.
+const isSilenceTarget = (node: ts.Expression): boolean =>
+  ts.isPropertyAccessExpression(node)
+  && node.name.text === "CONSOLA_LEVEL"
+  && ts.isPropertyAccessExpression(node.expression)
+  && node.expression.name.text === "env"
+  && ts.isIdentifier(node.expression.expression)
+  && node.expression.expression.text === "process"
 
-  assert.notEqual(
-    silenceIndex,
-    -1,
+// Text search cannot tell an assignment from a comment or a string that merely
+// spells one, and only an assignment silences anything. Match the statement
+// structurally instead: process.env.CONSOLA_LEVEL = "0", and nothing weaker.
+const findSilenceAssignmentOffsets = (code: string): Array<number> => {
+  const parsed = parse(code)
+  const offsets: Array<number> = []
+
+  const visit = (node: ts.Node): void => {
+    // Type positions are erased before anything runs, so they silence nothing.
+    if (ts.isTypeNode(node)) {
+      return
+    }
+    if (
+      ts.isBinaryExpression(node)
+      && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && isSilenceTarget(node.left)
+      && ts.isStringLiteral(node.right)
+      && node.right.text === silenceValue
+    ) {
+      offsets.push(node.getStart(parsed))
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  visit(parsed)
+  return offsets.sort((left, right) => left - right)
+}
+
+const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
+  const [firstSilenceOffset] = findSilenceAssignmentOffsets(code)
+  const [firstSrcImportOffset] = findDynamicSrcImportOffsets(code)
+
+  assert.ok(
+    firstSilenceOffset !== undefined,
     `claude-routes.test.ts must contain ${silenceAssignment}`,
   )
-  assert.notEqual(
-    firstSrcImportIndex,
-    undefined,
+  assert.ok(
+    firstSrcImportOffset !== undefined,
     `claude-routes.test.ts must dynamically import ${srcSpecifierPrefix}`,
   )
   assert.ok(
-    silenceIndex < firstSrcImportIndex,
+    firstSilenceOffset < firstSrcImportOffset,
     "CONSOLA_LEVEL must be set before the first ../../src/ dynamic import",
   )
 }
@@ -109,6 +145,39 @@ test("finds the earliest src import and ignores unrelated imports", () => {
   assert.equal(offsets[1], fixture.indexOf('import("../../src/second")'))
 })
 
+// The ordering assertion compares against the first import that actually runs.
+// A type-position import() is erased before anything executes, so it must not
+// be mistaken for the boundary the assignment has to precede.
+test("ignores type-position import() when finding runtime src imports", () => {
+  const fixture = [
+    'type ProxyConfig = import("../../src/lib/config").ProxyConfig',
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.deepEqual(findDynamicSrcImportOffsets(fixture), [
+    fixture.indexOf('import("../../src/server")'),
+  ])
+})
+
+// Only a statement that runs can silence anything. The three decoys below all
+// contain the assignment as text, and none of them executes.
+test("finds only executable silence assignments, sorted", () => {
+  const fixture = [
+    `// ${silenceAssignment}`,
+    `const doc = '${silenceAssignment}'`,
+    `type Doc = \`${silenceAssignment}\``,
+    silenceAssignment,
+    `if (true) { ${silenceAssignment} }`,
+  ].join("\n")
+
+  const offsets = findSilenceAssignmentOffsets(fixture)
+
+  assert.deepEqual(offsets, [
+    fixture.indexOf(`\n${silenceAssignment}`) + 1,
+    fixture.lastIndexOf(silenceAssignment),
+  ])
+})
+
 test("rejects a dynamic src import before logger configuration", () => {
   const fixture = [
     "await import('../../src/lib/log')",
@@ -120,6 +189,43 @@ test("rejects a dynamic src import before logger configuration", () => {
     () => assertSilencedBeforeDynamicSrcImports(fixture),
     /CONSOLA_LEVEL must be set before/,
   )
+})
+
+// A comment is not an assignment. Text search cannot tell the two apart, so the
+// commented form below silences nothing while reading as though it does.
+test("rejects a commented-out logger configuration", () => {
+  const fixture = [
+    `// ${silenceAssignment}`,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /must contain/,
+  )
+})
+
+// Quoting the assignment describes it; it does not perform it.
+test("rejects a logger configuration only spelled inside a string", () => {
+  const fixture = [
+    `const doc = '${silenceAssignment}'`,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /must contain/,
+  )
+})
+
+// The shape the suite actually uses must stay acceptable.
+test("accepts an executable logger configuration before the import", () => {
+  const fixture = [
+    silenceAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.doesNotThrow(() => assertSilencedBeforeDynamicSrcImports(fixture))
 })
 
 test("integration suite silences the logger before importing src", () => {
