@@ -171,3 +171,24 @@ test("never echoes the rejected copilot base url in the error", () => {
     )
   }
 })
+
+
+// Why: the WHATWG URL parser normalizes backslashes to forward slashes for
+// http(s) schemes, so a base URL written with backslashes parses cleanly,
+// carries no userinfo, and is accepted. It must come back byte-for-byte like
+// any other accepted value - which is what makes the backslash redaction tests
+// in redact.test.ts cover real supported config rather than an impossible
+// input.
+test("accepts a backslash-normalized copilot base url unchanged", () => {
+  const backslashUrl = "https://gateway.example\\tenant\\TOKEN"
+  assert.equal(normalizeCopilotBaseUrl(backslashUrl), backslashUrl)
+  assert.equal(normalizeCopilotBaseUrl(`  ${backslashUrl}  `), backslashUrl)
+
+  const mixedUrl = "https://gateway.example/tenant\\TOKEN"
+  assert.equal(normalizeCopilotBaseUrl(mixedUrl), mixedUrl)
+
+  // Pins the normalization that makes these dangerous: the tail lands in the
+  // path, so it is sent upstream and comes back in error payloads.
+  assert.equal(new URL(backslashUrl).pathname, "/tenant/TOKEN")
+  assert.equal(new URL(backslashUrl).origin, "https://gateway.example")
+})

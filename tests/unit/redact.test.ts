@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { inspect } from "node:util"
 
 import {
   formatUrlForDisplay,
@@ -211,4 +212,76 @@ test("is pure: repeated calls agree and inputs are unchanged", () => {
   assert.equal(input, `url=https://${host}/tenant/PURE_SECRET/models`)
   // Already-scrubbed text is stable under a second pass.
   assert.equal(scrubSensitiveUrls(first), first)
+})
+
+
+// Why: normalizeCopilotBaseUrl accepts `https://host\tenant\TOKEN` - WHATWG
+// folds the backslashes into the path, so there is no userinfo and the scheme
+// is https - and returns it byte-for-byte. The raw configured form therefore
+// reaches the log, and a scanner that stops at a backslash matches only the
+// origin, leaves the URL looking origin-only, and prints the whole tail.
+test("redacts a raw backslash-normalized url", () => {
+  const host = uniqueHost("backslash")
+  registerSensitiveOrigin(`https://${host}\\tenant\\BACKSLASH_SECRET`)
+
+  const scrubbed = scrubSensitiveUrls(
+    `base https://${host}\\tenant\\BACKSLASH_SECRET`,
+  )
+
+  assert.ok(!scrubbed.includes("BACKSLASH_SECRET"), scrubbed)
+  assert.equal(scrubbed, `base https://${host}[redacted]`)
+})
+
+// Why: the logger renders values through inspect(), which escapes each
+// backslash - so the text that actually reaches both sinks carries doubled
+// backslashes inside quotes. Built with inspect() rather than hand-written, so
+// the fixture is the real logger shape.
+test("redacts an inspect-escaped backslash url", () => {
+  const host = uniqueHost("inspected-backslash")
+  const configured = `https://${host}\\tenant\\INSPECT_SECRET`
+  registerSensitiveOrigin(configured)
+
+  const inspected = inspect({
+    response: { status: 500, url: `${configured}/models` },
+  })
+  assert.ok(
+    inspected.includes("\\\\"),
+    `fixture should carry doubled backslashes: ${inspected}`,
+  )
+
+  const scrubbed = scrubSensitiveUrls(inspected)
+
+  assert.ok(!scrubbed.includes("INSPECT_SECRET"), scrubbed)
+  assert.ok(scrubbed.includes(`https://${host}[redacted]`), scrubbed)
+  // Structure and diagnostics survive.
+  assert.ok(scrubbed.includes("status: 500"), scrubbed)
+})
+
+// Why: a base URL can mix separators, and the client still appends its own
+// endpoint with a forward slash. Matching must span the backslash to reach the
+// end of the tail rather than stopping partway through it.
+test("redacts a mixed slash and backslash url with an appended endpoint", () => {
+  const host = uniqueHost("mixed-backslash")
+  registerSensitiveOrigin(`https://${host}/tenant\\MIXED_SECRET`)
+
+  const scrubbed = scrubSensitiveUrls(
+    `GET https://${host}/tenant\\MIXED_SECRET/models -> 500`,
+  )
+
+  assert.ok(!scrubbed.includes("MIXED_SECRET"), scrubbed)
+  assert.equal(scrubbed, `GET https://${host}[redacted] -> 500`)
+})
+
+// Why: consuming backslashes must not widen the blast radius. Scope is still
+// decided by origin, so a different host and a bare path stay untouched.
+test("leaves unrelated backslash urls and detached backslash paths alone", () => {
+  const host = uniqueHost("bs-registered")
+  const other = uniqueHost("bs-other")
+  registerSensitiveOrigin(`https://${host}\\tenant\\SCOPED_SECRET`)
+
+  const detached = "configured path is \\tenant\\SCOPED_SECRET here"
+  assert.equal(scrubSensitiveUrls(detached), detached)
+
+  const unrelated = `GET https://${other}\\tenant\\SCOPED_SECRET -> 200`
+  assert.equal(scrubSensitiveUrls(unrelated), unrelated)
 })

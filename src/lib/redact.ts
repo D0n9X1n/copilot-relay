@@ -42,8 +42,15 @@ const controlBytePattern = /[\x00-\x1F\x7F]/g
  * Stops at whitespace, quotes, backticks and angle brackets so a URL embedded
  * in inspect() output — `url: 'https://host/x'` — matches without swallowing
  * the surrounding punctuation.
+ *
+ * Backslashes are consumed rather than terminating the match. WHATWG folds `\`
+ * into `/` for http(s), so `https://host\tenant\TOKEN` parses with the tail in
+ * the path, carries no userinfo, and is therefore accepted and stored verbatim
+ * by normalizeCopilotBaseUrl — and inspect() doubles each backslash on the way
+ * to both sinks. Stopping at the first one matched only the origin, which then
+ * looked origin-only and left the entire tail in the log.
  */
-const absoluteUrlPattern = /https?:\/\/[^\s'"`<>\\]+/gi
+const absoluteUrlPattern = /https?:\/\/[^\s'"`<>]+/gi
 
 /** Trailing prose punctuation, trimmed off a match so it survives rewriting. */
 const trailingPunctuationPattern = /[.,;:!?)\]}]+$/
@@ -153,11 +160,21 @@ export const scrubSensitiveUrls = (text: string): string => {
 
     // Where the authority ends in the *matched text*, which may differ from the
     // canonical origin in case or port. Nothing after it means nothing to hide.
+    //
+    // Backslash ends the authority exactly as "/" does: WHATWG normalizes it to
+    // "/" for http(s), so `https://host\tenant` has "tenant" in its path, not
+    // its host. Omitting it here would classify that URL as origin-only and
+    // return it unredacted.
     const authorityStart = candidate.indexOf("://") + 3
     let authorityEnd = candidate.length
     for (let index = authorityStart; index < candidate.length; index += 1) {
       const character = candidate[index]
-      if (character === "/" || character === "?" || character === "#") {
+      if (
+        character === "/"
+        || character === "\\"
+        || character === "?"
+        || character === "#"
+      ) {
         authorityEnd = index
         break
       }
