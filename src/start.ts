@@ -11,6 +11,7 @@ import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, log, setLogLevel } from "~/lib/log"
 import { getExposedModelIds } from "~/lib/models"
 import { validateUpstream } from "~/lib/preflight"
+import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
 import { appVersion } from "~/lib/version"
 import { startServer } from "~/server"
@@ -46,6 +47,13 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   const applyRuntimeConfig = (nextConfig: AppConfig) => {
     // Hot reload updates behavior for future requests; it intentionally does
     // not rebind the already-listening socket when host or port changes.
+    //
+    // The redaction policy is registered here rather than once at startup, so a
+    // base URL introduced by a later edit is covered too. Registration is
+    // additive and never removes a previous origin: a request against the old
+    // base URL can still be in flight when the config changes, and its error
+    // must stay redacted on its way to the log. See #47.
+    registerSensitiveOrigin(nextConfig.copilotBaseUrl)
     setLogLevel(nextConfig.logLevel)
     void cleanupLogs(nextConfig.logRetentionDays)
     runtimeState.debug = nextConfig.logLevel === "debug"
@@ -89,7 +97,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   log.info(
     `copilot-relay listening on http://${config.host}:${config.port}`,
   )
-  log.info(`copilot base url: ${config.copilotBaseUrl}`)
+  log.info(`copilot base url: ${formatUrlForDisplay(config.copilotBaseUrl)}`)
 
   const baseUrl = `http://${config.host}:${config.port}`
   if (appConfig.claudeSetup) {

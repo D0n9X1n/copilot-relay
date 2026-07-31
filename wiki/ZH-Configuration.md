@@ -34,7 +34,7 @@ opusModel: claude-opus-4.8
 | --- | --- |
 | `host` | 本地 Claude 兼容 HTTP 服务监听地址。建议保持 `127.0.0.1`，只允许本机访问。 |
 | `port` | 本地端口，默认 `4142`。 |
-| `copilotBaseUrl` | GitHub Copilot API 地址。一般不要改。 |
+| `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。其他值会导致启动失败。 |
 | `logRetentionDays` | `~/.copilot-relay/logs/` 下普通 `.log` 文件保留天数。 |
@@ -43,6 +43,37 @@ opusModel: claude-opus-4.8
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
 | `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
+
+## copilotBaseUrl 规则
+
+`copilotBaseUrl` 会在加载配置时校验，不满足以下条件时启动会直接失败：
+
+- **必须是绝对的 `http://` 或 `https://` 地址。** 相对路径（`/tenant/v1`）、只写主机名
+  （`api.githubcopilot.com`）、以及其他协议（`ftp://`、`file://`）都会被拒绝。允许使用
+  明文 HTTP，所以 `http://127.0.0.1:8080` 这类本地网关是合法值。
+- **地址里不能带账号密码。** `https://user:password@host` 会被拒绝。上游 HTTP 客户端
+  在真正发请求时本来也不接受这种写法，放行只会把一个清晰的启动错误变成一个难懂的
+  请求失败。
+
+错误信息只说明是哪个字段、违反了哪条规则，不会把你配置的值重复出来——因为这条信息
+可能出现在终端或日志文件里。
+
+### 日志和 `status` 里会显示什么
+
+如果 `copilotBaseUrl` 带有路径、查询参数或 fragment——比如
+`https://gateway.example/tenant/abc123` 这样的自建网关——只会显示它的 origin：
+
+```text
+copilot base url: https://gateway.example (path/query/fragment hidden)
+```
+
+`copilot-relay status` 和 `copilot-relay status --json` 里的 `copilotBaseUrl` 一行同理；
+`~/.copilot-relay/logs/` 中错误信息里出现的上游地址也一样，会写成
+`https://gateway.example[redacted]`。
+
+这么做是因为网关路径里可能带着 token，而日志文件恰恰是报问题时最常被要求附上的东西。
+不带路径的地址（比如默认的 `https://api.githubcopilot.com`）会完整显示——它里面没有
+需要隐藏的内容。
 
 ## 热重载与重启
 

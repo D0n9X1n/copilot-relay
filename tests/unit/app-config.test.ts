@@ -3,6 +3,7 @@ import test from "node:test"
 
 import {
   logLevels,
+  normalizeCopilotBaseUrl,
   normalizeLogLevel,
   normalizeThinkEffort,
   normalizeUpstreamTimeoutSeconds,
@@ -70,4 +71,103 @@ test("returns undefined for invalid think effort values", () => {
   assert.equal(normalizeThinkEffort(""), undefined)
   assert.equal(normalizeThinkEffort(5), undefined)
   assert.equal(normalizeThinkEffort(undefined), undefined)
+})
+
+// Why: copilotBaseUrl is used as `${base}${path}` for every upstream call, so a
+// value that is not an absolute HTTP(S) URL produces a confusing request-time
+// failure rather than a clear startup one. Missing/blank keeps the existing
+// normalizeString fallback behavior so the shipped default still applies.
+test("accepts a missing or blank copilot base url", () => {
+  assert.equal(normalizeCopilotBaseUrl(undefined), undefined)
+  assert.equal(normalizeCopilotBaseUrl(""), undefined)
+  assert.equal(normalizeCopilotBaseUrl("   "), undefined)
+  assert.equal(normalizeCopilotBaseUrl(42), undefined)
+})
+
+// Why: the accepted value is what gets concatenated with request paths. Any
+// URL-normalization here (adding a trailing slash, lowercasing the host,
+// re-encoding) would silently change the request URL, so the trimmed original
+// must come back byte-for-byte.
+test("returns the accepted copilot base url exactly as written", () => {
+  for (const value of [
+    "https://api.githubcopilot.com",
+    "https://gateway.example/tenant/v1",
+    "https://Gateway.Example.COM/Tenant",
+    "https://gateway.example:8443/base",
+    "https://gateway.example/a%2Fb",
+    "https://gateway.example/tenant?region=eu",
+  ]) {
+    assert.equal(normalizeCopilotBaseUrl(value), value)
+    assert.equal(normalizeCopilotBaseUrl(`  ${value}  `), value)
+  }
+})
+
+// Why: a local gateway over plain HTTP is a legitimate development setup and
+// must not be swept up by the scheme check.
+test("accepts http localhost copilot base urls", () => {
+  assert.equal(
+    normalizeCopilotBaseUrl("http://localhost:8080"),
+    "http://localhost:8080",
+  )
+  assert.equal(
+    normalizeCopilotBaseUrl("http://127.0.0.1:8080/base"),
+    "http://127.0.0.1:8080/base",
+  )
+})
+
+// Why: Undici accepts only absolute HTTP(S) URLs. Failing at config load names
+// the bad key; failing at request time surfaces as an unrelated fetch error.
+test("rejects malformed, relative and non-http copilot base urls", () => {
+  for (const value of [
+    "not a url",
+    "/tenant/v1",
+    "api.githubcopilot.com",
+    "ftp://gateway.example",
+    "file:///etc/passwd",
+    "ws://gateway.example",
+  ]) {
+    assert.throws(() => normalizeCopilotBaseUrl(value), /Invalid copilotBaseUrl/)
+  }
+})
+
+// Why: URL userinfo is a credential. Undici rejects it at request time anyway,
+// so accepting it only buys a confusing failure plus a disclosure. See #47.
+test("rejects copilot base urls carrying userinfo credentials", () => {
+  for (const value of [
+    "https://user:pass@gateway.example",
+    "https://user@gateway.example",
+    "https://:pass@gateway.example/tenant",
+  ]) {
+    assert.throws(() => normalizeCopilotBaseUrl(value), /Invalid copilotBaseUrl/)
+  }
+})
+
+// Why: the error message is itself a disclosure surface — it reaches the
+// terminal and, through the startup failure path, the log file. It must name
+// the key and the rule without ever echoing the offending value. See #47.
+test("never echoes the rejected copilot base url in the error", () => {
+  const cases = [
+    ["https://s3cr3t-user:s3cr3t-pass@gateway.example/tenant", "s3cr3t"],
+    ["ftp://gateway.example/tenant-T0KEN-abc?q=T0KEN", "T0KEN"],
+    ["not a url but LEAKY-VALUE", "LEAKY"],
+  ] as const
+
+  for (const [value, sentinel] of cases) {
+    assert.throws(
+      () => normalizeCopilotBaseUrl(value),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.match(error.message, /Invalid copilotBaseUrl/)
+        assert.ok(
+          !error.message.includes(sentinel),
+          `error message leaked ${sentinel}: ${error.message}`,
+        )
+        assert.ok(
+          !error.message.includes("gateway.example"),
+          `error message leaked the host: ${error.message}`,
+        )
+        return true
+      },
+    )
+  }
 })

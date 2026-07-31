@@ -105,6 +105,58 @@ const normalizePositiveInteger = (value: unknown): number | undefined => {
 const normalizeString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined
 
+/**
+ * Validates copilotBaseUrl as an absolute HTTP(S) URL without credentials.
+ *
+ * Two rules, both learned from #47:
+ *
+ * The value is concatenated as `${base}${path}` for every upstream call, so it
+ * must be something Undici will accept. A relative or non-HTTP value fails at
+ * request time as an unrelated-looking fetch error; failing here names the key.
+ *
+ * URL userinfo (`https://user:pass@host`) is rejected rather than passed
+ * through. Undici refuses it at request time anyway, so accepting it buys only
+ * a confusing failure plus a credential written to the log on every start.
+ *
+ * The accepted value is returned as the trimmed original, never URL-normalized.
+ * Round-tripping through URL would add a trailing slash, lowercase the host and
+ * re-encode the path, silently changing both the request URL and what gets
+ * written back to config.yaml.
+ *
+ * Errors are fixed strings. The rejected value is never interpolated: this
+ * message reaches the terminal and, via the startup failure path, the log file,
+ * which is exactly the disclosure being prevented.
+ */
+export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
+  const trimmed = normalizeString(value)
+  if (trimmed === undefined) {
+    return undefined
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(
+      "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com",
+    )
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com",
+    )
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "Invalid copilotBaseUrl: URL credentials (user:password@host) are not supported; remove them and use a plain https URL",
+    )
+  }
+
+  return trimmed
+}
+
 export const normalizeThinkEffort = (
   value: unknown,
 ): ReasoningEffort | undefined => {
@@ -338,7 +390,8 @@ export async function readAppConfig(): Promise<AppConfig> {
   // and a shipped default applies only where the key is absent.
   const config: AppConfig = {
     claudeSetup: claudeSetup ?? defaultConfig.claudeSetup,
-    copilotBaseUrl: normalizeString(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
+    copilotBaseUrl:
+      normalizeCopilotBaseUrl(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
     gptModel: normalizeString(raw.gptModel) ?? defaultConfig.gptModel,
     host: host ?? defaultConfig.host,
     logLevel: logLevel ?? defaultConfig.logLevel,

@@ -8,6 +8,12 @@ import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort } from "~/lib/lifecycle"
 import { setLogLevel } from "~/lib/log"
 import { getLogPath, paths } from "~/lib/paths"
+import {
+  formatUrlForDisplay,
+  registerSensitiveOrigin,
+  sanitizeTerminalString,
+  scrubSensitiveUrls,
+} from "~/lib/redact"
 import { appVersion } from "~/lib/version"
 
 /**
@@ -39,11 +45,18 @@ interface ProbeResult {
  * The resolved config as `status` reports it.
  *
  * Derived from AppConfig rather than restated, so a twelfth config key cannot
- * be added without this type following it automatically. The one deliberate
- * difference: `webSearchBackend` is null rather than undefined when unset.
- * JSON.stringify drops undefined properties, so leaving it optional would make
- * `status --json` emit 10 config keys on a default install and 11 on a
- * customized one; anything parsing that deserves a stable key set.
+ * be added without this type following it automatically. Two deliberate
+ * differences:
+ *
+ * `webSearchBackend` is null rather than undefined when unset. JSON.stringify
+ * drops undefined properties, so leaving it optional would make `status --json`
+ * emit 10 config keys on a default install and 11 on a customized one; anything
+ * parsing that deserves a stable key set.
+ *
+ * `copilotBaseUrl` is the display form, not the raw value. It is user-supplied
+ * and may legitimately carry a credential in its path, and `status` output is
+ * what a user pastes into a bug report. Mapped here rather than at each render
+ * site so the text block and `--json` cannot disagree about it. See #47.
  */
 export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
   webSearchBackend: string | null
@@ -51,6 +64,7 @@ export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
 
 export const toStatusConfig = (config: AppConfig): StatusConfig => ({
   ...config,
+  copilotBaseUrl: formatUrlForDisplay(config.copilotBaseUrl),
   webSearchBackend: config.webSearchBackend ?? null,
 })
 
@@ -185,7 +199,10 @@ const renderConfig = (
       key === "webSearchBackend" && value === null ?
         "(unset — uses gptModel)"
       : String(value)
-    return `    ${key.padEnd(24)}${rendered}`
+    // Every value is user-supplied and lands on a terminal unescaped. Raw
+    // control bytes could clear the line and paint status rows the relay never
+    // produced, so no config value is trusted to be printable. See #47.
+    return `    ${key.padEnd(24)}${sanitizeTerminalString(rendered)}`
   })
 
   if (running) {
@@ -405,6 +422,10 @@ export const collectStatus = async (options: {
 }): Promise<RelayStatus> => {
   const appConfig = await readAppConfig()
   setLogLevel(appConfig.logLevel)
+  // Before any probe runs, so a URL this origin appears in - a fetch failure
+  // from checkHealth or checkDeep, which quotes the URL it tried - is already
+  // covered by the time it reaches a detail string. See #47.
+  registerSensitiveOrigin(appConfig.copilotBaseUrl)
 
   const base = {
     // Both of these are derived from the same appConfig as `config`, so they
@@ -481,10 +502,16 @@ export const status = defineCommand({
 
     // stdout, not the logger: this is the command's output, and routing it
     // through the logger would write a log line every time it is polled.
+    //
+    // Scrubbed as a whole rather than field by field. toStatusConfig already
+    // handles the copilotBaseUrl row, but a probe failure detail quotes the URL
+    // it tried, and those strings come from fetch rather than from config. This
+    // is the backstop for every such path, including --deep. Applied to the
+    // complete output so legitimate newlines between rows survive. See #47.
     if (args.json) {
-      console.log(JSON.stringify(result, null, 2))
+      console.log(scrubSensitiveUrls(JSON.stringify(result, null, 2)))
     } else {
-      console.log(renderStatus(result).join("\n"))
+      console.log(scrubSensitiveUrls(renderStatus(result).join("\n")))
     }
 
     // 0 requires both a live process and a passing health probe. A relay that
