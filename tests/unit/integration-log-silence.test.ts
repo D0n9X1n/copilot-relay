@@ -15,20 +15,62 @@ const integrationSuiteUrl = new URL(
 )
 
 const silenceAssignment = "process.env.CONSOLA_LEVEL = \"0\""
-const firstSrcImportMarker = "import(\"../../src/"
 const srcSpecifierPrefix = "../../src/"
 
 const source = await fs.readFile(integrationSuiteUrl, "utf8")
 
-// Static import/export declarations only: these hoist above every statement.
-// Dynamic import() is an expression, evaluated in order, and so is allowed.
-const findHoistedSrcSpecifiers = (code: string): Array<string> => {
-  const parsed = ts.createSourceFile(
-    "claude-routes.test.ts",
-    code,
-    ts.ScriptTarget.Latest,
-    true,
+const parse = (code: string): ts.SourceFile =>
+  ts.createSourceFile("claude-routes.test.ts", code, ts.ScriptTarget.Latest, true)
+
+const findDynamicSrcImportOffsets = (code: string): Array<number> => {
+  const parsed = parse(code)
+  const offsets: Array<number> = []
+
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length === 1
+    ) {
+      const [specifier] = node.arguments
+      if (
+        (ts.isStringLiteral(specifier)
+          || ts.isNoSubstitutionTemplateLiteral(specifier))
+        && specifier.text.startsWith(srcSpecifierPrefix)
+      ) {
+        offsets.push(node.getStart(parsed))
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+
+  visit(parsed)
+  return offsets.sort((left, right) => left - right)
+}
+
+const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
+  const silenceIndex = code.indexOf(silenceAssignment)
+  const [firstSrcImportIndex] = findDynamicSrcImportOffsets(code)
+
+  assert.notEqual(
+    silenceIndex,
+    -1,
+    `claude-routes.test.ts must contain ${silenceAssignment}`,
   )
+  assert.notEqual(
+    firstSrcImportIndex,
+    undefined,
+    `claude-routes.test.ts must dynamically import ${srcSpecifierPrefix}`,
+  )
+  assert.ok(
+    silenceIndex < firstSrcImportIndex,
+    "CONSOLA_LEVEL must be set before the first ../../src/ dynamic import",
+  )
+}
+
+// Static import/export declarations hoist above every statement.
+const findHoistedSrcSpecifiers = (code: string): Array<string> => {
+  const parsed = parse(code)
 
   return parsed.statements.flatMap((statement) => {
     if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
@@ -42,24 +84,46 @@ const findHoistedSrcSpecifiers = (code: string): Array<string> => {
   })
 }
 
-test("integration suite silences the logger before importing src", () => {
-  const silenceIndex = source.indexOf(silenceAssignment)
-  const firstSrcImportIndex = source.indexOf(firstSrcImportMarker)
+test("finds dynamic src imports independent of quote style", () => {
+  const fixtures = [
+    'await import("../../src/double")',
+    "await import('../../src/single')",
+    "await import(`../../src/template`)",
+  ]
 
-  assert.notEqual(
-    silenceIndex,
-    -1,
-    `claude-routes.test.ts must contain ${silenceAssignment}`,
+  for (const fixture of fixtures) {
+    assert.deepEqual(findDynamicSrcImportOffsets(fixture), [6])
+  }
+})
+
+test("finds the earliest src import and ignores unrelated imports", () => {
+  const fixture = [
+    'await import("node:fs")',
+    "await import('../../src/first')",
+    'await import("../../src/second")',
+  ].join("\n")
+
+  const offsets = findDynamicSrcImportOffsets(fixture)
+  assert.equal(offsets.length, 2)
+  assert.equal(offsets[0], fixture.indexOf("import('../../src/first')"))
+  assert.equal(offsets[1], fixture.indexOf('import("../../src/second")'))
+})
+
+test("rejects a dynamic src import before logger configuration", () => {
+  const fixture = [
+    "await import('../../src/lib/log')",
+    silenceAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /CONSOLA_LEVEL must be set before/,
   )
-  assert.notEqual(
-    firstSrcImportIndex,
-    -1,
-    `claude-routes.test.ts must contain ${firstSrcImportMarker}`,
-  )
-  assert.ok(
-    silenceIndex < firstSrcImportIndex,
-    "CONSOLA_LEVEL must be set before the first ../../src/ dynamic import",
-  )
+})
+
+test("integration suite silences the logger before importing src", () => {
+  assertSilencedBeforeDynamicSrcImports(source)
 })
 
 // Every form below reaches src/ before any statement runs, so each must be
