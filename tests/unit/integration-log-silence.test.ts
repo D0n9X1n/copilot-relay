@@ -16,6 +16,7 @@ const integrationSuiteUrl = new URL(
 
 const silenceAssignment = "process.env.CONSOLA_LEVEL = \"0\""
 const silenceValue = "0"
+const noisyAssignment = "process.env.CONSOLA_LEVEL = \"3\""
 const srcSpecifierPrefix = "../../src/"
 
 const source = await fs.readFile(integrationSuiteUrl, "utf8")
@@ -60,7 +61,8 @@ const isSilenceTarget = (node: ts.Expression): boolean =>
 
 // Text search cannot tell an assignment from a comment or a string that merely
 // spells one, and only an assignment silences anything. Match the statement
-// structurally instead: process.env.CONSOLA_LEVEL = "0", and nothing weaker.
+// structurally instead: an assignment whose left-hand side is exactly
+// process.env.CONSOLA_LEVEL.
 //
 // Only a top-level statement counts. Nested anywhere -- an if, a loop, a bare
 // block, a function body -- whether the assignment runs at all, and whether it
@@ -69,12 +71,23 @@ const isSilenceTarget = (node: ts.Expression): boolean =>
 // nothing. Unconditional at module scope is the one shape guaranteed to have
 // run by the time the dynamic imports below it execute, so it is the only
 // shape accepted.
-// Every match is collected, not just the first: stopping at the first cannot
-// see a second assignment, and the caller has to count them to reject a
-// duplicate. parsed.statements is in source order, so the offsets are ascending.
-const findTopLevelSilenceOffsets = (code: string): Array<number> => {
+//
+// The value is recorded, not filtered on. Collecting only the assignments
+// that spell "0" makes an overwrite invisible: a later "3" never matches, the
+// "0" above it still counts as the sole assignment, and the file passes while
+// src/ loads with stdout on. Every assignment to the target is collected
+// whatever it assigns, so the caller can count them and then check the one
+// that survives. parsed.statements is in source order, so offsets ascend.
+type SilenceAssignment = {
+  offset: number
+  value: string | undefined
+}
+
+const findTopLevelSilenceAssignments = (
+  code: string,
+): Array<SilenceAssignment> => {
   const parsed = parse(code)
-  const offsets: Array<number> = []
+  const assignments: Array<SilenceAssignment> = []
 
   for (const statement of parsed.statements) {
     if (!ts.isExpressionStatement(statement)) {
@@ -85,39 +98,50 @@ const findTopLevelSilenceOffsets = (code: string): Array<number> => {
       ts.isBinaryExpression(expression)
       && expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
       && isSilenceTarget(expression.left)
-      && ts.isStringLiteral(expression.right)
-      && expression.right.text === silenceValue
     ) {
-      offsets.push(statement.getStart(parsed))
+      assignments.push({
+        offset: statement.getStart(parsed),
+        value: ts.isStringLiteral(expression.right)
+          ? expression.right.text
+          : undefined,
+      })
     }
   }
 
-  return offsets
+  return assignments
 }
 
 const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
-  const silenceOffsets = findTopLevelSilenceOffsets(code)
+  const assignments = findTopLevelSilenceAssignments(code)
   const [firstSrcImportOffset] = findDynamicSrcImportOffsets(code)
 
   assert.ok(
-    silenceOffsets.length > 0,
+    assignments.length > 0,
     `claude-routes.test.ts must contain a top-level ${silenceAssignment}`,
   )
   // One assignment decides the level. Two mean the last one wins, so the
   // ordering checked below is not necessarily the ordering that takes effect.
   assert.equal(
-    silenceOffsets.length,
+    assignments.length,
     1,
-    `claude-routes.test.ts must contain exactly one top-level ${silenceAssignment}, found ${silenceOffsets.length}`,
+    `claude-routes.test.ts must contain exactly one top-level ${silenceAssignment}, found ${assignments.length}`,
   )
-  const [silenceOffset] = silenceOffsets
+  const [assignment] = assignments
+
+  // Position is not enough: of the levels consola accepts, only "0" turns
+  // stdout off, so the one assignment that survives has to be that one.
+  assert.equal(
+    assignment.value,
+    silenceValue,
+    `claude-routes.test.ts must set CONSOLA_LEVEL to "${silenceValue}"`,
+  )
 
   assert.ok(
     firstSrcImportOffset !== undefined,
     `claude-routes.test.ts must dynamically import ${srcSpecifierPrefix}`,
   )
   assert.ok(
-    silenceOffset < firstSrcImportOffset,
+    assignment.offset < firstSrcImportOffset,
     "CONSOLA_LEVEL must be set before the first ../../src/ dynamic import",
   )
 }
@@ -192,7 +216,7 @@ test("finds only a top-level silence assignment", () => {
   ].join("\n")
 
   assert.deepEqual(
-    findTopLevelSilenceOffsets(fixture),
+    findTopLevelSilenceAssignments(fixture).map(({ offset }) => offset),
     [fixture.lastIndexOf(silenceAssignment)],
   )
 })
@@ -274,6 +298,57 @@ test("rejects a logger configuration inside a function body", () => {
 test("rejects duplicate top-level logger configuration", () => {
   const fixture = [
     silenceAssignment,
+    silenceAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /exactly one top-level/,
+  )
+})
+
+// A second assignment below the first is not a duplicate of it -- it is an
+// overwrite, and it is the case a finder keyed to the value "0" cannot see. The
+// pair below satisfies every other check on the first statement alone: one
+// assignment, spelled exactly right, sitting above the import. consola reads
+// the value that survives, so src/ loads at level 3 with stdout on, and the run
+// can still be aborted mid-file -- the exact failure the guard exists to stop.
+test("rejects a logger level overwritten after being silenced", () => {
+  const fixture = [
+    silenceAssignment,
+    noisyAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /exactly one top-level/,
+  )
+})
+
+// Ordering is not the only thing that matters. An assignment can be top-level,
+// unconditional and above every import and still leave stdout on: of the levels
+// consola accepts, only "0" silences it. A guard that checks position but not
+// value passes this file.
+test("rejects a sole logger configuration set to the wrong level", () => {
+  const fixture = [
+    noisyAssignment,
+    'await import("../../src/server")',
+  ].join("\n")
+
+  assert.throws(
+    () => assertSilencedBeforeDynamicSrcImports(fixture),
+    /must set CONSOLA_LEVEL to/,
+  )
+})
+
+// The mirror image of the overwrite: here the value that survives is correct,
+// but two statements still decide it. Accepting this shape means accepting that
+// the assignment the ordering check reads is not the one that takes effect.
+test("rejects a wrong logger level corrected by a later assignment", () => {
+  const fixture = [
+    noisyAssignment,
     silenceAssignment,
     'await import("../../src/server")',
   ].join("\n")
