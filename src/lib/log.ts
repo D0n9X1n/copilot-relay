@@ -46,8 +46,9 @@ export const setLogLevel = (level: LogLevelName): void => {
  * `breakLength: Infinity` matters as much as the depth cap. The previous
  * `inspect(value, { depth: null })` pretty-printed each payload across
  * thousands of physical lines, which was both the dominant source of log volume
- * and the reason the `grep` recipes in docs/logging.md returned a fragment of an
- * object instead of the matching entry. One entry is now one line.
+ * and the reason the `grep` recipes in wiki/EN-Logging-Troubleshooting.md
+ * returned a fragment of an object instead of the matching entry. One entry is
+ * now one line.
  */
 const formatLogValue = (value: unknown): string =>
   typeof value === "string" ? value : (

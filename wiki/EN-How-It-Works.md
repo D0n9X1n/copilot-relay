@@ -10,6 +10,10 @@ http://127.0.0.1:4142/v1/messages
 
 `copilot-relay` translates the request and sends it to GitHub Copilot upstream.
 
+This page is the short version. For the design map see
+[Architecture](EN-Architecture.md); for the mechanics and invariants behind it
+see [Internals](EN-Internals.md).
+
 ## Runtime flow
 
 ```text
@@ -35,6 +39,9 @@ copilot-relay start
   -> listen on host/port
   -> watch config.yaml for hot reload
 ```
+
+Preflight runs before the socket binds, so a relay that cannot reach its
+configured models fails to start rather than accepting traffic it cannot serve.
 
 ## Public API surface
 
@@ -70,8 +77,8 @@ Routing is simple by design:
 Default upstream models:
 
 ```yaml
-gptModel: gpt-5.5
-opusModel: claude-opus-4.8
+gptModel: gpt-5.6-sol
+opusModel: claude-opus-5
 ```
 
 ## Copilot API surface
@@ -81,7 +88,8 @@ Internally, Copilot may require either:
 - `/chat/completions`
 - `/responses`
 
-`gpt-5.5` uses `/responses`. Opus currently uses `/chat/completions`.
+`gpt-5.6-sol` and the rest of the `gpt-5.5`/`gpt-5.6` family use `/responses`.
+Opus currently uses `/chat/completions`.
 
 The relay hides this from Claude Code and always exposes Claude Messages-style
 responses.
@@ -103,9 +111,16 @@ responses.
 On startup, the relay reuses the cached Copilot token if it has more than 60
 seconds left. Otherwise it refreshes from `github_token`.
 
+Token values are never written to the log.
+
 ## Streaming
 
 Copilot streams OpenAI-style chat chunks. Claude Code expects Claude SSE events.
 The relay maintains a small state machine to open, delta, and close Claude
 content blocks in the correct order for text, thinking, and tool use.
 
+Advertising the WebSearch tool does not cost you streaming. The relay reads the
+model's response only as far as it takes to tell whether a search is coming, so
+a turn that never searches streams normally — which is most of them, since
+Claude Code offers the tool on every request. The details are in
+[Internals](EN-Internals.md).

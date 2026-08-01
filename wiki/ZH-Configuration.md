@@ -21,11 +21,11 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
-thinkEffort: xhigh
+thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.5
-opusModel: claude-opus-4.8
+gptModel: gpt-5.6-sol
+opusModel: claude-opus-5
 ```
 
 ## 字段说明
@@ -38,7 +38,7 @@ opusModel: claude-opus-4.8
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。其他值会导致启动失败。 |
 | `logRetentionDays` | `~/.copilot-relay/logs/` 下普通 `.log` 文件保留天数。 |
-| `thinkEffort` | 默认上游推理强度：`none`、`low`、`medium`、`high`、`xhigh`。 |
+| `thinkEffort` | 默认上游推理强度：`none`、`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
