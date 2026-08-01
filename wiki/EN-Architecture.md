@@ -220,8 +220,16 @@ are load-bearing rather than cosmetic; the reasoning is in
 
 At `debug`, every model request logs client, requested model, upstream model,
 requested think effort, requested thinking budget, and effective think effort.
-Also at `debug`, Claude and upstream request diagnostics are logged without
-redaction — which is why debug logs are not safe to share unreviewed.
+Also at `debug`, Claude and upstream request diagnostics are logged.
+
+The central logger passes every emitted value through `scrubSensitiveUrls`
+before either sink, so a secret-bearing upstream URL tail is redacted at every
+level, `debug` included. That is the only sanitization applied — it rewrites
+URLs and nothing else.
+
+Debug diagnostics still carry prompt text, tool definitions and arguments,
+request bodies, and headers, none of which a URL scrubber touches. **Do not
+share debug logs unreviewed.**
 
 ## Testing strategy
 

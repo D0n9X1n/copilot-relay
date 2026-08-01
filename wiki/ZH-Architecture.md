@@ -204,8 +204,15 @@ opusModel: claude-opus-5
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 在 `debug` 级别，每个模型请求都会记录 client、请求模型、上游模型、请求 think
-effort、请求 thinking budget、生效 think effort。同样在 `debug` 级别，Claude 与上游
-请求诊断会**不做脱敏**地记录 —— 这正是 debug 日志不适合未经审查就分享的原因。
+effort、请求 thinking budget、生效 think effort。同样在 `debug` 级别，还会记录
+Claude 与上游的请求诊断。
+
+中央日志器在写入任何一个 sink 之前，都会把每一个输出值过一遍
+`scrubSensitiveUrls`，因此携带密钥的上游 URL 尾部在**每个级别**都会被脱敏，`debug`
+也不例外。但这是唯一的净化处理 —— 它只重写 URL，不碰别的。
+
+debug 诊断里仍然包含提示词文本、工具定义与参数、请求体和 header，这些都不是 URL
+脱敏能覆盖的。**不要未经审查就分享 debug 日志。**
 
 ## 测试策略
 

@@ -439,3 +439,54 @@ test("prompt-cache docs separate the hashed key from the forwarded user field", 
     )
   }
 })
+
+// Why: src/lib/log.ts pipes every emitted value through scrubSensitiveUrls
+// before either sink, so secret-bearing upstream URL tails are redacted at
+// every level including debug. Saying diagnostics are logged "without
+// redaction" is false. The real hazard is different and still real: debug
+// payloads carry prompt text, tool definitions, and request bodies, which no
+// URL scrubber touches.
+test("Architecture logging sections describe redaction accurately", () => {
+  const sectionOf = (body: string, heading: string): string => {
+    const after = body.split(heading)[1] ?? ""
+    return after.split("\n## ")[0] ?? ""
+  }
+
+  const pages: [string, string, string[]][] = [
+    [
+      "EN-Architecture.md",
+      "\n## Logging",
+      ["request diagnostics are logged without\nredaction"],
+    ],
+    [
+      "ZH-Architecture.md",
+      "\n## 日志",
+      ["请求诊断会**不做脱敏**地记录"],
+    ],
+  ]
+
+  for (const [page, heading, falseClaims] of pages) {
+    const section = sectionOf(readPage(page), heading)
+
+    assert.notEqual(section, "", `${page} must have a logging section`)
+
+    for (const claim of falseClaims) {
+      assert.ok(
+        !section.includes(claim),
+        `wiki/${page} claims debug logs are unredacted; log.ts scrubs URL tails at every level`,
+      )
+    }
+
+    // The URL redaction that does happen must be stated.
+    assert.ok(
+      /scrubSensitiveUrls|redact|脱敏/.test(section),
+      `wiki/${page} logging section must say upstream URL tails are redacted`,
+    )
+
+    // And the hazard a URL scrubber cannot address must survive.
+    assert.ok(
+      /prompt|tool|payload|提示词|工具|请求体/.test(section),
+      `wiki/${page} must warn that debug payloads carry prompts and tool data`,
+    )
+  }
+})
