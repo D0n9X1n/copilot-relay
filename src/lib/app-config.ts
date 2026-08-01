@@ -119,6 +119,24 @@ const normalizeString = (value: unknown): string | undefined =>
 const conventionalHttpUrlPattern = /^https?:\/\//i
 
 /**
+ * Raw characters that cannot be delimited safely in rendered log text.
+ *
+ * A raw apostrophe is the clearest case. WHATWG accepts it and leaves it raw
+ * in the path, so the configured value keeps it - and inspect() renders that
+ * value inside quotes, where the apostrophe reads as the closing delimiter.
+ * Any URL scan ends there, and the rest of the path prints in full. Quotes,
+ * backticks and angle brackets are the same story; whitespace ends a URL for
+ * every reader and scanner alike; and tab and newline are worse still,
+ * because URL parsing strips them, so the stored value would not even match
+ * what is sent upstream.
+ *
+ * Rejecting the raw byte costs nothing: every one of these has a
+ * percent-encoded spelling that is unambiguous in log text and is accepted
+ * here unchanged. See #47.
+ */
+const unsafeRawDelimiterPattern = /['"`<>\s\u0000-\u001F\u007F]/
+
+/**
  * Both fixed strings. The rejected value is never interpolated: these messages
  * reach the terminal and, via the startup failure path, the log file, which is
  * exactly the disclosure being prevented.
@@ -127,11 +145,13 @@ const invalidCopilotBaseUrlMessage =
   "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com"
 const copilotBaseUrlCredentialsMessage =
   "Invalid copilotBaseUrl: URL credentials (user:password@host) are not supported; remove them and use a plain https URL"
+const copilotBaseUrlDelimiterMessage =
+  "Invalid copilotBaseUrl: quotes, backticks, angle brackets, whitespace and control characters must be percent-encoded"
 
 /**
  * Validates copilotBaseUrl as a conventional HTTP(S) URL without credentials.
  *
- * Three rules, all learned from #47:
+ * Four rules, all learned from #47:
  *
  * The value is concatenated as `${base}${path}` for every upstream call, so it
  * must be something Undici will accept. A relative or non-HTTP value fails at
@@ -142,6 +162,11 @@ const copilotBaseUrlCredentialsMessage =
  * unfindable in log text, so a configured secret in one of them cannot be
  * redacted by anything downstream. Rejecting is the only safe answer, and this
  * is the only place with enough context to give it.
+ *
+ * Raw quote-like characters, angle brackets, whitespace and control bytes are
+ * rejected for the same reason - see unsafeRawDelimiterPattern. They are what
+ * marks the end of a URL in rendered text, so a value containing one cannot be
+ * matched whole afterwards. Their percent-encoded forms are accepted.
  *
  * URL userinfo (`https://user:pass@host`) is rejected rather than passed
  * through. Undici refuses it at request time anyway, so accepting it buys only
@@ -162,6 +187,13 @@ export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
   // it is a valid URL, just not one that can be redacted later.
   if (!conventionalHttpUrlPattern.test(trimmed)) {
     throw new Error(invalidCopilotBaseUrlMessage)
+  }
+
+  // Also before new URL(), for two reasons: it accepts every one of these, and
+  // it silently strips tab and newline - so by the time it returned, the value
+  // stored in config.yaml would no longer match the URL actually requested.
+  if (unsafeRawDelimiterPattern.test(trimmed)) {
+    throw new Error(copilotBaseUrlDelimiterMessage)
   }
 
   let parsed: URL

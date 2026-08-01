@@ -57,6 +57,13 @@ is not:
 - **No credentials in the URL.** `https://user:password@host` is rejected. The
   upstream HTTP client refuses these at request time anyway, so accepting one
   would only turn a clear startup error into a confusing request failure.
+- **No raw quotes, angle brackets, whitespace, or control characters.** These
+  are what marks the end of a URL in a log line, so a value containing one
+  cannot be recognised as a whole URL afterwards and its tail would be printed
+  unredacted. Percent-encode them instead: `%27` for `'`, `%22` for `"`, `%60`
+  for a backtick, `%3C`/`%3E` for `<`/`>`, `%20` for a space, `%09` for a tab.
+  The encoded form is accepted and used exactly as written. Spaces or tabs
+  *around* the value are just trimmed, as with every other config key.
 
 The error names the key and the rule; it never repeats the value you configured,
 because that message can end up on a terminal or in a log file.

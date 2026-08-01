@@ -266,3 +266,113 @@ test("refuses shorthand at validation because redaction cannot catch it", () => 
     `copilot base url: ${shorthand}`,
   )
 })
+
+
+// Why (#47): a raw apostrophe is the sharpest case. WHATWG accepts it and
+// leaves it raw in the path, so the configured value keeps it - and every
+// practical URL scanner treats a quote as a delimiter, because in rendered
+// log text it usually is one. inspect() renders the value inside quotes, the
+// match ends at the apostrophe, and the rest of the path prints in full. The
+// other classes are the same problem: they are what tells a reader, and a
+// scanner, where a URL ends. Percent-encoding keeps every one of them usable.
+test("rejects raw delimiter characters in a copilot base url", () => {
+  const cases: Array<[string, string]> = [
+    ["https://gateway.example/tenant/APOS'D1_SENTINEL", "D1_SENTINEL"],
+    ['https://gateway.example/tenant/QUOTE"D2_SENTINEL', "D2_SENTINEL"],
+    ["https://gateway.example/tenant/TICK`D3_SENTINEL", "D3_SENTINEL"],
+    ["https://gateway.example/tenant/LT<D4_SENTINEL", "D4_SENTINEL"],
+    ["https://gateway.example/tenant/GT>D5_SENTINEL", "D5_SENTINEL"],
+    ["https://gateway.example/tenant/SPACE D6_SENTINEL", "D6_SENTINEL"],
+    ["https://gateway.example/tenant/TAB\tD7_SENTINEL", "D7_SENTINEL"],
+    ["https://gateway.example/tenant/NL\nD8_SENTINEL", "D8_SENTINEL"],
+    ["https://gateway.example/tenant/BEL\u0007D9_SENTINEL", "D9_SENTINEL"],
+    ["https://gateway.example/tenant/DEL\u007FD10_SENTINEL", "D10_SENTINEL"],
+  ]
+
+  for (const [value, sentinel] of cases) {
+    assert.throws(
+      () => normalizeCopilotBaseUrl(value),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.match(error.message, /Invalid copilotBaseUrl/)
+        assert.match(error.message, /percent-encoded/)
+        assert.ok(
+          !error.message.includes(sentinel),
+          `error leaked ${sentinel}: ${error.message}`,
+        )
+        assert.ok(
+          !error.message.includes("gateway.example"),
+          `error leaked the host: ${error.message}`,
+        )
+        return true
+      },
+    )
+  }
+})
+
+// Why: rejecting the raw byte is only reasonable because the encoded form
+// still works. Every delimiter class has a percent-encoded spelling that is
+// unambiguous in log text, and each must be accepted and preserved exactly -
+// re-encoding or normalizing here would change the request URL.
+test("accepts percent-encoded delimiters unchanged", () => {
+  for (const value of [
+    "https://gateway.example/tenant/APOS%27ENC",
+    "https://gateway.example/tenant/QUOTE%22ENC",
+    "https://gateway.example/tenant/TICK%60ENC",
+    "https://gateway.example/tenant/LT%3CENC",
+    "https://gateway.example/tenant/GT%3EENC",
+    "https://gateway.example/tenant/SPACE%20ENC",
+    "https://gateway.example/tenant/TAB%09ENC",
+    "https://gateway.example/tenant/DEL%7FENC",
+  ]) {
+    assert.equal(normalizeCopilotBaseUrl(value), value)
+    assert.equal(normalizeCopilotBaseUrl(`  ${value}  `), value)
+  }
+})
+
+// Why: surrounding whitespace is a typo, not an ambiguity - it is trimmed
+// first, exactly as for every other config value. Only whitespace inside the
+// value can hide where the URL ends.
+test("still trims surrounding whitespace before the delimiter check", () => {
+  assert.equal(
+    normalizeCopilotBaseUrl("\t  https://gateway.example/tenant/v1  \n"),
+    "https://gateway.example/tenant/v1",
+  )
+})
+
+// Why: this is the decision in one test. The raw apostrophe form must never
+// reach policy registration, because once it is in a log line no scrubber can
+// recover the tail - the scan ends at the quote. The encoded form is accepted,
+// registers normally, and is redacted end to end.
+test("rejects the apostrophe form but protects its encoded equivalent", () => {
+  const rawHost = "delimiter-raw.test.invalid"
+  const encodedHost = "delimiter-encoded.test.invalid"
+
+  // 1. Rejected before anything could register a policy from it.
+  assert.throws(
+    () =>
+      normalizeCopilotBaseUrl(
+        `https://${rawHost}/tenant/RAW'APOS_SENTINEL`,
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /Invalid copilotBaseUrl/)
+      assert.ok(!error.message.includes("APOS_SENTINEL"))
+      assert.ok(!error.message.includes(rawHost))
+      return true
+    },
+  )
+
+  // 2. The encoded equivalent is accepted verbatim...
+  const encoded = `https://${encodedHost}/tenant/ENC%27APOS_SENTINEL`
+  assert.equal(normalizeCopilotBaseUrl(encoded), encoded)
+
+  // ...registers as a policy, and is redacted whole in rendered log text.
+  registerSensitiveOrigin(encoded)
+  const scrubbed = scrubSensitiveUrls(`{ url: '${encoded}/models' }`)
+  assert.ok(
+    !scrubbed.includes("APOS_SENTINEL"),
+    `encoded form leaked its tail: ${scrubbed}`,
+  )
+  assert.ok(scrubbed.includes(`https://${encodedHost}[redacted]`), scrubbed)
+})
