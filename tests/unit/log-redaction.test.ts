@@ -148,7 +148,7 @@ test("leaves an unregistered url untouched in both sinks", async () => {
 
 // Why: the 9.3 GB lesson. Redaction runs on the same path that renders payloads
 // and must not reintroduce multi-line dumps, which would break every grep
-// recipe in docs/logging.md. See CLAUDE.md.
+// recipe in wiki/EN-Logging-Troubleshooting.md. See CLAUDE.md.
 test("keeps one entry on one physical line while redacting", async () => {
   const host = uniqueHost("oneline")
   registerSensitiveOrigin(`https://${host}/tenant/LINE_SECRET`)

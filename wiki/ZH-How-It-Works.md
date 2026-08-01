@@ -11,6 +11,9 @@ http://127.0.0.1:4142/v1/messages
 
 `copilot-relay` 把 Claude 请求转换后发给 GitHub Copilot 上游。
 
+本页是简版。设计地图见[架构](ZH-Architecture.md)；其背后的机制与不变量见
+[内部实现](ZH-Internals.md)。
+
 ## 请求流程
 
 ```text
@@ -36,6 +39,9 @@ copilot-relay start
   -> 监听 host/port
   -> 监听 config.yaml 热重载
 ```
+
+Preflight 在 socket 绑定之前运行，所以一个连配置模型都够不着的中继会直接启动失败，
+而不是先接下它根本处理不了的流量。
 
 ## 公开 API
 
@@ -70,8 +76,8 @@ OpenAI 兼容接口不会对外公开。
 默认值：
 
 ```yaml
-gptModel: gpt-5.5
-opusModel: claude-opus-4.8
+gptModel: gpt-5.6-sol
+opusModel: claude-opus-5
 ```
 
 ## Copilot 上游接口
@@ -81,7 +87,8 @@ opusModel: claude-opus-4.8
 - `/chat/completions`
 - `/responses`
 
-`gpt-5.5` 使用 `/responses`。Opus 当前使用 `/chat/completions`。
+`gpt-5.6-sol` 以及 `gpt-5.5`/`gpt-5.6` 系列的其余成员使用 `/responses`。Opus 当前
+使用 `/chat/completions`。
 
 这些差异对 Claude Code 隐藏，外部始终看到 Claude Messages 风格响应。
 
@@ -102,9 +109,14 @@ opusModel: claude-opus-4.8
 启动时，如果缓存的 Copilot token 还有超过 60 秒有效期，就直接复用；
 否则使用 `github_token` 刷新。
 
+token 值永远不会写进日志。
+
 ## 流式响应
 
 Copilot 输出 OpenAI 风格 chat chunks。Claude Code 需要 Claude SSE events。
 relay 内部维护一个小状态机，按顺序打开、写入、关闭 text/thinking/tool_use
 content block。
 
+声明 WebSearch 工具不再需要放弃流式。中继只把模型的响应读到"足以判断是否会发生搜索"
+为止，所以一个不会搜索的回合就是普通流式 —— 而这是绝大多数回合，因为 Claude Code 每
+个请求都会提供这个工具。细节见[内部实现](ZH-Internals.md)。

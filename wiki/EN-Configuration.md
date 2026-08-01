@@ -22,11 +22,11 @@ copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
-thinkEffort: xhigh
+thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.5
-opusModel: claude-opus-4.8
+gptModel: gpt-5.6-sol
+opusModel: claude-opus-5
 ```
 
 ## Keys
@@ -39,7 +39,7 @@ opusModel: claude-opus-4.8
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
 | `logLevel` | One of `error`, `info`, `debug`. Any other value fails startup. |
 | `logRetentionDays` | Days to keep normal `.log` files under `~/.copilot-relay/logs/`. |
-| `thinkEffort` | Default upstream reasoning effort: `none`, `low`, `medium`, `high`, `xhigh`. |
+| `thinkEffort` | Default upstream reasoning effort: `none`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `gptModel` | Upstream model for non-Opus requests. |

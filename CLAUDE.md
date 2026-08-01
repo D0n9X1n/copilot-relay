@@ -43,14 +43,43 @@ CI runs `ubuntu-latest`, `macos-latest`, **and `windows-latest`**. All three mus
 
 ## Documentation
 
-Two audiences, two folders. Keep the split clean.
+**`wiki/` is the only in-repo documentation tree and the source for the GitHub Wiki tab.** There is no `docs/`. It was merged into `wiki/` in #49/#50 — two trees meant the same fact was written twice, drifted, and a reader had to know which one was current.
 
-- **`docs/`** — developer-facing: architecture, development workflow, internals.
-- **`wiki/`** — user-facing: configuration, running as a service, troubleshooting. English and 中文, kept in sync.
+Both audiences live there. High-level architecture *and* precise technical detail belong in `wiki/`, written to be navigable by humans and by coding agents:
 
-`wiki/` is the source of truth for the GitHub wiki tab. `.github/workflows/publish-wiki.yml` publishes it on every merge to `main`, renaming `README.md` to `Home.md` and stripping `.md` from internal links, since wiki links resolve without the extension and repo-folder links require it.
+- `EN-How-It-Works` / `ZH-How-It-Works` — the short, approachable version.
+- `EN-Architecture` / `ZH-Architecture` — the map: modules, request and startup flow, public API, runtime files, boundaries.
+- `EN-Internals` / `ZH-Internals` — precise mechanics and the invariants that hold them: translation, streaming, prompt caching, lifecycle, logging, testing. Name source paths and symbols, not line numbers — line numbers go stale, names do not.
+- `EN-Development` / `ZH-Development` — setup, tests, CI matrix, workflow, releasing.
+- `EN-Configuration` / `ZH-Configuration` — user-facing config reference.
+- `EN-Logging-Troubleshooting` / `ZH-Logging-Troubleshooting` — log format and operational recipes.
+- Per-platform service pages.
+
+Keep the split clean *within* the wiki: user-facing configuration stays in Configuration, deep mechanics stay in Internals, and pages cross-link rather than restating each other. Duplicated prose is how the two trees drifted in the first place.
+
+**English and 中文 must stay synchronized.** Every `EN-` page has a `ZH-` counterpart with matching structure and technically equivalent content — not a fragmentary machine translation. `tests/unit/wiki-docs.test.ts` fails the build if a pair is missing.
+
+Publishing constraints, all enforced by that same test:
+
+- **Flat only.** `.github/workflows/publish-wiki.yml` copies top-level `wiki/*.md`; a subdirectory is silently not published.
+- **Source links keep `.md`** — `](EN-Internals.md)` — so they resolve when browsing the folder. The workflow strips the extension for the tab and renames `README.md` to `Home.md`.
+- **No cross-page anchors.** `](EN-Internals.md#section)` is not rewritten by the transform and 404s on the tab. Same-page `#anchor` links are fine.
+- Preserve real external links (`https://docs.anthropic.com/...`); they are not internal references.
 
 **One-way.** Edits made in the wiki tab's browser editor are overwritten on the next publish. Change `wiki/`.
+
+**Every `wiki/` update is incomplete until the publish workflow has succeeded and the live tab has been verified.** Merging is not shipping — the workflow can fail, and a broken link only appears after the transform runs:
+
+```sh
+gh run list --workflow=publish-wiki.yml --limit 1     # expect success on your merge SHA
+gh run view <run-id> --log                            # read it when it is not
+
+git clone https://github.com/D0n9X1n/copilot-relay.wiki.git /tmp/relay-wiki
+ls /tmp/relay-wiki                                    # Home.md present, tree flat
+grep -rn "](.*\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
+```
+
+Then open the tab and click through both the English and 中文 navigation from `Home`, including any page you added or renamed.
 
 The wiki used to be a separate repo, outside the PR surface. #21 changed the log filename in v0.2.3, the wiki was not updated, and 30 stale log paths survived two releases before #29 caught them — every documented `tail` and `grep` silently matching nothing. In-repo, that change and its doc update land in the same review. Treat a user-visible path, flag, or command change as incomplete until `wiki/` reflects it.
 
@@ -60,13 +89,13 @@ The wiki used to be a separate repo, outside the PR surface. #21 changed the log
 
 Consequence: **changing a shipped default reaches fresh installs only.** That is intended. A user's config value is theirs; do not add migration machinery to push a new default onto existing installs. A `configVersion` mechanism existed briefly for exactly that and was removed in #26 as unnecessary complexity.
 
-Configuration-first rule: if behavior might reasonably vary per user, add a config key rather than hardcoding. Reflect any new key in `config.default.yaml`, README, and `docs/`.
+Configuration-first rule: if behavior might reasonably vary per user, add a config key rather than hardcoding. Reflect any new key in `config.default.yaml`, README, and `wiki/` — `EN-Configuration.md` **and** `ZH-Configuration.md`.
 
 ## Logging
 
 Two invariants, both learned from a log that reached 9.3 GB:
 
-**One entry, one physical line.** `formatLogValue` needs *both* `compact: true` and `breakLength: Infinity`. The Node docs read as though the default `compact: 3` suffices — it does not. The number counts inner elements united, not a threshold, so it only collapses payloads nesting no deeper than that count. On a real 4-level error payload: `compact: 3` → 10 lines, `compact: 1` → **22**, `compact: true` → 1. `tests/unit/log-format.test.ts` pins this; do not "simplify" it away. Multi-line dumps also break every `grep` recipe in `docs/logging.md`.
+**One entry, one physical line.** `formatLogValue` needs *both* `compact: true` and `breakLength: Infinity`. The Node docs read as though the default `compact: 3` suffices — it does not. The number counts inner elements united, not a threshold, so it only collapses payloads nesting no deeper than that count. On a real 4-level error payload: `compact: 3` → 10 lines, `compact: 1` → **22**, `compact: true` → 1. `tests/unit/log-format.test.ts` pins this; do not "simplify" it away. Multi-line dumps also break every `grep` recipe in `wiki/EN-Logging-Troubleshooting.md`.
 
 **Retention needs rotation.** The active file is `copilot-relay.<local-date>.log`, resolved per write so it rotates at local midnight with no timer. Retention ages files by the **filename date**, falling back to mtime for undated files. Before rotation existed, retention aged one never-rotated file by mtime, every append refreshed that mtime, and it was never once eligible for deletion. Local date, not UTC — `logRetentionDays` is a human "how many days" setting.
 
@@ -89,9 +118,9 @@ Integration tests mock upstream Copilot. They must never call the real service.
 
 ## Public API
 
-Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`. Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision.
+Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`, `GET|HEAD /api/hello`. Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision. `/api/hello` is Claude Code's reachability probe, answered statically by `src/server.ts` — the client sends it, so it is part of the surface rather than scaffolding to remove.
 
-**`/healthz` and `/v1/models` prove nothing about upstream.** The first is a static handler; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes both. Only `POST /v1/messages` exercises token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
+**`/healthz`, `/v1/models`, and `/api/hello` prove nothing about upstream.** The first and third are static handlers; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes all three. Only `POST /v1/messages` exercises token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
 
 **`status` and `stop` ask different questions, and must detect differently.** `status` uses `findRelayOnPort` — pid file when its port matches, else the port-listener check, never the global process scan. `stop` uses `findRelayProcessIds`, which does scan globally, because cleaning up strays on any port is the point. Do not "unify" these: giving `status` the global scan makes it report a relay on a port nothing is listening on (#33), and scoping `stop` would leave strays behind.
 

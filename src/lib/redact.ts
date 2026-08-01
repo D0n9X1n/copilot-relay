@@ -4,7 +4,8 @@
 // credential in its path — `https://gateway.example/tenant/token-ABC` is a
 // working custom-gateway config, used as `${base}/models`. That value was
 // written verbatim to the log on every start and into `status` output, which is
-// the one file docs/logging.md asks users to paste into an issue. See #47.
+// the one file wiki/EN-Logging-Troubleshooting.md asks users to paste into an
+// issue. See #47.
 //
 // Pure and dependency-free on purpose: it sits on the logging path, so anything
 // that could throw or block here would take a request down with it.

@@ -52,8 +52,9 @@ test("collapses a nested payload onto a single line", async () => {
   assert.match(lines[0], /status: 400/)
 })
 
-// Why: the grep recipes in docs/logging.md search for a message and expect the
-// matching line to carry its context. Multi-line dumps returned a fragment.
+// Why: the grep recipes in wiki/EN-Logging-Troubleshooting.md search for a
+// message and expect the matching line to carry its context. Multi-line dumps
+// returned a fragment.
 test("keeps message and context greppable on one line", async () => {
   log.error("Startup preflight failed", {
     detail: { attempted: ["gpt-5.6-sol", "claude-opus-5"] },

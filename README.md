@@ -211,7 +211,8 @@ tail -f ~/.copilot-relay/logs/copilot-relay.$(date +%F).log
 grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
-See [`docs/troubleshooting.md`](docs/troubleshooting.md) for common debugging workflows.
+See [Logs and troubleshooting](wiki/EN-Logging-Troubleshooting.md)
+([中文](wiki/ZH-Logging-Troubleshooting.md)) for common debugging workflows.
 
 ## Running it as a service
 
@@ -225,11 +226,15 @@ which is generated from `wiki/` on every merge. Edit the folder, not the tab.
 
 ## Development
 
-Developer notes live in [`docs/development.md`](docs/development.md).
-Architecture notes live in [`docs/architecture.md`](docs/architecture.md).
-Logging notes live in [`docs/logging.md`](docs/logging.md).
-Troubleshooting notes live in [`docs/troubleshooting.md`](docs/troubleshooting.md).
-User-facing guides live in [`wiki/`](wiki/).
+All documentation lives in [`wiki/`](wiki/), in English and 中文:
+
+| Page | Covers |
+| --- | --- |
+| [Architecture](wiki/EN-Architecture.md) ([中文](wiki/ZH-Architecture.md)) | Modules, request and startup flow, public API, runtime files |
+| [Internals](wiki/EN-Internals.md) ([中文](wiki/ZH-Internals.md)) | Translation, streaming, prompt caching, lifecycle, logging invariants |
+| [Development](wiki/EN-Development.md) ([中文](wiki/ZH-Development.md)) | Setup, tests, CI matrix, workflow, releasing |
+| [Configuration](wiki/EN-Configuration.md) ([中文](wiki/ZH-Configuration.md)) | Every config key, hot reload vs restart |
+| [Logs and troubleshooting](wiki/EN-Logging-Troubleshooting.md) ([中文](wiki/ZH-Logging-Troubleshooting.md)) | Log format, grep recipes, failure modes |
 
 ```sh
 npm install
