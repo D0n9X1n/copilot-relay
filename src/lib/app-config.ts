@@ -105,6 +105,115 @@ const normalizePositiveInteger = (value: unknown): number | undefined => {
 const normalizeString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined
 
+/**
+ * A conventional http(s) URL: scheme followed by a literal "//" authority.
+ *
+ * WHATWG is far more permissive than this. `https:host/path`, `https:/host/path`
+ * and `https:\\host\path` all parse, all normalize to a real origin with the
+ * tail in the path, and all work upstream - so a protocol check alone lets them
+ * through. None of them can be found again in arbitrary log text: practical URL
+ * detection anchors on a literal "://", and loosening that to chase a bare
+ * "https:" would start matching ordinary prose. Requiring the authority prefix
+ * is the one boundary where this has a definite answer. See #47.
+ */
+const conventionalHttpUrlPattern = /^https?:\/\//i
+
+/**
+ * Raw characters that cannot be delimited safely in rendered log text.
+ *
+ * A raw apostrophe is the clearest case. WHATWG accepts it and leaves it raw
+ * in the path, so the configured value keeps it - and inspect() renders that
+ * value inside quotes, where the apostrophe reads as the closing delimiter.
+ * Any URL scan ends there, and the rest of the path prints in full. Quotes,
+ * backticks and angle brackets are the same story; whitespace ends a URL for
+ * every reader and scanner alike; and tab and newline are worse still,
+ * because URL parsing strips them, so the stored value would not even match
+ * what is sent upstream.
+ *
+ * Rejecting the raw byte costs nothing: every one of these has a
+ * percent-encoded spelling that is unambiguous in log text and is accepted
+ * here unchanged. See #47.
+ */
+const unsafeRawDelimiterPattern = /['"`<>\s\u0000-\u001F\u007F]/
+
+/**
+ * Both fixed strings. The rejected value is never interpolated: these messages
+ * reach the terminal and, via the startup failure path, the log file, which is
+ * exactly the disclosure being prevented.
+ */
+const invalidCopilotBaseUrlMessage =
+  "Invalid copilotBaseUrl: expected an absolute http(s) URL, e.g. https://api.githubcopilot.com"
+const copilotBaseUrlCredentialsMessage =
+  "Invalid copilotBaseUrl: URL credentials (user:password@host) are not supported; remove them and use a plain https URL"
+const copilotBaseUrlDelimiterMessage =
+  "Invalid copilotBaseUrl: quotes, backticks, angle brackets, whitespace and control characters must be percent-encoded"
+
+/**
+ * Validates copilotBaseUrl as a conventional HTTP(S) URL without credentials.
+ *
+ * Four rules, all learned from #47:
+ *
+ * The value is concatenated as `${base}${path}` for every upstream call, so it
+ * must be something Undici will accept. A relative or non-HTTP value fails at
+ * request time as an unrelated-looking fetch error; failing here names the key.
+ *
+ * It must be written with an explicit `http://` or `https://` authority. See
+ * conventionalHttpUrlPattern: the shorthand forms WHATWG also accepts are
+ * unfindable in log text, so a configured secret in one of them cannot be
+ * redacted by anything downstream. Rejecting is the only safe answer, and this
+ * is the only place with enough context to give it.
+ *
+ * Raw quote-like characters, angle brackets, whitespace and control bytes are
+ * rejected for the same reason - see unsafeRawDelimiterPattern. They are what
+ * marks the end of a URL in rendered text, so a value containing one cannot be
+ * matched whole afterwards. Their percent-encoded forms are accepted.
+ *
+ * URL userinfo (`https://user:pass@host`) is rejected rather than passed
+ * through. Undici refuses it at request time anyway, so accepting it buys only
+ * a confusing failure plus a credential written to the log on every start.
+ *
+ * The accepted value is returned as the trimmed original, never URL-normalized.
+ * Round-tripping through URL would add a trailing slash, lowercase the host and
+ * re-encode the path, silently changing both the request URL and what gets
+ * written back to config.yaml.
+ */
+export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
+  const trimmed = normalizeString(value)
+  if (trimmed === undefined) {
+    return undefined
+  }
+
+  // Before new URL(), because the shorthand this rejects parses successfully -
+  // it is a valid URL, just not one that can be redacted later.
+  if (!conventionalHttpUrlPattern.test(trimmed)) {
+    throw new Error(invalidCopilotBaseUrlMessage)
+  }
+
+  // Also before new URL(), for two reasons: it accepts every one of these, and
+  // it silently strips tab and newline - so by the time it returned, the value
+  // stored in config.yaml would no longer match the URL actually requested.
+  if (unsafeRawDelimiterPattern.test(trimmed)) {
+    throw new Error(copilotBaseUrlDelimiterMessage)
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(invalidCopilotBaseUrlMessage)
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(invalidCopilotBaseUrlMessage)
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(copilotBaseUrlCredentialsMessage)
+  }
+
+  return trimmed
+}
+
 export const normalizeThinkEffort = (
   value: unknown,
 ): ReasoningEffort | undefined => {
@@ -338,7 +447,8 @@ export async function readAppConfig(): Promise<AppConfig> {
   // and a shipped default applies only where the key is absent.
   const config: AppConfig = {
     claudeSetup: claudeSetup ?? defaultConfig.claudeSetup,
-    copilotBaseUrl: normalizeString(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
+    copilotBaseUrl:
+      normalizeCopilotBaseUrl(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
     gptModel: normalizeString(raw.gptModel) ?? defaultConfig.gptModel,
     host: host ?? defaultConfig.host,
     logLevel: logLevel ?? defaultConfig.logLevel,

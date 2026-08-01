@@ -7,6 +7,7 @@ import consola from "consola"
 
 import type { LogLevelName } from "~/lib/app-config"
 import { getLogPath, paths } from "~/lib/paths"
+import { scrubSensitiveUrls } from "~/lib/redact"
 
 const logCleanupCheckIntervalMs = 60 * 60 * 1000
 const millisecondsPerDay = 24 * 60 * 60 * 1000
@@ -75,17 +76,21 @@ const formatLogValue = (value: unknown): string =>
     })
   )
 
+/**
+ * Appends one already-rendered entry.
+ *
+ * Takes strings rather than raw values: rendering happens once in wrapFileLog,
+ * so the console and the file are guaranteed to carry the same redacted text.
+ * Inspecting again here would reintroduce the gap this closes - the file would
+ * be scrubbed while the console showed the original object. See #47.
+ */
 const writeLogFile = async (
   level: string,
-  values: Array<unknown>,
+  values: Array<string>,
 ): Promise<void> => {
   await fs.mkdir(paths.logsDir, { recursive: true })
   await cleanupLogsIfDue()
-  const line = [
-    new Date().toISOString(),
-    level,
-    values.map(formatLogValue).join(" "),
-  ].join(" ")
+  const line = [new Date().toISOString(), level, values.join(" ")].join(" ")
   // Resolved per write, so a relay running across local midnight starts the next
   // dated file on its own; there is no rotation timer to drift or miss.
   await fs.appendFile(getLogPath(), `${line}\n`)
@@ -101,17 +106,42 @@ const cleanupLogsIfDue = async (): Promise<void> => {
   await cleanupLogs(logRetentionDays)
 }
 
+/**
+ * The single boundary where every logged value becomes redacted text.
+ *
+ * Each argument is rendered exactly once and scrubbed once, and the identical
+ * array of strings goes to both the file and the console. Scrubbing only on the
+ * way to disk would leave the original object on the console - the screen a
+ * user screenshots into an issue - so the two sinks must not diverge. See #47.
+ *
+ * Rendering is skipped only when neither sink would emit, so the cost matches
+ * the old behavior at info level. The console gate is read from consola rather
+ * than assumed equal to currentLogLevel: if the two ever diverge, rendering
+ * must follow whichever sink is still emitting, or that sink gets raw values.
+ */
 const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
   level: string,
   fn: T,
 ): T =>
   ((...args: Array<unknown>) => {
-    if ((fileLevelByMethod[level] ?? consolaLevelByName.info) <= currentLogLevel) {
+    const methodLevel = fileLevelByMethod[level] ?? consolaLevelByName.info
+    const writesToFile = methodLevel <= currentLogLevel
+    const writesToConsole = methodLevel <= consola.level
+
+    if (!writesToFile && !writesToConsole) {
+      return fn(...args)
+    }
+
+    const rendered = args.map((value) =>
+      scrubSensitiveUrls(formatLogValue(value)),
+    )
+
+    if (writesToFile) {
       // File logging must never block the console path or fail a request. If
       // the disk write fails, the original consola call still runs.
-      void writeLogFile(level, args).catch(() => undefined)
+      void writeLogFile(level, rendered).catch(() => undefined)
     }
-    return fn(...args)
+    return fn(...rendered)
   }) as T
 
 consola.error = wrapFileLog("error", consola.error.bind(consola))

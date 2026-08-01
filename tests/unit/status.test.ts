@@ -442,6 +442,131 @@ test("passes config values through unchanged except webSearchBackend", () => {
   assert.equal(status.webSearchBackend, null)
 })
 
+// Config carrying a credential in the URL path, used for the disclosure tests
+// below. This is a working custom-gateway shape: it is used as `${base}/models`.
+const secretUrlConfig = {
+  claudeSetup: true,
+  copilotBaseUrl:
+    "https://gateway.example/tenant/PATH_SENTINEL?key=QUERY_SENTINEL#FRAG_SENTINEL",
+  gptModel: "gpt-5.6-sol",
+  host: "127.0.0.1",
+  logLevel: "info" as const,
+  logRetentionDays: 3,
+  opusModel: "claude-opus-5",
+  port: 4142,
+  thinkEffort: "max" as const,
+  upstreamTimeoutSeconds: 180,
+  webSearchBackend: undefined,
+}
+
+const sentinels = ["PATH_SENTINEL", "QUERY_SENTINEL", "FRAG_SENTINEL"]
+
+const secretConfigWith = (copilotBaseUrl: string) => ({
+  ...secretUrlConfig,
+  copilotBaseUrl,
+})
+
+// Why: the default base URL carries nothing secret, so redaction must not fire
+// on it. A fix that mangles the common case would be worse than the bug.
+test("leaves an origin-only copilot base url unchanged", () => {
+  assert.equal(
+    toStatusConfig(secretConfigWith("https://api.githubcopilot.com"))
+      .copilotBaseUrl,
+    "https://api.githubcopilot.com",
+  )
+
+  const out = render(runningStatus)
+  assert.match(out, /^\s+copilotBaseUrl\s+https:\/\/api\.githubcopilot\.com$/m)
+})
+
+// Why: #47. `status` is the command a user runs when reporting a problem, and
+// its output is what they paste into an issue. A credential in the configured
+// path must not survive into that text.
+test("hides copilot base url path, query and fragment in text output", () => {
+  const out = render({ ...runningStatus, config: toStatusConfig(secretUrlConfig) })
+
+  for (const sentinel of sentinels) {
+    assert.ok(!out.includes(sentinel), `status text leaked ${sentinel}`)
+  }
+  // The origin survives: it answers "which gateway is this talking to".
+  assert.ok(out.includes("https://gateway.example"))
+  assert.match(out, /copilotBaseUrl\s+https:\/\/gateway\.example \(path/)
+})
+
+// Why: --json is the machine-readable surface of the same command and is just
+// as likely to be attached to a bug report.
+test("hides copilot base url path, query and fragment in --json output", () => {
+  const serialized = JSON.stringify(
+    { ...runningStatus, config: toStatusConfig(secretUrlConfig) },
+    null,
+    2,
+  )
+
+  for (const sentinel of sentinels) {
+    assert.ok(!serialized.includes(sentinel), `status --json leaked ${sentinel}`)
+  }
+
+  const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
+  // Key set and count must not shift just because one value is now redacted.
+  assert.equal(Object.keys(parsed.config).length, 11)
+  assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
+})
+
+// Why: the companion hardening item in #47. status writes config values
+// straight to stdout, so raw control bytes in a config string could clear the
+// line and paint status rows the relay never produced.
+test("cannot inject terminal rows from a config value", () => {
+  const injected = toStatusConfig(
+    secretConfigWith(
+      "https://gateway.example/\u001B[2K\rhealth     ok",
+    ),
+  )
+  const out = render({ ...runningStatus, config: injected })
+
+  assert.ok(
+    !out.includes("\u001B"),
+    "status text emitted a raw escape byte",
+  )
+  assert.ok(!out.includes("\r"), "status text emitted a raw carriage return")
+  // The forged row must not appear as its own line.
+  assert.doesNotMatch(out, /^health {5}ok$/m)
+})
+
+// Why: redaction must not disturb the contract every scripted caller depends
+// on. Exit codes and the reported key order are unchanged by it.
+test("keeps key order and exit codes unchanged under redaction", () => {
+  const status = { ...runningStatus, config: toStatusConfig(secretUrlConfig) }
+  const out = render(status)
+
+  const order = [
+    "host",
+    "port",
+    "copilotBaseUrl",
+    "claudeSetup",
+    "logLevel",
+    "logRetentionDays",
+    "thinkEffort",
+    "upstreamTimeoutSeconds",
+    "webSearchBackend",
+    "gptModel",
+    "opusModel",
+  ]
+  const positions = order.map((key) => out.indexOf(`    ${key.padEnd(24)}`))
+  assert.ok(
+    positions.every((position, index) =>
+      index === 0 ? position > -1 : position > positions[index - 1],
+    ),
+    `config rows out of order: ${positions.join(", ")}`,
+  )
+
+  assert.equal(resolveExitCode(status), 0)
+  assert.equal(resolveExitCode({ ...status, running: false }), 1)
+  assert.equal(
+    resolveExitCode({ ...status, health: { ok: false } }),
+    2,
+  )
+})
+
 test.after(async () => {
   await fs.rm(tempHome, { force: true, recursive: true })
 })
