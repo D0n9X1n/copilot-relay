@@ -317,8 +317,21 @@ info POST /v1/messages -> 400 123ms error="Invalid request"
 grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
-如果响应 body 提到请求形状，就看 `error` 条目里附近的 `request` 对象。如果它提到认证
-或模型访问权限，重新跑 `copilot-relay auth` 并再检查一次 `/v1/models`。
+如果响应 body 提到请求形状，就看 `error` 条目里附近的 `request` 对象。
+
+如果它提到认证或模型访问权限，先刷新登录，然后用一个**真的会访问 Copilot** 的检查
+来验证：
+
+```sh
+copilot-relay auth
+copilot-relay restart      # 如果中继本来就在运行
+copilot-relay status --deep
+```
+
+**不要用 `/v1/models` 来确认这件事。** 它列出的是你配置里写的模型 ID，永远不会访问
+Copilot，所以一个过期的 token、或者一个你的订阅无权访问的模型，都能原样通过它。只有
+`POST /v1/messages` 会真正触发 token 刷新和上游模型访问 —— 那正是 `status --deep`
+发出的请求，也是一次真实 Claude Code 请求所做的事。
 
 ## 模型不对
 

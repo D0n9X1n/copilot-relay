@@ -257,3 +257,41 @@ test("CLAUDE.md names every public API surface the server registers", () => {
     )
   }
 })
+
+
+// Why: /v1/models maps config and never contacts Copilot, so an expired token
+// or a denied model passes it. Telling a user with an auth/model-access error
+// to "re-check /v1/models" sends them to a probe that cannot detect the thing
+// they are debugging. Only POST /v1/messages -- via `status --deep` or real
+// traffic -- exercises token refresh and upstream model access.
+test("auth troubleshooting sends users to a probe that reaches upstream", () => {
+  // The 400/500 section is where an auth or model-access error surfaces.
+  const sectionOf = (body: string, heading: string): string => {
+    const after = body.split(heading)[1] ?? ""
+    return after.split("\n## ")[0] ?? ""
+  }
+
+  const pages: [string, string][] = [
+    ["EN-Logging-Troubleshooting.md", "## Request returns 400 or 500"],
+    ["ZH-Logging-Troubleshooting.md", "## 请求返回 400 或 500"],
+  ]
+
+  for (const [page, heading] of pages) {
+    const section = sectionOf(readPage(page), heading)
+
+    assert.notEqual(section, "", `${page} must have the 400/500 section`)
+
+    assert.ok(
+      section.includes("status --deep"),
+      `wiki/${page} 400/500 section must point at status --deep, the only check that reaches upstream`,
+    )
+
+    // Reject directing the reader back to the local listing to confirm auth.
+    for (const misdirection of ["re-check `/v1/models`", "再检查一次 `/v1/models`"]) {
+      assert.ok(
+        !section.includes(misdirection),
+        `wiki/${page} must not tell users to verify auth with /v1/models; it never contacts Copilot`,
+      )
+    }
+  }
+})

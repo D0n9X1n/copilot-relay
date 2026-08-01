@@ -336,8 +336,22 @@ grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 If the response body mentions request shape, check the surrounding `request`
-object in the `error` entry. If it mentions auth or model access, rerun
-`copilot-relay auth` and re-check `/v1/models`.
+object in the `error` entry.
+
+If it mentions auth or model access, refresh the login and then verify with a
+check that actually reaches Copilot:
+
+```sh
+copilot-relay auth
+copilot-relay restart      # if the relay was already running
+copilot-relay status --deep
+```
+
+**Do not use `/v1/models` to confirm this.** It lists the model IDs your
+config names and never contacts Copilot, so an expired token or a model your
+subscription cannot access passes it unchanged. Only `POST /v1/messages`
+exercises token refresh and real upstream model access — which is what
+`status --deep` sends, and what a real Claude Code request does.
 
 ## Wrong model used
 
