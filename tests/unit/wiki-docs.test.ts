@@ -295,3 +295,88 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
     }
   }
 })
+
+// Why: wiki/ is browsed in the repository as well as published. GitHub resolves
+// ](EN-Internals.md) in the folder view but 404s on ](EN-Internals); the wiki
+// tab is the reverse. The publish workflow's sed is the only thing allowed to
+// drop the extension, so source must always carry it -- an extensionless page
+// link is broken for every reader of the repo.
+const publishedPageNames = (): Set<string> => {
+  const names = new Set<string>()
+
+  for (const page of wikiPages()) {
+    names.add(page.slice(0, -".md".length))
+  }
+
+  // README.md publishes as Home.md, so an author may reach for either name.
+  // Both name a page, and neither resolves in source without .md.
+  names.add("Home")
+
+  return names
+}
+
+// True when a target names a wiki page but omits the .md the repository view
+// needs. Pure, so the rule can be fixture-tested without touching the repo.
+const isExtensionlessPageLink = (
+  target: string,
+  pageNames: Set<string>,
+): boolean => {
+  if (target.startsWith("#")) return false
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)) return false
+
+  const file = target.split("#")[0] ?? ""
+
+  if (file === "" || file.endsWith(".md")) return false
+
+  return pageNames.has(file)
+}
+
+test("the extensionless-link rule accepts and rejects the right targets", () => {
+  const pageNames = new Set(["EN-Internals", "README", "Home"])
+
+  for (const rejected of ["EN-Internals", "README", "Home", "EN-Internals#top"]) {
+    assert.ok(
+      isExtensionlessPageLink(rejected, pageNames),
+      `${rejected} names a wiki page without .md and must be rejected`,
+    )
+  }
+
+  for (const accepted of [
+    "EN-Internals.md",
+    "EN-Internals.md#streaming",
+    "https://github.com/D0n9X1n/copilot-relay",
+    "https://example.com/EN-Internals",
+    "mailto:someone@example.com",
+    "#same-page-anchor",
+    "LICENSE",
+    "diagram.png",
+  ]) {
+    assert.ok(
+      !isExtensionlessPageLink(accepted, pageNames),
+      `${accepted} must be accepted by the extensionless-link rule`,
+    )
+  }
+})
+
+test("every wiki link to a page carries .md in source", () => {
+  const pageNames = publishedPageNames()
+  const offenders: string[] = []
+
+  for (const page of wikiPages()) {
+    const body = stripCode(readPage(page))
+
+    for (const match of body.matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = match[1] ?? ""
+
+      if (isExtensionlessPageLink(target, pageNames)) {
+        offenders.push(`wiki/${page} -> ${target}`)
+      }
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these links omit .md and break when browsing wiki/ in the repository:\n${offenders.join("\n")}`,
+  )
+})
