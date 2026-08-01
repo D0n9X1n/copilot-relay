@@ -18,6 +18,19 @@ const uniqueHost = (label: string): string => {
   return `${label}-${originCounter}.test.invalid`
 }
 
+/**
+ * A unique port, for origins whose host cannot carry a counter.
+ *
+ * localhost and an IPv6 literal are fixed spellings - splicing a counter into
+ * either produces something that is not a host at all (`[::1]-3` does not
+ * parse). Varying the port keeps the literal intact and still gives every
+ * case its own origin, which is what keeps these order-independent.
+ */
+const uniquePort = (): number => {
+  originCounter += 1
+  return 20_000 + originCounter
+}
+
 // Why: an origin-only base URL carries nothing secret, so rewriting it would
 // only make the log harder to read. The common case must stay verbatim.
 test("displays an origin-only url unchanged", () => {
@@ -284,4 +297,85 @@ test("leaves unrelated backslash urls and detached backslash paths alone", () =>
 
   const unrelated = `GET https://${other}\\tenant\\SCOPED_SECRET -> 200`
   assert.equal(scrubSensitiveUrls(unrelated), unrelated)
+})
+
+// Why: the marker is ordinary text, and nothing stops it appearing in a real
+// path. `https://host/tenant/SECRET[redacted]` is a valid configured value -
+// it parses, and brackets are not unsafe delimiters - so a scrubber that
+// skipped anything *ending* in the marker handed that URL straight through
+// with the secret intact. Redaction must be decided by structure, never by
+// trusting text that a configured value can simply contain.
+test("redacts a registered url whose path ends in the literal marker", () => {
+  const host = uniqueHost("marker-collision")
+  registerSensitiveOrigin(`https://${host}/tenant/COLLIDE_SECRET[redacted]`)
+
+  const scrubbed = scrubSensitiveUrls(
+    `base https://${host}/tenant/COLLIDE_SECRET[redacted]`,
+  )
+
+  assert.ok(!scrubbed.includes("COLLIDE_SECRET"), scrubbed)
+  // Canonical origin plus one marker - not a doubled bracket.
+  assert.equal(scrubbed, `base https://${host}[redacted]`)
+})
+
+// Why: the same collision reaches the log through inspect() output, where the
+// URL is quoted and the marker sits just inside the closing quote.
+test("redacts a marker-suffixed url inside inspected object text", () => {
+  const host = uniqueHost("marker-nested")
+  const configured = `https://${host}/tenant/NESTED_COLLIDE[redacted]`
+  registerSensitiveOrigin(configured)
+
+  // The base URL itself, with no endpoint appended, so the marker sits at the
+  // very end of the match - which is precisely what the old text check keyed
+  // on. An appended endpoint would hide the collision.
+  const inspected = inspect({
+    response: { status: 500, url: configured },
+  })
+  const scrubbed = scrubSensitiveUrls(inspected)
+
+  assert.ok(!scrubbed.includes("NESTED_COLLIDE"), scrubbed)
+  assert.ok(scrubbed.includes(`https://${host}[redacted]`), scrubbed)
+  assert.ok(scrubbed.includes("status: 500"), scrubbed)
+})
+
+// Why: idempotence used to rest on a text check - skip anything ending in the
+// marker - which is exactly the bypass that leaked. It has to hold
+// structurally instead: `origin[redacted]` is not a parseable URL, because a
+// bracket is illegal in a hostname unless it delimits an IPv6 literal, so a
+// second pass simply finds nothing to rewrite. Checked across all three
+// origin shapes, since each puts a different thing right before the marker:
+// a bare name, a port, and an IPv6 literal that ends in a bracket already.
+test("is idempotent structurally across origin shapes", () => {
+  const cases = [
+    `https://${uniqueHost("idem-host")}`,
+    `http://localhost:${uniquePort()}`,
+    `https://[::1]:${uniquePort()}`,
+  ]
+
+  for (const origin of cases) {
+    registerSensitiveOrigin(`${origin}/tenant/IDEM_SECRET`)
+
+    const first = scrubSensitiveUrls(
+      `url=${origin}/tenant/IDEM_SECRET/models`,
+    )
+    const second = scrubSensitiveUrls(first)
+
+    assert.ok(!first.includes("IDEM_SECRET"), first)
+    assert.equal(first, `url=${origin}[redacted]`)
+    // The whole point: a second pass must not rewrite its own output.
+    assert.equal(second, first)
+  }
+})
+
+// Why: the marker is a word that can legitimately appear in a log line. Only
+// absolute URLs on a registered origin are rewritten, so prose that happens
+// to contain it - including a bracketed URL list - must survive untouched.
+test("leaves unrelated literal marker text alone", () => {
+  const other = uniqueHost("marker-prose")
+  const prose =
+    `the operator wrote [redacted] in the ticket; see https://${other}/status`
+  assert.equal(scrubSensitiveUrls(prose), prose)
+
+  const bare = "value was [redacted] before upload"
+  assert.equal(scrubSensitiveUrls(bare), bare)
 })

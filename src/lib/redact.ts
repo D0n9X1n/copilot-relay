@@ -52,8 +52,16 @@ const controlBytePattern = /[\x00-\x1F\x7F]/g
  */
 const absoluteUrlPattern = /https?:\/\/[^\s'"`<>]+/gi
 
-/** Trailing prose punctuation, trimmed off a match so it survives rewriting. */
-const trailingPunctuationPattern = /[.,;:!?)\]}]+$/
+/**
+ * Trailing prose punctuation, trimmed off a match so it survives rewriting.
+ *
+ * Deliberately excludes `]` and `}`. Both end a URL far more often than they
+ * follow one: the scrubbed form ends `[redacted]`, and an IPv6 origin ends
+ * `[::1]`. Trimming either would corrupt the exact shapes this function
+ * emits and re-reads - a doubled `origin[redacted]]` on one pass, an unparseable
+ * IPv6 host on the next.
+ */
+const trailingPunctuationPattern = /[.,;:!?)]+$/
 
 const parseHttpUrl = (value: string): URL | undefined => {
   let parsed: URL
@@ -143,12 +151,18 @@ export const scrubSensitiveUrls = (text: string): string => {
   }
 
   return text.replace(absoluteUrlPattern, (match) => {
-    // Already-scrubbed text must survive a second pass unchanged; the logger
-    // and status can both run over the same string.
-    if (match.endsWith(redactedMarker)) {
-      return match
-    }
-
+    // No text-level shortcut for already-scrubbed input. Skipping anything
+    // that *ended* with the marker was a bypass, not an optimization: the
+    // marker is ordinary text, `https://host/tenant/SECRET[redacted]` is a
+    // valid configured value - it parses, and brackets are not unsafe
+    // delimiters - and that check handed it straight back with the secret
+    // intact.
+    //
+    // Idempotence is structural instead. `origin[redacted]` is not a parseable
+    // URL, because a bracket is illegal in a hostname unless it delimits an
+    // IPv6 literal, so parseHttpUrl below rejects it and a second pass finds
+    // nothing to rewrite - for a bare host, a host with a port, and an IPv6
+    // literal alike.
     const trailing = trailingPunctuationPattern.exec(match)?.[0] ?? ""
     const candidate =
       trailing ? match.slice(0, match.length - trailing.length) : match
