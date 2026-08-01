@@ -232,3 +232,28 @@ test("no tracked file points at the removed docs/ tree", () => {
     `these tracked files still reference the removed docs/ tree:\n${offenders.join("\n")}`,
   )
 })
+
+// Why: CLAUDE.md tells agents not to add routes outside the surface it lists,
+// so a route the server actually registers but the list omits reads as
+// forbidden. src/server.ts registers GET|HEAD /api/hello -- Claude Code's
+// reachability probe -- and an agent trusting an incomplete list could remove
+// it. The list must name every current surface.
+test("CLAUDE.md names every public API surface the server registers", () => {
+  const claudeMd = fs.readFileSync(path.join(repoRoot, "CLAUDE.md"), "utf8")
+  const publicApiSection = claudeMd.split("## Public API")[1] ?? ""
+
+  assert.notEqual(publicApiSection, "", "CLAUDE.md must have a Public API section")
+
+  for (const surface of [
+    "POST /v1/messages",
+    "POST /v1/messages/count_tokens",
+    "GET /v1/models",
+    "GET /healthz",
+    "GET|HEAD /api/hello",
+  ]) {
+    assert.ok(
+      publicApiSection.includes(surface),
+      `CLAUDE.md Public API section must name ${surface}`,
+    )
+  }
+})
