@@ -376,3 +376,21 @@ test("rejects the apostrophe form but protects its encoded equivalent", () => {
   )
   assert.ok(scrubbed.includes(`https://${encodedHost}[redacted]`), scrubbed)
 })
+
+// Why: ordinary URL punctuation is not a delimiter problem - a query value
+// may legitimately be, or end with, `.` `,` `)` `]` `}` or `!`. These stay
+// accepted and byte-for-byte, which is what makes the punctuation-tail tests
+// in redact.test.ts cover real supported config. Narrowing validation to
+// dodge that redaction problem would break working gateways instead.
+test("accepts ordinary url punctuation unchanged", () => {
+  for (const value of [
+    "https://gateway.example/?token=!!!",
+    "https://gateway.example/tenant/v1.",
+    "https://gateway.example/?q=(v1)",
+    "https://gateway.example/?a=[v1]",
+    "https://gateway.example/?a={v1}",
+    "https://gateway.example/?a=v1;b=v2",
+  ]) {
+    assert.equal(normalizeCopilotBaseUrl(value), value)
+  }
+})

@@ -379,3 +379,76 @@ test("leaves unrelated literal marker text alone", () => {
   const bare = "value was [redacted] before upload"
   assert.equal(scrubSensitiveUrls(bare), bare)
 })
+
+// Why: trailing punctuation was trimmed off a match and restored after the
+// marker, on the theory that it was prose following the URL. In a query
+// string it is not prose - it is the value. `?token=!!!` is a valid
+// configured URL whose secret is punctuation and nothing else, so trimming
+// handed back the entire token. Arbitrary log text cannot tell a token made
+// of punctuation from a sentence that ends in one, so the complete tail goes.
+test("redacts a query secret made entirely of punctuation", () => {
+  const host = uniqueHost("punct-only")
+  registerSensitiveOrigin(`https://${host}/?token=!!!`)
+
+  const scrubbed = scrubSensitiveUrls(`base https://${host}/?token=!!!`)
+
+  assert.ok(!scrubbed.includes("!!!"), scrubbed)
+  assert.equal(scrubbed, `base https://${host}[redacted]`)
+})
+
+// Why: every character the old heuristic trimmed could equally be the last
+// byte of a path or query value. Each is a separate case because each was
+// restored verbatim after the marker.
+test("redacts tails ending in each trimmed punctuation character", () => {
+  const tails = [".", ",", ";", ":", "!", "?", ")", "]", "}"]
+
+  for (const [index, tail] of tails.entries()) {
+    const host = uniqueHost(`punct-tail-${index}`)
+    const configured = `https://${host}/?a=PUNCT_SECRET${tail}`
+    registerSensitiveOrigin(configured)
+
+    const scrubbed = scrubSensitiveUrls(`url=${configured}`)
+
+    assert.ok(
+      !scrubbed.includes("PUNCT_SECRET"),
+      `tail ${JSON.stringify(tail)} leaked the secret: ${scrubbed}`,
+    )
+    assert.equal(
+      scrubbed,
+      `url=https://${host}[redacted]`,
+      `tail ${JSON.stringify(tail)} survived after the marker`,
+    )
+  }
+})
+
+// Why: the same punctuation tail reaches the log through inspect() output,
+// where the URL is quoted. The closing quote ends the match, so the tail sits
+// at the very end of it - exactly where the trim used to fire.
+test("redacts a punctuation tail inside inspected object text", () => {
+  const host = uniqueHost("punct-nested")
+  const configured = `https://${host}/?token=NESTED_PUNCT!!!`
+  registerSensitiveOrigin(configured)
+
+  const inspected = inspect({
+    response: { status: 502, url: configured },
+  })
+  const scrubbed = scrubSensitiveUrls(inspected)
+
+  assert.ok(!scrubbed.includes("NESTED_PUNCT"), scrubbed)
+  assert.ok(!scrubbed.includes("!!!"), scrubbed)
+  assert.ok(scrubbed.includes(`https://${host}[redacted]`), scrubbed)
+  assert.ok(scrubbed.includes("status: 502"), scrubbed)
+})
+
+// Why: absorbing the tail is only acceptable because it is scoped to origins
+// already known to carry a secret. A URL nobody registered is ordinary
+// diagnostic data and must read back byte-for-byte, punctuation included -
+// otherwise this fix would quietly damage every unrelated log line.
+test("leaves an unregistered url with trailing punctuation unchanged", () => {
+  const other = uniqueHost("punct-unregistered")
+
+  for (const tail of [".", ")", "]", "}", "!!!"]) {
+    const line = `see https://${other}/?a=KEEP${tail}`
+    assert.equal(scrubSensitiveUrls(line), line)
+  }
+})

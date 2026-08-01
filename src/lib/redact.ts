@@ -52,17 +52,6 @@ const controlBytePattern = /[\x00-\x1F\x7F]/g
  */
 const absoluteUrlPattern = /https?:\/\/[^\s'"`<>]+/gi
 
-/**
- * Trailing prose punctuation, trimmed off a match so it survives rewriting.
- *
- * Deliberately excludes `]` and `}`. Both end a URL far more often than they
- * follow one: the scrubbed form ends `[redacted]`, and an IPv6 origin ends
- * `[::1]`. Trimming either would corrupt the exact shapes this function
- * emits and re-reads - a doubled `origin[redacted]]` on one pass, an unparseable
- * IPv6 host on the next.
- */
-const trailingPunctuationPattern = /[.,;:!?)]+$/
-
 const parseHttpUrl = (value: string): URL | undefined => {
   let parsed: URL
   try {
@@ -151,38 +140,48 @@ export const scrubSensitiveUrls = (text: string): string => {
   }
 
   return text.replace(absoluteUrlPattern, (match) => {
-    // No text-level shortcut for already-scrubbed input. Skipping anything
-    // that *ended* with the marker was a bypass, not an optimization: the
-    // marker is ordinary text, `https://host/tenant/SECRET[redacted]` is a
-    // valid configured value - it parses, and brackets are not unsafe
-    // delimiters - and that check handed it straight back with the secret
-    // intact.
+    // The whole match is treated as the URL - nothing is trimmed off the end
+    // and nothing is restored after the marker.
     //
-    // Idempotence is structural instead. `origin[redacted]` is not a parseable
-    // URL, because a bracket is illegal in a hostname unless it delimits an
-    // IPv6 literal, so parseHttpUrl below rejects it and a second pass finds
-    // nothing to rewrite - for a bare host, a host with a port, and an IPv6
-    // literal alike.
-    const trailing = trailingPunctuationPattern.exec(match)?.[0] ?? ""
-    const candidate =
-      trailing ? match.slice(0, match.length - trailing.length) : match
-
-    const parsed = parseHttpUrl(candidate)
+    // Trailing punctuation used to be trimmed as presumed prose and put back
+    // afterwards. In a query string it is not prose, it is the value:
+    // `?token=!!!` is a valid configured URL whose secret is punctuation and
+    // nothing else, and the restore handed that token back whole. Arbitrary
+    // log text cannot tell a token made of punctuation from a sentence that
+    // ends in one, so the ambiguity is resolved toward disclosure safety: a
+    // sentence-ending period after a sensitive URL is absorbed into the
+    // marker. That costs a character of prose on origins already known to
+    // carry a secret; the alternative cost was the secret.
+    //
+    // Unregistered origins are returned untouched below, so ordinary
+    // diagnostic URLs keep their punctuation byte-for-byte.
+    //
+    // There is also no text-level shortcut for already-scrubbed input.
+    // Skipping anything that *ended* with the marker was a bypass, not an
+    // optimization: `https://host/tenant/SECRET[redacted]` is a valid
+    // configured value, and that check handed it back with the secret intact.
+    // Idempotence is structural instead - `origin[redacted]` is not a
+    // parseable URL, because a bracket is illegal in a hostname unless it
+    // delimits an IPv6 literal, so parseHttpUrl rejects it and a second pass
+    // finds nothing to rewrite, for a bare host, a host with a port, and an
+    // IPv6 literal alike.
+    const parsed = parseHttpUrl(match)
     if (!parsed || !sensitiveOrigins.has(parsed.origin)) {
       return match
     }
 
-    // Where the authority ends in the *matched text*, which may differ from the
-    // canonical origin in case or port. Nothing after it means nothing to hide.
+    // Where the authority ends in the *matched text*, which may differ from
+    // the canonical origin in case or port. Nothing after it means nothing to
+    // hide.
     //
-    // Backslash ends the authority exactly as "/" does: WHATWG normalizes it to
-    // "/" for http(s), so `https://host\tenant` has "tenant" in its path, not
-    // its host. Omitting it here would classify that URL as origin-only and
-    // return it unredacted.
-    const authorityStart = candidate.indexOf("://") + 3
-    let authorityEnd = candidate.length
-    for (let index = authorityStart; index < candidate.length; index += 1) {
-      const character = candidate[index]
+    // Backslash ends the authority exactly as "/" does: WHATWG normalizes it
+    // to "/" for http(s), so `https://host\tenant` has "tenant" in its path,
+    // not its host. Omitting it here would classify that URL as origin-only
+    // and return it unredacted.
+    const authorityStart = match.indexOf("://") + 3
+    let authorityEnd = match.length
+    for (let index = authorityStart; index < match.length; index += 1) {
+      const character = match[index]
       if (
         character === "/"
         || character === "\\"
@@ -194,8 +193,8 @@ export const scrubSensitiveUrls = (text: string): string => {
       }
     }
 
-    return authorityEnd === candidate.length ?
+    return authorityEnd === match.length ?
         match
-      : `${parsed.origin}${redactedMarker}${trailing}`
+      : `${parsed.origin}${redactedMarker}`
   })
 }
