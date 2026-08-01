@@ -185,7 +185,19 @@ prefix.
   `metadata.user_id`, surfaced as `payload.user`);
 - fall back to a hash of the system prompt when there is no user id.
 
-Keys are SHA-256 hashed, so the raw id is never forwarded upstream.
+The key itself is a SHA-256 digest (`cr-` plus 32 hex characters), so
+`prompt_cache_key` does not expose the identifier it was derived from.
+
+**That is not an anonymization guarantee for the request as a whole.**
+`buildResponsesRequestPayload` sets `prompt_cache_key` *and*, separately,
+`user: sanitizeUserIdentifier(payload.user)`. `sanitizeUserIdentifier` in
+`src/copilot/chat.ts` only truncates to 64 characters — it does not hash — so
+the identifier Claude Code sent is forwarded upstream in the `user` field of
+the same request. The `/chat/completions` path forwards it the same way.
+
+Operationally: treat `metadata.user_id` as a value GitHub Copilot will see.
+Do not put secrets or personal data in it. Hashing the cache key protects the
+cache-routing value, not the identifier.
 
 Measured end-to-end (`gpt-5.5`, stable user id, large prefix): steady-state
 `cache_read` hits ~100% once warm, versus a flat 0 without the key.

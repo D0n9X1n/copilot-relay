@@ -380,3 +380,62 @@ test("every wiki link to a page carries .md in source", () => {
     `these links omit .md and break when browsing wiki/ in the repository:\n${offenders.join("\n")}`,
   )
 })
+
+// Why: prompt_cache_key is SHA-256 derived and exposes nothing, but
+// buildResponsesRequestPayload ALSO sets `user: sanitizeUserIdentifier(...)`,
+// and sanitizeUserIdentifier only truncates to 64 chars -- it does not hash.
+// Documenting the hashed key as though it were the whole story reads as an
+// anonymization guarantee the relay does not make.
+test("prompt-cache docs separate the hashed key from the forwarded user field", () => {
+  const sectionOf = (body: string, heading: string): string => {
+    const after = body.split(heading)[1] ?? ""
+    return after.split("\n## ")[0] ?? ""
+  }
+
+  const pages: [string, string, string[]][] = [
+    [
+      "EN-Internals.md",
+      "## Prompt caching",
+      ["Keys are SHA-256 hashed, so the raw id is never forwarded upstream"],
+    ],
+    [
+      "ZH-Internals.md",
+      "## Prompt 缓存",
+      ["因此原始 id 永远不会转发到上游"],
+    ],
+  ]
+
+  for (const [page, heading, falseClaims] of pages) {
+    const section = sectionOf(readPage(page), heading)
+
+    assert.notEqual(section, "", `${page} must have a prompt caching section`)
+
+    for (const claim of falseClaims) {
+      assert.ok(
+        !section.includes(claim),
+        `wiki/${page} claims the identifier is never forwarded; responses.ts sends it in the user field`,
+      )
+    }
+
+    assert.ok(
+      section.includes("prompt_cache_key"),
+      `wiki/${page} must name prompt_cache_key`,
+    )
+
+    assert.ok(
+      /SHA-256/.test(section),
+      `wiki/${page} must say the cache key is SHA-256 derived`,
+    )
+
+    // The separately forwarded identifier must be described, with its limit.
+    assert.ok(
+      /`user`/.test(section),
+      `wiki/${page} must document the separate upstream user field`,
+    )
+
+    assert.ok(
+      section.includes("64"),
+      `wiki/${page} must state the identifier is truncated to 64 characters`,
+    )
+  }
+})

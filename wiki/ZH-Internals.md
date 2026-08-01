@@ -168,7 +168,18 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
   `payload.user` 上体现）；
 - 没有 user id 时，退化为 system prompt 的哈希。
 
-key 经过 SHA-256 哈希，因此原始 id 永远不会转发到上游。
+key 本身是一个 SHA-256 摘要（`cr-` 加 32 位十六进制字符），所以
+`prompt_cache_key` 本身不会暴露它是从哪个标识符派生出来的。
+
+**但这并不等于整个请求做了匿名化。**
+`buildResponsesRequestPayload` 在设置 `prompt_cache_key` 的同时，还会单独设置
+`user: sanitizeUserIdentifier(payload.user)`。`src/copilot/chat.ts` 里的
+`sanitizeUserIdentifier` 只是把字符串截断到 64 个字符 —— 它不做哈希 —— 因此
+Claude Code 发来的那个标识符会原样出现在同一个请求的 `user` 字段里转发到上游。
+`/chat/completions` 路径也是同样的转发方式。
+
+实践建议：把 `metadata.user_id` 当作 GitHub Copilot 会看到的值来对待，不要在里面
+放密钥或个人信息。对缓存 key 做哈希保护的是缓存路由值，不是这个标识符。
 
 端到端实测（`gpt-5.5`、稳定 user id、大前缀）：预热之后稳态 `cache_read` 命中约
 100%，而没有 key 时是恒定的 0。`gpt-5.6-sol` 走同一条 `/responses` 路径和同一套
