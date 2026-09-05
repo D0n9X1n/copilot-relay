@@ -127,7 +127,13 @@ const startDelayedStreamingCopilot = async () => {
   }
 }
 
-const startMockCopilot = async () => {
+const startMockCopilot = async (
+  responsesUsage: NonNullable<import("../../src/copilot/responses").ResponsesApiResponse["usage"]> = {
+    input_tokens: 1,
+    output_tokens: 1,
+    total_tokens: 2,
+  },
+) => {
   const requests: Array<CapturedRequest> = []
   let webSearchChatCalls = 0
   const server = createHttpServer(async (request, response) => {
@@ -376,7 +382,7 @@ const startMockCopilot = async () => {
             content: [{ type: "output_text", text: "OK" }],
           },
         ],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        usage: responsesUsage,
       }))
       return
     }
@@ -453,8 +459,13 @@ test("GET /v1/models returns configured Claude Code models", async () => {
 // Why: [1m] is a Claude Code context selector, not a Copilot model ID. The
 // public list should expose it, while the full Messages-to-Responses path must
 // strip it and preserve the configured max effort before touching Copilot.
-test("advertises Astra's 1M identity but sends its canonical model upstream", async () => {
-  const mock = await startMockCopilot()
+test("advertises Astra's 1M identity and preserves its cache key and usage", async () => {
+  const mock = await startMockCopilot({
+    input_tokens: 9789,
+    input_tokens_details: { cached_tokens: 9786 },
+    output_tokens: 5,
+    total_tokens: 9794,
+  })
   runtimeState.thinkEffort = "max"
   runtimeState.modelRouting = {
     gptModel: "gpt-6-astra",
@@ -475,6 +486,7 @@ test("advertises Astra's 1M identity but sends its canonical model upstream", as
         max_tokens: 16,
         messages: [{ role: "user", content: "Reply OK only." }],
         model: "gpt-6-astra[1m]",
+        metadata: { user_id: "astra-cache-session" },
       }),
       headers: { "content-type": "application/json" },
       method: "POST",
@@ -482,11 +494,21 @@ test("advertises Astra's 1M identity but sends its canonical model upstream", as
     const body = await response.json() as {
       content: Array<{ text?: string }>
       model?: string
+      usage: {
+        input_tokens: number
+        output_tokens: number
+        cache_read_input_tokens: number
+      }
     }
 
     assert.equal(response.status, 200)
     assert.equal(body.content[0]?.text, "OK")
     assert.equal(body.model, "gpt-6-astra[1m]")
+    assert.deepEqual(body.usage, {
+      input_tokens: 3,
+      output_tokens: 5,
+      cache_read_input_tokens: 9786,
+    })
     const upstreamRequests = mock.requests.filter(
       (request) => request.path === "/responses" || request.path === "/chat/completions",
     )
@@ -495,12 +517,36 @@ test("advertises Astra's 1M identity but sends its canonical model upstream", as
       upstreamRequests.map((request) => (request.body as { model?: string }).model),
       ["gpt-6-astra"],
     )
-    assert.equal(
-      ((upstreamRequests[0]?.body as {
-        reasoning?: { effort?: string }
-      })?.reasoning)?.effort,
-      "max",
-    )
+    const upstream = upstreamRequests[0]?.body as {
+      prompt_cache_key?: string
+      reasoning?: { effort?: string }
+    }
+    assert.equal(upstream.reasoning?.effort, "max")
+    assert.match(upstream.prompt_cache_key ?? "", /^cr-[a-f0-9]{32}$/)
+
+    const repeatedResponse = await app.fetch(new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({
+        max_tokens: 16,
+        messages: [
+          { role: "user", content: "Reply OK only." },
+          { role: "assistant", content: "OK" },
+          { role: "user", content: "Reply again." },
+        ],
+        model: "gpt-6-astra",
+        metadata: { user_id: "astra-cache-session" },
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    }))
+    assert.equal(repeatedResponse.status, 200)
+    await repeatedResponse.json()
+    assert.equal(mock.requests.at(-1)?.path, "/responses")
+    const repeatedUpstream = mock.requests.at(-1)?.body as {
+      model: string
+      prompt_cache_key: string
+    }
+    assert.equal(repeatedUpstream.model, "gpt-6-astra")
+    assert.equal(repeatedUpstream.prompt_cache_key, upstream.prompt_cache_key)
   } finally {
     await mock.close()
   }

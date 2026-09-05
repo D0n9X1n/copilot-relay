@@ -155,12 +155,12 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 定义、之前的回合）。这段前缀上的 prompt 缓存命中，是输入 token 成本和延迟的主要杠杆。
 这里有两个承重的中继行为，都在真实 Copilot 上游上验证过。
 
-### `/responses` 需要稳定的 `prompt_cache_key`
+### 用 `prompt_cache_key` 提示 `/responses` 缓存路由
 
-对 GPT-5.5/5.6 系列的 Copilot `/responses` 缓存测试表明，稳定的 `prompt_cache_key`
-会把请求钉在同一个后端上。没有这个 key，即使前缀逐字节相同，`cached_tokens` 也可能
-在多个回合之间掉到 0。Relay 也会为 Astra 发送这个 key；共用请求构造器不等于已经实测
-Astra 的缓存命中率。
+Relay 发送稳定的 `prompt_cache_key` 作为缓存路由提示。此前对 GPT-5.5/5.6 系列的
+Copilot `/responses` 测试观察到，省略该 key 时缓存读取会掉到 0。但这不能证明所有模型
+都需要它：下面的对照测试中，Astra 在没有 key 时也产生了缓存命中。仅有 key 既不能保证
+缓存命中，也不能替代稳定的 prompt 前缀。
 
 `buildResponsesRequestPayload` 派生一个按会话的 key：
 
@@ -181,13 +181,30 @@ Claude Code 发来的那个标识符会原样出现在同一个请求的 `user` 
 实践建议：把 `metadata.user_id` 当作 GitHub Copilot 会看到的值来对待，不要在里面
 放密钥或个人信息。对缓存 key 做哈希保护的是缓存路由值，不是这个标识符。
 
-端到端实测（`gpt-5.5`、稳定 user id、大前缀）：预热之后稳态 `cache_read` 命中约
-100%，而没有 key 时是恒定的 0。`gpt-5.6-sol` 与 `gpt-6-astra` 共用同一套
-`/responses` 请求构造器和缓存 key 机制；上面的测量来自 GPT-5.5，不是 Astra 基准测试。
+此前用 `gpt-5.5`、稳定 user id 和大前缀进行的端到端测量中，预热后的缓存读取约为
+100%，不带 key 时为 0。这只是该模型及该工作负载的测量，不是普适的缓存前提。
 
-在 `/responses` 系模型之间切换 `gptModel` 并不能换回什么缓存收益：
-`/chat/completions` 系模型（例如 `gpt-5.4`）之所以能缓存，也只是因为它们的前缀稳定；
-而 `gpt-5.5`/`gpt-5.6` 系列带上 key 之后能达到同样的命中率。
+### GPT-6 Astra 缓存验证
+
+2026-09-05（UTC），向 Copilot `/responses` 发送了六次小规模非流式请求，使用
+`gpt-6-astra`、`low` effort、合成前缀及 relay 实际的
+`buildResponsesRequestPayload`。每组使用独立的前缀标记，并连续发送三次完全相同的
+请求。两组都保留稳定的合成 `user`；无 key 组仅从构造后的 payload 中删除
+`prompt_cache_key`。
+
+| 请求 | 带稳定 key：缓存 / 输入 tokens | 不带 key：缓存 / 输入 tokens |
+| --- | --- | --- |
+| 第一次（冷缓存） | 0 / 9,789 | 0 / 9,789 |
+| 第二次 | 9,786 / 9,789（99.97%） | 9,786 / 9,789（99.97%） |
+| 第三次 | 9,786 / 9,789（99.97%） | 9,786 / 9,789（99.97%） |
+
+六次请求均返回 HTTP 200 和 `OK`，每次输出 5 tokens。Relay 的 Responses 到 Claude
+翻译保留了 `cache_read_input_tokens: 9786`，并在热缓存请求中报告 3 个未缓存输入 tokens。
+
+这证实 Astra 接受现有 key，并能在带 key 的请求中返回缓存命中。无 key 对照组也命中了
+缓存，因此本实验**不能**证明 Astra 必须使用该 key，也不能证明它能提高命中率。保留
+稳定 key，同时测量真实工作负载：本次单账号、`low` effort 的短测试不代表 `max`、
+并发、缓存过期后或接近 1M 上限时的表现。
 
 ### assistant 的 `thinking` 保留在上游历史里
 
