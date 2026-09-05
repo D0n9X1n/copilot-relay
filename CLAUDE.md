@@ -13,6 +13,8 @@ Working conventions for `copilot-relay`. Read before opening a PR or cutting a r
 
 Nothing lands on `main` without an issue and a PR. (Some history predates this — `v0.2.2` shipped by direct push and has no PR — but it is the rule going forward.)
 
+**Post-merge cleanup is required.** After confirming a PR is merged, remove its inactive local and remote feature branches and temporary worktrees, then prune stale remote-tracking refs. Inspect worktree status, unique commits, and session ownership first; never discard active or unmerged work. Preserve exceptions and report them. Follow the safe sequence in `wiki/EN-Development.md` / `wiki/ZH-Development.md` before calling the PR complete.
+
 ## Releasing
 
 **Pushing a tag is irreversible.** `.github/workflows/publish.yml` fires on any `v*` tag and publishes to **npm** and **GitHub Packages**. npm cannot be meaningfully unpublished. There is no dry run.

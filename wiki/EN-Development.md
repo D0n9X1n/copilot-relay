@@ -89,6 +89,45 @@ PR.
 Some history predates this — `v0.2.2` shipped by direct push and has no PR — but
 it is the rule going forward.
 
+### Required post-merge cleanup
+
+A merged PR is not complete until its inactive feature branches and temporary
+worktrees are cleaned up, or preserved exceptions are explicitly reported.
+
+1. Confirm the PR is merged and fetch the current base branch. Check
+   `git status --short`, `git worktree list --porcelain`, and branch ancestry;
+   a branch's age or name does not prove its work was merged.
+2. Check which sessions own the worktrees and locks. Never remove an active
+   worktree or clear another session's lock merely to make cleanup succeed.
+3. Switch away from the merged feature branch only in a checkout you own.
+   Remove clean, inactive worktrees before deleting their local branches with
+   `git branch -d`. Use ordinary `git worktree remove`, not forced removal.
+4. Delete the confirmed merged remote branch if it remains, then run
+   `git fetch --prune origin`. Keep `main` and genuinely active branches.
+5. Report the final working-tree status, remaining branches/worktrees, and any
+   preserved exceptions. Remove only disposable build outputs, never credentials,
+   runtime state, or another session's files.
+
+Uncommitted changes or unique commits block ordinary deletion. Preserve them in
+place, or create and verify a private recovery archive before an explicitly
+agreed stale-work cleanup. Do not use forced deletion to bypass these checks.
+
+`git branch -d` relies on ancestry and can refuse a squash/rebase-merged branch.
+For that case only, `git branch -D` is permitted after confirming all of these:
+
+- The PR is merged and its merge result is reachable from the current base.
+- The local branch tip exactly matches the PR's head commit recorded at merge,
+  not the resulting squash/rebase commit. Extra or rewritten local commits mean
+  preserve the branch, even when the original PR diff landed.
+- All changes from that recorded PR head landed. `git cherry -v main <branch>`
+  with no `+` entries confirms per-commit patch equivalence; a multi-commit squash
+  may still show `+`, so compare the complete PR diff with its squash commit.
+
+Recheck each branch tip immediately before deletion, including the remote tip;
+if it changed or the recorded PR head/equivalence cannot be verified, preserve it.
+Never infer safety from a PR being closed, or use this exception to force-remove
+a dirty or active worktree.
+
 ### Milestone membership
 
 Membership is decided by **commit ancestry, not close dates**. Use
