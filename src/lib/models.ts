@@ -17,7 +17,7 @@ export interface ModelRoutingConfig {
 export const defaultReasoningEffort: ReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
-  gptModel: "gpt-5.6-sol",
+  gptModel: "gpt-6-astra",
   opusModel: "claude-opus-5",
 }
 
@@ -29,15 +29,20 @@ export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   || value === "xhigh"
   || value === "max"
 
-const exactGpt56SolPattern = /^gpt-5\.6-sol(?:\[1m\])*$/i
-const claudeContextModelId = "gpt-5.6-sol[1m]"
-const copilotModelId = "gpt-5.6-sol"
+const oneMillionContextModelPattern = /^(gpt-5\.6-sol|gpt-6-astra)(?:\[1m\])*$/i
 
-export const normalizeClaudeModelId = (model: string): string =>
-  exactGpt56SolPattern.test(model) ? claudeContextModelId : model
+const normalizeOneMillionContextModel = (model: string): string | undefined => {
+  const match = oneMillionContextModelPattern.exec(model)
+  return match?.[1]?.toLowerCase()
+}
+
+export const normalizeClaudeModelId = (model: string): string => {
+  const normalized = normalizeOneMillionContextModel(model)
+  return normalized ? `${normalized}[1m]` : model
+}
 
 export const normalizeCopilotModelId = (model: string): string =>
-  exactGpt56SolPattern.test(model) ? copilotModelId : model
+  normalizeOneMillionContextModel(model) ?? model
 
 const getConfiguredModelRouting = (): ModelRoutingConfig =>
   runtimeState.modelRouting ?? defaultModelRouting

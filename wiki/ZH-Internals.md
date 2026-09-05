@@ -108,7 +108,7 @@ thinking/text block。
 路由、think effort 和请求日志，并为配置的 GPT 系模型选择 Copilot `/responses`。
 
 `src/copilot/responses.ts` 在 Copilot Responses API 与 chat-completion 风格结果之间
-翻译。它之所以存在，是因为 `gpt-5.6-sol`（默认 `gptModel`）以及
+翻译。它之所以存在，是因为默认模型 `gpt-6-astra`、此前默认的 `gpt-5.6-sol` 以及
 `gpt-5.5`/`gpt-5.6` 系列的其余成员在上游走 `/responses`，而 Opus 走
 `/chat/completions`。
 
@@ -157,10 +157,10 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 
 ### `/responses` 需要稳定的 `prompt_cache_key`
 
-`gpt-5.6-sol` —— 以及其他只走 `/responses` 的模型，比如 `gpt-5.5`/`gpt-5.6` 系列的
-其余成员 —— 只有在每个请求都带着稳定的 `prompt_cache_key`、把请求钉在同一个后端上
-时，才会返回 prompt 缓存命中。没有这个 key，即使前缀逐字节相同，`cached_tokens` 也
-会在多个回合之间随机掉到 0。
+对 GPT-5.5/5.6 系列的 Copilot `/responses` 缓存测试表明，稳定的 `prompt_cache_key`
+会把请求钉在同一个后端上。没有这个 key，即使前缀逐字节相同，`cached_tokens` 也可能
+在多个回合之间掉到 0。Relay 也会为 Astra 发送这个 key；共用请求构造器不等于已经实测
+Astra 的缓存命中率。
 
 `buildResponsesRequestPayload` 派生一个按会话的 key：
 
@@ -182,8 +182,8 @@ Claude Code 发来的那个标识符会原样出现在同一个请求的 `user` 
 放密钥或个人信息。对缓存 key 做哈希保护的是缓存路由值，不是这个标识符。
 
 端到端实测（`gpt-5.5`、稳定 user id、大前缀）：预热之后稳态 `cache_read` 命中约
-100%，而没有 key 时是恒定的 0。`gpt-5.6-sol` 走同一条 `/responses` 路径和同一套
-缓存 key 机制，因此行为一致。
+100%，而没有 key 时是恒定的 0。`gpt-5.6-sol` 与 `gpt-6-astra` 共用同一套
+`/responses` 请求构造器和缓存 key 机制；上面的测量来自 GPT-5.5，不是 Astra 基准测试。
 
 在 `/responses` 系模型之间切换 `gptModel` 并不能换回什么缓存收益：
 `/chat/completions` 系模型（例如 `gpt-5.4`）之所以能缓存，也只是因为它们的前缀稳定；

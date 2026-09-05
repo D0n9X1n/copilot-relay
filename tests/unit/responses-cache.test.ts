@@ -26,13 +26,18 @@ test("gpt-5.5 routes to the /responses endpoint", () => {
   assert.equal(shouldUseResponsesApiForModel("gpt-5.5-2025-01-01"), true)
 })
 
-// Why: gpt-5.6-sol (the default gptModel) rejects /chat/completions with
-// unsupported_api_for_model, so it must be classified as Responses-only up front
-// instead of relying on the failed-chat retry fallback.
+// Existing GPT-5.6 configurations must still use Responses without a failed chat request.
 test("gpt-5.6 family routes to the /responses endpoint", () => {
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-sol"), true)
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-luna"), true)
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-terra"), true)
+})
+
+// Why: GPT-6 Astra advertises only /responses upstream. Classifying it before
+// the request avoids a guaranteed failed /chat/completions attempt on every turn.
+test("gpt-6 Astra routes to the /responses endpoint", () => {
+  assert.equal(shouldUseResponsesApiForModel("gpt-6-astra"), true)
+  assert.equal(shouldUseResponsesApiForModel("GPT-6-ASTRA"), true)
 })
 
 // Why: /responses only returns prompt cache hits when a STABLE prompt_cache_key

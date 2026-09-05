@@ -57,7 +57,7 @@ const hasPrimaryModelOverride = (
 /**
  * Update `~/.claude/settings.json` so its env block points Claude Code at the
  * running proxy. Preserves unrelated keys and model choices while normalizing
- * managed gpt-5.6-sol overrides. Sets a dummy auth token only if none is present.
+ * managed one-million-context GPT overrides. Sets a dummy auth token only if absent.
  */
 export async function applyClaudeConfig(
   input: ApplyClaudeConfigInput,

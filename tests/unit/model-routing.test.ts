@@ -18,40 +18,51 @@ test.afterEach(() => {
 })
 
 // Why: the context selector is a Claude-facing identity only. Normalize exact
-// gpt-5.6-sol spellings idempotently while leaving similar and other IDs alone.
-test("normalizes only exact gpt-5.6-sol identities at each boundary", () => {
-  for (const model of [
-    "gpt-5.6-sol",
-    "GPT-5.6-SOL",
-    "gpt-5.6-sol[1m]",
-    "GPT-5.6-SOL[1M][1m]",
-  ]) {
-    assert.equal(normalizeClaudeModelId(model), "gpt-5.6-sol[1m]")
-    assert.equal(normalizeCopilotModelId(model), "gpt-5.6-sol")
+// one-million-context GPT IDs idempotently while leaving near-matches untouched.
+test("normalizes exact 1M GPT identities at each boundary", () => {
+  for (const [input, canonical] of [
+    ["gpt-5.6-sol", "gpt-5.6-sol"],
+    ["GPT-5.6-SOL[1M][1m]", "gpt-5.6-sol"],
+    ["gpt-6-astra", "gpt-6-astra"],
+    ["GPT-6-ASTRA[1M][1m]", "gpt-6-astra"],
+  ] as const) {
+    assert.equal(normalizeClaudeModelId(input), `${canonical}[1m]`)
+    assert.equal(normalizeCopilotModelId(input), canonical)
+    assert.equal(
+      normalizeClaudeModelId(normalizeClaudeModelId(input)),
+      `${canonical}[1m]`,
+    )
+    assert.equal(
+      normalizeCopilotModelId(normalizeCopilotModelId(input)),
+      canonical,
+    )
   }
-
-  assert.equal(
-    normalizeClaudeModelId(normalizeClaudeModelId("GPT-5.6-SOL[1M][1m]")),
-    "gpt-5.6-sol[1m]",
-  )
-  assert.equal(
-    normalizeCopilotModelId(normalizeCopilotModelId("GPT-5.6-SOL[1M][1m]")),
-    "gpt-5.6-sol",
-  )
 
   for (const model of [
     "gpt-5.6-sol-preview",
     "gpt-5.6-sol[2m]",
     "prefix-gpt-5.6-sol",
     "gpt-5.6-luna[1m]",
-    " gpt-5.6-sol",
-    "gpt-5.6-sol ",
-    "gpt-5.6-sol\n",
+    "gpt-6-astra-preview",
+    "gpt-6-astra[2m]",
+    "prefix-gpt-6-astra",
+    " gpt-6-astra",
+    "gpt-6-astra ",
+    "gpt-6-astra\n",
     "gpt-test",
   ]) {
     assert.equal(normalizeClaudeModelId(model), model)
     assert.equal(normalizeCopilotModelId(model), model)
   }
+})
+
+test("defaults to Astra and keeps the Opus lane separate", () => {
+  assert.deepEqual(defaultModelRouting, {
+    gptModel: "gpt-6-astra",
+    opusModel: "claude-opus-5",
+  })
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5"])
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5"])
 })
 
 // Why: model discovery is consumed by Claude Code while availability checks are

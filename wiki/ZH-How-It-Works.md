@@ -29,19 +29,19 @@ Claude Code
 
 ## 启动流程
 
-```text
-copilot-relay start
-  -> 读取 ~/.copilot-relay/config.yaml
-  -> 读取 github_token
-  -> 读取或刷新 copilot_token.json
-  -> 通过 preflight 验证模型和配置
-  -> 可选更新 ~/.claude/settings.json
-  -> 监听 host/port
-  -> 监听 config.yaml 热重载
+```mermaid
+flowchart TD
+    A[copilot-relay start] --> B[读取并写回完整配置]
+    B --> C[读取或刷新认证]
+    C --> D[校验配置模型和 effort]
+    D --> E[监听 host 和 port]
+    E --> F[可选更新 Claude Code 设置]
+    F --> G[监听配置热重载]
 ```
 
 Preflight 在 socket 绑定之前运行，所以一个连配置模型都够不着的中继会直接启动失败，
-而不是先接下它根本处理不了的流量。
+而不是先接下它根本处理不了的流量。解析后的配置已经写入磁盘，因此可以直接修改不可用的
+模型。
 
 ## 公开 API
 
@@ -73,12 +73,15 @@ OpenAI 兼容接口不会对外公开。
 | 名字包含 `opus` | `opusModel` |
 | 其他 | `gptModel` |
 
-默认值：
+全新安装的首选值：
 
 ```yaml
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
+
+已有模型选择不会被迁移。如果账号无法使用 Astra，请明确选择可用模型；见
+[配置说明](ZH-Configuration.md)。
 
 ## Copilot 上游接口
 
@@ -87,8 +90,8 @@ opusModel: claude-opus-5
 - `/chat/completions`
 - `/responses`
 
-`gpt-5.6-sol` 以及 `gpt-5.5`/`gpt-5.6` 系列的其余成员使用 `/responses`。Opus 当前
-使用 `/chat/completions`。
+`gpt-6-astra`、`gpt-5.6-sol` 以及 `gpt-5.5`/`gpt-5.6` 系列的其余成员使用
+`/responses`。Opus 当前使用 `/chat/completions`。
 
 这些差异对 Claude Code 隐藏，外部始终看到 Claude Messages 风格响应。
 

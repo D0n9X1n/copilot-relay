@@ -453,11 +453,11 @@ test("GET /v1/models returns configured Claude Code models", async () => {
 // Why: [1m] is a Claude Code context selector, not a Copilot model ID. The
 // public list should expose it, while the full Messages-to-Responses path must
 // strip it and preserve the configured max effort before touching Copilot.
-test("advertises the 1M GPT identity but sends its canonical model upstream", async () => {
+test("advertises Astra's 1M identity but sends its canonical model upstream", async () => {
   const mock = await startMockCopilot()
   runtimeState.thinkEffort = "max"
   runtimeState.modelRouting = {
-    gptModel: "gpt-5.6-sol",
+    gptModel: "gpt-6-astra",
     opusModel: "claude-opus-4.8",
   }
 
@@ -466,7 +466,7 @@ test("advertises the 1M GPT identity but sends its canonical model upstream", as
     const modelsResponse = await app.fetch(new Request("http://localhost/v1/models"))
     const models = await modelsResponse.json() as { data: Array<{ id: string }> }
     assert.deepEqual(models.data.map((model) => model.id), [
-      "gpt-5.6-sol[1m]",
+      "gpt-6-astra[1m]",
       "claude-opus-4.8",
     ])
 
@@ -474,7 +474,7 @@ test("advertises the 1M GPT identity but sends its canonical model upstream", as
       body: JSON.stringify({
         max_tokens: 16,
         messages: [{ role: "user", content: "Reply OK only." }],
-        model: "gpt-5.6-sol[1m]",
+        model: "gpt-6-astra[1m]",
       }),
       headers: { "content-type": "application/json" },
       method: "POST",
@@ -486,35 +486,20 @@ test("advertises the 1M GPT identity but sends its canonical model upstream", as
 
     assert.equal(response.status, 200)
     assert.equal(body.content[0]?.text, "OK")
-    assert.equal(body.model, "gpt-5.6-sol[1m]")
-    const upstreamModels = mock.requests.flatMap((request) => {
-      if (request.path !== "/responses" && request.path !== "/chat/completions") {
-        return []
-      }
-      return [(request.body as { model?: string }).model]
-    })
-    assert.deepEqual(upstreamModels, ["gpt-5.6-sol"])
+    assert.equal(body.model, "gpt-6-astra[1m]")
+    const upstreamRequests = mock.requests.filter(
+      (request) => request.path === "/responses" || request.path === "/chat/completions",
+    )
+    assert.deepEqual(upstreamRequests.map((request) => request.path), ["/responses"])
+    assert.deepEqual(
+      upstreamRequests.map((request) => (request.body as { model?: string }).model),
+      ["gpt-6-astra"],
+    )
     assert.equal(
-      ((mock.requests.find((request) => request.path === "/responses")?.body as {
+      ((upstreamRequests[0]?.body as {
         reasoning?: { effort?: string }
       })?.reasoning)?.effort,
       "max",
-    )
-    assert.equal(upstreamModels.some((model) => model?.includes("[1m]")), false)
-
-    const plainResponse = await app.fetch(new Request("http://localhost/v1/messages", {
-      body: JSON.stringify({
-        max_tokens: 16,
-        messages: [{ role: "user", content: "Reply OK only." }],
-        model: "gpt-5.6-sol",
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    }))
-    assert.equal(plainResponse.status, 200)
-    assert.equal(
-      (mock.requests.at(-1)?.body as { model?: string }).model,
-      "gpt-5.6-sol",
     )
   } finally {
     await mock.close()

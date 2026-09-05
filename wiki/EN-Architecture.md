@@ -87,21 +87,23 @@ Routing is deliberately simple and entirely config-driven:
 | contains `opus` | `opusModel` |
 | anything else | `gptModel` |
 
-Shipped defaults:
+Preferred fresh-install defaults:
 
 ```yaml
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 
-`src/lib/models.ts` owns this mapping and also validates the allowed
-`thinkEffort` values: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
+Existing model choices are never migrated. If Astra is unavailable to an account,
+preflight fails; choose an available model in the generated config explicitly. `src/lib/models.ts` owns this mapping
+and also validates the allowed `thinkEffort` values: `none`, `low`, `medium`,
+`high`, `xhigh`, `max`.
 
 Which upstream *API* a model uses is a separate question from which model runs.
-`gpt-5.6-sol` and the rest of the `gpt-5.5`/`gpt-5.6` family go through Copilot
-`/responses`; Opus currently uses `/chat/completions`. Claude Code never sees the
-difference — both paths return Claude Messages-style responses. The consequences
-of that split are in [Internals](EN-Internals.md).
+`gpt-6-astra`, `gpt-5.6-sol`, and the rest of the `gpt-5.5`/`gpt-5.6` family go
+through Copilot `/responses`; Opus currently uses `/chat/completions`. Claude Code
+never sees the difference — both paths return Claude Messages-style responses.
+The consequences of that split are in [Internals](EN-Internals.md).
 
 ## Main modules
 
@@ -124,30 +126,21 @@ of that split are in [Internals](EN-Internals.md).
 
 ## Startup flow
 
-```text
-start command
-  |
-  | read ~/.copilot-relay/config.yaml
-  | create config from config.default.yaml if missing
-  v
-apply runtime config
-  |
-  | load/sync github_token
-  | load/refresh copilot_token.json
-  v
-preflight upstream models and think effort
-  |
-  | optionally write Claude Code settings
-  v
-start HTTP server
-  |
-  | watch config.yaml for hot reload
-  v
-serve Claude Code requests
+```mermaid
+flowchart TD
+    A[Start command] --> B[Read and materialize config]
+    B --> C[Apply runtime config]
+    C --> D[Load or refresh GitHub and Copilot tokens]
+    D --> E[Preflight both model IDs and thinking effort]
+    E --> F[Bind HTTP server and write PID record]
+    F --> G[Optionally update Claude Code settings]
+    G --> H[Watch config and serve requests]
 ```
 
 Preflight runs *before* the socket binds. A relay that cannot reach its
 configured models fails to start rather than accepting traffic it cannot serve.
+The resolved config is already on disk, so a missing account-specific model can
+be corrected directly.
 
 ## Runtime files
 
@@ -188,7 +181,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 

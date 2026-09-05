@@ -29,19 +29,19 @@ Claude Code
 
 ## Startup flow
 
-```text
-copilot-relay start
-  -> read ~/.copilot-relay/config.yaml
-  -> load github_token
-  -> load or refresh copilot_token.json
-  -> validate configured models with upstream preflight
-  -> optionally update ~/.claude/settings.json
-  -> listen on host/port
-  -> watch config.yaml for hot reload
+```mermaid
+flowchart TD
+    A[copilot-relay start] --> B[Read and write resolved config]
+    B --> C[Load or refresh authentication]
+    C --> D[Validate configured models and effort]
+    D --> E[Listen on host and port]
+    E --> F[Optionally update Claude Code settings]
+    F --> G[Watch config for hot reload]
 ```
 
 Preflight runs before the socket binds, so a relay that cannot reach its
 configured models fails to start rather than accepting traffic it cannot serve.
+The resolved config is already on disk so an unavailable model can be edited.
 
 ## Public API surface
 
@@ -74,12 +74,15 @@ Routing is simple by design:
 | contains `opus` | `opusModel` |
 | anything else | `gptModel` |
 
-Default upstream models:
+Preferred fresh-install upstream models:
 
 ```yaml
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
+
+Existing model choices are never migrated. If your account cannot use Astra,
+choose an available model explicitly; see [Configuration](EN-Configuration.md).
 
 ## Copilot API surface
 
@@ -88,8 +91,8 @@ Internally, Copilot may require either:
 - `/chat/completions`
 - `/responses`
 
-`gpt-5.6-sol` and the rest of the `gpt-5.5`/`gpt-5.6` family use `/responses`.
-Opus currently uses `/chat/completions`.
+`gpt-6-astra`, `gpt-5.6-sol`, and the rest of the `gpt-5.5`/`gpt-5.6`
+family use `/responses`. Opus currently uses `/chat/completions`.
 
 The relay hides this from Claude Code and always exposes Claude Messages-style
 responses.

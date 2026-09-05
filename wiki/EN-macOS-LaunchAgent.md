@@ -106,14 +106,14 @@ copilot-relay 0.2.5
   version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
-  models     gpt-5.6-sol[1m], claude-opus-5
+  models     gpt-6-astra[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-5.6-sol
+    gptModel                gpt-6-astra
     opusModel               claude-opus-5
     host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```
@@ -174,7 +174,7 @@ and nothing more. It never contacts GitHub Copilot.
 curl -s http://127.0.0.1:4142/v1/models
 ```
 
-Expect your configured models, e.g. `gpt-5.6-sol[1m]` and `claude-opus-5`. This
+Expect your configured models, e.g. `gpt-6-astra[1m]` and `claude-opus-5`. This
 is served from config and **also never contacts upstream**. A relay whose Copilot
 token expired an hour ago passes layers 1 and 2.
 
@@ -184,7 +184,7 @@ token expired an hour ago passes layers 1 and 2.
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-5.6-sol","max_tokens":16,
+  -d '{"model":"gpt-6-astra","max_tokens":16,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 

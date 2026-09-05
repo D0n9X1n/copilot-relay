@@ -90,14 +90,14 @@ copilot-relay 0.2.5
   version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
-  models     gpt-5.6-sol[1m], claude-opus-5
+  models     gpt-6-astra[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-5.6-sol
+    gptModel                gpt-6-astra
     opusModel               claude-opus-5
     host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```
@@ -156,7 +156,7 @@ curl -s http://127.0.0.1:4142/healthz
 curl -s http://127.0.0.1:4142/v1/models
 ```
 
-期望看到你配置的模型，例如 `gpt-5.6-sol[1m]` 和 `claude-opus-5`。结果直接来自配置，
+期望看到你配置的模型，例如 `gpt-6-astra[1m]` 和 `claude-opus-5`。结果直接来自配置，
 **同样不访问上游**。一个 Copilot 令牌一小时前就过期的 relay，前两层照样通过。
 
 ### 第三层 —— 端到端
@@ -165,7 +165,7 @@ curl -s http://127.0.0.1:4142/v1/models
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-5.6-sol","max_tokens":16,
+  -d '{"model":"gpt-6-astra","max_tokens":16,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 

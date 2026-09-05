@@ -118,8 +118,8 @@ startup preflight. It applies model routing, think effort, and request logging,
 and chooses Copilot `/responses` for configured GPT-style models.
 
 `src/copilot/responses.ts` translates between the Copilot Responses API and
-chat-completion-like results. It exists because `gpt-5.6-sol` (the default
-`gptModel`) and the rest of the `gpt-5.5`/`gpt-5.6` family use `/responses`
+chat-completion-like results. It exists because the default `gpt-6-astra`, the
+previous `gpt-5.6-sol` default, and the `gpt-5.5`/`gpt-5.6` family use `/responses`
 upstream, while Opus uses `/chat/completions`.
 
 Two upstream APIs, one Claude-facing protocol. Claude Code never learns which
@@ -173,11 +173,11 @@ load-bearing here; both were verified against live Copilot upstream.
 
 ### `/responses` needs a stable `prompt_cache_key`
 
-`gpt-5.6-sol` — and other `/responses`-only models such as the rest of the
-`gpt-5.5`/`gpt-5.6` family — only return prompt cache hits when each request
-carries a stable `prompt_cache_key` pinning it to the same backend. Without the
-key, `cached_tokens` randomly drops to 0 across turns even for a byte-identical
-prefix.
+Copilot `/responses` cache tests with the GPT-5.5/5.6 family showed that a stable
+`prompt_cache_key` pins requests to the same backend. Without the key,
+`cached_tokens` can drop to 0 across turns even for a byte-identical prefix.
+The relay sends this key for Astra too; using the same request builder is not a
+measurement of Astra's cache-hit rate.
 
 `buildResponsesRequestPayload` derives a per-conversation key:
 
@@ -201,8 +201,8 @@ cache-routing value, not the identifier.
 
 Measured end-to-end (`gpt-5.5`, stable user id, large prefix): steady-state
 `cache_read` hits ~100% once warm, versus a flat 0 without the key.
-`gpt-5.6-sol` uses the same `/responses` path and cache-key mechanism, so the
-behavior carries over.
+`gpt-5.6-sol` and `gpt-6-astra` use the same `/responses` request builder and
+cache-key mechanism; the measurement above is from GPT-5.5, not an Astra benchmark.
 
 There is no caching difference to recover by switching `gptModel` between
 `/responses` models: `/chat/completions` models (e.g. `gpt-5.4`) also cache only

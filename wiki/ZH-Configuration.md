@@ -24,7 +24,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 
@@ -43,6 +43,97 @@ opusModel: claude-opus-5
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
 | `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
+
+## 选择模型和 thinking effort
+
+### 列出可用模型
+
+模型是否可用取决于 Copilot 账号及组织策略。安装 GitHub Copilot CLI 后，在终端运行
+`copilot`，然后**在其交互会话中**输入：
+
+```text
+/model
+```
+
+选择器会列出账号可见的模型及所选模型支持的 effort。请使用与 relay 相同的账号。
+在这里选择模型只会改变 Copilot CLI 会话，不会修改 relay 配置。不存在
+`copilot-relay models` 命令。
+
+Relay 使用的权威模型目录是配置的 `copilotBaseUrl` 上需要认证的 `GET /models`。
+启动时会查询该目录，再探测两个配置模型。`copilot-relay status` 和本地
+`GET /v1/models` 只显示配置的 relay ID，不会拉取上游目录，也不能证明模型可用。
+自建网关的模型目录可能与 Copilot CLI 不同。不要把 bearer token 粘贴到命令、日志或
+issue 中。
+
+### 选择兼容的 effort
+
+`thinkEffort` 会覆盖客户端传入的 effort，并同时应用于两条路由。选择 `gptModel` 和
+`opusModel` **都支持**的值；如果设置了 `webSearchBackend`，它也必须支持该值。
+Relay 接受 `none`、`low`、`medium`、`high`、`xhigh`、`max`。旧配置值 `minimal`
+会被规范化为 `low`，不是独立档位。缺少 effort 元数据表示“未公布”，不是“支持所有档位”。
+
+2026-09-05 查询的实时目录显示，`gpt-6-astra` 和 `claude-opus-5` 都支持 `low`、
+`medium`、`high`、`xhigh`、`max`；Astra 未公布 `none`。更高 effort 通常会以更多
+延迟和 token 消耗换取更多推理。切换任意模型时应重新检查选择器，而不是假设所有模型都
+接受 `max`。
+
+### 更新 relay 配置
+
+修改已有的键并保留其他设置。macOS 或 Linux：
+
+```sh
+${EDITOR:-vi} ~/.copilot-relay/config.yaml
+```
+
+Windows PowerShell：
+
+```powershell
+notepad "$env:USERPROFILE\.copilot-relay\config.yaml"
+```
+
+在 macOS/Linux 上，可选用 **Mike Farah 的 `yq` v4** 切换 GPT 路由并保留你的 Opus
+选择；直接用编辑器不需要额外依赖：
+
+```sh
+cp -p ~/.copilot-relay/config.yaml ~/.copilot-relay/config.yaml.bak
+yq -i '.gptModel = "gpt-6-astra" | .thinkEffort = "max"' ~/.copilot-relay/config.yaml
+```
+
+确认另一个配置模型支持后再用 `max`。全新安装的默认组合为：
+
+```yaml
+gptModel: gpt-6-astra
+opusModel: claude-opus-5
+thinkEffort: max
+```
+
+这些键支持热重载。如需立即验证两条路由，先等待正在进行的工作结束，再运行
+`copilot-relay restart`，或通过服务管理器重启（见各平台服务页面）。启动会发送少量真实
+上游请求并消耗 token；`restart` 会以前台方式运行 relay。`status --deep` 只向 GPT
+路由发送一次真实请求，不是对两条路由的完整验证。
+
+已有安装会保留已保存的模型选择，升级软件包不会迁移这些值。如果启动报告 Astra 不可用，
+请编辑已生成的 `config.yaml`，选择账号支持的模型，例如**目录中存在时**使用
+`gpt-5.6-sol`，并设置兼容的 effort。Relay 会明确失败，不会静默回退。需要撤销修改时，
+恢复 `config.yaml.bak`。
+
+### 使用 1M context window
+
+Relay 配置保留规范 ID `gpt-6-astra`。Relay 向 Claude Code 暴露
+`gpt-6-astra[1m]`，向 Copilot 只发送 `gpt-6-astra`。`[1m]` 控制 Claude Code 的
+context 计数，不能扩大上游容量。2026-09-05 查询的目录公布了 1,000,000-token 总窗口、
+872,000 prompt tokens 和最多 128,000 output tokens。应为输出预留空间，并在达到
+上游 prompt 限制前压缩；这些是公布的限制，并非通过百万 token 请求实测得出。
+
+已有 Claude Code 配置需要明确选择新身份：
+
+```sh
+claude --model 'gpt-6-astra[1m]'
+```
+
+也可以在 Claude Code 中输入 `/model gpt-6-astra[1m]`。`claudeSetup: true` 只在没有
+主要模型覆盖项时写入默认模型；它会保留已有模型选择和 shell wrapper。如果 wrapper
+固定了其他 `--model`，也需要修改。
 
 ## copilotBaseUrl 规则
 

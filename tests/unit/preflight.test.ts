@@ -1,10 +1,22 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
-import { validateUpstream } from "../../src/lib/preflight"
-import { runtimeState } from "../../src/lib/state"
+
+const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-preflight-"))
+process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
+
+const { validateUpstream } = await import("../../src/lib/preflight")
+const { runtimeState } = await import("../../src/lib/state")
+
+test.after(async () => {
+  await fs.rm(tempHome, { force: true, recursive: true })
+})
 
 interface CapturedRequest {
   body: unknown
@@ -19,7 +31,9 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   return body ? JSON.parse(body) as unknown : undefined
 }
 
-const startMockCopilot = async () => {
+const startMockCopilot = async (
+  modelIds = ["gpt-6-astra", "claude-opus-4.8"],
+) => {
   const requests: Array<CapturedRequest> = []
   const server = createHttpServer(async (request, response) => {
     const path = request.url ?? "/"
@@ -29,7 +43,7 @@ const startMockCopilot = async () => {
 
     if (path === "/models") {
       response.end(JSON.stringify({
-        data: [{ id: "gpt-5.6-sol" }, { id: "claude-opus-4.8" }],
+        data: modelIds.map((id) => ({ id })),
       }))
       return
     }
@@ -100,7 +114,7 @@ test.afterEach(() => {
 test("preflight uses canonical upstream model ids", async () => {
   const mock = await startMockCopilot()
   runtimeState.modelRouting = {
-    gptModel: "GPT-5.6-SOL[1M][1m]",
+    gptModel: "GPT-6-ASTRA[1M][1m]",
     opusModel: "claude-opus-4.8",
   }
   runtimeState.thinkEffort = "max"
@@ -124,9 +138,41 @@ test("preflight uses canonical upstream model ids", async () => {
     const upstreamModels = mock.requests.flatMap((request) =>
       request.path === "/models" ? [] : [(request.body as { model?: string }).model]
     )
-    assert.deepEqual(upstreamModels, ["gpt-5.6-sol", "claude-opus-4.8"])
+    assert.deepEqual(upstreamModels, ["gpt-6-astra", "claude-opus-4.8"])
     assert.equal(upstreamModels.some((model) => model?.includes("[1m]")), false)
+    const responsesRequest = mock.requests.find((request) => request.path === "/responses")
+    assert.equal(
+      (responsesRequest?.body as { reasoning?: { effort?: string } }).reasoning?.effort,
+      "max",
+    )
   } finally {
     await mock.close()
   }
 })
+
+for (const missing of ["gpt-6-astra", "claude-opus-5"]) {
+  test(`preflight rejects unavailable ${missing} without changing models`, async () => {
+    const models = ["gpt-6-astra", "claude-opus-5", "gpt-5.6-sol"]
+    const mock = await startMockCopilot(models.filter((model) => model !== missing))
+    const routing = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5" }
+    runtimeState.modelRouting = { ...routing }
+    runtimeState.thinkEffort = "max"
+
+    try {
+      await assert.rejects(validateUpstream({
+        copilotBaseUrl: mock.baseUrl,
+        copilotToken: "test-token",
+        host: "127.0.0.1",
+        port: 0,
+        upstreamTimeoutMs: 1_000,
+        vsCodeVersion: "1.99.3",
+      }, "max"), {
+        message: `Required Copilot model(s) unavailable upstream: ${missing}`,
+      })
+      assert.deepEqual(mock.requests.map((request) => request.path), ["/models"])
+      assert.deepEqual(runtimeState.modelRouting, routing)
+    } finally {
+      await mock.close()
+    }
+  })
+}

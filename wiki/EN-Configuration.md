@@ -25,7 +25,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 
@@ -44,6 +44,106 @@ opusModel: claude-opus-5
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `gptModel` | Upstream model for non-Opus requests. |
 | `opusModel` | Upstream model for requested models containing `opus`. |
+
+## Choose models and thinking effort
+
+### List available models
+
+Model availability depends on your Copilot account and organization policy. With
+GitHub Copilot CLI installed, run `copilot` in your terminal, then enter this
+command **inside its interactive session**:
+
+```text
+/model
+```
+
+The picker lists account-visible models and the selected model's supported effort
+choices. Use the same account as the relay. Selecting a model there changes the
+Copilot CLI session, not the relay configuration. There is no `copilot-relay models`
+command.
+
+The authoritative relay catalog is authenticated `GET /models` at your configured
+`copilotBaseUrl`. Startup queries it and then probes both configured models.
+`copilot-relay status` and local `GET /v1/models` show configured relay IDs only;
+they never fetch that catalog and do not prove model access. A custom gateway may
+have a different catalog from Copilot CLI. Never paste bearer tokens into commands,
+logs, or issue reports.
+
+### Choose a compatible effort
+
+`thinkEffort` overrides client-provided effort for both routes. Choose a value
+supported by **both** `gptModel` and `opusModel` (and by `webSearchBackend` when
+set). The relay accepts `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Legacy config value `minimal` is normalized to `low`; it is not a separate tier.
+Missing effort metadata means "not advertised," not "all tiers supported."
+
+The live catalog checked on 2026-09-05 advertised `low`, `medium`, `high`, `xhigh`,
+and `max` for both `gpt-6-astra` and `claude-opus-5`; `none` is not advertised for
+Astra. Higher effort generally trades latency and token use for more reasoning.
+Recheck the picker when changing either model instead of assuming every model
+accepts `max`.
+
+### Update the relay config
+
+Edit the existing keys, preserving unrelated settings. macOS or Linux:
+
+```sh
+${EDITOR:-vi} ~/.copilot-relay/config.yaml
+```
+
+Windows PowerShell:
+
+```powershell
+notepad "$env:USERPROFILE\.copilot-relay\config.yaml"
+```
+
+To switch the GPT route while keeping your Opus choice, use **Mike Farah's `yq`
+v4** on macOS/Linux (optional; the editor needs no extra dependency):
+
+```sh
+cp -p ~/.copilot-relay/config.yaml ~/.copilot-relay/config.yaml.bak
+yq -i '.gptModel = "gpt-6-astra" | .thinkEffort = "max"' ~/.copilot-relay/config.yaml
+```
+
+Use `max` only after checking the other configured model. The fresh-install pair is:
+
+```yaml
+gptModel: gpt-6-astra
+opusModel: claude-opus-5
+thinkEffort: max
+```
+
+These keys hot-reload. To validate both routes immediately, wait for active work to
+finish and run `copilot-relay restart`, or restart through your service manager
+(see the platform service pages). Startup makes small real upstream requests that
+consume tokens; `restart` runs the relay in the foreground. `status --deep` makes
+one real request to the GPT route, not a validation of both routes.
+
+Existing installations keep their saved model choices; upgrading the package does
+not migrate them. If startup reports Astra unavailable, edit the generated
+`config.yaml` to a model your account supports, such as `gpt-5.6-sol` **if listed**,
+and choose a compatible effort. The relay fails explicitly rather than silently
+falling back. Restore `config.yaml.bak` if you need to undo the edit.
+
+### Use the 1M context window
+
+Keep the canonical `gpt-6-astra` in relay config. The relay exposes
+`gpt-6-astra[1m]` to Claude Code and sends only `gpt-6-astra` to Copilot. `[1m]`
+controls Claude Code's context accounting; it does not enlarge upstream capacity.
+The catalog checked on 2026-09-05 advertised a 1,000,000-token total window,
+872,000 prompt tokens, and up to 128,000 output tokens. Leave room for output and
+compact before hitting the upstream prompt limit; no million-token request was
+used to establish these advertised limits.
+
+For an existing Claude Code setup, select the new identity explicitly:
+
+```sh
+claude --model 'gpt-6-astra[1m]'
+```
+
+Or enter `/model gpt-6-astra[1m]` inside Claude Code. `claudeSetup: true` seeds a
+model only when no primary override exists; it preserves existing model selections
+and shell wrappers. Update a wrapper that pins a different `--model` if necessary.
 
 ## copilotBaseUrl rules
 
