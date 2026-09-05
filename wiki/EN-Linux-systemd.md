@@ -178,7 +178,7 @@ an hour ago passes layers 1 and 2.
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-6-astra","max_tokens":16,
+  -d '{"model":"gpt-6-astra","max_tokens":256,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 
@@ -186,6 +186,12 @@ A `200` with `content` and non-zero `usage` proves the whole path: config, token
 refresh, the Copilot call, and translation back to Claude shape. **This is the
 only check that proves the relay can serve Claude Code.** It costs a handful of
 tokens.
+
+The 256-token cap gives reasoning more headroom than the CLI diagnostic's 16-token
+cap, but does not guarantee visible text. A successful assistant message with
+empty `content`, `stop_reason: max_tokens`, and positive `usage.output_tokens`
+still proves upstream reachability, not a completed answer. See
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 Layers 1 and 2 passing while layer 3 fails means auth or upstream, not the unit
 file — run `copilot-relay auth` and read today's log.

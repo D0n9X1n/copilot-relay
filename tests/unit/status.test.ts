@@ -10,7 +10,7 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-status-"
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
+const { checkDeep, hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
   await import("../../src/status")
 const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
   await import("../../src/lib/lifecycle")
@@ -105,6 +105,104 @@ test("reports a successful end-to-end check under --deep", () => {
   assert.match(out, /upstream\s+ok \(890ms\)/)
   assert.match(out, /end-to-end/)
 })
+
+const exhaustedProbeResponse = {
+  type: "message",
+  role: "assistant",
+  model: "gpt-6-astra[1m]",
+  content: [],
+  stop_reason: "max_tokens",
+  usage: { input_tokens: 11, output_tokens: 16 },
+}
+
+for (const [name, body, detail] of [
+  ["visible text", {
+    ...exhaustedProbeResponse,
+    content: [{ type: "text", text: "ok" }],
+    stop_reason: "end_turn",
+  }, undefined],
+  ["reasoning that exhausts the output budget", exhaustedProbeResponse,
+    "output budget exhausted before visible text"],
+] as const) {
+  test(`deep probe accepts ${name} without overriding effort`, async (t) => {
+    let captured: { url: unknown; init?: RequestInit } | undefined
+    t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+      captured = { url, init }
+      return Response.json(body)
+    })
+
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    assert.equal(captured?.url, "http://127.0.0.1:4142/v1/messages")
+    assert.equal(captured?.init?.method, "POST")
+    assert.deepEqual(captured?.init?.headers, {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    })
+    assert.deepEqual(JSON.parse(String(captured?.init?.body)), {
+      max_tokens: 16,
+      messages: [{ content: "Reply with the single word: ok", role: "user" }],
+      model: "gpt-6-astra[1m]",
+    })
+    assert.ok(captured?.init?.signal instanceof AbortSignal)
+    assert.equal(result.ok, true)
+    assert.equal(result.detail, detail)
+    assert.equal(typeof result.ms, "number")
+    assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 0)
+    if (detail) {
+      const text = render({ ...runningStatus, deep: result })
+      assert.ok(text.includes(detail))
+      assert.doesNotMatch(text, /copilot-relay auth/)
+    }
+  })
+}
+
+for (const [name, body] of [
+  ["empty completed response", { ...exhaustedProbeResponse, stop_reason: "end_turn" }],
+  ["zero output usage", { ...exhaustedProbeResponse, usage: { output_tokens: 0 } }],
+  ["missing usage", { ...exhaustedProbeResponse, usage: undefined }],
+  ["string output usage", { ...exhaustedProbeResponse, usage: { output_tokens: "16" } }],
+  ["negative output usage", { ...exhaustedProbeResponse, usage: { output_tokens: -1 } }],
+  ["wrong response type", { ...exhaustedProbeResponse, type: "error" }],
+  ["wrong response role", { ...exhaustedProbeResponse, role: "user" }],
+  ["missing content", { ...exhaustedProbeResponse, content: undefined }],
+  ["non-array content", { ...exhaustedProbeResponse, content: "" }],
+  ["missing response", null],
+] as const) {
+  test(`deep probe rejects ${name}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => Response.json(body))
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    assert.equal(result.ok, false)
+    assert.equal(result.detail, "empty response")
+    assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
+  })
+}
+
+for (const [status, body, detail] of [
+  [401, { error: { message: "unauthorized" } }, "http 401: unauthorized"],
+  [500, exhaustedProbeResponse, "http 500"],
+] as const) {
+  test(`deep probe rejects HTTP ${status} regardless of response content`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => Response.json(body, { status }))
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    assert.equal(result.ok, false)
+    assert.equal(result.detail, detail)
+    assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
+  })
+}
+
+for (const [name, response, detail] of [
+  ["invalid JSON", () => new Response("not JSON"), "empty response"],
+  ["network failure", () => { throw new Error("fetch failed") }, "fetch failed"],
+  ["timeout", () => { throw new DOMException("timeout", "TimeoutError") }, "timed out"],
+] as const) {
+  test(`deep probe rejects ${name}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => response())
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    assert.equal(result.ok, false)
+    assert.equal(result.detail, detail)
+    assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
+  })
+}
 
 // Why: listening but unable to reach Copilot is the failure users actually hit,
 // and the fix is not obvious from the symptom.

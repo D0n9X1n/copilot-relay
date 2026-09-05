@@ -165,13 +165,18 @@ curl -s http://127.0.0.1:4142/v1/models
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-6-astra","max_tokens":16,
+  -d '{"model":"gpt-6-astra","max_tokens":256,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 
 返回 `200`，带 `content` 和非零 `usage`，说明整条链路都是通的：配置、令牌刷新、Copilot
 调用，以及转换回 Claude 格式。**只有这一层能证明 relay 真的可以为 Claude Code 服务。**
 它会消耗少量 token。
+
+256-token 上限比 CLI 诊断的 16-token 上限为推理留出更多余量，但并不保证一定有可见文字。
+成功的 assistant message 即使 `content` 为空，只要有 `stop_reason: max_tokens` 和正数
+`usage.output_tokens`，仍能证明上游可达，而非答案已完成。参见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 如果前两层通过而第三层失败，问题在鉴权或上游，不在 unit 文件 —— 执行
 `copilot-relay auth` 并查看当天日志。

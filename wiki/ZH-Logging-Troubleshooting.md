@@ -38,6 +38,13 @@ copilot-relay status --deep
 `--deep` 会经由 Copilot 发一个真实请求。它是可选的，因为要花掉一点 token。退出码：
 `0` 运行且可达，`1` 未运行，`2` 在运行但不可用。
 
+诊断保留 16-token 输出预算，推理与可见文字共享这个预算。成功的 assistant message 若
+带有 `stop_reason: max_tokens` 和正数 `usage.output_tokens`，即使 `content` 为空也能
+证明上游往返成功。这时文字输出和 JSON 的 `deep.detail` 都会显示
+`output budget exhausted before visible text`；退出码 `0` 表示可达，不代表答案已经完成。
+空的已完成响应、缺少预算耗尽证据的响应和 HTTP 错误仍然会失败。如果需要可见答案，请
+用更大的输出预算手动发请求，不要仅因为推理用完探针预算就重新认证。
+
 ## 日志文件
 
 当前文件带**本地**日历日期，每天本地零点轮转：
