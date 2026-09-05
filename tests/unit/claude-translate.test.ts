@@ -30,6 +30,10 @@ const createChatResponse = (model: string): ChatCompletionResponse => ({
 // model names.
 test("normalizes completed response model metadata for Claude", () => {
   assert.equal(
+    translateToClaude(createChatResponse("gpt-6-astra")).model,
+    "gpt-6-astra[1m]",
+  )
+  assert.equal(
     translateToClaude(createChatResponse("gpt-5.6-sol")).model,
     "gpt-5.6-sol[1m]",
   )

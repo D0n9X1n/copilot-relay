@@ -118,8 +118,8 @@ startup preflight. It applies model routing, think effort, and request logging,
 and chooses Copilot `/responses` for configured GPT-style models.
 
 `src/copilot/responses.ts` translates between the Copilot Responses API and
-chat-completion-like results. It exists because `gpt-5.6-sol` (the default
-`gptModel`) and the rest of the `gpt-5.5`/`gpt-5.6` family use `/responses`
+chat-completion-like results. It exists because the default `gpt-6-astra`, the
+previous `gpt-5.6-sol` default, and the `gpt-5.5`/`gpt-5.6` family use `/responses`
 upstream, while Opus uses `/chat/completions`.
 
 Two upstream APIs, one Claude-facing protocol. Claude Code never learns which
@@ -171,13 +171,13 @@ tool definitions, prior turns) every request. Prompt cache hits on that prefix
 are the main lever for input-token cost and latency. Two relay behaviors are
 load-bearing here; both were verified against live Copilot upstream.
 
-### `/responses` needs a stable `prompt_cache_key`
+### `/responses` cache routing with `prompt_cache_key`
 
-`gpt-5.6-sol` — and other `/responses`-only models such as the rest of the
-`gpt-5.5`/`gpt-5.6` family — only return prompt cache hits when each request
-carries a stable `prompt_cache_key` pinning it to the same backend. Without the
-key, `cached_tokens` randomly drops to 0 across turns even for a byte-identical
-prefix.
+The relay sends a stable `prompt_cache_key` as a cache-routing hint. Earlier
+Copilot `/responses` tests with the GPT-5.5/5.6 family found cache reads dropping
+to 0 without it. That does not establish that every model requires the key:
+Astra also cached requests without it in the controlled check below. A key alone
+neither guarantees a cache hit nor replaces a stable prompt prefix.
 
 `buildResponsesRequestPayload` derives a per-conversation key:
 
@@ -199,15 +199,33 @@ Operationally: treat `metadata.user_id` as a value GitHub Copilot will see.
 Do not put secrets or personal data in it. Hashing the cache key protects the
 cache-routing value, not the identifier.
 
-Measured end-to-end (`gpt-5.5`, stable user id, large prefix): steady-state
-`cache_read` hits ~100% once warm, versus a flat 0 without the key.
-`gpt-5.6-sol` uses the same `/responses` path and cache-key mechanism, so the
-behavior carries over.
+Earlier end-to-end measurements with `gpt-5.5`, a stable user id, and a large
+prefix showed ~100% warm cache reads versus 0 without the key. Treat that as a
+measurement of that model and workload, not a universal cache requirement.
 
-There is no caching difference to recover by switching `gptModel` between
-`/responses` models: `/chat/completions` models (e.g. `gpt-5.4`) also cache only
-because their prefix is stable, and the `gpt-5.5`/`gpt-5.6` family reaches the
-same hit rate with the key.
+### GPT-6 Astra cache check
+
+On 2026-09-05 (UTC), six small non-streaming calls to Copilot `/responses` used
+`gpt-6-astra`, `low` effort, a synthetic prefix, and the relay's actual
+`buildResponsesRequestPayload`. Each arm had its own prefix marker and three
+identical requests. Both arms kept a stable synthetic `user`; the no-key arm
+removed only `prompt_cache_key` from the constructed payload.
+
+| Request | With stable key: cached / input tokens | Without key: cached / input tokens |
+| --- | --- | --- |
+| First (cold) | 0 / 9,789 | 0 / 9,789 |
+| Second | 9,786 / 9,789 (99.97%) | 9,786 / 9,789 (99.97%) |
+| Third | 9,786 / 9,789 (99.97%) | 9,786 / 9,789 (99.97%) |
+
+All six returned HTTP 200 and `OK`, with 5 output tokens each. The relay's
+Responses-to-Claude translation preserved `cache_read_input_tokens: 9786` and
+reported 3 uncached input tokens on the warm calls.
+
+This confirms that Astra accepts the existing key and returns cache hits with it.
+The no-key control also hit cache, so the experiment does **not** prove that Astra
+requires the key or that it improves hit rates. Keep the stable key, but measure
+real workloads: this short single-account run at `low` effort does not establish
+behavior at `max`, under concurrency, after cache expiry, or near the 1M limit.
 
 ### Assistant `thinking` stays in upstream history
 

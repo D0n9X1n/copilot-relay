@@ -132,10 +132,10 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 ```text
 info Log level: info
 info Think effort: xhigh
-info Exposed models: gpt-5.6-sol[1m], claude-opus-5
+info Exposed models: gpt-6-astra[1m], claude-opus-5
 info Running upstream preflight
-info Upstream models available: gpt-5.6-sol, claude-opus-5
-info Preflight OK: model=gpt-5.6-sol think_effort=xhigh
+info Upstream models available: gpt-6-astra, claude-opus-5
+info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
 info copilot-relay listening on http://127.0.0.1:4142
 ```
@@ -209,7 +209,7 @@ debug request_id=3b241101-e2bb-4255-8caf-4136c566a962 Copilot POST /responses ->
 条目会把完整上游上下文保持在一行里：
 
 ```text
-error Failed to create responses: route=/responses model=gpt-5.6-sol status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
+error Failed to create responses: route=/responses model=gpt-6-astra status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
 ```
 
 ### 请求 payload

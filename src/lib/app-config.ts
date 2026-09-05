@@ -37,7 +37,7 @@ export interface AppConfig {
 const defaultConfig: AppConfig = {
   claudeSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
-  gptModel: "gpt-5.6-sol",
+  gptModel: "gpt-6-astra",
   host: "127.0.0.1",
   logLevel: "info",
   logRetentionDays: 3,

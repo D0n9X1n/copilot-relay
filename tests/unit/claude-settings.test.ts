@@ -25,12 +25,12 @@ const readSettings = async (
 // Why: a fresh managed Claude Code setup must actually select the configured GPT
 // default and expose its 1M client-side context identity without changing the
 // canonical model that Copilot receives.
-test("creates Claude settings with the 1M GPT identity", async () => {
+test("creates Claude settings with Astra's 1M identity", async () => {
   await withTemporarySettings(async (configPath) => {
     const result = await applyClaudeConfig({
       baseUrl: "http://127.0.0.1:4142",
       configPath,
-      gptModel: "GPT-5.6-SOL[1M][1m]",
+      gptModel: "GPT-6-ASTRA[1M][1m]",
     })
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
@@ -41,7 +41,7 @@ test("creates Claude settings with the 1M GPT identity", async () => {
       created: true,
       previousBaseUrl: undefined,
     })
-    assert.equal(settings.model, "gpt-5.6-sol[1m]")
+    assert.equal(settings.model, "gpt-6-astra[1m]")
     assert.equal(env.ANTHROPIC_MODEL, undefined)
     assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:4142")
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, "dummy")

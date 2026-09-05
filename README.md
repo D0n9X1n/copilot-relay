@@ -49,13 +49,14 @@ Routing:
 | Requested model | Upstream model |
 | --- | --- |
 | contains `opus` | `claude-opus-5` |
-| `gpt-5.6-sol[1m]`, plain `gpt-5.6-sol`, or another non-Opus alias | `gpt-5.6-sol` |
+| `gpt-6-astra[1m]`, plain `gpt-6-astra`, or another non-Opus alias | `gpt-6-astra` |
 
-The relay advertises `gpt-5.6-sol[1m]` to Claude Code. The `[1m]` selector
-changes Claude Code's client-side context budgeting only; every Copilot request
-still uses `gpt-5.6-sol`, and the relay cannot enlarge GitHub Copilot's upstream
-capacity. An explicit CLI or API model override that bypasses the managed Claude
-settings is outside this guarantee.
+The fresh-install default is `gpt-6-astra`, exposed to Claude Code as
+`gpt-6-astra[1m]`. The selector changes Claude Code's client-side context budgeting
+only; Copilot receives the canonical `gpt-6-astra` ID. It does not enlarge
+upstream capacity. Existing `config.yaml` model choices are never migrated.
+If your account cannot use Astra, startup fails explicitly; choose a model your
+account supports rather than relying on an automatic fallback.
 
 Claude Code can still show its built-in Haiku and Sonnet picker entries. The
 managed `model` field sets the startup default but does not restrict
@@ -73,8 +74,8 @@ npx copilot-relay@latest stop
 With `claudeSetup: true`, `start` manages `ANTHROPIC_BASE_URL`, a dummy
 `ANTHROPIC_AUTH_TOKEN` when auth is absent, and the configured GPT default via
 the top-level `model` field in `~/.claude/settings.json`. Exact
-`gpt-5.6-sol` model overrides are normalized to the Claude-facing
-`gpt-5.6-sol[1m]` identity; unrelated model choices are preserved.
+`gpt-6-astra` and `gpt-5.6-sol` overrides are normalized to Claude-facing
+`[1m]` identities; unrelated model choices are preserved.
 
 ## Config
 
@@ -90,12 +91,16 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
+gptModel: gpt-6-astra
+opusModel: claude-opus-5
 ```
 
 copilot-relay writes the resolved config back to this file, so every key is
 present after the first start. Shipped defaults therefore apply to fresh
 installs only — once a value is in your `config.yaml` it is never rewritten by
-an upgrade. To pick up a changed default, edit the key yourself.
+an upgrade. To pick up a changed default, edit the key yourself. See
+[Configuration](wiki/EN-Configuration.md) / [配置说明](wiki/ZH-Configuration.md)
+for live model discovery, compatible thinking efforts, and copy-paste updates.
 
 `logLevel` controls verbosity:
 
@@ -137,7 +142,7 @@ copilot-relay 0.2.5
   version    0.2.5
   listening  http://127.0.0.1:4142
   health     ok (9ms)
-  models     gpt-5.6-sol[1m], claude-opus-5
+  models     gpt-6-astra[1m], claude-opus-5
   upstream   not checked (use --deep)
   log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
   config     ~/.copilot-relay/config.yaml
@@ -150,7 +155,7 @@ copilot-relay 0.2.5
     thinkEffort             max
     upstreamTimeoutSeconds  180
     webSearchBackend        (unset — uses gptModel)
-    gptModel                gpt-5.6-sol
+    gptModel                gpt-6-astra
     opusModel               claude-opus-5
     host, port and claudeSetup take effect on restart; the rest hot-reload.
 ```

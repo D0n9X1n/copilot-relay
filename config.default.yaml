@@ -52,7 +52,7 @@ webSearchBackend:
 # Model routing: requests containing "opus" use opusModel; all others use gptModel.
 #
 # Upstream Copilot model used for non-Opus requests.
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 
 # Upstream Copilot model used for requests containing "opus".
 opusModel: claude-opus-5

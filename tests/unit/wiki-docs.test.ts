@@ -381,6 +381,31 @@ test("every wiki link to a page carries .md in source", () => {
   )
 })
 
+// Why: Copilot availability and effort tiers are account-specific. The local
+// relay endpoint only echoes config, so both language guides must preserve the
+// live picker workflow and a direct, token-safe way to update all model knobs.
+test("Configuration documents live model discovery and simple updates", () => {
+  for (const page of ["EN-Configuration.md", "ZH-Configuration.md"]) {
+    const body = readPage(page)
+
+    for (const required of [
+      "/model",
+      "GET /v1/models",
+      "gpt-6-astra",
+      "claude-opus-5",
+      "thinkEffort",
+      "yq -i",
+      "copilot-relay restart",
+      "[1m]",
+    ]) {
+      assert.ok(
+        body.includes(required),
+        `wiki/${page} must document ${required}`,
+      )
+    }
+  }
+})
+
 // Why: prompt_cache_key is SHA-256 derived and exposes nothing, but
 // buildResponsesRequestPayload ALSO sets `user: sanitizeUserIdentifier(...)`,
 // and sanitizeUserIdentifier only truncates to 64 chars -- it does not hash.

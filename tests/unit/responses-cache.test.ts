@@ -26,45 +26,71 @@ test("gpt-5.5 routes to the /responses endpoint", () => {
   assert.equal(shouldUseResponsesApiForModel("gpt-5.5-2025-01-01"), true)
 })
 
-// Why: gpt-5.6-sol (the default gptModel) rejects /chat/completions with
-// unsupported_api_for_model, so it must be classified as Responses-only up front
-// instead of relying on the failed-chat retry fallback.
+// Existing GPT-5.6 configurations must still use Responses without a failed chat request.
 test("gpt-5.6 family routes to the /responses endpoint", () => {
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-sol"), true)
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-luna"), true)
   assert.equal(shouldUseResponsesApiForModel("gpt-5.6-terra"), true)
 })
 
-// Why: /responses only returns prompt cache hits when a STABLE prompt_cache_key
-// pins repeated requests to the same backend. Without it, cached_tokens randomly
-// drops to 0 across turns even for identical prefixes (measured live). The relay
-// must always emit a key for /responses requests.
-test("buildResponsesRequestPayload always sets a prompt_cache_key", () => {
-  const payload = buildResponsesRequestPayload(basePayload(), "low")
-  assert.equal(typeof payload.prompt_cache_key, "string")
-  assert.ok((payload.prompt_cache_key as string).length > 0)
+// Why: GPT-6 Astra advertises only /responses upstream. Classifying it before
+// the request avoids a guaranteed failed /chat/completions attempt on every turn.
+test("gpt-6 Astra routes to the /responses endpoint", () => {
+  assert.equal(shouldUseResponsesApiForModel("gpt-6-astra"), true)
+  assert.equal(shouldUseResponsesApiForModel("GPT-6-ASTRA"), true)
 })
 
-// Why: a Claude Code session sends a stable metadata.user_id (surfaced as
-// payload.user). The same user must yield the same key across turns so the whole
-// session shares one warm cache, and different users must not collide.
-test("prompt_cache_key is stable per user and isolates different users", () => {
-  const a1 = buildResponsesRequestPayload(basePayload({ user: "session-AAA" }), "low")
-  const a2 = buildResponsesRequestPayload(basePayload({ user: "session-AAA" }), "low")
-  const b1 = buildResponsesRequestPayload(basePayload({ user: "session-BBB" }), "low")
+for (const model of ["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"]) {
+  test(`${model} keeps session cache keys stable across turns and effort changes`, () => {
+    const first = buildResponsesRequestPayload(basePayload({ model, user: "session-AAA" }), "low")
+    const next = buildResponsesRequestPayload(basePayload({
+      model,
+      user: "session-AAA",
+      messages: [
+        ...basePayload().messages,
+        { role: "assistant", content: "OK" },
+        { role: "user", content: "Reply again." },
+      ],
+    }), "max")
+    const other = buildResponsesRequestPayload(basePayload({ model, user: "session-BBB" }), "low")
 
-  assert.equal(a1.prompt_cache_key, a2.prompt_cache_key)
-  assert.notEqual(a1.prompt_cache_key, b1.prompt_cache_key)
+    assert.match(first.prompt_cache_key ?? "", /^cr-[a-f0-9]{32}$/)
+    assert.equal(first.prompt_cache_key, next.prompt_cache_key)
+    assert.notEqual(first.prompt_cache_key, other.prompt_cache_key)
+    assert.equal(first.model, model)
+    assert.deepEqual(next.reasoning, { effort: "max" })
+  })
+
+  test(`${model} derives the fallback key from the system prompt`, () => {
+    const first = buildResponsesRequestPayload(basePayload({ model }), "low")
+    const same = buildResponsesRequestPayload(basePayload({ model }), "low")
+    const different = buildResponsesRequestPayload(basePayload({
+      model,
+      messages: [{ role: "system", content: "A different system prompt." }],
+    }), "low")
+
+    assert.match(first.prompt_cache_key ?? "", /^cr-sys-[a-f0-9]{32}$/)
+    assert.equal(first.prompt_cache_key, same.prompt_cache_key)
+    assert.notEqual(first.prompt_cache_key, different.prompt_cache_key)
+  })
+}
+
+test("session cache keys do not encode the upstream model", () => {
+  const keys = ["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"].map((model) =>
+    buildResponsesRequestPayload(basePayload({ model, user: "session-AAA" }), "low").prompt_cache_key,
+  )
+
+  assert.equal(new Set(keys).size, 1)
+  assert.match(keys[0] ?? "", /^cr-[a-f0-9]{32}$/)
 })
 
-// Why: clients without a user id still benefit from caching when their system
-// prompt is identical, so fall back to a system-prompt hash rather than dropping
-// the key entirely.
-test("prompt_cache_key falls back to system prompt when no user id", () => {
-  const noUser = buildResponsesRequestPayload(basePayload(), "low")
-  const sameSystem = buildResponsesRequestPayload(basePayload(), "low")
-  assert.equal(noUser.prompt_cache_key, sameSystem.prompt_cache_key)
-  assert.ok((noUser.prompt_cache_key as string).startsWith("cr-sys-"))
+test("omits a cache key without a user identifier or system prompt", () => {
+  const payload = buildResponsesRequestPayload(basePayload({
+    model: "gpt-6-astra",
+    messages: [{ role: "user", content: "Reply OK" }],
+  }), "low")
+
+  assert.equal(payload.prompt_cache_key, undefined)
 })
 
 // Why: the Responses API expects reasoning effort nested as reasoning.effort,

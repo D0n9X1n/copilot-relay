@@ -18,7 +18,7 @@ test("exposes the 1M GPT identity in Claude stream metadata", () => {
     id: "chat_stream",
     object: "chat.completion.chunk",
     created: 1,
-    model: "gpt-5.6-sol",
+    model: "gpt-6-astra",
     choices: [
       {
         index: 0,
@@ -32,6 +32,6 @@ test("exposes the 1M GPT identity in Claude stream metadata", () => {
 
   assert.equal(
     start?.type === "message_start" ? start.message.model : undefined,
-    "gpt-5.6-sol[1m]",
+    "gpt-6-astra[1m]",
   )
 })

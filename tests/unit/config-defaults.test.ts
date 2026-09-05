@@ -72,7 +72,7 @@ test("applies defaults only to absent keys", async () => {
 
   assert.equal(config.port, 5000)
   assert.equal(config.opusModel, "claude-opus-5")
-  assert.equal(config.gptModel, "gpt-5.6-sol")
+  assert.equal(config.gptModel, "gpt-6-astra")
   assert.equal(config.logRetentionDays, 3)
 })
 
@@ -81,7 +81,15 @@ test("uses shipped defaults for a fresh install", async () => {
   const config = await readAppConfig()
 
   assert.equal(config.opusModel, "claude-opus-5")
-  assert.equal(config.gptModel, "gpt-5.6-sol")
+  assert.equal(config.gptModel, "gpt-6-astra")
+})
+
+test("keeps an existing Sol model through repeated reads", async () => {
+  await writeConfigFile("gptModel: gpt-5.6-sol\n")
+
+  assert.equal((await readAppConfig()).gptModel, "gpt-5.6-sol")
+  assert.equal((await readAppConfig()).gptModel, "gpt-5.6-sol")
+  assert.match(await readConfigFile(), /gptModel: gpt-5\.6-sol/)
 })
 
 // Why: v0.2.3 wrote configVersion into real user configs. Removing the parser

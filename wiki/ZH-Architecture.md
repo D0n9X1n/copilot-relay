@@ -79,17 +79,19 @@ GitHub Copilot API
 | 名字包含 `opus` | `opusModel` |
 | 其他 | `gptModel` |
 
-默认值：
+全新安装的首选值：
 
 ```yaml
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 
-`src/lib/models.ts` 负责这个映射，同时校验允许的 `thinkEffort` 取值：`none`、
-`low`、`medium`、`high`、`xhigh`、`max`。
+已有模型选择不会被迁移。如果账号无法使用 Astra，preflight 会失败；请在生成的配置中
+明确选择可用模型。
+`src/lib/models.ts` 负责这个映射，同时校验允许的 `thinkEffort` 取值：`none`、`low`、
+`medium`、`high`、`xhigh`、`max`。
 
-模型走哪个上游 **API** 和跑哪个模型是两个问题。`gpt-5.6-sol` 以及
+模型走哪个上游 **API** 和跑哪个模型是两个问题。`gpt-6-astra`、`gpt-5.6-sol` 以及
 `gpt-5.5`/`gpt-5.6` 系列的其余成员走 Copilot `/responses`；Opus 目前走
 `/chat/completions`。Claude Code 看不到这个差别 —— 两条路径都返回 Claude
 Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Internals.md)。
@@ -115,30 +117,20 @@ Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Inter
 
 ## 启动流程
 
-```text
-start 命令
-  |
-  | 读取 ~/.copilot-relay/config.yaml
-  | 不存在则从 config.default.yaml 创建
-  v
-应用运行期配置
-  |
-  | 读取/同步 github_token
-  | 读取/刷新 copilot_token.json
-  v
-对上游模型与 think effort 做 preflight
-  |
-  | 可选写入 Claude Code 设置
-  v
-启动 HTTP server
-  |
-  | 监听 config.yaml 热重载
-  v
-开始服务 Claude Code 请求
+```mermaid
+flowchart TD
+    A[启动命令] --> B[读取并写回完整配置]
+    B --> C[应用运行期配置]
+    C --> D[读取或刷新 GitHub 与 Copilot token]
+    D --> E[Preflight 校验两个模型 ID 和 thinking effort]
+    E --> F[绑定 HTTP 服务并写入 PID 记录]
+    F --> G[可选更新 Claude Code 设置]
+    G --> H[监听配置并处理请求]
 ```
 
 Preflight 在 socket 绑定**之前**运行。一个连配置模型都够不着的中继会直接启动失败，
-而不是先接下它根本处理不了的流量。
+而不是先接下它根本处理不了的流量。此时解析后的配置已经写入磁盘，因此可以直接修改
+账号不支持的模型。
 
 ## 运行期文件
 
@@ -177,7 +169,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
-gptModel: gpt-5.6-sol
+gptModel: gpt-6-astra
 opusModel: claude-opus-5
 ```
 
