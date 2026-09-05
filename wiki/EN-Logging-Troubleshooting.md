@@ -40,6 +40,15 @@ copilot-relay status --deep
 few tokens. Exit codes: `0` running and reachable, `1` not running, `2` running
 but not usable.
 
+The diagnostic keeps a 16-token output budget, shared by reasoning and visible
+text. A successful assistant message with `stop_reason: max_tokens` and positive
+`usage.output_tokens` proves the upstream round trip even if `content` is empty.
+In that case text output and JSON `deep.detail` say `output budget exhausted before
+visible text`; exit code `0` means reachability, not a completed answer. Empty
+completed responses, missing exhaustion evidence, and HTTP errors still fail.
+For a visible answer, send a manual request with a larger output budget rather
+than re-authenticating solely because reasoning used the probe's budget.
+
 ## The log file
 
 The active file carries the **local** calendar date and rotates at local

@@ -267,7 +267,7 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
   if (status.deep) {
     lines.push(
       status.deep.ok ?
-        `  upstream   ok (${status.deep.ms}ms) — end-to-end Copilot round trip`
+        `  upstream   ok (${status.deep.ms}ms) — ${status.deep.detail ?? "end-to-end Copilot round trip"}`
       : `  upstream   FAILED${status.deep.detail ? ` — ${status.deep.detail}` : ""}`,
     )
   } else {
@@ -375,7 +375,7 @@ const readModels = async (baseUrl: string): Promise<Array<string>> => {
  * Opt-in because it spends tokens. It is the only check that exercises token
  * refresh, the upstream call, and translation back to Claude shape.
  */
-const checkDeep = async (
+export const checkDeep = async (
   baseUrl: string,
   model: string,
 ): Promise<ProbeResult> => {
@@ -408,10 +408,34 @@ const checkDeep = async (
       }
     }
 
-    const content = (result.body as { content?: Array<unknown> } | undefined)?.content
-    return Array.isArray(content) && content.length > 0 ?
-        { ms: result.ms, ok: true }
-      : { detail: "empty response", ms: result.ms, ok: false }
+    const body = result.body as {
+      content?: unknown
+      role?: unknown
+      stop_reason?: unknown
+      type?: unknown
+      usage?: { output_tokens?: unknown }
+    } | undefined
+    if (Array.isArray(body?.content)) {
+      if (body.content.length > 0) {
+        return { ms: result.ms, ok: true }
+      }
+      // Reasoning can consume the probe's entire budget before visible text.
+      if (
+        body.type === "message"
+        && body.role === "assistant"
+        && body.stop_reason === "max_tokens"
+        && typeof body.usage?.output_tokens === "number"
+        && Number.isFinite(body.usage.output_tokens)
+        && body.usage.output_tokens > 0
+      ) {
+        return {
+          detail: "output budget exhausted before visible text",
+          ms: result.ms,
+          ok: true,
+        }
+      }
+    }
+    return { detail: "empty response", ms: result.ms, ok: false }
   } catch (error) {
     return { detail: describeError(error), ok: false }
   }
