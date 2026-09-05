@@ -81,6 +81,40 @@ copilot-relay stop
 有一部分历史早于这套规则 —— `v0.2.2` 是直接推送发布的，没有 PR —— 但从今往后按此
 执行。
 
+### 合并后必须清理
+
+PR 合并后，只有清理了不再活跃的功能分支和临时 worktree，或明确报告了保留的例外，
+才算完成。
+
+1. 确认 PR 已合并，并获取最新的基础分支。检查 `git status --short`、
+   `git worktree list --porcelain` 和分支祖先关系；分支的名称或年龄不能证明工作已合并。
+2. 检查 worktree 和锁由哪个会话持有。不要删除活跃 worktree，也不要为了让清理通过
+   就解除其他会话的锁。
+3. 只在自己拥有的 checkout 中切离已合并的功能分支。先用普通的
+   `git worktree remove` 删除干净、非活跃的 worktree，再用 `git branch -d`
+   删除本地分支；不要强制移除。
+4. 如果已确认合并的远端分支仍存在，删除它，再运行 `git fetch --prune origin`。
+   保留 `main` 和真正活跃的分支。
+5. 报告最终工作区状态、剩余分支/worktree 和保留的例外。只清理可再生成的构建产物，
+   不要删除凭据、运行状态或其他会话的文件。
+
+未提交改动或独有提交会阻止普通删除。应原地保留，或在明确约定的陈旧工作清理之前，
+创建并验证私有恢复归档。不要用强制删除绕过这些检查。
+
+`git branch -d` 依据祖先关系，可能拒绝删除经 squash/rebase 合并的分支。仅在这种情况下，
+确认以下全部条件后，才允许使用 `git branch -D`：
+
+- PR 已合并，且合并结果可从当前基础分支到达。
+- 本地分支 tip 与 PR 合并时记录的 head commit 完全一致，而不是与生成的 squash/rebase
+  commit 比较。如果本地有额外或重写的提交，即使原 PR diff 已进入目标分支，也必须保留。
+- 该 PR head 的全部改动均已合并。`git cherry -v main <branch>` 没有 `+` 条目可以确认
+  逐提交补丁等价；多个提交合并成一个 squash commit 后仍可能显示 `+`，这时应比较
+  完整 PR diff 与对应的 squash commit。
+
+删除前立即重新检查每个分支 tip，包括远端 tip；如果它已变化，或无法验证 PR 合并时的
+head 或补丁等价，就保留分支。不要仅凭 PR 已关闭就判断安全，也不要借此强制删除脏的或
+活跃的 worktree。
+
 ### Milestone 归属
 
 归属由**提交祖先关系决定，而不是关闭时间**。用 `git tag --contains <merge-sha>`，取
