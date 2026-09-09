@@ -35,6 +35,7 @@ src/
     client.ts                 authenticated HTTP client, retries, timing
     chat.ts                   chat abstraction, routing, think effort
     responses.ts              Responses API translation, prompt_cache_key
+    tool-schema.ts            Responses-only tool schema compatibility
     types.ts                  upstream payload types
 
   lib/
@@ -124,6 +125,25 @@ upstream, while Opus uses `/chat/completions`.
 
 Two upstream APIs, one Claude-facing protocol. Claude Code never learns which
 one served its request.
+
+### Tool-schema compatibility
+
+`normalizeResponsesToolSchema` in `src/copilot/tool-schema.ts` adapts function
+parameters at the shared `buildResponsesRequestPayload` boundary. Copilot rejects
+JSON Schema `pattern` constraints containing Unicode property escapes such as
+`\p{Cc}` and `\P{L}`, and lookahead/lookbehind assertions such as `(?!...)`.
+Claude Code's `Artifact` tool includes these patterns in its `field`, `database`,
+and `doc_id` parameters even when the user never calls that tool. Removing only
+the Unicode pattern reveals a second upstream rejection for the lookaheads.
+
+The relay omits those patterns from the upstream copy, keeping supported patterns
+and other schema fields. Escaped literals and lookaround-like text inside
+character classes remain intact. It visits schema-bearing keywords, not literal
+data in `default`, `const`, `enum`, or `examples`, and does not rewrite property names.
+The original Claude schema and the `/chat/completions` path remain unchanged;
+client-side tool validation still enforces the original constraint. The same
+adaptation covers streaming, non-streaming, and WebSearch model passes that use
+Responses.
 
 ## Streaming
 

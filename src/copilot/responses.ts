@@ -11,6 +11,7 @@ import type {
 } from "~/copilot/types"
 
 import { sanitizeUserIdentifier } from "./chat"
+import { normalizeResponsesToolSchema } from "./tool-schema"
 
 export interface ResponseStreamEventMessage {
   data?: string
@@ -778,7 +779,7 @@ function translateTools(
     type: "function",
     name: tool.function.name,
     description: tool.function.description,
-    parameters: tool.function.parameters,
+    parameters: normalizeResponsesToolSchema(tool.function.parameters),
   }))
 }
 
