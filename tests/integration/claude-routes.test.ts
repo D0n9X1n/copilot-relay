@@ -5,6 +5,11 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import {
+  artifactFieldPattern,
+  artifactToolSchema,
+} from "../fixtures/artifact-tool"
+
 // paths.ts resolves the log directory from os.homedir() at import time, and
 // these tests exercise the real server, which logs. Without this redirect the
 // suite appends to the developer's live ~/.copilot-relay/logs on every run.
@@ -338,7 +343,23 @@ const startMockCopilot = async (
     if (path === "/responses") {
       const payload = body as {
         model?: string
-        tools?: Array<{ type?: string }>
+        stream?: boolean
+        tools?: Array<{
+          type?: string
+          parameters?: { properties?: { field?: { pattern?: string } } }
+        }>
+      }
+      if (payload.tools?.some(
+        (tool) => tool.parameters?.properties?.field?.pattern === artifactFieldPattern,
+      )) {
+        response.statusCode = 400
+        response.end(JSON.stringify({
+          error: {
+            code: "invalid_request_body",
+            message: "Invalid schema for function 'Artifact': pattern is not a 'regex'.",
+          },
+        }))
+        return
       }
       if (payload.tools?.some((tool) => tool.type === "web_search_preview")) {
         response.end(JSON.stringify({
@@ -371,7 +392,7 @@ const startMockCopilot = async (
         return
       }
 
-      response.end(JSON.stringify({
+      const result = {
         id: "resp_1",
         created_at: 1,
         model: payload.model,
@@ -383,7 +404,20 @@ const startMockCopilot = async (
           },
         ],
         usage: responsesUsage,
-      }))
+      }
+      if (payload.stream) {
+        response.setHeader("content-type", "text/event-stream")
+        for (const event of [
+          { type: "response.created", response: { ...result, output: [] } },
+          { type: "response.output_text.delta", output_index: 0, delta: "OK" },
+          { type: "response.completed", response: result },
+        ]) {
+          response.write(`data: ${JSON.stringify(event)}\n\n`)
+        }
+        response.end()
+        return
+      }
+      response.end(JSON.stringify(result))
       return
     }
 
@@ -431,6 +465,83 @@ test.afterEach(() => {
   delete runtimeState.thinkEffort
   delete runtimeState.modelRouting
 })
+
+for (const model of ["gpt-6-astra[1m]", "opus"]) {
+  for (const stream of [false, true]) {
+    for (const webSearch of [false, true]) {
+      test(`Artifact schema works with model=${model} stream=${stream} WebSearch=${webSearch}`, async () => {
+        const mock = await startMockCopilot()
+        runtimeState.modelRouting = {
+          gptModel: "gpt-6-astra",
+          opusModel: "claude-opus-4.8",
+        }
+
+        try {
+          const app = createTestProxy(mock.baseUrl)
+          const response = await app.fetch(new Request("http://localhost/v1/messages", {
+            body: JSON.stringify({
+              max_tokens: 16,
+              messages: [{ role: "user", content: "Reply OK only." }],
+              model,
+              stream,
+              tools: [
+                { name: "Artifact", input_schema: artifactToolSchema },
+                ...webSearch ? [{
+                  name: "WebSearch",
+                  input_schema: { type: "object" },
+                }] : [],
+              ],
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          }))
+
+          assert.equal(response.status, 200)
+          if (stream) {
+            const events = await response.text()
+            assert.match(events, /event: message_stop/)
+            assert.match(events, /"text":"OK"/)
+            assert.doesNotMatch(events, /event: error/)
+          } else {
+            const body = await response.json() as { content: Array<{ text?: string }> }
+            assert.equal(body.content[0]?.text, "OK")
+          }
+
+          assert.equal(mock.requests.length, 1)
+          const upstream = mock.requests[0]
+          assert.ok(upstream)
+          assert.equal(
+            upstream.path,
+            model === "opus" ? "/chat/completions" : "/responses",
+          )
+          const payload = upstream.body as {
+            tools: Array<{
+              name?: string
+              parameters?: Record<string, unknown>
+              function?: { name: string; parameters: Record<string, unknown> }
+            }>
+          }
+          const tool = payload.tools.find(
+            (candidate) => (candidate.name ?? candidate.function?.name) === "Artifact",
+          )
+          assert.ok(tool)
+          assert.deepEqual(
+            tool.parameters ?? tool.function?.parameters,
+            model === "opus" ? artifactToolSchema : {
+              ...artifactToolSchema,
+              properties: {
+                ...artifactToolSchema.properties,
+                field: { type: "string" },
+              },
+            },
+          )
+        } finally {
+          await mock.close()
+        }
+      })
+    }
+  }
+}
 
 // Why: Claude Code and humans can probe available models before sending a
 // message. This scenario verifies the public model list is served locally from
