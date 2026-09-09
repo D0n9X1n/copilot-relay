@@ -120,11 +120,14 @@ thinking/text block。
 
 `src/copilot/tool-schema.ts` 中的 `normalizeResponsesToolSchema` 在共用的
 `buildResponsesRequestPayload` 边界适配函数参数。Copilot 会拒绝包含 `\p{Cc}`、
-`\P{L}` 等 Unicode 属性转义的 JSON Schema `pattern` 约束；Claude Code 的
-`Artifact` 工具就包含这种约束，即使用户从未调用该工具，也会随请求发送。
+`\P{L}` 等 Unicode 属性转义，以及 `(?!...)` 等前瞻或后顾断言的 JSON Schema
+`pattern` 约束。Claude Code 的 `Artifact` 工具在 `field`、`database` 和 `doc_id`
+参数中包含这些 pattern，即使用户从未调用该工具，也会随请求发送。仅删除 Unicode
+pattern 后，上游的下一层校验仍会拒绝前瞻断言。
 
 中继只从发往上游的副本中省略这些 pattern，保留受支持的 pattern 和其他 schema
-字段。遍历仅针对承载 schema 的关键字，不会改写 `default`、`const`、`enum`、
+字段。转义后的字面字符，以及字符类中形似环视断言的文本，均保持不变。
+遍历仅针对承载 schema 的关键字，不会改写 `default`、`const`、`enum`、
 `examples` 中的字面数据，也不会改写属性名。原始 Claude schema 和
 `/chat/completions` 路径保持不变；客户端工具校验仍执行原始约束。所有使用 Responses
 的流式、非流式以及 WebSearch 模型调用都经过同一适配。

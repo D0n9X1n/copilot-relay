@@ -7,7 +7,7 @@ import {
   artifactToolSchema,
 } from "../fixtures/artifact-tool"
 
-test("omits the rejected Artifact pattern without changing other constraints or the input", () => {
+test("omits rejected Artifact patterns without changing other constraints or the input", () => {
   const original = structuredClone(artifactToolSchema)
   const normalized = normalizeResponsesToolSchema(artifactToolSchema)
 
@@ -16,6 +16,8 @@ test("omits the rejected Artifact pattern without changing other constraints or 
     properties: {
       ...artifactToolSchema.properties,
       field: { type: "string" },
+      database: { type: "string", maxLength: 1000 },
+      doc_id: { type: "string" },
     },
   })
   assert.deepEqual(artifactToolSchema, original)
@@ -39,6 +41,23 @@ test("recognizes Unicode property escapes with odd backslash counts", () => {
   }
 })
 
+test("omits lookahead and lookbehind patterns rejected by Responses", () => {
+  for (const pattern of [
+    "^(?!__.*__$)[a-z]+$",
+    "^(?=[a-z])[a-z0-9]+$",
+    "(?<=prefix)[a-z]+",
+    "(?<!prefix)[a-z]+",
+    String.raw`^\\(?!_)[a-z]+$`,
+    "[a-z](?!_)",
+  ]) {
+    assert.deepEqual(
+      normalizeResponsesToolSchema({ type: "string", pattern }),
+      { type: "string" },
+      pattern,
+    )
+  }
+})
+
 test("preserves portable patterns, escaped literals, and unrelated invalid input", () => {
   for (const pattern of [
     "",
@@ -46,6 +65,14 @@ test("preserves portable patterns, escaped literals, and unrelated invalid input
     String.raw`^\d{1,3}\.\d+$`,
     String.raw`^\\p{L}$`,
     String.raw`^\\\\P{N}$`,
+    "^(?:[a-z]+|[0-9]+)$",
+    "^[()?!<=>]+$",
+    "^[(?=!]+$",
+    "^[()](?:[a-z]+)$",
+    String.raw`^\(\?=foo\)$`,
+    String.raw`^\(\?!foo\)$`,
+    String.raw`^\(\?<=foo\)$`,
+    String.raw`^\(\?<!foo\)$`,
     "[",
     null,
     12,

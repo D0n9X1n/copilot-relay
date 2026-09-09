@@ -346,7 +346,13 @@ const startMockCopilot = async (
         stream?: boolean
         tools?: Array<{
           type?: string
-          parameters?: { properties?: { field?: { pattern?: string } } }
+          parameters?: {
+            properties?: {
+              field?: { pattern?: string }
+              database?: { pattern?: string }
+              doc_id?: { pattern?: string }
+            }
+          }
         }>
       }
       if (payload.tools?.some(
@@ -357,6 +363,19 @@ const startMockCopilot = async (
           error: {
             code: "invalid_request_body",
             message: "Invalid schema for function 'Artifact': pattern is not a 'regex'.",
+          },
+        }))
+        return
+      }
+      if (payload.tools?.some((tool) =>
+        tool.parameters?.properties?.doc_id?.pattern === artifactToolSchema.properties.doc_id.pattern
+        || tool.parameters?.properties?.database?.pattern === artifactToolSchema.properties.database.pattern,
+      )) {
+        response.statusCode = 400
+        response.end(JSON.stringify({
+          error: {
+            code: "invalid_request_body",
+            message: "Invalid JSON schema: regex lookaround is not supported.",
           },
         }))
         return
@@ -532,6 +551,8 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
               properties: {
                 ...artifactToolSchema.properties,
                 field: { type: "string" },
+                database: { type: "string", maxLength: 1000 },
+                doc_id: { type: "string" },
               },
             },
           )
