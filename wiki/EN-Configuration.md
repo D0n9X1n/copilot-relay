@@ -39,7 +39,7 @@ opusModel: claude-opus-5
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
 | `logLevel` | One of `error`, `info`, `debug`. Any other value fails startup. |
 | `logRetentionDays` | Days to keep normal `.log` files under `~/.copilot-relay/logs/`. |
-| `thinkEffort` | Default upstream reasoning effort: `none`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `thinkEffort` | Fallback reasoning effort when the request omits it: `none`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `gptModel` | Upstream model for non-Opus requests. |
@@ -73,9 +73,27 @@ logs, or issue reports.
 
 ### Choose a compatible effort
 
-`thinkEffort` overrides client-provided effort for both routes. Choose a value
-supported by **both** `gptModel` and `opusModel` (and by `webSearchBackend` when
-set). The relay accepts `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
+`thinkEffort` is the default, not an override. The first non-null value wins:
+
+1. Claude Code's native `output_config.effort`.
+2. The legacy request field `reasoning_effort`.
+3. `thinkEffort` in `config.yaml`, or the shipped default when unset.
+
+For example, `output_config: {"effort": "low"}` uses `low` even when
+`thinkEffort: max`. Missing or null request fields use the fallback.
+`thinking.budget_tokens` is not an effort level and is not converted into one.
+Malformed explicit effort returns `400` rather than silently choosing the default.
+An effort unsupported by the selected upstream model remains an upstream error;
+the relay does not substitute another level.
+
+The selected effort stays the same through chat/Responses, streaming/JSON, and
+WebSearch decision, retrieval, and final-answer passes. A config reload affects
+later requests, not the remaining passes of one already in progress.
+Startup preflight still checks the configured default for both models.
+
+Choose a default supported by **both** `gptModel` and `opusModel` (and by
+`webSearchBackend` when set). The relay accepts `none`, `low`, `medium`, `high`,
+`xhigh`, and `max`.
 Legacy config value `minimal` is normalized to `low`; it is not a separate tier.
 Missing effort metadata means "not advertised," not "all tiers supported."
 

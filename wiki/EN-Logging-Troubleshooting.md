@@ -152,12 +152,12 @@ At `info`, startup logs confirm the active config and preflight:
 
 ```text
 info Log level: info
-info Think effort: xhigh
-info Exposed models: gpt-6-astra[1m], claude-opus-5
+info Default think effort: xhigh
 info Running upstream preflight
 info Upstream models available: gpt-6-astra, claude-opus-5
 info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
+info Exposed models: gpt-6-astra[1m], claude-opus-5
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 
@@ -196,7 +196,7 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 At `debug`:
 
 ```text
-debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
+debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
 ```
 
 | Field | Meaning |
@@ -204,9 +204,9 @@ debug Model request client=claude requested_model=opus upstream_model=claude-opu
 | `client` | `claude` for Claude Code traffic, `generic` for internal startup preflight |
 | `requested_model` | model name sent by Claude Code |
 | `upstream_model` | actual Copilot model used |
-| `requested_think_effort` | `reasoning_effort` sent by Claude Code, or `none` |
+| `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `none` when absent |
 | `requested_thinking` | Claude Code `thinking` config, including budget when present |
-| `effective_think_effort` | value sent upstream after config/routing |
+| `effective_think_effort` | request effort when supplied; otherwise the configured default sent upstream |
 
 Use this line first when debugging "why did my request use this model/effort?"
 
@@ -387,9 +387,10 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 Compare `effective_think_effort` with `requested_think_effort` and with
-`thinkEffort` in config. `thinkEffort` in `~/.copilot-relay/config.yaml` wins
-over client-provided reasoning effort, so startup preflight and real traffic
-exercise the same upstream behavior.
+`thinkEffort` in config. Request effort takes precedence; the configured value is
+used only when no request effort is supplied. Startup preflight checks that
+default, not every possible request override. The precedence rules and distinction
+from a thinking-token budget are in [Configuration](EN-Configuration.md).
 
 ## WebSearch fails or returns no results
 

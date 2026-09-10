@@ -123,6 +123,10 @@ for live model discovery, compatible thinking efforts, and copy-paste updates.
 Any other `logLevel` value is invalid and stops startup.
 
 Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
+It is a fallback, not a forced override: Claude Code's `output_config.effort`
+wins, followed by the legacy `reasoning_effort` field, then `thinkEffort` when
+neither request field supplies a value. The selected effort is preserved through
+all model and WebSearch passes; existing config values are not rewritten.
 
 `upstreamTimeoutSeconds` controls the maximum time a single Claude request can
 spend waiting on upstream Copilot calls, including chat, Responses, preflight,

@@ -38,7 +38,7 @@ opusModel: claude-opus-5
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。其他值会导致启动失败。 |
 | `logRetentionDays` | `~/.copilot-relay/logs/` 下普通 `.log` 文件保留天数。 |
-| `thinkEffort` | 默认上游推理强度：`none`、`low`、`medium`、`high`、`xhigh`、`max`。 |
+| `thinkEffort` | 请求未指定时使用的默认推理强度：`none`、`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
@@ -69,9 +69,25 @@ issue 中。
 
 ### 选择兼容的 effort
 
-`thinkEffort` 会覆盖客户端传入的 effort，并同时应用于两条路由。选择 `gptModel` 和
-`opusModel` **都支持**的值；如果设置了 `webSearchBackend`，它也必须支持该值。
-Relay 接受 `none`、`low`、`medium`、`high`、`xhigh`、`max`。旧配置值 `minimal`
+`thinkEffort` 是默认值，不再覆盖请求。按以下顺序使用第一个非 null 的值：
+
+1. Claude Code 原生字段 `output_config.effort`。
+2. 兼容旧客户端的请求字段 `reasoning_effort`。
+3. `config.yaml` 中的 `thinkEffort`；未配置时使用发布默认值。
+
+例如，即使配置为 `thinkEffort: max`，请求中的
+`output_config: {"effort": "low"}` 仍会使用 `low`。请求字段缺失或为 null 时使用默认值。
+`thinking.budget_tokens` 不是 effort 档位，不会被换算成某个档位。格式不正确的显式
+effort 返回 `400`，不会静默改用默认值。若所选上游模型不支持该 effort，仍会返回上游
+错误；relay 不会替换成其他档位。
+
+选定的 effort 在 chat/Responses、流式/JSON，以及 WebSearch 的决策、检索和最终回答
+调用中保持一致。配置热重载只影响之后的请求，不会改变进行中请求的后续调用。
+启动 preflight 仍会为两个模型验证配置的默认档位。
+
+选择 `gptModel` 和 `opusModel` **都支持**的默认值；如果设置了 `webSearchBackend`，
+它也必须支持该值。Relay 接受 `none`、`low`、`medium`、`high`、`xhigh`、`max`。
+旧配置值 `minimal`
 会被规范化为 `low`，不是独立档位。缺少 effort 元数据表示“未公布”，不是“支持所有档位”。
 
 2026-09-05 查询的实时目录显示，`gpt-6-astra` 和 `claude-opus-5` 都支持 `low`、

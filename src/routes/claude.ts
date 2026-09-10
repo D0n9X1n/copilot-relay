@@ -36,7 +36,7 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getExposedModelIds } from "~/lib/models"
+import { getExposedModelIds, getRequestReasoningEffort } from "~/lib/models"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
@@ -59,7 +59,7 @@ const isNonStreamingResponse = (
 
 const getClaudeRequestedThinkEffort = (
   payload: ClaudeMessagesPayload,
-): string => payload.reasoning_effort ?? "none"
+): string => getRequestReasoningEffort(payload) ?? "none"
 
 const getClaudeRequestedThinking = (
   payload: ClaudeMessagesPayload,
@@ -324,7 +324,7 @@ const handleClaudeMessageRequest = async (
     if (webSearchToolCall) {
       const search = await createClaudeWebSearchExecution(
         config,
-        claudePayload,
+        { ...claudePayload, reasoning_effort: openAIPayload.reasoning_effort },
         webSearchToolCall.query,
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
@@ -475,6 +475,14 @@ claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const requestId = c.get("requestId")
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+  try {
+    getRequestReasoningEffort(claudePayload)
+  } catch (error) {
+    if (!(error instanceof HTTPError)) throw error
+    c.set("requestErrorMessage", error.message)
+    log.error(`request_id=${requestId} ${error.message}`)
+    return error.response
+  }
   const requestSignal = createCopilotRequestSignal(
     c.req.raw.signal,
     config.upstreamTimeoutMs,
@@ -584,6 +592,10 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     return c.json({ input_tokens: Math.max(1, finalTokenCount) })
   } catch (error) {
     log.error("Error counting tokens:", error)
+    if (error instanceof HTTPError) {
+      c.set("requestErrorMessage", error.message)
+      return error.response
+    }
     return c.json({ input_tokens: 1 })
   }
 })

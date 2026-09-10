@@ -110,6 +110,15 @@ names on the way out and maps them back on the way in. Claude Code's tool names
 are not always valid upstream identifiers, and a response carrying the normalized
 name would not match the tool the client registered.
 
+`getRequestReasoningEffort` and `resolveReasoningEffort` in `src/lib/models.ts`
+validate/select request effort and apply the configured fallback. Translation
+freezes the effective level in the chat payload before any upstream wait.
+The chat wrapper must retain it during catalog lookup, retries, and Responses
+fallback. WebSearch retrieval receives that same value, and its final-answer
+payload already preserves it, so a config reload cannot change effort mid-turn.
+Invalid explicit effort is rejected before opening SSE, including on token-count
+requests. User-facing precedence is documented in [Configuration](EN-Configuration.md).
+
 `src/claude/types.ts` defines only the subset of Claude Messages API types the
 proxy needs. It is intentionally not a full Claude SDK — an unused type is a
 maintenance cost with no test covering it.

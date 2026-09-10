@@ -39,7 +39,8 @@ logLevel: info
 # midnight, which is what makes this setting take effect at all.
 logRetentionDays: 3
 
-# Default upstream thinking/reasoning effort sent to Copilot.
+# Fallback upstream effort when Claude Code does not specify one.
+# Request output_config.effort wins, followed by legacy reasoning_effort.
 # Valid values: none, low, medium, high, xhigh, max.
 thinkEffort: max
 

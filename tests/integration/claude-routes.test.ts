@@ -138,6 +138,7 @@ const startMockCopilot = async (
     output_tokens: 1,
     total_tokens: 2,
   },
+  onRequest?: (request: CapturedRequest) => void,
 ) => {
   const requests: Array<CapturedRequest> = []
   let webSearchChatCalls = 0
@@ -145,6 +146,7 @@ const startMockCopilot = async (
     const path = request.url ?? "/"
     const body = await readJsonBody(request)
     requests.push({ body, path })
+    onRequest?.({ body, path })
 
     response.setHeader("content-type", "application/json")
 
@@ -346,6 +348,7 @@ const startMockCopilot = async (
         stream?: boolean
         tools?: Array<{
           type?: string
+          name?: string
           parameters?: {
             properties?: {
               field?: { pattern?: string }
@@ -408,6 +411,33 @@ const startMockCopilot = async (
           ],
           usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
         }))
+        return
+      }
+
+      const inputText = JSON.stringify((body as { input?: unknown }).input ?? [])
+      const webSearchTool = /search/i.test(inputText) ?
+          payload.tools?.find((tool) => tool.name === "WebSearch" || tool.name === "web_search")
+        : undefined
+      if (webSearchTool) {
+        const item = {
+          type: "function_call",
+          call_id: "call_responses_web_search",
+          name: webSearchTool.name,
+          arguments: JSON.stringify({ query: "GitHub Copilot docs" }),
+        }
+        const result = {
+          id: "resp_web_search_call", created_at: 1, model: payload.model,
+          output: [item], usage: responsesUsage,
+        }
+        if (payload.stream) {
+          response.setHeader("content-type", "text/event-stream")
+          for (const event of [
+            { type: "response.created", response: { ...result, output: [] } },
+            { type: "response.output_item.added", output_index: 0, item },
+            { type: "response.completed", response: result },
+          ]) response.write(`data: ${JSON.stringify(event)}\n\n`)
+          response.end()
+        } else response.end(JSON.stringify(result))
         return
       }
 
@@ -483,6 +513,153 @@ test.beforeEach(() => {
 test.afterEach(() => {
   delete runtimeState.thinkEffort
   delete runtimeState.modelRouting
+})
+
+const requestEffortCases: Array<{
+  name: string
+  fields: Record<string, unknown>
+  expected: string
+}> = [
+  ...["none", "low", "medium", "high", "xhigh", "max"].map((effort) => ({
+    name: `native ${effort}`,
+    fields: { output_config: { effort } },
+    expected: effort,
+  })),
+  { name: "legacy", fields: { reasoning_effort: "medium" }, expected: "medium" },
+  {
+    name: "native wins over legacy",
+    fields: { output_config: { effort: "low" }, reasoning_effort: "high" },
+    expected: "low",
+  },
+  { name: "configured fallback", fields: {}, expected: "xhigh" },
+  {
+    name: "thinking budget is not an effort",
+    fields: { max_tokens: 8192, thinking: { type: "enabled", budget_tokens: 4096 } },
+    expected: "xhigh",
+  },
+  {
+    name: "null effort is absent",
+    fields: { output_config: { effort: null }, reasoning_effort: null },
+    expected: "xhigh",
+  },
+]
+
+for (const model of ["default", "opus"]) {
+  for (const stream of [false, true]) {
+    for (const { name, fields, expected } of requestEffortCases) {
+      test(`request effort ${name}: model=${model} stream=${stream}`, async () => {
+        const mock = await startMockCopilot()
+        try {
+          const app = createTestProxy(mock.baseUrl)
+          const response = await app.fetch(new Request("http://localhost/v1/messages", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model, stream, max_tokens: 16,
+              messages: [{ role: "user", content: "Reply OK only." }],
+              ...fields,
+            }),
+          }))
+          assert.equal(response.status, 200)
+          const text = await response.text()
+          if (stream) {
+            assert.match(text, /event: message_stop/)
+            assert.doesNotMatch(text, /event: error/)
+          }
+          assert.equal(mock.requests.length, 1)
+          const upstream = mock.requests[0]?.body as {
+            reasoning_effort?: string
+            reasoning?: { effort?: string }
+          }
+          assert.equal(
+            model === "opus" ? upstream.reasoning_effort : upstream.reasoning?.effort,
+            expected,
+          )
+          assert.equal(runtimeState.thinkEffort, "xhigh")
+        } finally {
+          await mock.close()
+        }
+      })
+    }
+
+    for (const fields of [{ output_config: { effort: "medium" } }, {}]) {
+      test(`WebSearch request effort survives all passes: model=${model} stream=${stream} explicit=${"output_config" in fields}`, async () => {
+        const mock = await startMockCopilot(undefined, () => {
+          runtimeState.thinkEffort = "low"
+        })
+        const expected = "output_config" in fields ? "medium" : "xhigh"
+        try {
+          const app = createTestProxy(mock.baseUrl)
+          const response = await app.fetch(new Request("http://localhost/v1/messages", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model, stream, max_tokens: 16,
+              messages: [{ role: "user", content: "Search for Copilot documentation." }],
+              tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
+              ...fields,
+            }),
+          }))
+          assert.equal(response.status, 200)
+          const text = await response.text()
+          assert.match(text, /web_search_tool_result/)
+          if (stream) assert.match(text, /event: message_stop/)
+          assert.deepEqual(mock.requests.map((request) => request.path), model === "opus" ?
+            ["/chat/completions", "/responses", "/chat/completions"] :
+            ["/responses", "/responses", "/responses"])
+          for (const request of mock.requests) {
+            const body = request.body as { reasoning_effort?: string; reasoning?: { effort?: string } }
+            assert.equal(body.reasoning_effort ?? body.reasoning?.effort, expected)
+          }
+          const next = await app.fetch(new Request("http://localhost/v1/messages", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Reply OK only." }] }),
+          }))
+          assert.equal(next.status, 200)
+          await next.text()
+          const nextBody = mock.requests.at(-1)?.body as {
+            reasoning_effort?: string; reasoning?: { effort?: string }
+          }
+          assert.equal(nextBody.reasoning_effort ?? nextBody.reasoning?.effort, "low")
+        } finally {
+          await mock.close()
+        }
+      })
+    }
+  }
+}
+
+test("rejects invalid request effort before SSE or upstream calls", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    for (const fields of [
+      { output_config: { effort: "ultra" } },
+      { output_config: { effort: 0 }, reasoning_effort: "low" },
+      { output_config: [] },
+      { output_config: "high" },
+      { reasoning_effort: "" },
+    ]) {
+      for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+        for (const stream of [false, true]) {
+          const response = await app.fetch(new Request(`http://localhost${path}`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model: "opus", stream, max_tokens: 16,
+              messages: [{ role: "user", content: "Reply OK only." }], ...fields,
+            }),
+          }))
+          assert.equal(response.status, 400)
+          const body = await response.json() as { error: { type: string } }
+          assert.equal(body.error.type, "invalid_request_error")
+        }
+      }
+    }
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
 })
 
 for (const model of ["gpt-6-astra[1m]", "opus"]) {

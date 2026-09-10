@@ -27,8 +27,10 @@ import type {
 import type { ProxyConfig } from "~/lib/config"
 import {
   getModelRouting,
+  getRequestReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
+  resolveReasoningEffort,
 } from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
@@ -244,6 +246,7 @@ const buildWebSearchRequestPayload = (
   model,
   input: buildSearchInput(payload, requestedQuery),
   tools: [{ type: "web_search_preview" }],
+  reasoning: { effort: resolveReasoningEffort(getRequestReasoningEffort(payload)) },
   max_output_tokens: Math.max(256, Math.min(payload.max_tokens ?? 1024, 1200)),
   temperature: payload.temperature,
   top_p: payload.top_p,

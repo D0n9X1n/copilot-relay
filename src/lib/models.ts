@@ -1,5 +1,6 @@
 // Config-driven model routing and think-effort validation.
 import { runtimeState } from "~/lib/state"
+import { HTTPError } from "~/lib/error"
 
 export type ReasoningEffort =
   | "none"
@@ -35,6 +36,41 @@ export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   || value === "high"
   || value === "xhigh"
   || value === "max"
+
+const invalidRequestEffort = (message: string): HTTPError =>
+  new HTTPError(message, new Response(JSON.stringify({
+    type: "error",
+    error: { type: "invalid_request_error", message },
+  }), { status: 400, headers: { "content-type": "application/json" } }), message)
+
+export function getRequestReasoningEffort(request: {
+  output_config?: unknown
+  reasoning_effort?: unknown
+}): ReasoningEffort | undefined {
+  let nativeEffort: unknown
+  const outputConfig = request.output_config
+  if (outputConfig !== undefined && outputConfig !== null) {
+    if (typeof outputConfig !== "object" || Array.isArray(outputConfig)) {
+      throw invalidRequestEffort("Invalid output_config: expected an object.")
+    }
+    if ("effort" in outputConfig) nativeEffort = outputConfig.effort
+  }
+  const requested = nativeEffort ?? request.reasoning_effort
+  if (requested === undefined || requested === null) return undefined
+  if (!isReasoningEffort(requested)) {
+    const field = nativeEffort !== undefined && nativeEffort !== null ?
+        "output_config.effort" : "reasoning_effort"
+    throw invalidRequestEffort(
+      `Invalid ${field}: expected none, low, medium, high, xhigh, or max.`,
+    )
+  }
+  return requested
+}
+
+export const resolveReasoningEffort = (
+  requested?: ReasoningEffort | null,
+): ReasoningEffort =>
+  requested ?? runtimeState.thinkEffort ?? defaultReasoningEffort
 
 const oneMillionContextModelPattern = /^(gpt-5\.6-sol|gpt-6-astra)(?:\[1m\])*$/i
 
