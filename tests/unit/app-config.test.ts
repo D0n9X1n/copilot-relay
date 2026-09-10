@@ -55,8 +55,8 @@ test("accepts non-negative upstream timeouts with explicit zero disabling the de
 // Why: thinkEffort is the user's reasoning-effort knob. Every documented tier
 // (including the newest "max") must normalize to itself, case-insensitively, so
 // a valid config value is never silently downgraded to the default.
-test("normalizes every supported think effort tier", () => {
-  for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
+test("normalizes every supported configured think effort tier", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
     assert.equal(normalizeThinkEffort(effort), effort)
     assert.equal(normalizeThinkEffort(effort.toUpperCase()), effort)
   }
@@ -69,15 +69,17 @@ test("maps legacy 'minimal' think effort to low", () => {
   assert.equal(normalizeThinkEffort("MINIMAL"), "low")
 })
 
-// Why: an unknown or non-string think effort should return undefined so the
-// caller falls back to the default instead of forwarding a value Copilot would
-// reject upstream.
-test("returns undefined for invalid think effort values", () => {
-  assert.equal(normalizeThinkEffort("ultra"), undefined)
-  assert.equal(normalizeThinkEffort("maximum"), undefined)
-  assert.equal(normalizeThinkEffort(""), undefined)
-  assert.equal(normalizeThinkEffort(5), undefined)
+test("rejects none and malformed explicit think effort instead of hiding them with defaults", () => {
   assert.equal(normalizeThinkEffort(undefined), undefined)
+  for (const value of ["none", "NONE", "ultra", "maximum", "", 5, null, false]) {
+    assert.throws(() => normalizeThinkEffort(value), (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /Invalid thinkEffort/)
+      assert.match(error.message, /Valid values: low, medium, high, xhigh, max/)
+      assert.doesNotMatch(error.message, /Valid values: none/)
+      return true
+    })
+  }
 })
 
 // Why: copilotBaseUrl is used as `${base}${path}` for every upstream call, so a

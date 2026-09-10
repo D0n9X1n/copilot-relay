@@ -4,10 +4,12 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
+  configurableReasoningEfforts,
   defaultReasoningEffort,
-  isReasoningEffort,
-  type ReasoningEffort,
+  isConfiguredReasoningEffort,
+  type ConfiguredReasoningEffort,
 } from "~/lib/models"
+import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
 export const logLevels = ["error", "info", "debug"] as const
@@ -21,7 +23,7 @@ export interface AppConfig {
   logRetentionDays: number
   opusModel: string
   port: number
-  thinkEffort: ReasoningEffort
+  thinkEffort: ConfiguredReasoningEffort
   upstreamTimeoutSeconds: number
   webSearchBackend?: string
 }
@@ -214,14 +216,22 @@ export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
   return trimmed
 }
 
+class InvalidThinkEffortError extends Error {
+  constructor() {
+    super(`Invalid thinkEffort. Valid values: ${configurableReasoningEfforts.join(", ")}. "none" is not allowed as a configured default.`)
+    this.name = "InvalidThinkEffortError"
+  }
+}
+
 export const normalizeThinkEffort = (
   value: unknown,
-): ReasoningEffort | undefined => {
-  if (typeof value !== "string") {
-    return undefined
+): ConfiguredReasoningEffort | undefined => {
+  if (value === undefined) return undefined
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase() === "minimal" ? "low" : value.toLowerCase()
+    if (isConfiguredReasoningEffort(normalized)) return normalized
   }
-  const normalized = value.toLowerCase() === "minimal" ? "low" : value.toLowerCase()
-  return isReasoningEffort(normalized) ? normalized : undefined
+  throw new InvalidThinkEffortError()
 }
 
 export const normalizeUpstreamTimeoutSeconds = (
@@ -404,16 +414,15 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# Log verbosity:",
     "#   error - startup/preflight/request failures only",
-    "#   info  - error logs plus startup status, preflight status, and local HTTP",
-    "#           status codes",
-    "#   debug - info logs plus model routing summaries, Copilot upstream timings,",
-    "#           and request payloads",
+    "#   info  - error logs plus startup/preflight status, model/effort summaries,",
+    "#           and local HTTP status codes",
+    "#   debug - info logs plus detailed Copilot timings and request payloads",
     `logLevel: ${config.logLevel}`,
     "",
     "# Number of days to keep files in ~/.copilot-relay/logs.",
     `logRetentionDays: ${config.logRetentionDays}`,
     "",
-    "# Fallback effort when the request omits it: none, low, medium, high, xhigh, max.",
+    `# Fallback effort when the request omits it: ${configurableReasoningEfforts.join(", ")}.`,
     `thinkEffort: ${config.thinkEffort}`,
     "",
     "# Max seconds for one request's upstream calls; 0 disables the relay deadline.",
@@ -491,9 +500,14 @@ export const watchAppConfig = (
 
       lastMtime = nextMtime
       onReload(await readAppConfig())
-    } catch {
+    } catch (error) {
       // Config editors can briefly write invalid partial files. Keep the last
       // good runtime config rather than degrading live requests mid-edit.
+      if (error instanceof InvalidThinkEffortError) {
+        log.error(`${error.message} Keeping the previous runtime settings.`)
+      } else {
+        log.error(`Could not reload config. Check ${paths.configPath} for invalid values or file errors.`)
+      }
     }
   }, 1000)
 

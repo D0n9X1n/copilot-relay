@@ -220,13 +220,14 @@ grep -rn "](.*\.md)" /tmp/relay-wiki || echo "没有残留的 .md 链接"
 | 级别 | 记录内容 |
 | --- | --- |
 | `error` | 启动、preflight、请求、token 刷新和上游失败 |
-| `info` | error 的内容，加上启动状态、preflight 状态、request ID、上游生命周期和本地 HTTP 状态码 |
-| `debug` | info 的内容，加上模型路由摘要、Copilot 上游耗时和请求 payload |
+| `info` | error 的内容，加上启动/preflight 状态、request ID、模型与 effort 摘要、上游生命周期和本地 HTTP 状态码 |
+| `debug` | info 的内容，加上详细 Copilot 耗时和请求 payload |
 
 其他任何 `logLevel` 值都是非法的，必须让启动失败。
 
-在 `debug` 级别，每个模型请求都必须记录 client 类型、请求模型、上游模型、请求 think
-effort、请求 thinking budget、生效 think effort。在 `error` 级别，上游失败要连同完整
+在 `info` 级别，每个模型请求都必须记录 client 类型、请求模型、上游模型、请求 think
+effort、请求 thinking budget、生效 think effort。缺失的 effort 用 `unset` 表示，普通
+payload 转储保留在 `debug` 级别。在 `error` 级别，上游失败要连同完整
 的请求与响应上下文记录在同一个日志文件里。
 
 永远不要记录 token 值。[内部实现](ZH-Internals.md)里的单行与轮转不变量不是风格问题

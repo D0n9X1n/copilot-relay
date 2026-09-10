@@ -116,14 +116,15 @@ Only three levels are valid:
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures. |
-| `info` | Errors plus startup status, preflight status, request IDs, upstream lifecycle, and local HTTP status codes. |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads. |
+| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, and local HTTP status codes. |
+| `debug` | Info plus detailed Copilot timings and request payloads. |
 
 Invalid values such as `warn`, `trace`, or `silent` stop startup. File logs
 follow the same `logLevel` filter as console logs.
 
-Start with `info`. Set `logLevel: debug` only while you need model routing,
-upstream timings, or request payloads — it can log prompts and tool payloads.
+Start with `info`: model routing and requested/effective effort are visible there.
+Set `logLevel: debug` only for detailed timings or request payloads — it can log
+prompts and tool payloads. Existing error-context logging is unchanged.
 
 ## Useful searches
 
@@ -193,10 +194,10 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 
 ### Model routing
 
-At `debug`:
+At `info` (also included at `debug`):
 
 ```text
-debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
+info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
 ```
 
 | Field | Meaning |
@@ -204,11 +205,14 @@ debug Model request client=claude requested_model=opus upstream_model=claude-opu
 | `client` | `claude` for Claude Code traffic, `generic` for internal startup preflight |
 | `requested_model` | model name sent by Claude Code |
 | `upstream_model` | actual Copilot model used |
-| `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `none` when absent |
+| `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `unset` when absent |
 | `requested_thinking` | Claude Code `thinking` config, including budget when present |
 | `effective_think_effort` | request effort when supplied; otherwise the configured default sent upstream |
 
 Use this line first when debugging "why did my request use this model/effort?"
+`unset` means the configured fallback was used. Explicit request `none` is logged
+as `none`, not confused with an omitted field. The summary contains metadata, not
+the normal prompt/tool payload dump, and strips terminal controls to stay on one line.
 
 ### Upstream Copilot calls
 
@@ -364,13 +368,7 @@ exercises token refresh and real upstream model access — which is what
 
 ## Wrong model used
 
-Temporarily set:
-
-```yaml
-logLevel: debug
-```
-
-Then:
+With `logLevel: info` or `debug`:
 
 ```sh
 grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.*.log
@@ -391,6 +389,8 @@ Compare `effective_think_effort` with `requested_think_effort` and with
 used only when no request effort is supplied. Startup preflight checks that
 default, not every possible request override. The precedence rules and distinction
 from a thinking-token budget are in [Configuration](EN-Configuration.md).
+`thinkEffort: none` and malformed defaults now fail startup with valid choices;
+an invalid hot reload logs an error and leaves the previous runtime settings active.
 
 ## WebSearch fails or returns no results
 

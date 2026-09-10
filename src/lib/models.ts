@@ -2,13 +2,9 @@
 import { runtimeState } from "~/lib/state"
 import { HTTPError } from "~/lib/error"
 
-export type ReasoningEffort =
-  | "none"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max"
+export const configurableReasoningEfforts = ["low", "medium", "high", "xhigh", "max"] as const
+export type ConfiguredReasoningEffort = typeof configurableReasoningEfforts[number]
+export type ReasoningEffort = "none" | ConfiguredReasoningEffort
 
 export interface ModelRoutingConfig {
   gptModel: string
@@ -22,20 +18,18 @@ export interface ModelTokenLimits {
   max_non_streaming_output_tokens?: number
 }
 
-export const defaultReasoningEffort: ReasoningEffort = "max"
+export const defaultReasoningEffort: ConfiguredReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
   gptModel: "gpt-6-astra",
   opusModel: "claude-opus-5",
 }
 
+export const isConfiguredReasoningEffort = (value: unknown): value is ConfiguredReasoningEffort =>
+  configurableReasoningEfforts.some((effort) => effort === value)
+
 export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
-  value === "none"
-  || value === "low"
-  || value === "medium"
-  || value === "high"
-  || value === "xhigh"
-  || value === "max"
+  value === "none" || isConfiguredReasoningEffort(value)
 
 const invalidRequestEffort = (message: string): HTTPError =>
   new HTTPError(message, new Response(JSON.stringify({

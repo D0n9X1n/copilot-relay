@@ -3,13 +3,13 @@ import { type ServerType } from "@hono/node-server"
 import { defineCommand } from "citty"
 
 import { setupProxyAuth } from "~/lib/auth"
-import { readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
+import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { readProxyConfig } from "~/lib/config"
 import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, log, setLogLevel } from "~/lib/log"
-import { getExposedModelIds } from "~/lib/models"
+import { defaultReasoningEffort, getExposedModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
@@ -40,6 +40,10 @@ const canCloseConnections = (
 
 export async function startRelay(appConfig?: AppConfig): Promise<void> {
   appConfig ??= await readAppConfig()
+  appConfig = {
+    ...appConfig,
+    thinkEffort: normalizeThinkEffort(appConfig.thinkEffort) ?? defaultReasoningEffort,
+  }
   setLogLevel(appConfig.logLevel)
   await cleanupLogs(appConfig.logRetentionDays)
 

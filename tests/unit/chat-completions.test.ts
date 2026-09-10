@@ -14,6 +14,9 @@ const { createChatCompletions } = await import("../../src/copilot/chat")
 const { isRetryableFetchError } = await import("../../src/copilot/client")
 const { HTTPError } = await import("../../src/lib/error")
 const { runtimeState } = await import("../../src/lib/state")
+const { log, setLogLevel } = await import("../../src/lib/log")
+const { getLogPath } = await import("../../src/lib/paths")
+const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 test.after(async () => { await fs.rm(tempHome, { recursive: true, force: true }) })
 
 interface CapturedRequest {
@@ -161,6 +164,76 @@ test("honors requested effort over the configured default in the upstream chat b
     assert.equal(request.reasoning_effort, "low")
     assert.equal(runtimeState.thinkEffort, "max")
   } finally {
+    delete runtimeState.thinkEffort
+    await mock.close()
+  }
+})
+
+test("info logs show requested and effective effort without normal request payloads", async (t) => {
+  const mock = await startMockCopilot()
+  const infoCalls = t.mock.method(log, "info")
+  runtimeState.thinkEffort = "high"
+  setLogLevel("info")
+  registerSensitiveOrigin("https://metadata-gateway.example/ROUTING_SECRET_SENTINEL")
+  const config: ProxyConfig = {
+    copilotBaseUrl: mock.baseUrl, copilotToken: "test-token",
+    host: "127.0.0.1", port: 0, upstreamTimeoutMs: 10_000, vsCodeVersion: "1.99.3",
+  }
+  try {
+    for (const [id, effort, expected] of [
+      ["effort-info-explicit", "low", "low"],
+      ["effort-info-unset", undefined, "high"],
+      ["effort-info-none", "none", "none"],
+    ] as const) {
+      await createChatCompletions(config, {
+        model: "opus", max_tokens: 16, stream: false, reasoning_effort: effort,
+        messages: [{ role: "user", content: "PRIVATE_PROMPT_SENTINEL" }],
+        tools: [{
+          type: "function",
+          function: {
+            name: "Read", description: "PRIVATE_TOOL_SENTINEL",
+            parameters: { type: "object" },
+          },
+        }],
+      }, {
+        client: "claude", requestId: id,
+        requestedModel: "opus\n\u001b[31m https://metadata-gateway.example/ROUTING_SECRET_SENTINEL",
+      })
+
+      let contents = ""
+      let summary: string | undefined
+      for (let attempt = 0; attempt < 100; attempt++) {
+        try {
+          contents = await fs.readFile(getLogPath(), "utf8")
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+        }
+        summary = contents.split("\n").find(
+          (line) => line.includes(`request_id=${id}`) && line.includes(" info Model request "),
+        )
+        if (summary) break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      assert.ok(summary, "No info-level model summary was written")
+      assert.match(summary, new RegExp(`requested_think_effort=${effort ?? "unset"}\\b`))
+      assert.match(summary, new RegExp(`effective_think_effort=${expected}\\b`))
+      assert.ok(!summary.includes("\u001b"))
+      assert.match(summary, /metadata-gateway\.example\[redacted\]/)
+      assert.doesNotMatch(contents, /ROUTING_SECRET_SENTINEL/)
+      assert.doesNotMatch(contents, /PRIVATE_PROMPT_SENTINEL|PRIVATE_TOOL_SENTINEL|Full request payload/)
+    }
+    assert.doesNotMatch(
+      JSON.stringify(infoCalls.mock.calls.map((call) => call.arguments)),
+      /PRIVATE_PROMPT_SENTINEL|PRIVATE_TOOL_SENTINEL|Full request payload/,
+    )
+    setLogLevel("error")
+    await createChatCompletions(config, {
+      model: "opus", max_tokens: 16, stream: false,
+      messages: [{ role: "user", content: "hello" }],
+    }, { requestId: "effort-info-suppressed" })
+    assert.doesNotMatch(await fs.readFile(getLogPath(), "utf8"), /effort-info-suppressed/)
+  } finally {
+    setLogLevel("info")
     delete runtimeState.thinkEffort
     await mock.close()
   }

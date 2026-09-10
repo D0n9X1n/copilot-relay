@@ -26,10 +26,9 @@ claudeSetup: true
 
 # Log verbosity:
 #   error - startup/preflight/request failures only
-#   info  - error logs plus startup status, preflight status, and local HTTP
-#           status codes
-#   debug - info logs plus model routing summaries, Copilot upstream timings,
-#           and request payloads
+#   info  - error logs plus startup/preflight status, model/effort summaries,
+#           and local HTTP status codes
+#   debug - info logs plus detailed Copilot timings and request payloads
 # Any other value is invalid and stops startup.
 logLevel: info
 
@@ -41,7 +40,7 @@ logRetentionDays: 3
 
 # Fallback upstream effort when Claude Code does not specify one.
 # Request output_config.effort wins, followed by legacy reasoning_effort.
-# Valid values: none, low, medium, high, xhigh, max.
+# Valid values: low, medium, high, xhigh, max.
 thinkEffort: max
 
 # Max seconds to wait for one Claude request's upstream Copilot calls.

@@ -102,14 +102,15 @@ payload 的边界是深度 6、100 个数组元素、每个字符串 4000 字符
 | 级别 | 记录内容 |
 | --- | --- |
 | `error` | 启动、preflight、请求、token 刷新和上游失败。 |
-| `info` | error 的内容，加上启动状态、preflight 状态、request ID、上游生命周期和本地 HTTP 状态码。 |
-| `debug` | info 的内容，加上模型路由摘要、Copilot 上游耗时和请求 payload。 |
+| `info` | error 的内容，加上启动/preflight 状态、request ID、模型与 effort 摘要、上游生命周期和本地 HTTP 状态码。 |
+| `debug` | info 的内容，加上详细 Copilot 耗时和请求 payload。 |
 
 `warn`、`trace`、`silent` 之类的非法值会让启动失败。文件日志与控制台日志遵循同一个
 `logLevel` 过滤。
 
-先用 `info`。只在你确实需要模型路由、上游耗时或请求 payload 时，才临时设成
-`logLevel: debug` —— 它可能记录 prompt 和工具 payload。
+先用 `info`，该级别已能看到模型路由、请求 effort 和生效 effort。只在需要详细耗时
+或请求 payload 时，才临时设成 `logLevel: debug` —— 它可能记录 prompt 和工具 payload。
+已有的错误上下文日志不变。
 
 ## 常用搜索
 
@@ -177,10 +178,10 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 
 ### 模型路由
 
-在 `debug` 级别：
+在 `info` 级别（`debug` 也包含这些内容）：
 
 ```text
-debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
+info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
 ```
 
 | 字段 | 含义 |
@@ -188,11 +189,13 @@ debug Model request client=claude requested_model=opus upstream_model=claude-opu
 | `client` | Claude Code 流量为 `claude`，内部启动 preflight 为 `generic` |
 | `requested_model` | Claude Code 发来的模型名 |
 | `upstream_model` | 实际使用的 Copilot 模型 |
-| `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `none` |
+| `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `unset` |
 | `requested_thinking` | Claude Code 的 `thinking` 配置，有 budget 时一并包含 |
 | `effective_think_effort` | 有请求 effort 时使用该值；否则使用配置的默认值 |
 
 调试"我的请求为什么用了这个模型/effort？"时，先看这一行。
+`unset` 表示使用了配置默认值。显式请求的 `none` 会记录成 `none`，不会与缺失字段混淆。
+该摘要只包含元数据，不包含普通 prompt/工具 payload 转储，并会移除终端控制字符以保持单行。
 
 ### 上游 Copilot 调用
 
@@ -342,13 +345,7 @@ Copilot，所以一个过期的 token、或者一个你的订阅无权访问的�
 
 ## 模型不对
 
-临时设置：
-
-```yaml
-logLevel: debug
-```
-
-然后：
+使用 `logLevel: info` 或 `debug` 时：
 
 ```sh
 grep -n "Model request" ~/.copilot-relay/logs/copilot-relay.*.log
@@ -368,6 +365,8 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 做对比。请求 effort 优先；只有请求未指定 effort 时才使用配置值。启动 preflight
 验证的是该默认值，而不是每一种请求覆盖值。优先级及 effort 与 thinking-token 预算的
 区别见[配置说明](ZH-Configuration.md)。
+`thinkEffort: none` 和格式错误的默认值现在会阻止启动，并提示有效选项；
+无效的热重载会记录错误，之前的运行时设置继续生效。
 
 ## WebSearch 失败或没有结果
 

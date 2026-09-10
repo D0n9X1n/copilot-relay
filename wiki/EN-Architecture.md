@@ -96,7 +96,7 @@ opusModel: claude-opus-5
 
 Existing model choices are never migrated. If Astra is unavailable to an account,
 preflight fails; choose an available model in the generated config explicitly. `src/lib/models.ts` owns this mapping
-and also validates the allowed `thinkEffort` values: `none`, `low`, `medium`,
+and also validates the allowed `thinkEffort` defaults: `low`, `medium`,
 `high`, `xhigh`, `max`.
 
 Which upstream *API* a model uses is a separate question from which model runs.
@@ -219,14 +219,15 @@ are load-bearing rather than cosmetic; the reasoning is in
 [Internals](EN-Internals.md), and the operational recipes are in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
-At `debug`, every model request logs client, requested model, upstream model,
+At `info`, every model request logs client, requested model, upstream model,
 requested think effort, requested thinking budget, and effective think effort.
-Also at `debug`, Claude and upstream request diagnostics are logged.
+Missing effort is marked `unset`. Full normal Claude/upstream request diagnostics
+remain at `debug`.
 
 The central logger passes every emitted value through `scrubSensitiveUrls`
 before either sink, so a secret-bearing upstream URL tail is redacted at every
-level, `debug` included. That is the only sanitization applied — it rewrites
-URLs and nothing else.
+level, `debug` included. The central sanitizer rewrites URLs, not payload content.
+Model metadata summaries separately strip terminal control characters.
 
 Debug diagnostics still carry prompt text, tool definitions and arguments,
 request bodies, and headers, none of which a URL scrubber touches. **Do not

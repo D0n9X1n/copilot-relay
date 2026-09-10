@@ -4,6 +4,7 @@ import { events } from "fetch-event-stream"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
+import { sanitizeTerminalString } from "~/lib/redact"
 import {
   getRequestReasoningEffort,
   resolveReasoningEffort,
@@ -195,7 +196,7 @@ export const createChatCompletions = async (
   const client = options.client ?? "generic"
   const requestedModel = options.requestedModel ?? payload.model
   const requestedThinkEffort =
-    options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "none"
+    options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "unset"
   const reasoningEffort = getRequestedReasoningEffort(payload)
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
@@ -229,8 +230,8 @@ export const createChatCompletions = async (
   const enableVision = messagesIncludeImage(compatiblePayload.messages)
   const initiator = isAgentInitiator(compatiblePayload.messages)
   const requestPayload = buildRequestPayload(compatiblePayload)
-  log.debug(
-    [
+  log.info(
+    sanitizeTerminalString([
       "Model request",
       `client=${client}`,
       `requested_model=${requestedModel}`,
@@ -238,8 +239,8 @@ export const createChatCompletions = async (
       `upstream_model=${compatiblePayload.model}`,
       `requested_think_effort=${requestedThinkEffort}`,
       `requested_thinking=${requestedThinking}`,
-      `effective_think_effort=${requestPayload.reasoning_effort ?? "none"}`,
-    ].join(" "),
+      `effective_think_effort=${requestPayload.reasoning_effort ?? "unset"}`,
+    ].join(" ")),
   )
   log.debug("Full request payload", {
     payload: requestPayload,

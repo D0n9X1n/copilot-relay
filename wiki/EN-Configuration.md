@@ -39,7 +39,7 @@ opusModel: claude-opus-5
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
 | `logLevel` | One of `error`, `info`, `debug`. Any other value fails startup. |
 | `logRetentionDays` | Days to keep normal `.log` files under `~/.copilot-relay/logs/`. |
-| `thinkEffort` | Fallback reasoning effort when the request omits it: `none`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `thinkEffort` | Fallback reasoning effort when the request omits it: `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `gptModel` | Upstream model for non-Opus requests. |
@@ -92,10 +92,26 @@ later requests, not the remaining passes of one already in progress.
 Startup preflight still checks the configured default for both models.
 
 Choose a default supported by **both** `gptModel` and `opusModel` (and by
-`webSearchBackend` when set). The relay accepts `none`, `low`, `medium`, `high`,
-`xhigh`, and `max`.
+`webSearchBackend` when set). Configured defaults accept only `low`, `medium`,
+`high`, `xhigh`, and `max`.
 Legacy config value `minimal` is normalized to `low`; it is not a separate tier.
 Missing effort metadata means "not advertised," not "all tiers supported."
+
+`thinkEffort: none` is not a valid relay-wide default. It and any other malformed
+explicit value fail before authentication, upstream probes, or config write-back:
+
+```text
+Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not allowed as a configured default.
+```
+
+The invalid file is left unchanged so you can correct it; the relay never hides
+an invalid value by writing `max`. Missing keys still use the shipped default.
+An invalid hot reload logs an error and keeps the last valid runtime settings.
+After correcting the file, normal reload resumes.
+
+This restriction is on the configured fallback, not on request-level overrides.
+Explicit request `none` is still passed through for models that support it, such
+as GPT-5.6 Sol. It is not an instruction to use the fallback.
 
 The live catalog checked on 2026-09-05 advertised `low`, `medium`, `high`, `xhigh`,
 and `max` for both `gpt-6-astra` and `claude-opus-5`; `none` is not advertised for
