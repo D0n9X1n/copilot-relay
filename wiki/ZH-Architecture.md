@@ -88,7 +88,7 @@ opusModel: claude-opus-5
 
 已有模型选择不会被迁移。如果账号无法使用 Astra，preflight 会失败；请在生成的配置中
 明确选择可用模型。
-`src/lib/models.ts` 负责这个映射，同时校验允许的 `thinkEffort` 取值：`none`、`low`、
+`src/lib/models.ts` 负责这个映射，同时校验允许的 `thinkEffort` 默认值：`low`、
 `medium`、`high`、`xhigh`、`max`。
 
 模型走哪个上游 **API** 和跑哪个模型是两个问题。`gpt-6-astra`、`gpt-5.6-sol` 以及
@@ -202,13 +202,14 @@ opusModel: claude-opus-5
 见[内部实现](ZH-Internals.md)，操作手册见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
-在 `debug` 级别，每个模型请求都会记录 client、请求模型、上游模型、请求 think
-effort、请求 thinking budget、生效 think effort。同样在 `debug` 级别，还会记录
-Claude 与上游的请求诊断。
+在 `info` 级别，每个模型请求都会记录 client、请求模型、上游模型、请求 think
+effort、请求 thinking budget、生效 think effort。缺失的 effort 标记为 `unset`。
+普通 Claude 与上游的完整请求诊断仍仅在 `debug` 级别记录。
 
 中央日志器在写入任何一个 sink 之前，都会把每一个输出值过一遍
 `scrubSensitiveUrls`，因此携带密钥的上游 URL 尾部在**每个级别**都会被脱敏，`debug`
-也不例外。但这是唯一的净化处理 —— 它只重写 URL，不碰别的。
+也不例外。中央净化器只重写 URL，不清理 payload 内容；模型元数据摘要还会单独移除
+终端控制字符。
 
 debug 诊断里仍然包含提示词文本、工具定义与参数、请求体和 header，这些都不是 URL
 脱敏能覆盖的。**不要未经审查就分享 debug 日志。**

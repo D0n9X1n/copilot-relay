@@ -2,7 +2,7 @@
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
-import type { ReasoningEffort } from "~/lib/models"
+import type { ConfiguredReasoningEffort } from "~/lib/models"
 import { getUpstreamModelIds } from "~/lib/models"
 import { loadCopilotModelCatalog } from "~/copilot/models"
 import type { ChatCompletionsPayload } from "~/copilot/types"
@@ -45,7 +45,7 @@ const createProbePayload = (model: string): ChatCompletionsPayload => ({
 const validateModelRequest = async (
   config: ProxyConfig,
   model: string,
-  thinkEffort: ReasoningEffort,
+  thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   try {
     // Probe through the same internal chat path as real requests so routing,
@@ -78,7 +78,7 @@ const validateModelRequest = async (
 
 export const validateUpstream = async (
   config: ProxyConfig,
-  thinkEffort: ReasoningEffort,
+  thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   log.info("Running upstream preflight")
   await ensureRequiredModels(config)

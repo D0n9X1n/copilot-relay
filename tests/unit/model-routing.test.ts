@@ -2,11 +2,13 @@ import test from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  configurableReasoningEfforts,
   defaultModelRouting,
   defaultReasoningEffort,
   getExposedModelIds,
   getUpstreamModelIds,
   isReasoningEffort,
+  isConfiguredReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
   routeModelId,
@@ -15,6 +17,16 @@ import { runtimeState } from "../../src/lib/state"
 
 test.afterEach(() => {
   delete runtimeState.modelRouting
+})
+
+test("configured effort choices exclude none without removing request-level support", () => {
+  assert.deepEqual([...configurableReasoningEfforts], ["low", "medium", "high", "xhigh", "max"])
+  for (const effort of configurableReasoningEfforts) {
+    assert.equal(isConfiguredReasoningEffort(effort), true)
+    assert.equal(isReasoningEffort(effort), true)
+  }
+  assert.equal(isConfiguredReasoningEffort("none"), false)
+  assert.equal(isReasoningEffort("none"), true)
 })
 
 // Why: the context selector is a Claude-facing identity only. Normalize exact
@@ -155,9 +167,8 @@ test("falls back to default routing when runtime config is unset", () => {
   ])
 })
 
-// Why: isReasoningEffort is the single guard that validates configured think
-// effort. It must accept every documented tier (including "max") and reject
-// anything else, so an invalid config value can never reach Copilot upstream.
+// Request-level none remains valid for models that support it, even though the
+// configured fallback has a narrower set of choices.
 test("accepts every valid reasoning effort tier and rejects the rest", () => {
   for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
     assert.equal(isReasoningEffort(effort), true)

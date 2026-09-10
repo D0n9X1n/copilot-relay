@@ -89,6 +89,12 @@ src/
 info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=180
 ```
 
+`ConfiguredReasoningEffort` 和 `configurableReasoningEfforts` 将合法配置默认值与请求级
+`ReasoningEffort` 分开。`normalizeThinkEffort` 在配置写回和认证之前拒绝 `none` 及
+其他格式错误的显式默认值；`startRelay` 也会校验程序直接传入的默认值。只有缺失的键
+使用发布默认值。无效重载会记录错误并保留当前设置；一般文件或语法错误不会回显可能
+含有敏感信息的配置内容。
+
 新增一个键意味着同时更新 `config.default.yaml`、README，以及**两种语言**的
 [配置说明](ZH-Configuration.md)。
 

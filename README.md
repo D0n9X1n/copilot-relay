@@ -117,16 +117,19 @@ for live model discovery, compatible thinking efforts, and copy-paste updates.
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, and request failures |
-| `info` | Errors plus startup status, preflight status, request IDs, upstream lifecycle, and local HTTP status codes |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
+| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, and local HTTP status codes |
+| `debug` | Info plus detailed Copilot timings and request payloads |
 
 Any other `logLevel` value is invalid and stops startup.
 
-Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
+Valid `thinkEffort` defaults: `low`, `medium`, `high`, `xhigh`, `max`.
 It is a fallback, not a forced override: Claude Code's `output_config.effort`
 wins, followed by the legacy `reasoning_effort` field, then `thinkEffort` when
 neither request field supplies a value. The selected effort is preserved through
 all model and WebSearch passes; existing config values are not rewritten.
+`none` and other invalid explicit defaults fail startup before authentication or
+config write-back, with a clear list of valid choices. They are not silently
+replaced with `max`. Explicit request-level `none` remains model-dependent.
 
 `upstreamTimeoutSeconds` controls the maximum time a single Claude request can
 spend waiting on upstream Copilot calls, including chat, Responses, preflight,
@@ -212,7 +215,10 @@ health probe, so a relay that cannot answer `/healthz` never reports success.
 
 ## Logging
 
-At `debug`, every model request logs the requested model, upstream model, requested think effort, requested thinking, and effective think effort.
+At `info`, every model request logs the requested model, upstream model, requested
+think effort, requested thinking, and effective think effort. Missing request
+effort is shown as `unset`, distinct from explicit `none`; full normal request
+payloads remain at `debug`.
 
 Upstream failures are logged at `error` with full request and response context in the same log file.
 

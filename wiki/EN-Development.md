@@ -243,14 +243,15 @@ an existing install — a user's config value is theirs. See
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures |
-| `info` | Errors plus startup status, preflight status, request IDs, upstream lifecycle, and local HTTP status codes |
-| `debug` | Info plus model routing summaries, Copilot upstream timings, and request payloads |
+| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, and local HTTP status codes |
+| `debug` | Info plus detailed Copilot timings and request payloads |
 
 Any other `logLevel` value is invalid and must fail startup.
 
-At `debug`, every model request must log client type, requested model, upstream
+At `info`, every model request must log client type, requested model, upstream
 model, requested think effort, requested thinking budget, and effective think
-effort. At `error`, log upstream failures with full request and response context
+effort. Use `unset` for an omitted effort and keep normal payload dumps at `debug`.
+At `error`, log upstream failures with full request and response context
 in the same log file.
 
 Never log token values. The one-line and rotation invariants in

@@ -59,7 +59,7 @@ const isNonStreamingResponse = (
 
 const getClaudeRequestedThinkEffort = (
   payload: ClaudeMessagesPayload,
-): string => getRequestReasoningEffort(payload) ?? "none"
+): string => getRequestReasoningEffort(payload) ?? "unset"
 
 const getClaudeRequestedThinking = (
   payload: ClaudeMessagesPayload,

@@ -10,8 +10,9 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-cfg-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { readAppConfig } = await import("../../src/lib/app-config")
+const { readAppConfig, watchAppConfig } = await import("../../src/lib/app-config")
 const { paths } = await import("../../src/lib/paths")
+const { log } = await import("../../src/lib/log")
 
 const writeConfigFile = async (content: string): Promise<void> => {
   await fs.mkdir(paths.appDir, { recursive: true })
@@ -97,6 +98,69 @@ test("materializes an explicitly disabled deadline without restoring the default
   assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
   assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
   assert.match(await readConfigFile(), /upstreamTimeoutSeconds: 0/)
+})
+
+test("invalid effort is rejected without rewriting the user's config", async () => {
+  for (const value of ["none", "NONE", "ultra", "\"\"", "42"]) {
+    const original = `# preserve this file\nthinkEffort: ${value}\nport: 5000\n`
+    await writeConfigFile(original)
+    await assert.rejects(readAppConfig(), /Invalid thinkEffort/)
+    assert.equal(await readConfigFile(), original)
+  }
+})
+
+test("generated effort guidance lists only valid fallback choices", async () => {
+  await writeConfigFile("thinkEffort: minimal\n")
+  assert.equal((await readAppConfig()).thinkEffort, "low")
+  const written = await readConfigFile()
+  assert.match(written, /# Fallback effort when the request omits it: low, medium, high, xhigh, max\./)
+  assert.doesNotMatch(written, /# Fallback effort[^\n]*none/)
+})
+
+test("invalid effort reload reports an error, keeps runtime settings, and can recover", async (t) => {
+  await writeConfigFile("thinkEffort: high\n")
+  let active = await readAppConfig()
+  let mtime = 1
+  const stats = await fs.stat(paths.configPath)
+  t.mock.method(fs, "stat", async () => Object.assign(stats, { mtimeMs: mtime }))
+  const errors: string[] = []
+  t.mock.method(log, "error", (...values: unknown[]) => { errors.push(values.join(" ")) })
+  t.mock.timers.enable({ apis: ["setInterval"] })
+  const timer = watchAppConfig((next) => { active = next })
+  const waitFor = async (predicate: () => boolean) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (predicate()) return
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.ok(predicate(), "Config reload did not finish")
+  }
+  try {
+    await new Promise((resolve) => setImmediate(resolve))
+    const invalid = "thinkEffort: none\n"
+    await writeConfigFile(invalid)
+    mtime++
+    t.mock.timers.tick(1000)
+    await waitFor(() => errors.length > 0)
+    assert.match(errors[0], /Invalid thinkEffort.*Valid values: low, medium, high, xhigh, max/)
+    assert.equal(active.thinkEffort, "high")
+    assert.equal(await readConfigFile(), invalid)
+
+    errors.length = 0
+    await writeConfigFile("malformed PRIVATE_CONFIG_SENTINEL\n")
+    mtime++
+    t.mock.timers.tick(1000)
+    await waitFor(() => errors.length > 0)
+    assert.match(errors[0], /Could not reload config/)
+    assert.doesNotMatch(errors[0], /PRIVATE_CONFIG_SENTINEL/)
+    assert.equal(active.thinkEffort, "high")
+
+    await writeConfigFile("thinkEffort: low\n")
+    mtime++
+    t.mock.timers.tick(1000)
+    await waitFor(() => active.thinkEffort === "low")
+  } finally {
+    clearInterval(timer)
+  }
 })
 
 // Why: v0.2.3 wrote configVersion into real user configs. Removing the parser

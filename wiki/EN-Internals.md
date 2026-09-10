@@ -96,6 +96,13 @@ A reload logs what it applied:
 info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=180
 ```
 
+`ConfiguredReasoningEffort` and `configurableReasoningEfforts` keep the allowed
+fallback choices separate from request-level `ReasoningEffort`. `normalizeThinkEffort`
+rejects `none` and malformed explicit defaults before config write-back or auth;
+`startRelay` also validates programmatically supplied defaults. Missing keys alone
+use the shipped default. Invalid reloads emit an error and retain active settings;
+generic file/syntax errors do not echo potentially sensitive config contents.
+
 Adding a key means updating `config.default.yaml`, the README, and
 [Configuration](EN-Configuration.md) in both languages.
 
