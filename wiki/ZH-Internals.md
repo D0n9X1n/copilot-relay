@@ -102,6 +102,13 @@ thinking/text block。
 入站时再映射回来。Claude Code 的工具名不总是合法的上游标识符，而一个带着规范化后
 名字的响应，与客户端注册的那个工具对不上。
 
+`src/lib/models.ts` 中的 `getRequestReasoningEffort` 和 `resolveReasoningEffort`
+负责校验、选择请求 effort，并应用配置默认值。翻译层会在任何上游等待之前，将有效
+档位固定到 chat payload。Chat 包装层必须在模型目录查询、重试以及 Responses 回退
+期间保留该值。WebSearch 检索接收同一个值，最终回答 payload 也会保留它，因此配置
+热重载不会让一个回合中途改变 effort。显式 effort 无效时会在打开 SSE 前拒绝请求，
+token-count 请求也一样。面向用户的优先级规则见[配置说明](ZH-Configuration.md)。
+
 `src/claude/types.ts` 只定义代理需要的那部分 Claude Messages API 类型。它刻意不是
 完整的 Claude SDK —— 一个用不到的类型就是没有测试覆盖的维护成本。
 

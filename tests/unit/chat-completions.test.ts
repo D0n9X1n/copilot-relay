@@ -1,12 +1,20 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
-import { createChatCompletions } from "../../src/copilot/chat"
-import { isRetryableFetchError } from "../../src/copilot/client"
 import type { ProxyConfig } from "../../src/lib/config"
-import { HTTPError } from "../../src/lib/error"
-import { runtimeState } from "../../src/lib/state"
+
+const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-chat-tests-"))
+process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
+const { createChatCompletions } = await import("../../src/copilot/chat")
+const { isRetryableFetchError } = await import("../../src/copilot/client")
+const { HTTPError } = await import("../../src/lib/error")
+const { runtimeState } = await import("../../src/lib/state")
+test.after(async () => { await fs.rm(tempHome, { recursive: true, force: true }) })
 
 interface CapturedRequest {
   body: unknown
@@ -127,11 +135,7 @@ test("normalizes final assistant prefill before chat completions upstream calls"
   }
 })
 
-// Why: the configured think effort must win over client input and reach the
-// upstream body, or the "max" default would be silently dropped. This drives the
-// real createChatCompletions path and asserts reasoning_effort on the captured
-// /chat/completions request.
-test("injects configured max think effort into the upstream chat body", async () => {
+test("honors requested effort over the configured default in the upstream chat body", async () => {
   const mock = await startMockCopilot()
   runtimeState.thinkEffort = "max"
   try {
@@ -154,7 +158,8 @@ test("injects configured max think effort into the upstream chat body", async ()
 
     const request = mock.requests[0]?.body as { reasoning_effort?: string }
     assert.equal(mock.requests[0]?.path, "/chat/completions")
-    assert.equal(request.reasoning_effort, "max")
+    assert.equal(request.reasoning_effort, "low")
+    assert.equal(runtimeState.thinkEffort, "max")
   } finally {
     delete runtimeState.thinkEffort
     await mock.close()

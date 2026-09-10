@@ -138,12 +138,12 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ```text
 info Log level: info
-info Think effort: xhigh
-info Exposed models: gpt-6-astra[1m], claude-opus-5
+info Default think effort: xhigh
 info Running upstream preflight
 info Upstream models available: gpt-6-astra, claude-opus-5
 info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
+info Exposed models: gpt-6-astra[1m], claude-opus-5
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 
@@ -180,7 +180,7 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 在 `debug` 级别：
 
 ```text
-debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=xhigh
+debug Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
 ```
 
 | 字段 | 含义 |
@@ -188,9 +188,9 @@ debug Model request client=claude requested_model=opus upstream_model=claude-opu
 | `client` | Claude Code 流量为 `claude`，内部启动 preflight 为 `generic` |
 | `requested_model` | Claude Code 发来的模型名 |
 | `upstream_model` | 实际使用的 Copilot 模型 |
-| `requested_think_effort` | Claude Code 发来的 `reasoning_effort`，没有则为 `none` |
+| `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `none` |
 | `requested_thinking` | Claude Code 的 `thinking` 配置，有 budget 时一并包含 |
-| `effective_think_effort` | 经过配置/路由后真正发往上游的值 |
+| `effective_think_effort` | 有请求 effort 时使用该值；否则使用配置的默认值 |
 
 调试"我的请求为什么用了这个模型/effort？"时，先看这一行。
 
@@ -365,8 +365,9 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 把 `effective_think_effort` 与 `requested_think_effort`，以及配置里的 `thinkEffort`
-做对比。`~/.copilot-relay/config.yaml` 里的 `thinkEffort` 会压过客户端提供的
-reasoning effort，这样启动 preflight 和真实流量才会走同一套上游行为。
+做对比。请求 effort 优先；只有请求未指定 effort 时才使用配置值。启动 preflight
+验证的是该默认值，而不是每一种请求覆盖值。优先级及 effort 与 thinking-token 预算的
+区别见[配置说明](ZH-Configuration.md)。
 
 ## WebSearch 失败或没有结果
 

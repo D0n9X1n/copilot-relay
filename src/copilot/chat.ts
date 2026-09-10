@@ -4,9 +4,11 @@ import { events } from "fetch-event-stream"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { defaultReasoningEffort } from "~/lib/models"
-import { routeModelId } from "~/lib/models"
-import { runtimeState } from "~/lib/state"
+import {
+  getRequestReasoningEffort,
+  resolveReasoningEffort,
+  routeModelId,
+} from "~/lib/models"
 import { boundModelOutputTokens, getCachedCopilotModel } from "~/copilot/models"
 import { collectChatCompletionStream } from "~/copilot/stream"
 import {
@@ -64,11 +66,9 @@ export const sanitizeReasoningEffortForModel = (
 const getRequestedReasoningEffort = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload["reasoning_effort"] => {
-  // Configured think effort wins over client input so startup preflight and
-  // actual Claude Code traffic exercise the same upstream behavior.
   return sanitizeReasoningEffortForModel(
     payload.model,
-    runtimeState.thinkEffort ?? defaultReasoningEffort,
+    resolveReasoningEffort(getRequestReasoningEffort(payload)),
   )
 }
 
@@ -195,7 +195,8 @@ export const createChatCompletions = async (
   const client = options.client ?? "generic"
   const requestedModel = options.requestedModel ?? payload.model
   const requestedThinkEffort =
-    options.requestedThinkEffort ?? payload.reasoning_effort ?? "none"
+    options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "none"
+  const reasoningEffort = getRequestedReasoningEffort(payload)
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
   const upstreamModelId = routeModelId(payload.model)
@@ -217,6 +218,7 @@ export const createChatCompletions = async (
   const upstreamPayload = {
     ...payload,
     model: upstreamModelId,
+    reasoning_effort: reasoningEffort,
     max_tokens: maxTokens,
     stream: bufferResponse ? true : payload.stream,
   }

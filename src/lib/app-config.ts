@@ -413,7 +413,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# Number of days to keep files in ~/.copilot-relay/logs.",
     `logRetentionDays: ${config.logRetentionDays}`,
     "",
-    "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh, max.",
+    "# Fallback effort when the request omits it: none, low, medium, high, xhigh, max.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
     "# Max seconds for one request's upstream calls; 0 disables the relay deadline.",

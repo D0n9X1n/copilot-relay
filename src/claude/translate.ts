@@ -1,10 +1,10 @@
 // Non-streaming protocol translation between Claude Messages and Copilot chat completions.
 import {
-  defaultReasoningEffort,
+  getRequestReasoningEffort,
   normalizeClaudeModelId,
+  resolveReasoningEffort,
   routeModelId,
 } from "~/lib/models"
-import { runtimeState } from "~/lib/state"
 import type {
   ChatCompletionResponse,
   ChatCompletionsPayload,
@@ -64,7 +64,7 @@ export function translateToOpenAI(
     stream: payload.stream,
     temperature: payload.temperature,
     top_p: payload.top_p,
-    reasoning_effort: runtimeState.thinkEffort ?? defaultReasoningEffort,
+    reasoning_effort: resolveReasoningEffort(getRequestReasoningEffort(payload)),
     user: payload.metadata?.user_id,
     tools,
     tool_choice:

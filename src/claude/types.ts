@@ -1,4 +1,6 @@
 // Minimal Claude Messages API types used by the proxy; intentionally not a full SDK.
+import type { ReasoningEffort } from "~/lib/models"
+
 export interface ClaudeMessagesPayload {
   model: string
   messages: Array<ClaudeMessage>
@@ -21,7 +23,10 @@ export interface ClaudeMessagesPayload {
     type: "enabled" | "adaptive"
     budget_tokens?: number
   }
-  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh" | "max"
+  output_config?: {
+    effort?: ReasoningEffort | null
+  } | null
+  reasoning_effort?: ReasoningEffort | null
   service_tier?: "auto" | "standard_only"
 }
 

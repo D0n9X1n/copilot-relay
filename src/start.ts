@@ -73,7 +73,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   applyRuntimeConfig(appConfig)
 
   log.info(`Log level: ${appConfig.logLevel}`)
-  log.info(`Think effort: ${appConfig.thinkEffort}`)
+  log.info(`Default think effort: ${appConfig.thinkEffort}`)
   log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
 
   const authSession = await setupProxyAuth(config)
