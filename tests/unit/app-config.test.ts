@@ -41,12 +41,15 @@ test("distinguishes missing and invalid log levels", () => {
 // Why: upstream timeouts are part of the runtime config contract. Missing values
 // use the default, while malformed values should stop startup instead of
 // silently disabling request cancellation.
-test("accepts only positive upstream timeout seconds", () => {
+test("accepts non-negative upstream timeouts with explicit zero disabling the deadline", () => {
   assert.equal(normalizeUpstreamTimeoutSeconds(undefined), undefined)
   assert.equal(normalizeUpstreamTimeoutSeconds("180"), 180)
   assert.equal(normalizeUpstreamTimeoutSeconds(45), 45)
-  assert.throws(() => normalizeUpstreamTimeoutSeconds("0"), /positive integer/)
-  assert.throws(() => normalizeUpstreamTimeoutSeconds("abc"), /positive integer/)
+  assert.equal(normalizeUpstreamTimeoutSeconds("0"), 0)
+  assert.equal(normalizeUpstreamTimeoutSeconds(0), 0)
+  for (const value of ["abc", "180junk", "1.5", "", -1, 1.5, Infinity, true]) {
+    assert.throws(() => normalizeUpstreamTimeoutSeconds(value), /non-negative integer/)
+  }
 })
 
 // Why: thinkEffort is the user's reasoning-effort knob. Every documented tier

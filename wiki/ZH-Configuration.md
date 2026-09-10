@@ -39,7 +39,7 @@ opusModel: claude-opus-5
 | `logLevel` | 只能是 `error`、`info`、`debug`。其他值会导致启动失败。 |
 | `logRetentionDays` | `~/.copilot-relay/logs/` 下普通 `.log` 文件保留天数。 |
 | `thinkEffort` | 默认上游推理强度：`none`、`low`、`medium`、`high`、`xhigh`、`max`。 |
-| `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`。 |
+| `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
 | `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
@@ -60,8 +60,10 @@ opusModel: claude-opus-5
 `copilot-relay models` 命令。
 
 Relay 使用的权威模型目录是配置的 `copilotBaseUrl` 上需要认证的 `GET /models`。
-启动时会查询该目录，再探测两个配置模型。`copilot-relay status` 和本地
-`GET /v1/models` 只显示配置的 relay ID，不会拉取上游目录，也不能证明模型可用。
+启动时会查询该目录，再探测两个配置模型。`copilot-relay status` 显示配置的 relay ID；
+本地 `GET /v1/models` 还会在目录提供数据时返回缓存的 `context_window`、
+`max_input_tokens` 和 `max_tokens`。这两个接口都不会拉取上游目录，也不能证明模型
+当前可用。
 自建网关的模型目录可能与 Copilot CLI 不同。不要把 bearer token 粘贴到命令、日志或
 issue 中。
 
@@ -117,23 +119,57 @@ thinkEffort: max
 `gpt-5.6-sol`，并设置兼容的 effort。Relay 会明确失败，不会静默回退。需要撤销修改时，
 恢复 `config.yaml.bak`。
 
-### 使用 1M context window
+### 使用模型的完整 context 和输出预算
 
 Relay 配置保留规范 ID `gpt-6-astra`。Relay 向 Claude Code 暴露
 `gpt-6-astra[1m]`，向 Copilot 只发送 `gpt-6-astra`。`[1m]` 控制 Claude Code 的
-context 计数，不能扩大上游容量。2026-09-05 查询的目录公布了 1,000,000-token 总窗口、
-872,000 prompt tokens 和最多 128,000 output tokens。应为输出预留空间，并在达到
-上游 prompt 限制前压缩；这些是公布的限制，并非通过百万 token 请求实测得出。
+context 计数，不能扩大上游容量。2026-09-09 查询的实时目录公布了：
+
+| 模型 | 总 context | 最大 prompt | 最大输出 |
+| --- | ---: | ---: | ---: |
+| `gpt-6-astra` | 1,000,000 | 872,000 | 128,000 |
+| `claude-opus-5` | 1,000,000 | 936,000 | 64,000 |
+| `gpt-5.6-sol` | 1,050,000 | 922,000 | 128,000 |
+
+这些值来自模型发现，并非运行时代码写死的限制，也不是通过生产环境中的百万 token
+请求测得。应在总窗口内为输出（包括推理）预留空间。Relay 不会截短输入，也不会扩大
+客户端明确指定的较小输出预算。Prompt 是否真正符合限制，仍由上游判定。
+流式和完整 JSON 响应都可以使用模型的完整输出上限。
 
 已有 Claude Code 配置需要明确选择新身份：
 
 ```sh
-claude --model 'gpt-6-astra[1m]'
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 claude --model 'gpt-6-astra[1m]'
 ```
 
 也可以在 Claude Code 中输入 `/model gpt-6-astra[1m]`。`claudeSetup: true` 只在没有
 主要模型覆盖项时写入默认模型；它会保留已有模型选择和 shell wrapper。如果 wrapper
 固定了其他 `--model`，也需要修改。
+应使用配置模型的准确身份，不要假设内置别名具有相同的客户端 context 预算。
+
+如果发现的 GPT 窗口并非恰好 1M，自动设置会使用不带后缀的模型 ID，并将
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` 初始化为实际窗口。否则 Claude 的 `[1m]` 后缀会覆盖
+该数值设置。以上述目录为例，手动配置 Sol 时可运行：
+
+```sh
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=1050000 CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 \
+  claude --model gpt-5.6-sol
+```
+
+PowerShell 中用 `$env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "128000"` 赋值；需要时同样设置
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS`，再运行对应的 `claude` 命令。数值应以你的模型目录
+为准，不要照搬其他账号的容量。Claude 设置、shell 环境、自动压缩和上游限制仍可能约束
+实际可用窗口；自动设置不会禁用压缩。详见 Claude 的
+[context 覆盖规则](https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id)。
+
+如果响应可能超过已保存的超时，请明确设置：
+
+```yaml
+upstreamTimeoutSeconds: 0
+```
+
+该设置会热重载，只移除 relay 的总超时。客户端取消，以及客户端、上游和传输层自身
+的超时仍然有效。全新安装的默认值仍为 `180`，已有值不会被迁移。
 
 ## copilotBaseUrl 规则
 
@@ -193,8 +229,8 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 `host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
 host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。
 
-改 `gptModel` 会立刻改变上游路由，但不会重写 `~/.claude/settings.json` 里已经写好的模型
-—— 那个是启动时写的。
+改 `gptModel` 会立刻改变上游路由，但不会重写 `~/.claude/settings.json` 中已有的模型或
+token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。
 
 ## Claude Code 配置
 
@@ -209,10 +245,17 @@ host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4142
 ANTHROPIC_AUTH_TOKEN=<dummy local token>
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=<发现的 GPT context 窗口>
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预算>
 ```
 
 这里的 token 是本地 relay 占位值。真正访问 GitHub Copilot 用的是
 `~/.copilot-relay/` 里的 GitHub/Copilot token。
+两个预算变量仅在缺失时写入；明确设置的较小值会被保留。Relay 会按实际路由到的模型
+限制每个请求的输出预算，因此从 Astra 切换到 Opus 时，共用的客户端设置不会让请求
+超过 Opus 的上限。若网关没有提供有效的限制元数据，启动日志会说明限制不可用，
+并保留客户端的显式预算，而不是猜测容量。`claudeSetup: false` 时，请自行配置这些
+客户端变量。
 
 ## 运行时文件
 

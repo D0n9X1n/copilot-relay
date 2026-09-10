@@ -92,6 +92,13 @@ test("keeps an existing Sol model through repeated reads", async () => {
   assert.match(await readConfigFile(), /gptModel: gpt-5\.6-sol/)
 })
 
+test("materializes an explicitly disabled deadline without restoring the default", async () => {
+  await writeConfigFile("upstreamTimeoutSeconds: 0\n")
+  assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
+  assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
+  assert.match(await readConfigFile(), /upstreamTimeoutSeconds: 0/)
+})
+
 // Why: v0.2.3 wrote configVersion into real user configs. Removing the parser
 // case makes it an unrecognized key, so this pins that it is inert rather than
 // a startup error, and that it drops out on the next write-back.

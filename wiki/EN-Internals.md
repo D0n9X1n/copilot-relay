@@ -34,7 +34,9 @@ src/
   copilot/
     client.ts                 authenticated HTTP client, retries, timing
     chat.ts                   chat abstraction, routing, think effort
+    models.ts                 provider-scoped model catalog and token limits
     responses.ts              Responses API translation, prompt_cache_key
+    stream.ts                 shared accumulation and complete-stream validation
     tool-schema.ts            Responses-only tool schema compatibility
     types.ts                  upstream payload types
 
@@ -146,6 +148,38 @@ adaptation covers streaming, non-streaming, and WebSearch model passes that use
 Responses.
 
 ## Streaming
+
+### Long context and output budgets
+
+`loadCopilotModelCatalog` in `src/copilot/models.ts` retains the catalog read
+during preflight. Limits remain scoped to the exact upstream base URL; a change
+refreshes discovery before using a budget, concurrent refreshes share one request,
+and an older response cannot overwrite a newer provider's catalog. Missing or
+invalid limit metadata is not converted into a guessed capacity.
+
+`boundModelOutputTokens` caps a request at its routed model's advertised output
+maximum without increasing an explicit smaller budget. Preflight and deep-health
+requests keep their 16-token budgets. Prompt content is never sliced to fit.
+`count_tokens` uses a supported discovered tokenizer when available and skips the old
+Claude-family 15% padding in that case, so a reported tokenizer does not still
+force premature compaction through a model-name heuristic. Local model discovery
+returns cached limits and makes no upstream call.
+
+Some models advertise a lower `max_non_streaming_output_tokens` than their
+streaming ceiling. `createChatCompletions` requests upstream SSE above that
+threshold, then `collectChatCompletionStream` returns a completed chat response
+for JSON callers and WebSearch final passes. It reuses the WebSearch accumulator,
+preserves usage, reasoning, tool fragments and `length` termination, and refuses
+an incomplete stream rather than synthesizing success. Ordinary streaming
+callers still receive chunks as they arrive.
+
+Managed Claude budgets, model-selector handling, and the opt-in unlimited relay
+deadline are described in [Configuration](EN-Configuration.md). Boundary tests in
+`tests/integration/model-text-limits.test.ts` preserve tokenizer-measured prompts
+of 872K/936K tokens and outputs of 128K/64K through both response modes, with a
+mocked upstream and no paid million-token generation.
+
+### Claude SSE translation
 
 `src/claude/stream.ts` converts streaming Copilot chat chunks into Claude SSE
 events. It is a state machine because Claude requires explicit content block

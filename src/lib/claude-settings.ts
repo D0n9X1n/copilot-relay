@@ -2,12 +2,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { normalizeClaudeModelId } from "~/lib/models"
+import { normalizeClaudeModelId, type ModelTokenLimits } from "~/lib/models"
 
 interface ApplyClaudeConfigInput {
   baseUrl: string
   configPath: string
   gptModel: string
+  gptLimits?: ModelTokenLimits
+  maxOutputTokens?: number
 }
 
 interface ApplyClaudeResult {
@@ -104,18 +106,19 @@ export async function applyClaudeConfig(
       ? (env.ANTHROPIC_BASE_URL as string)
       : undefined
   const hadPrimaryModelOverride = hasPrimaryModelOverride(parsed, env)
-  const claudeGptModel = normalizeClaudeModelId(gptModel)
+  const contextWindow = input.gptLimits?.max_context_window_tokens
+  const claudeGptModel = normalizeClaudeModelId(gptModel, contextWindow)
   const shouldSeedTopLevelModel = !hadPrimaryModelOverride
   const nextModel =
     typeof parsed.model === "string"
-      ? normalizeClaudeModelId(parsed.model)
+      ? normalizeClaudeModelId(parsed.model, contextWindow)
       : undefined
 
   // ANTHROPIC_MODEL outranks the saved model setting, so only normalize it
   // when the user already set it; managed defaults belong in `model`.
   for (const key of knownModelEnvKeys) {
     if (typeof env[key] === "string") {
-      env[key] = normalizeClaudeModelId(env[key])
+      env[key] = normalizeClaudeModelId(env[key], contextWindow)
     }
   }
 
@@ -124,6 +127,12 @@ export async function applyClaudeConfig(
   // upstream authentication is handled by copilot-relay's Copilot token.
   if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
     env.ANTHROPIC_AUTH_TOKEN = "dummy"
+  }
+  if (contextWindow !== undefined && env.CLAUDE_CODE_MAX_CONTEXT_TOKENS === undefined) {
+    env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextWindow)
+  }
+  if (input.maxOutputTokens !== undefined && env.CLAUDE_CODE_MAX_OUTPUT_TOKENS === undefined) {
+    env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(input.maxOutputTokens)
   }
 
   const next: Record<string, unknown> = {
