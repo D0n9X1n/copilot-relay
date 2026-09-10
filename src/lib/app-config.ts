@@ -231,9 +231,10 @@ export const normalizeUpstreamTimeoutSeconds = (
     return undefined
   }
 
-  const timeout = normalizePositiveInteger(value)
-  if (timeout === undefined) {
-    throw new Error("Invalid upstreamTimeoutSeconds: expected a positive integer")
+  const timeout =
+    typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
+  if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 0) {
+    throw new Error("Invalid upstreamTimeoutSeconds: expected a non-negative integer (0 disables the deadline)")
   }
 
   return timeout
@@ -415,7 +416,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# Default upstream thinking/reasoning effort: none, low, medium, high, xhigh, max.",
     `thinkEffort: ${config.thinkEffort}`,
     "",
-    "# Max seconds to wait for a single Claude request's upstream Copilot calls.",
+    "# Max seconds for one request's upstream calls; 0 disables the relay deadline.",
     `upstreamTimeoutSeconds: ${config.upstreamTimeoutSeconds}`,
     "",
     "# Copilot model used for bridge-managed Claude WebSearch. Empty uses gptModel.",

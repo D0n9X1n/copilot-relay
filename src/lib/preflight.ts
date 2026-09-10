@@ -4,47 +4,14 @@ import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import type { ReasoningEffort } from "~/lib/models"
 import { getUpstreamModelIds } from "~/lib/models"
-import {
-  createCopilotRequestSignal,
-  fetchCopilot,
-  getCopilotProviderContext,
-  readCopilotJson,
-} from "~/copilot/client"
+import { loadCopilotModelCatalog } from "~/copilot/models"
 import type { ChatCompletionsPayload } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
 
-interface CopilotModelsResponse {
-  data?: Array<{ id?: string }>
-}
-
-const fetchUpstreamModelIds = async (config: ProxyConfig): Promise<Set<string>> => {
-  const provider = getCopilotProviderContext(config)
-  const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
-  const response = await fetchCopilot(provider, "/models", {
-    method: "GET",
-    headers: { accept: "application/json" },
-  }, { signal, timeoutMs: config.upstreamTimeoutMs })
-
-  if (!response.ok) {
-    throw new HTTPError("Failed to validate upstream models", response)
-  }
-
-  const payload = await readCopilotJson<CopilotModelsResponse>(
-    response,
-    signal,
-    config.upstreamTimeoutMs,
-  )
-  return new Set(
-    (payload.data ?? [])
-      .map((model) => model.id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0),
-  )
-}
-
 const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
-  const upstreamModels = await fetchUpstreamModelIds(config)
+  const catalog = await loadCopilotModelCatalog(config)
   const requiredModels = getUpstreamModelIds()
-  const missingModels = requiredModels.filter((model) => !upstreamModels.has(model))
+  const missingModels = requiredModels.filter((model) => !catalog.models.has(model))
 
   if (missingModels.length > 0) {
     throw new Error(
@@ -53,6 +20,14 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   }
 
   log.info(`Upstream models available: ${requiredModels.join(", ")}`)
+  for (const model of requiredModels) {
+    const limits = catalog.models.get(model)?.limits
+    if (limits) {
+      log.info(`Model token limits: model=${model} context=${limits.max_context_window_tokens} input=${limits.max_prompt_tokens} output=${limits.max_output_tokens} non_streaming_output=${limits.max_non_streaming_output_tokens ?? limits.max_output_tokens}`)
+    } else {
+      log.error(`Model token limits unavailable: model=${model}; preserving client budgets without assuming a capacity.`)
+    }
+  }
 }
 
 const createProbePayload = (model: string): ChatCompletionsPayload => ({

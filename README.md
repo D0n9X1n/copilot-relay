@@ -75,7 +75,17 @@ With `claudeSetup: true`, `start` manages `ANTHROPIC_BASE_URL`, a dummy
 `ANTHROPIC_AUTH_TOKEN` when auth is absent, and the configured GPT default via
 the top-level `model` field in `~/.claude/settings.json`. Exact
 `gpt-6-astra` and `gpt-5.6-sol` overrides are normalized to Claude-facing
-`[1m]` identities; unrelated model choices are preserved.
+`[1m]` identities when discovery reports exactly 1M; other reported windows use
+plain GPT IDs with Claude's numeric context setting. Unrelated model choices and
+existing token-budget overrides are preserved.
+
+Startup retains Copilot's actual context, prompt, and output limits and exposes
+them on `GET /v1/models`. Managed Claude setup seeds
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when absent.
+The default models support 1M total context, with up to 128K output tokens for
+Astra and 64K for Opus. Input text is never shortened; smaller explicit output
+budgets remain respected. See [full-context configuration](wiki/EN-Configuration.md)
+for existing/manual Claude setups and the limits on input plus output.
 
 ## Config
 
@@ -116,7 +126,9 @@ Valid `thinkEffort`: `none`, `low`, `medium`, `high`, `xhigh`, `max`.
 
 `upstreamTimeoutSeconds` controls the maximum time a single Claude request can
 spend waiting on upstream Copilot calls, including chat, Responses, preflight,
-and bridge-managed WebSearch calls. The default is `180`.
+and bridge-managed WebSearch calls. The default is `180`. Set `0` to disable the
+relay deadline for very long requests; client cancellation and provider/transport
+timeouts still apply. Existing saved timeouts are never changed by an upgrade.
 
 `webSearchBackend` controls bridge-managed Claude WebSearch. Leave it empty to
 use `gptModel`, or set a Copilot Responses model ID such as `gpt-5.5`.

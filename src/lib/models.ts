@@ -14,6 +14,13 @@ export interface ModelRoutingConfig {
   opusModel: string
 }
 
+export interface ModelTokenLimits {
+  max_context_window_tokens: number
+  max_prompt_tokens: number
+  max_output_tokens: number
+  max_non_streaming_output_tokens?: number
+}
+
 export const defaultReasoningEffort: ReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
@@ -36,9 +43,23 @@ const normalizeOneMillionContextModel = (model: string): string | undefined => {
   return match?.[1]?.toLowerCase()
 }
 
-export const normalizeClaudeModelId = (model: string): string => {
+export const normalizeClaudeModelId = (
+  model: string,
+  contextWindowTokens?: number,
+): string => {
   const normalized = normalizeOneMillionContextModel(model)
-  return normalized ? `${normalized}[1m]` : model
+  if (!normalized) return model
+
+  const catalog = runtimeState.modelCatalog
+  contextWindowTokens ??=
+    catalog?.baseUrl === runtimeState.upstreamBaseUrl ?
+      catalog?.models.get(normalized)?.limits?.max_context_window_tokens
+    : undefined
+  // [1m] overrides Claude's numeric context setting. Use the plain ID when
+  // discovery reports another window, so that setting can represent it exactly.
+  return contextWindowTokens !== undefined && contextWindowTokens !== 1_000_000 ?
+      normalized
+    : `${normalized}[1m]`
 }
 
 export const normalizeCopilotModelId = (model: string): string =>

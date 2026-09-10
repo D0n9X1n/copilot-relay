@@ -10,6 +10,7 @@ import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, log, setLogLevel } from "~/lib/log"
 import { getExposedModelIds } from "~/lib/models"
+import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
@@ -59,6 +60,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     runtimeState.debug = nextConfig.logLevel === "debug"
     runtimeState.thinkEffort = nextConfig.thinkEffort
     config.copilotBaseUrl = nextConfig.copilotBaseUrl
+    runtimeState.upstreamBaseUrl = nextConfig.copilotBaseUrl
     config.host = nextConfig.host
     config.port = nextConfig.port
     config.upstreamTimeoutMs = nextConfig.upstreamTimeoutSeconds * 1000
@@ -73,7 +75,6 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   log.info(`Log level: ${appConfig.logLevel}`)
   log.info(`Think effort: ${appConfig.thinkEffort}`)
   log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
-  log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
   const authSession = await setupProxyAuth(config)
 
@@ -83,6 +84,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     log.error("Startup preflight failed:", error)
     process.exit(1)
   }
+  log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
   const server = await startServer(config)
   await writeRelayPidFile(config)
@@ -102,10 +104,16 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   const baseUrl = `http://${config.host}:${config.port}`
   if (appConfig.claudeSetup) {
     try {
+      const gptLimits = getCachedCopilotModel(config, appConfig.gptModel)?.limits
+      const opusLimits = getCachedCopilotModel(config, appConfig.opusModel)?.limits
       const claudeResult = await applyClaudeConfig({
         baseUrl,
         configPath: claudeConfigPath,
         gptModel: appConfig.gptModel,
+        gptLimits,
+        maxOutputTokens: gptLimits && opusLimits ?
+            Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
+          : undefined,
       })
       if (claudeResult.changed) {
         log.info(

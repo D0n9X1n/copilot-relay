@@ -1,5 +1,6 @@
 // Converts hot-loaded app config into the mutable runtime config shared with routes.
 import type { AppConfig } from "~/lib/app-config"
+import type { CopilotModelCatalog } from "~/copilot/models"
 
 const vscodeVersion = "1.99.3"
 
@@ -8,6 +9,7 @@ export interface ProxyConfig {
   port: number
   copilotBaseUrl: string
   copilotToken: string | undefined
+  modelCatalog?: CopilotModelCatalog
   upstreamTimeoutMs: number
   vsCodeVersion: string
   webSearchBackend?: string

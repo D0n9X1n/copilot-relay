@@ -21,6 +21,7 @@ copilotBaseUrl: https://api.githubcopilot.com
 
 # When true, start updates ~/.claude/settings.json with ANTHROPIC_BASE_URL
 # and a dummy ANTHROPIC_AUTH_TOKEN so Claude Code can use this proxy.
+# Also seeds context/output budgets from model discovery when not already set.
 claudeSetup: true
 
 # Log verbosity:
@@ -43,6 +44,8 @@ logRetentionDays: 3
 thinkEffort: max
 
 # Max seconds to wait for one Claude request's upstream Copilot calls.
+# Set 0 to disable the relay deadline for very long requests. Client cancellation
+# and upstream/provider limits still apply.
 upstreamTimeoutSeconds: 180
 
 # Copilot model used for bridge-managed Claude WebSearch.

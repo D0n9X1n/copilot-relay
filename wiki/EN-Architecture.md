@@ -118,7 +118,9 @@ The consequences of that split are in [Internals](EN-Internals.md).
 | `src/claude/tool-names.ts` | Normalizes Claude tool names into Copilot-compatible names and maps them back. |
 | `src/copilot/client.ts` | Low-level Copilot HTTP client: required headers, bearer tokens, timing logs, transient 5xx retries. |
 | `src/copilot/chat.ts` | Internal chat abstraction used by routes and startup preflight. Applies model routing and think effort. |
+| `src/copilot/models.ts` | Retains discovered context/input/output limits, scopes them to the upstream provider, and bounds output budgets. |
 | `src/copilot/responses.ts` | Translates between the Copilot Responses API and chat-completion-like results. |
+| `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
 | `src/lib/app-config.ts` | Loads and writes `~/.copilot-relay/config.yaml`. Hot-reloads while running. |
 | `src/lib/models.ts` | Config-driven model routing and `thinkEffort` validation. |
 | `src/lib/auth.ts` | GitHub device login, token storage, Copilot bearer refresh before expiry. |
@@ -141,6 +143,12 @@ Preflight runs *before* the socket binds. A relay that cannot reach its
 configured models fails to start rather than accepting traffic it cannot serve.
 The resolved config is already on disk, so a missing account-specific model can
 be corrected directly.
+
+Preflight also retains token limits and tokenizer metadata for configured models.
+Managed Claude setup uses those limits to seed absent client budget settings;
+local `/v1/models` reports the cached capacities without contacting upstream.
+See [Configuration](EN-Configuration.md) for full-context use and
+[Internals](EN-Internals.md) for output buffering and token-counting invariants.
 
 ## Runtime files
 
@@ -188,7 +196,7 @@ opusModel: claude-opus-5
 `host`, `port`, and `claudeSetup` are read once at startup. The other eight
 hot-reload, applying to work that starts after the change. Empty
 `webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total
-upstream wait budget for a single Claude request.
+upstream wait budget for a single Claude request; `0` disables that relay deadline.
 
 `readAppConfig()` writes the resolved config back to disk, so an existing install
 has every key materialized and a `?? defaultConfig.x` fallback is never consulted

@@ -37,15 +37,16 @@ import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
 import { getExposedModelIds } from "~/lib/models"
-import { getTokenCount, type TokenizerModel } from "~/lib/tokenizer"
+import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
 import { createCopilotRequestSignal } from "~/copilot/client"
+import { getCachedCopilotModel } from "~/copilot/models"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
-const createTokenCountModel = (modelId: string): TokenizerModel => ({
-  capabilities: { tokenizer: "o200k_base" },
+const createTokenCountModel = (modelId: string, tokenizer = "o200k_base"): TokenizerModel => ({
+  capabilities: { tokenizer },
   id: modelId,
 })
 
@@ -453,12 +454,20 @@ const handleClaudeMessageRequest = async (
 claudeRoutes.get("/models", (c) =>
   c.json({
     object: "list",
-    data: getExposedModelIds().map((id) => ({
-      id,
-      object: "model",
-      created: 0,
-      owned_by: "github-copilot",
-    })),
+    data: getExposedModelIds().map((id) => {
+      const limits = getCachedCopilotModel(c.get("config"), id)?.limits
+      return {
+        id,
+        object: "model",
+        created: 0,
+        owned_by: "github-copilot",
+        ...(limits && {
+          context_window: limits.max_context_window_tokens,
+          max_input_tokens: limits.max_prompt_tokens,
+          max_tokens: limits.max_output_tokens,
+        }),
+      }
+    }),
   }),
 )
 
@@ -540,8 +549,12 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     const claudePayload = await c.req.json<ClaudeMessagesPayload>()
     const openAIPayload = translateToOpenAI(claudePayload)
     const exposedModels = getExposedModelIds()
+    const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
+    const hasDiscoveredTokenizer =
+      upstreamModel?.tokenizer !== undefined && isSupportedTokenizer(upstreamModel.tokenizer)
     const selectedModel = createTokenCountModel(
       openAIPayload.model === exposedModels[1] ? exposedModels[1] : exposedModels[0],
+      hasDiscoveredTokenizer ? upstreamModel?.tokenizer : undefined,
     )
 
     const tokenCount = await getTokenCount(openAIPayload, selectedModel)
@@ -557,12 +570,13 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
           tool.name.startsWith("mcp__"),
         )
       }
-      if (!mcpToolExist && effectiveModelId.startsWith("claude")) {
+      if (!hasDiscoveredTokenizer && !mcpToolExist && effectiveModelId.startsWith("claude")) {
         tokenCount.input += 346
       }
     }
 
-    const multiplier = effectiveModelId.startsWith("claude") ? 1.15 : 1
+    const multiplier =
+      !hasDiscoveredTokenizer && effectiveModelId.startsWith("claude") ? 1.15 : 1
     const finalTokenCount = Math.round(
       (tokenCount.input + tokenCount.output) * multiplier,
     )

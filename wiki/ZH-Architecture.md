@@ -109,7 +109,9 @@ Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Inter
 | `src/claude/tool-names.ts` | 把 Claude 工具名规范化成 Copilot 可接受的名字，并在响应里映射回来。 |
 | `src/copilot/client.ts` | 底层 Copilot HTTP 客户端：必需 header、bearer token、耗时日志、瞬时 5xx 重试。 |
 | `src/copilot/chat.ts` | 供 routes 和启动 preflight 共用的内部 chat 抽象。应用模型路由与 think effort。 |
+| `src/copilot/models.ts` | 保留发现的 context、输入和输出限制，按上游隔离，并约束输出预算。 |
 | `src/copilot/responses.ts` | 在 Copilot Responses API 与 chat-completion 风格结果之间翻译。 |
+| `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |
 | `src/lib/models.ts` | 配置驱动的模型路由与 `thinkEffort` 校验。 |
 | `src/lib/auth.ts` | GitHub device login、token 存储、到期前刷新 Copilot bearer token。 |
@@ -131,6 +133,11 @@ flowchart TD
 Preflight 在 socket 绑定**之前**运行。一个连配置模型都够不着的中继会直接启动失败，
 而不是先接下它根本处理不了的流量。此时解析后的配置已经写入磁盘，因此可以直接修改
 账号不支持的模型。
+
+Preflight 还会保留模型的 token 限制和 tokenizer 元数据。Claude 自动设置据此补充缺失
+的客户端预算；本地 `/v1/models` 返回缓存的容量，不会调用上游。完整 context 的使用
+方法见[配置说明](ZH-Configuration.md)，输出缓冲和 token 计数的不变量见
+[内部实现](ZH-Internals.md)。
 
 ## 运行期文件
 
@@ -175,7 +182,7 @@ opusModel: claude-opus-5
 
 `host`、`port`、`claudeSetup` 只在启动时读取一次。其余八项热重载，对改动之后开始的
 工作生效。`webSearchBackend` 为空表示使用 `gptModel`。`upstreamTimeoutSeconds` 限制
-单个 Claude 请求在上游上的总等待预算。
+单个 Claude 请求在上游上的总等待预算；`0` 禁用 relay 的这项总超时。
 
 `readAppConfig()` 会把解析后的配置写回磁盘，所以一个已有安装的每个键都已经落盘，
 `?? defaultConfig.x` 这类兜底在那条路径上再也不会被用到。因此**修改发布默认值只对

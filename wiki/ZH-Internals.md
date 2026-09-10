@@ -31,7 +31,9 @@ src/
   copilot/
     client.ts                 认证 HTTP 客户端、重试、计时
     chat.ts                   chat 抽象、路由、think effort
+    models.ts                 按上游地址隔离的模型目录和 token 限制
     responses.ts              Responses API 翻译、prompt_cache_key
+    stream.ts                 共用聚合逻辑与完整流校验
     tool-schema.ts            仅用于 Responses 的工具 schema 兼容处理
     types.ts                  上游 payload 类型
 
@@ -133,6 +135,32 @@ pattern 后，上游的下一层校验仍会拒绝前瞻断言。
 的流式、非流式以及 WebSearch 模型调用都经过同一适配。
 
 ## 流式
+
+### 长 context 与输出预算
+
+`src/copilot/models.ts` 中的 `loadCopilotModelCatalog` 保留 preflight 读取的模型
+目录。限制数据绑定到准确的上游 base URL；地址改变后会先重新发现，再使用预算。
+并发刷新共用一个请求，较旧的响应不能覆盖新上游的目录。缺失或无效的限制元数据不会
+被替换成猜测的容量。
+
+`boundModelOutputTokens` 按实际路由模型公布的最大输出限制请求，同时不会提高客户端
+明确指定的较小预算。Preflight 和深度健康检查仍保留 16-token 预算。Prompt 内容不会
+为了适应限制而被切片。`count_tokens` 在有数据时使用受支持的已发现 tokenizer，并在这种情况下
+跳过旧的 Claude 系列 15% 余量，避免已有 tokenizer 数据时仍因模型名称启发式而过早
+压缩。本地模型发现返回缓存的限制，不会调用上游。
+
+某些模型公布的 `max_non_streaming_output_tokens` 小于流式上限。超过该阈值时，
+`createChatCompletions` 会向上游请求 SSE，再由 `collectChatCompletionStream` 为
+JSON 调用方及 WebSearch 最终模型调用返回完整 chat 响应。它复用 WebSearch 的聚合器，
+保留 usage、推理、工具参数片段和 `length` 终止原因，并拒绝不完整的流，而不是构造
+成功结果。普通流式调用方仍然实时接收 chunk。
+
+Claude 自动预算、模型选择器处理，以及可选的无总超时设置，见
+[配置说明](ZH-Configuration.md)。`tests/integration/model-text-limits.test.ts` 在
+两种响应模式下完整传递经 tokenizer 计数的 872K/936K-token prompt 和
+128K/64K-token 输出；上游使用 mock，不会执行付费的百万 token 生成。
+
+### Claude SSE 翻译
 
 `src/claude/stream.ts` 把流式 Copilot chat chunk 转换成 Claude SSE 事件。它是一个
 状态机，因为 Claude 要求 text、thinking、tool use 的 content block 按正确顺序显式

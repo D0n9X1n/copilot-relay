@@ -7,6 +7,8 @@ import { log } from "~/lib/log"
 import { defaultReasoningEffort } from "~/lib/models"
 import { routeModelId } from "~/lib/models"
 import { runtimeState } from "~/lib/state"
+import { boundModelOutputTokens, getCachedCopilotModel } from "~/copilot/models"
+import { collectChatCompletionStream } from "~/copilot/stream"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -197,8 +199,27 @@ export const createChatCompletions = async (
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
   const upstreamModelId = routeModelId(payload.model)
-  const upstreamPayload =
-    upstreamModelId === payload.model ? payload : { ...payload, model: upstreamModelId }
+  const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens)
+  const nonStreamingLimit =
+    getCachedCopilotModel(config, upstreamModelId)?.limits?.max_non_streaming_output_tokens
+  // Some models allow their largest output only over SSE. Buffer that upstream
+  // stream for JSON clients and WebSearch final passes instead of shortening it.
+  const bufferResponse =
+    !payload.stream
+    && typeof maxTokens === "number"
+    && nonStreamingLimit !== undefined
+    && maxTokens > nonStreamingLimit
+  const completeResponse = (
+    response: ChatCompletionResponse | AsyncIterable<{ data?: string }>,
+  ) => bufferResponse && !("choices" in response) ?
+      collectChatCompletionStream(response, signal, options.timeoutMs)
+    : response
+  const upstreamPayload = {
+    ...payload,
+    model: upstreamModelId,
+    max_tokens: maxTokens,
+    stream: bufferResponse ? true : payload.stream,
+  }
   const useResponsesApi = shouldUseResponsesApiForModel(upstreamPayload.model)
   const compatiblePayload =
     useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(upstreamPayload)
@@ -225,13 +246,13 @@ export const createChatCompletions = async (
   // resolve to a Responses-only upstream model even when the client asked for a
   // generic Claude model name.
   if (useResponsesApi) {
-    return createResponses(provider, compatiblePayload, {
+    return completeResponse(await createResponses(provider, compatiblePayload, {
       vision: enableVision,
       initiator,
       requestId: options.requestId,
       signal,
       timeoutMs: options.timeoutMs,
-    })
+    }))
   }
 
   const response = await fetchCopilot(
@@ -256,13 +277,13 @@ export const createChatCompletions = async (
 
   if (!response.ok) {
     if (await shouldRetryWithResponses(response, signal, options.timeoutMs)) {
-      return createResponses(provider, compatiblePayload, {
+      return completeResponse(await createResponses(provider, compatiblePayload, {
         vision: enableVision,
         initiator,
         requestId: options.requestId,
         signal,
         timeoutMs: options.timeoutMs,
-      })
+      }))
     }
 
     const detail = await logUpstreamError("Failed to create chat completions", response, {
@@ -279,7 +300,7 @@ export const createChatCompletions = async (
   }
 
   if (compatiblePayload.stream) {
-    return events(response)
+    return completeResponse(events(response))
   }
 
   return readCopilotJson<ChatCompletionResponse>(

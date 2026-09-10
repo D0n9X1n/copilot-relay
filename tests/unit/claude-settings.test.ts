@@ -5,6 +5,7 @@ import path from "node:path"
 import test from "node:test"
 
 import { applyClaudeConfig } from "../../src/lib/claude-settings"
+import { astraLimits, solLimits } from "../fixtures/model-limits"
 
 const withTemporarySettings = async (
   run: (configPath: string) => Promise<void>,
@@ -21,6 +22,42 @@ const readSettings = async (
   configPath: string,
 ): Promise<Record<string, unknown>> =>
   JSON.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>
+
+test("seeds actual context and maximum output budgets from model discovery", async () => {
+  for (const [gptModel, gptLimits, expectedModel] of [
+    ["gpt-6-astra", astraLimits, "gpt-6-astra[1m]"],
+    ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol"],
+  ] as const) {
+    await withTemporarySettings(async (configPath) => {
+      const input = { baseUrl: "http://127.0.0.1:4142", configPath, gptModel, gptLimits, maxOutputTokens: 128_000 }
+      await applyClaudeConfig(input)
+      const settings = await readSettings(configPath)
+      const env = settings.env as Record<string, unknown>
+      assert.equal(settings.model, expectedModel)
+      assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, String(gptLimits.max_context_window_tokens))
+      assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "128000")
+      assert.equal(env.DISABLE_COMPACT, undefined)
+      assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, undefined)
+      assert.equal((await applyClaudeConfig(input)).changed, false)
+    })
+  }
+})
+
+test("preserves explicit client context and output overrides", async () => {
+  await withTemporarySettings(async (configPath) => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true })
+    await fs.writeFile(configPath, JSON.stringify({
+      env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "500000", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192" },
+    }))
+    await applyClaudeConfig({
+      baseUrl: "http://127.0.0.1:4142", configPath, gptModel: "gpt-6-astra",
+      gptLimits: astraLimits, maxOutputTokens: 128_000,
+    })
+    const env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "500000")
+    assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "8192")
+  })
+})
 
 // Why: a fresh managed Claude Code setup must actually select the configured GPT
 // default and expose its 1M client-side context identity without changing the

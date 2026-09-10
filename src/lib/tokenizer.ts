@@ -24,6 +24,9 @@ const encodingMap = {
 
 type SupportedEncoding = keyof typeof encodingMap
 
+export const isSupportedTokenizer = (encoding: string): encoding is SupportedEncoding =>
+  Object.hasOwn(encodingMap, encoding)
+
 interface Encoder {
   encode: (text: string) => Array<number>
 }
@@ -114,14 +117,13 @@ const getEncodeChatFunction = async (encoding: string): Promise<Encoder> => {
     if (cached) return cached
   }
 
-  const supported = encoding as SupportedEncoding
-  if (!(supported in encodingMap)) {
+  if (!isSupportedTokenizer(encoding)) {
     const fallback = (await encodingMap.o200k_base()) as Encoder
     encodingCache.set(encoding, fallback)
     return fallback
   }
 
-  const mod = (await encodingMap[supported]()) as Encoder
+  const mod = (await encodingMap[encoding]()) as Encoder
   encodingCache.set(encoding, mod)
   return mod
 }
