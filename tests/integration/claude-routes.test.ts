@@ -139,6 +139,10 @@ const startMockCopilot = async (
     total_tokens: 2,
   },
   onRequest?: (request: CapturedRequest) => void,
+  options: {
+    searchFailure?: { status: number; body: string }
+    functionCall?: { name: string; arguments: string }
+  } = {},
 ) => {
   const requests: Array<CapturedRequest> = []
   let webSearchChatCalls = 0
@@ -384,6 +388,11 @@ const startMockCopilot = async (
         return
       }
       if (payload.tools?.some((tool) => tool.type === "web_search_preview")) {
+        if (options.searchFailure) {
+          response.statusCode = options.searchFailure.status
+          response.end(options.searchFailure.body)
+          return
+        }
         response.end(JSON.stringify({
           id: "resp_web_search",
           created_at: 1,
@@ -418,12 +427,12 @@ const startMockCopilot = async (
       const webSearchTool = /search/i.test(inputText) ?
           payload.tools?.find((tool) => tool.name === "WebSearch" || tool.name === "web_search")
         : undefined
-      if (webSearchTool) {
+      if (webSearchTool || options.functionCall) {
         const item = {
           type: "function_call",
-          call_id: "call_responses_web_search",
-          name: webSearchTool.name,
-          arguments: JSON.stringify({ query: "GitHub Copilot docs" }),
+          call_id: "call_responses_tool",
+          name: options.functionCall?.name ?? webSearchTool?.name,
+          arguments: options.functionCall?.arguments ?? JSON.stringify({ query: "GitHub Copilot docs" }),
         }
         const result = {
           id: "resp_web_search_call", created_at: 1, model: payload.model,
@@ -713,14 +722,17 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
           const payload = upstream.body as {
             tools: Array<{
               name?: string
+              strict?: boolean
               parameters?: Record<string, unknown>
-              function?: { name: string; parameters: Record<string, unknown> }
+              function?: { name: string; parameters: Record<string, unknown>; strict?: boolean }
             }>
           }
           const tool = payload.tools.find(
             (candidate) => (candidate.name ?? candidate.function?.name) === "Artifact",
           )
           assert.ok(tool)
+          assert.equal(tool.strict, model === "opus" ? undefined : false)
+          assert.equal(tool.function?.strict, undefined)
           assert.deepEqual(
             tool.parameters ?? tool.function?.parameters,
             model === "opus" ? artifactToolSchema : {
@@ -738,6 +750,88 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
         }
       })
     }
+  }
+}
+
+for (const stream of [false, true]) {
+  for (const optional of [false, true]) {
+    test(`Responses optional tool arguments survive stream=${stream} supplied=${optional}`, async () => {
+      const args = { description: "inspect", prompt: "read synthetic text", ...optional ? { isolation: "remote" } : {} }
+      const schema = {
+        type: "object",
+        properties: {
+          description: { type: "string" }, prompt: { type: "string" },
+          isolation: { type: "string", enum: ["worktree", "remote"] },
+        },
+        required: ["description", "prompt"],
+      }
+      const mock = await startMockCopilot(undefined, undefined, {
+        functionCall: { name: "Agent", arguments: JSON.stringify(args) },
+      })
+      try {
+        const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "default", max_tokens: 128, stream,
+            messages: [{ role: "user", content: "Call Agent." }],
+            tools: [{ name: "Agent", input_schema: schema }],
+          }),
+        }))
+        assert.equal(response.status, 200)
+        if (stream) {
+          const events = (await response.text()).split("\n")
+            .filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6)))
+          const json = events.filter((event) => event.delta?.type === "input_json_delta")
+            .map((event) => event.delta.partial_json).join("")
+          assert.deepEqual(JSON.parse(json), args)
+          assert.equal(events.filter((event) => event.type === "message_stop").length, 1)
+        } else {
+          const result = await response.json() as { content: Array<{ type: string; input?: unknown }> }
+          assert.deepEqual(result.content.find((block) => block.type === "tool_use")?.input, args)
+        }
+        assert.equal(mock.requests.length, 1)
+        assert.equal(mock.requests[0]?.path, "/responses")
+        const sent = mock.requests[0]?.body as { tools: Array<{ strict: boolean; parameters: unknown }> }
+        assert.equal(sent.tools[0]?.strict, false)
+        assert.deepEqual(sent.tools[0]?.parameters, schema)
+      } finally {
+        await mock.close()
+      }
+    })
+  }
+  for (const status of [503, 429, 401, 403, 400]) {
+    test(`WebSearch HTTP ${status} stays a tool error with stream=${stream}`, async () => {
+      const mock = await startMockCopilot(undefined, undefined, {
+        searchFailure: { status, body: JSON.stringify({ error: { message: "Please try again later." }, request: { prompt: "PRIVATE_CONTEXT" } }) },
+      })
+      try {
+        const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "opus", max_tokens: 128, stream,
+            messages: [{ role: "user", content: "Search the web for public docs." }],
+            tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
+          }),
+        }))
+        assert.equal(response.status, 200)
+        const text = await response.text()
+        assert.match(text, new RegExp(`HTTP ${status}`))
+        assert.match(text, /"type":"web_search_tool_result_error","error_code":"unavailable"/)
+        assert.match(text, /Please try again later\./)
+        assert.doesNotMatch(text, /not available for model|PRIVATE_CONTEXT/)
+        if (stream) {
+          assert.equal((text.match(/event: message_start/g) ?? []).length, 1)
+          assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+          assert.doesNotMatch(text, /event: error/)
+        }
+        assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
+        const retrievals = mock.requests.filter((request) => request.path === "/responses")
+        assert.equal(retrievals.length, status === 503 ? 2 : 1)
+        for (const retrieval of retrievals) {
+          assert.deepEqual((retrieval.body as { tools: unknown }).tools, [{ type: "web_search_preview" }])
+        }
+      } finally {
+        await mock.close()
+      }
+    })
   }
 }
 

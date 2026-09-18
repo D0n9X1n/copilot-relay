@@ -21,6 +21,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,11 +37,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -55,33 +63,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${RELEASE_TAG}"
-          current_commit="$(git rev-list -n 1 "$tag")"
-          previous_tag="$(git describe --tags --abbrev=0 "${current_commit}^" 2>/dev/null || true)"
-          if [ -n "$previous_tag" ]; then
-            commit_range="${previous_tag}..${current_commit}"
-          else
-            commit_range="${current_commit}"
-          fi
-          commit_messages="$(git log --reverse --format='- %s' "$commit_range")"
           notes_file="$(mktemp)"
-          cat > "$notes_file" <<EOF
-          ## copilot-relay ${tag}
-
-          Automated release for ${tag}.
-
-          ### Commits
-          ${commit_messages}
-
-          ### Assets
-          - npm package tarball
-          - SHA256 checksums
-
-          ### Validation
-          - TypeScript typecheck
-          - Unit tests
-          - Integration tests with mocked Copilot upstream
-          - Build
-          EOF
+          trap 'rm -f "$notes_file"' EXIT
+          python3 scripts/release-notes.py "$tag" release > "$notes_file"
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release edit "$tag" --title "$tag" --notes-file "$notes_file"

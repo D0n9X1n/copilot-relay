@@ -29,6 +29,10 @@ npm run build
 ```
 
 `npm test` 会把单元和集成两个套件一起跑。测试通过 `tsx` 使用 Node 内置 test runner。
+发布说明测试还需要 Git 和 Python 3.12 或更新版本（POSIX 使用 `python3`，Windows 使用
+`python`，也可通过 `PYTHON` 指定可执行文件）。测试使用临时 Git 仓库和模拟的 GitHub
+元数据，不调用真实 GitHub API。CI 的六条腿都安装 Python 3.12。Python 只是开发和发布
+依赖，运行中继本身不需要 Python。
 
 纯逻辑优先写单元测试 —— 配置校验、模型路由、token 计数启发式、Claude/Copilot 协议
 边界情况。只有当 Hono 路由或 mock 上游行为本身属于契约的一部分时，才用集成测试。
@@ -144,6 +148,28 @@ git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # ← 不可回头的�
 
 然后验证它确实发布了 —— `npm view copilot-relay version` 和
 `gh release view vX.Y.Z` —— 并关闭 milestone。
+
+### 发布说明生成
+
+`scripts/release-notes.py` 沿用 SonicTerm 的确定性发布说明格式：Downloads、Resolved
+issues、可选的 Manually closed issues (unverified release linkage)、Changes since
+上一个 tag，以及 Verification。它复用 SonicTerm 的 `scripts/release-issues.py`
+归属验证器，上游 MIT 声明保留在 `scripts/LICENSE-SonicTerm`。
+
+基准是从发布提交的父提交可达的上一个 tag，而不是版本号最大的 tag。候选 issue 来自
+精确的左开右闭提交范围中的关闭关键词和关联 PR，包括合并提交。只有关闭事件指向范围
+内仍有效的提交或已合并 PR，才会进入 Resolved issues；去重和规范的 revert 记录可防止
+把已发布或已撤销的修复算作本次交付。手工关闭的 issue 单独披露，不视为归属证明。
+展示的变更按新到旧排列，仅包含非合并提交的标题和短哈希。
+
+生成需要完整 Git 历史、具有 issue/PR 读取权限的 GitHub CLI 认证、与该提交中包版本
+一致的 tag，以及 npm tarball 和匹配的 `SHA256SUMS`。历史或产物缺失、归属不明确、
+API 查询失败时，会在输出任何说明之前失败。`PREVIOUS_TAG` 可指定祖先基准；
+`RELEASE_FIRST=1` 显式允许首次发布，不能与 `PREVIOUS_TAG` 同时使用。
+
+发布 workflow 会先生成说明，再创建或更新 GitHub Release。这不会阻止并行的 npm 和
+GitHub Packages job，因此必须验证所有发布 job，而不能只看包是否可用。单独运行生成器
+不会创建 tag 或发布包。它的离线测试包含在 `npm run test:unit` 中。
 
 ### 发布细节
 

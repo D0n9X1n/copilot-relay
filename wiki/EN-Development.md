@@ -31,7 +31,11 @@ npm run build
 ```
 
 `npm test` runs the unit and integration suites together. Tests use Node's
-built-in test runner via `tsx`.
+built-in test runner via `tsx`. Release-note tests also require Git and Python
+3.12 or newer (`python3` on POSIX, `python` on Windows, or the executable named by
+`PYTHON`). They use temporary Git repositories and mocked GitHub metadata, never
+live GitHub API calls. CI provisions Python 3.12 on all six legs. Python is a
+development/release dependency only, not a requirement for running the relay.
 
 Prefer unit tests for pure logic — config validation, model routing, token-count
 heuristics, Claude/Copilot protocol edge cases. Use integration tests only when
@@ -160,6 +164,34 @@ git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # ← point of no retu
 
 Then verify it actually shipped — `npm view copilot-relay version` and
 `gh release view vX.Y.Z` — and close the milestone.
+
+### Release-note generation
+
+`scripts/release-notes.py` follows SonicTerm's deterministic release-message
+format: Downloads, Resolved issues, optional Manually closed issues (unverified
+release linkage), Changes since the previous tag, and Verification. It reuses
+SonicTerm's `scripts/release-issues.py` provenance collector; the upstream MIT
+notice is preserved in `scripts/LICENSE-SonicTerm`.
+
+The base is the previous reachable tag from the release commit's parent, not the
+highest version number. Issue candidates come from closing keywords and associated
+PRs across the exact base-exclusive/head-inclusive range, including merge commits.
+Only closure events tied to active, in-range commits or merged PRs enter Resolved
+issues; deduplication and canonical reverts prevent claiming previously shipped or
+reverted fixes. Manual closures are disclosed separately, not treated as proof.
+Displayed changes are newest-first non-merge commit subjects with short hashes.
+
+Generation requires complete Git history, GitHub CLI authentication with issue/PR
+read access, a tag matching that commit's package version, and the npm tarball plus
+matching `SHA256SUMS`. Missing history/assets, ambiguous provenance, or failed API
+lookups fail before any notes are emitted. `PREVIOUS_TAG` may select an explicit
+ancestor base; `RELEASE_FIRST=1` is the explicit first-release opt-in and cannot be
+combined with `PREVIOUS_TAG`.
+
+The publish workflow generates notes before creating or updating the GitHub
+Release. This does not gate the parallel npm/GitHub Packages jobs: verify all
+publish jobs, not just package availability. Running the generator alone never
+creates a tag or publishes a package. Its offline tests run under `npm run test:unit`.
 
 ### Publishing details
 

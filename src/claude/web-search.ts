@@ -25,6 +25,7 @@ import type {
   ToolCall,
 } from "~/copilot/types"
 import type { ProxyConfig } from "~/lib/config"
+import { sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
 import {
   getModelRouting,
   getRequestReasoningEffort,
@@ -335,6 +336,47 @@ const createFailedSearchExecution = (
   text: message,
 })
 
+const getSearchFailureCategory = (status: number): string => {
+  if (status === 503) return "service unavailable"
+  if (status >= 500) return "server failure"
+  if (status === 429) return "rate limited"
+  if (status === 401) return "authentication rejected"
+  if (status === 403) return "access denied"
+  return "request failed"
+}
+
+const getSearchFailureDetail = (body: string, token: string | undefined): string => {
+  let detail = body.trim()
+  try {
+    const parsed: unknown = JSON.parse(detail)
+    const error = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : undefined
+    detail = typeof error?.message === "string" ? error.message
+      : typeof error?.code === "string" ? error.code : ""
+  } catch {
+    if (/^[{[<]/.test(detail)) return ""
+  }
+
+  detail = scrubSensitiveUrls(sanitizeTerminalString(detail))
+  detail = detail.replace(/https?:\/\/[^\s'"`<>]+/gi, (raw) => {
+    try {
+      const url = new URL(raw)
+      return url.username || url.password || url.search || url.hash ?
+          `${url.origin}/[redacted]` : raw
+    } catch {
+      return "[redacted]"
+    }
+  })
+  if (token) detail = detail.replaceAll(token, "[redacted]")
+  // Upstream prose is untrusted; omit credential or request echoes rather than truncate them.
+  if (
+    /\b(?:authorization|bearer|api[_ -]?key|password|secret|access[_ -]?token|refresh[_ -]?token)\b/i.test(detail)
+    || /\btoken\s*[=:]/i.test(detail)
+    || /\b(?:gh[pousr]_|github_pat_|sk-|eyJ)[A-Za-z0-9_-]+/.test(detail)
+    || /\b(?:request|payload|prompt|messages|input|headers|conversation)\b["']?\s*[:=]/i.test(detail)
+  ) return ""
+  return detail.trim().slice(0, 240)
+}
+
 export const createClaudeWebSearchExecution = async (
   config: ProxyConfig,
   payload: ClaudeMessagesPayload,
@@ -365,17 +407,18 @@ export const createClaudeWebSearchExecution = async (
   )
 
   if (!response.ok) {
-    const detail = await readCopilotText(
+    const body = await readCopilotText(
       response,
       signal,
       options.timeoutMs,
     ).catch(() => "")
+    const detail = getSearchFailureDetail(body, config.copilotToken)
     return createFailedSearchExecution(
       payload,
       requestedQuery,
       backendModel,
       [
-        `Copilot web search is not available for model ${backendModel}.`,
+        `Copilot web search upstream ${getSearchFailureCategory(response.status)} (HTTP ${response.status}; model ${backendModel}).`,
         detail ? `Upstream response: ${detail}` : "",
       ]
         .filter(Boolean)

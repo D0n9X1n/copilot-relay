@@ -111,3 +111,62 @@ test("omits reasoning when effort is undefined", () => {
   const payload = buildResponsesRequestPayload(basePayload(), undefined)
   assert.equal(payload.reasoning, undefined)
 })
+
+test("Responses function tools explicitly preserve optional argument schemas", () => {
+  const tools: NonNullable<ChatCompletionsPayload["tools"]> = [
+    {
+      type: "function",
+      function: {
+        name: "Agent",
+        parameters: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            prompt: { type: "string" },
+            isolation: { type: "string", enum: ["worktree", "remote"] },
+          },
+          required: ["description", "prompt"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "Read",
+        parameters: {
+          type: "object",
+          properties: {
+            file_path: { type: "string" },
+            pages: { type: "string" },
+            options: {
+              type: "object",
+              properties: { encoding: { type: "string", enum: ["utf8"] } },
+              additionalProperties: false,
+            },
+          },
+          required: ["file_path"],
+          additionalProperties: true,
+        },
+      },
+    },
+  ]
+  const original = structuredClone(tools)
+  const request = JSON.parse(JSON.stringify(
+    buildResponsesRequestPayload(basePayload({ tools }), "low"),
+  ))
+
+  assert.deepEqual(request.tools, original.map((tool) => ({
+    type: "function",
+    name: tool.function.name,
+    parameters: tool.function.parameters,
+    strict: false,
+  })))
+  assert.deepEqual(tools, original)
+  assert.equal("strict" in request, false)
+})
+
+test("Responses requests without tools do not add strictness or tools", () => {
+  const request = JSON.parse(JSON.stringify(buildResponsesRequestPayload(basePayload(), "low")))
+  assert.equal("tools" in request, false)
+  assert.equal("strict" in request, false)
+})

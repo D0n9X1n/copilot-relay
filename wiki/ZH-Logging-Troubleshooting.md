@@ -377,6 +377,24 @@ Claude WebSearch 由中继通过 Copilot `/responses` 加 `web_search_preview` �
 grep -n "web_search_preview\|Failed to create responses\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
+上游 HTTP 请求失败时，工具结果仍使用 `unavailable` 错误码，但附带文本会报告实际的
+上游状态码和后端模型：
+
+```text
+Copilot web search upstream service unavailable (HTTP 503; model gpt-6-astra).
+```
+
+503 表示服务暂不可用，其他 5xx 表示服务器故障，429 表示限流，401 表示认证被拒绝，
+403 表示访问被拒绝。这些状态不能证明模型或工具不受支持，也不能证明令牌已经过期。
+其他状态报告通用请求失败。外层 Claude 响应仍可能为 HTTP 200，包括已经打开的 SSE
+流；应检查工具结果和上游 `return from upstream ... status=...` 日志，而不只看外层
+状态码。成功但内容为空的响应则显示 `did not return search results`。
+
+如果可用，会在清理后附上上游错误消息或错误码，最多 240 个字符。识别出的凭据或请求
+回显以及无法识别的结构化正文会被省略；不会新增原始响应头或请求 payload 日志。
+重试策略和模型选择保持不变。这是诊断处理，不是搜索执行的证明：生成文本中的链接
+本身不能证明搜索已经执行。
+
 WebSearch 默认使用 `gptModel`。要改用另一个 Copilot Responses 模型：
 
 ```yaml
@@ -451,12 +469,27 @@ debug Copilot POST /chat/completions -> 200 8287ms (attempt 1)
 grep -n "Failed to refresh Copilot token\|Using cached Copilot token\|Next Copilot token refresh" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
-如果请求突然开始出现认证错误：
+缓存 bearer 可能在声明的期限之前被拒绝。无论 preflight 还是正常请求，遇到 HTTP 401
+或纯文本 `forbidden` 的 HTTP 403 时，中继都会尝试一次非交互刷新。并发失败共享刷新；
+明确的策略、模型或配额拒绝不会触发刷新。仅凭 403 不能断定 token 到期或账户失去权限。
 
-1. 检查 `github_token` 是否存在。
-2. 检查 `copilot_token.json` 是否存在。
-3. 搜索 `Failed to refresh Copilot token`。
-4. 运行 `copilot-relay auth` 刷新 GitHub 登录 token。
+```sh
+grep -n "authentication rejected\|token refresh completed\|token recovery failed" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+`token refresh completed; retrying` 只表示交换完成或复用了更新的 token，不表示推理已经
+成功。应检查重试后的上游状态；持续拒绝仍会报告。交换失败不会启动设备授权。已取消
+的请求和已经开始的流永远不会重放。
+
+如果认证错误持续存在：
+
+1. 检查 `github_token` 和 `copilot_token.json` 是否存在，不要打印内容。
+2. 检查刷新、恢复失败日志及最终上游状态。
+3. 明确的权限或配额错误应与凭据被拒绝分开排查。
+4. 只有需要更新 GitHub 登录时才运行 `copilot-relay auth`；删除缓存或重新授权不是正常恢复路径。
+
+恢复后用 `copilot-relay status --deep` 验证推理；本地健康检查和模型列表接口本身不能
+证明上游可用。
 
 ## Claude Code 设置不对
 
