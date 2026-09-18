@@ -21,6 +21,8 @@ const copilotDispatcher = new Agent({
 export interface CopilotProviderContext {
   baseUrl: string
   token: string | undefined
+  tokenGeneration?: number
+  refreshToken?: ProxyConfig["refreshCopilotToken"]
   vsCodeVersion: string
 }
 
@@ -28,7 +30,9 @@ export const getCopilotProviderContext = (
   config: ProxyConfig,
 ): CopilotProviderContext => ({
   baseUrl: config.copilotBaseUrl,
-  token: config.copilotToken,
+  get token() { return config.copilotToken },
+  get tokenGeneration() { return config.copilotTokenGeneration ?? 0 },
+  refreshToken: config.refreshCopilotToken,
   vsCodeVersion: config.vsCodeVersion,
 })
 
@@ -201,6 +205,44 @@ const logUpstreamLifecycle = (
   log.debug(message)
 }
 
+const waitWithSignal = <T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+  if (!signal) return pending
+  if (signal.aborted) {
+    void pending.catch(() => {})
+    return Promise.reject(signal.reason)
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+  })
+}
+
+const isAuthRejection = async (response: Response, signal: AbortSignal | undefined): Promise<boolean> => {
+  if (response.status === 401) return true
+  if (response.status !== 403) return false
+  const reader = response.clone().body?.getReader()
+  if (!reader) return false
+  const decoder = new TextDecoder()
+  let text = ""
+  let size = 0
+  try {
+    for (;;) {
+      const chunk = await waitWithSignal(reader.read(), signal)
+      if (chunk.done) return (text + decoder.decode()).trim().toLowerCase() === "forbidden"
+      size += chunk.value.byteLength
+      if (size > 128) return false
+      text += decoder.decode(chunk.value, { stream: true })
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error
+    return false
+  } finally {
+    // A tee branch's cancellation may wait for the other branch to finish.
+    void reader.cancel().catch(() => {})
+  }
+}
+
 export const fetchCopilot = async (
   provider: CopilotProviderContext,
   path: string,
@@ -216,18 +258,23 @@ export const fetchCopilot = async (
   const timeoutMs = options.timeoutMs ?? copilotRequestTimeoutMs
   const signal = createCopilotRequestSignal(options.signal, timeoutMs)
   let lastError: unknown
+  let transientRetries = 0
+  let authRecoveryUsed = false
 
-  for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+  for (let attempt = 1; attempt <= maxFetchAttempts + 1; attempt++) {
     const upstreamRequestId = randomUUID()
+    const attemptedToken = provider.token!
+    const attemptedGeneration = provider.tokenGeneration ?? 0
+    let response: Response
     try {
       const started = performance.now()
       logUpstreamLifecycle(
         options.requestId,
         `send upstream method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
       )
-      const response = await undiciFetch(`${provider.baseUrl}${path}`, {
+      response = await undiciFetch(`${provider.baseUrl}${path}`, {
         ...init,
-        headers: buildHeaders(provider, init, options, upstreamRequestId),
+        headers: buildHeaders({ ...provider, token: attemptedToken }, init, options, upstreamRequestId),
         dispatcher: copilotDispatcher,
         signal,
       })
@@ -238,13 +285,6 @@ export const fetchCopilot = async (
       )
       log.debug(
         `${formatRequestId(options.requestId)}Copilot ${init.method ?? "GET"} ${path} -> ${response.status} ${ms}ms (attempt ${attempt}) upstream_request_id=${upstreamRequestId}`,
-      )
-
-      if (!shouldRetryResponse(response) || attempt === maxFetchAttempts) {
-        return response
-      }
-      log.error(
-        `${formatRequestId(options.requestId)}Copilot ${path} returned ${response.status}; retrying (${attempt}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
       )
     } catch (error) {
       const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
@@ -261,18 +301,44 @@ export const fetchCopilot = async (
         `upstream failed method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
       )
       lastError = error
-      if (attempt === maxFetchAttempts) {
+      if (transientRetries >= maxFetchAttempts - 1) {
         log.error(
           `${formatRequestId(options.requestId)}Copilot ${path} request failed after ${attempt} attempts upstream_request_id=${upstreamRequestId}`,
           error,
         )
         throw error
       }
+      transientRetries++
       log.error(
-        `${formatRequestId(options.requestId)}Copilot ${path} request failed; retrying (${attempt}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
+        `${formatRequestId(options.requestId)}Copilot ${path} request failed; retrying (${transientRetries}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
         error,
       )
+      continue
     }
+
+    try {
+      signal?.throwIfAborted()
+      if (!authRecoveryUsed && provider.refreshToken && await isAuthRejection(response, signal)) {
+        authRecoveryUsed = true
+        log.info(`${formatRequestId(options.requestId)}Copilot ${path} authentication rejected status=${response.status}; refreshing token`)
+        await response.body?.cancel()
+        signal?.throwIfAborted()
+        await waitWithSignal(provider.refreshToken(attemptedToken, attemptedGeneration), signal)
+        signal?.throwIfAborted()
+        log.info(`${formatRequestId(options.requestId)}Copilot token refresh completed; retrying ${path}`)
+        continue
+      }
+    } catch (error) {
+      void response.body?.cancel().catch(() => {})
+      const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
+      if (abortError) throw abortError
+      log.error(`${formatRequestId(options.requestId)}Copilot token recovery failed; request not replayed`)
+      throw new Error("Copilot token recovery failed; request not replayed.")
+    }
+    if (!shouldRetryResponse(response) || transientRetries >= maxFetchAttempts - 1) return response
+    transientRetries++
+    log.error(`${formatRequestId(options.requestId)}Copilot ${path} returned ${response.status}; retrying (${transientRetries}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`)
+    await response.body?.cancel()
   }
 
   throw lastError

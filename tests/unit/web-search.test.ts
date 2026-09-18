@@ -1,19 +1,31 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import { createServer as createHttpServer, type IncomingMessage } from "node:http"
+import os from "node:os"
+import path from "node:path"
 import test from "node:test"
 
-import {
+import type { WebSearchExecutionResult } from "../../src/claude/web-search"
+import type { ClaudeMessagesPayload, ClaudeTool } from "../../src/claude/types"
+import type { ChatCompletionsPayload, Message } from "../../src/copilot/types"
+import type { ProxyConfig } from "../../src/lib/config"
+
+const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-search-test-"))
+process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
+process.env.CONSOLA_LEVEL = "0"
+const {
   createClaudeWebSearchExecution,
   createClaudeWebSearchResponse,
   createFinalWebSearchPayload,
   getWebSearchBackendModel,
-  type WebSearchExecutionResult,
-} from "../../src/claude/web-search"
-import { createClaudeToolNameMapper } from "../../src/claude/tool-names"
-import type { ClaudeMessagesPayload, ClaudeTool } from "../../src/claude/types"
-import type { ChatCompletionsPayload, Message } from "../../src/copilot/types"
-import type { ProxyConfig } from "../../src/lib/config"
-import { HTTPError } from "../../src/lib/error"
+} = await import("../../src/claude/web-search")
+const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names")
+const { HTTPError } = await import("../../src/lib/error")
+const { registerSensitiveOrigin } = await import("../../src/lib/redact")
+test.after(async () => {
+  await fs.rm(tempHome, { recursive: true, force: true })
+})
 
 interface CapturedRequest {
   body: unknown
@@ -93,6 +105,114 @@ const startWebSearchMockCopilot = async () => {
     requests,
   }
 }
+
+const withSearchResponses = async (
+  replies: Array<{ status: number; body: string }>,
+  run: (baseUrl: string, attempts: () => number) => Promise<void>,
+) => {
+  let attempts = 0
+  const server = createHttpServer(async (request, response) => {
+    await readJsonBody(request)
+    const reply = replies[Math.min(attempts++, replies.length - 1)]!
+    response.writeHead(reply.status)
+    response.end(reply.body)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  assert(address && typeof address === "object")
+  try {
+    await run(`http://127.0.0.1:${address.port}`, () => attempts)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+}
+
+for (const [status, category] of [
+  [503, "service unavailable"],
+  [500, "server failure"],
+  [429, "rate limited"],
+  [401, "authentication rejected"],
+  [403, "access denied"],
+  [400, "request failed"],
+  [404, "request failed"],
+] as const) {
+  test(`WebSearch preserves HTTP ${status} without guessing model support`, async () => {
+    await withSearchResponses([{ status, body: "Please try again later." }], async (baseUrl, attempts) => {
+      const search = await createClaudeWebSearchExecution(
+        { ...createConfig(baseUrl), webSearchBackend: "gpt-6-astra" }, payload, "public query",
+      )
+      assert.match(search.text, new RegExp(`HTTP ${status}`))
+      assert.ok(search.text.includes(category))
+      assert.match(search.text, /gpt-6-astra/)
+      assert.match(search.text, /Please try again later\./)
+      assert.doesNotMatch(search.text, /not available for model|token expired/)
+      assert.equal(attempts(), status >= 500 ? 2 : 1)
+      assert.deepEqual(search.results, [])
+      const result = createClaudeWebSearchResponse(search).content[1]
+      assert.deepEqual(result && "content" in result ? result.content : undefined, {
+        type: "web_search_tool_result_error", error_code: "unavailable",
+      })
+    })
+  })
+}
+
+for (const [name, body, expected] of [
+  ["JSON message", JSON.stringify({ error: { message: "web_search_preview is unsupported", code: "unknown_capability" }, request: { prompt: "PRIVATE_CONTEXT" } }), "web_search_preview is unsupported"],
+  ["JSON code", JSON.stringify({ error: { code: "invalid_request" } }), "invalid_request"],
+  ["empty", "", ""],
+  ["malformed JSON", '{"error": PRIVATE_CONTEXT', ""],
+  ["unrecognized JSON", JSON.stringify({ request: { prompt: "PRIVATE_CONTEXT" } }), ""],
+  ["non-string message", JSON.stringify({ error: { message: { prompt: "PRIVATE_CONTEXT" } } }), ""],
+  ["terminal controls", "\x1b[31mBusy\x1b[0m\nTry later", "BusyTry later"],
+  ["bounded text", "x".repeat(400), "x".repeat(240)],
+  ["credential after display limit", `${"x".repeat(300)} Authorization: Bearer PRIVATE_CONTEXT`, ""],
+  ["JSON credential", JSON.stringify({ error: { message: "Authorization: Bearer PRIVATE_CONTEXT" } }), ""],
+  ["configured token", "Rejected test-token", "Rejected [redacted]"],
+  ["authorization", "Authorization: Bearer PRIVATE_CONTEXT", ""],
+  ["token assignment", "api_key=PRIVATE_CONTEXT", ""],
+  ["GitHub token", "Rejected ghp_PRIVATE_CONTEXT", ""],
+  ["request echo", 'Request payload: {"messages":[{"content":"PRIVATE_CONTEXT"}]}', ""],
+  ["credential URL", "See https://user:PRIVATE_CONTEXT@example.com/help?token=PRIVATE_CONTEXT", "See https://example.com/[redacted]"],
+  ["sensitive origin", "See https://search-secret.example/PRIVATE_CONTEXT", "See [redacted]"],
+] as const) {
+  test(`WebSearch safely renders ${name} diagnostics`, async () => {
+    registerSensitiveOrigin("https://search-secret.example/secret")
+    await withSearchResponses([{ status: 400, body }], async (baseUrl) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+      assert.match(search.text, /HTTP 400/)
+      assert.doesNotMatch(search.text, /PRIVATE_CONTEXT|test-token|\x1b/)
+      const detail = search.text.split("\nUpstream response: ")[1] ?? ""
+      assert.equal(detail, expected)
+      assert.doesNotMatch(search.text, /not available for model/)
+    })
+  })
+}
+
+test("WebSearch recovers after a transient HTTP 503 with its existing retry", async () => {
+  await withSearchResponses([
+    { status: 503, body: "Busy" },
+    { status: 200, body: JSON.stringify({
+      id: "search_recovered", model: "gpt-6-astra",
+      output: [{ type: "message", content: [{ type: "output_text", text: "1. Docs - https://example.com/docs" }] }],
+    }) },
+  ], async (baseUrl, attempts) => {
+    const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+    assert.equal(attempts(), 2)
+    assert.equal(search.results[0]?.url, "https://example.com/docs")
+    assert.doesNotMatch(search.text, /HTTP 503/)
+  })
+})
+
+test("successful empty WebSearch remains distinct from an HTTP error", async () => {
+  await withSearchResponses([{ status: 200, body: JSON.stringify({ id: "empty", model: "gpt-6-astra", output: [] }) }], async (baseUrl, attempts) => {
+    const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+    assert.equal(search.text, "Copilot web search did not return search results.")
+    assert.equal(attempts(), 1)
+  })
+})
 
 const startHangingMockCopilot = async () => {
   const requests: Array<CapturedRequest> = []

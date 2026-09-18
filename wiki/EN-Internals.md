@@ -163,6 +163,14 @@ client-side tool validation still enforces the original constraint. The same
 adaptation covers streaming, non-streaming, and WebSearch model passes that use
 Responses.
 
+`translateTools` in `src/copilot/responses.ts` also sets `strict: false` on every
+Responses function tool. Omitting it lets upstream normalize compatible schemas
+into strict mode, which can make optional properties required. Explicit non-strict
+mode preserves optional `Agent.isolation`, `Read.pages`, and nested properties
+without injecting nulls or defaults. Returned arguments are not stripped or
+rewritten. This setting does not apply to built-in `web_search_preview` or to
+`/chat/completions` tools.
+
 ## Streaming
 
 ### Long context and output budgets
@@ -329,7 +337,29 @@ On startup, the cached Copilot token is reused if it has more than 60 seconds
 remaining; otherwise it is refreshed from `github_token`. Refresh timers must use
 `unref()` so they do not keep short-lived commands alive.
 
-Token values are never logged. Lifecycle logs carry paths and scheduling only.
+A future refresh deadline is not proof that upstream still accepts the token.
+`setupProxyAuth` installs a non-interactive refresh callback on the runtime config.
+`fetchCopilot` in `src/copilot/client.ts` uses it for HTTP 401 and HTTP 403 whose
+entire body is plain `forbidden` (case/whitespace insensitive, at most 128 bytes).
+Structured model/policy/quota denials are returned unchanged. The provider keeps
+its base URL but reads the current token for each attempt.
+
+Timer and request refreshes share one in-flight exchange. The attempted token and
+refresh generation identify late rejections, so they reuse an already-completed
+refresh even if the replacement token text is identical. A replacement is written
+to a private temporary file and atomically renamed over the cache before updating
+live state and rescheduling renewal. Each upstream operation allows one auth
+recovery plus the existing transient retry allowance, at most three HTTP attempts;
+chat-to-Responses fallback is a separate operation under the same caller deadline.
+
+A cancelled/timed-out caller stops waiting and is never replayed; other callers
+may still use the shared exchange, which has its own finite upstream timeout
+(180 seconds when the configured timeout is disabled). Only rejected HTTP
+responses are recovered, never a successful response or a started stream. Refresh
+failures surface without device login or being retried as network failures.
+
+Token values are never logged. Recovery logs contain status, route, and outcome,
+not credentials or response payloads.
 
 ## Lifecycle: status and stop ask different questions
 

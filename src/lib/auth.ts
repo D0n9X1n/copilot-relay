@@ -1,5 +1,6 @@
 // GitHub device auth plus file-backed Copilot token cache and refresh scheduling.
 import fs from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
@@ -130,11 +131,15 @@ const writeStoredCopilotToken = async (
     refreshIn: input.refresh_in,
     token: input.token,
   }
-  await fs.writeFile(
-    paths.copilotTokenPath,
-    `${JSON.stringify(payload, null, 2)}\n`,
-    { mode: 0o600 },
-  )
+  const temporaryPath = `${paths.copilotTokenPath}.${randomUUID()}.tmp`
+  try {
+    await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
+      mode: 0o600, flag: "wx",
+    })
+    await fs.rename(temporaryPath, paths.copilotTokenPath)
+  } finally {
+    await fs.rm(temporaryPath, { force: true })
+  }
 }
 
 const getStoredTokenRemainingSeconds = (token: StoredCopilotToken): number => {
@@ -222,11 +227,13 @@ const getGitHubUser = async (
 const getCopilotToken = async (
   githubToken: string,
   vsCodeVersion: string,
+  signal?: AbortSignal,
 ): Promise<CopilotTokenResponse> => {
   const response = await fetch(
     `${githubApiBaseUrl}/copilot_internal/v2/token`,
     {
       headers: githubHeaders(githubToken, vsCodeVersion),
+      signal,
     },
   )
 
@@ -277,15 +284,26 @@ export const setupProxyAuth = async (
   options: AuthOptions = {},
 ): Promise<ProxyAuthSession> => {
   let githubToken = await ensureGitHubToken(options)
-  const applyCopilotToken = async () => {
-    const tokenResponse = await getCopilotToken(
-      githubToken,
-      config.vsCodeVersion,
-    )
-
-    config.copilotToken = tokenResponse.token
-    await writeStoredCopilotToken(tokenResponse)
-    return tokenResponse.refresh_in
+  let refreshInFlight: Promise<number> | undefined
+  const applyCopilotToken = () => {
+    if (refreshInFlight) return refreshInFlight
+    refreshInFlight = (async () => {
+      const tokenResponse = await getCopilotToken(
+        githubToken,
+        config.vsCodeVersion,
+        AbortSignal.timeout(config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : 180_000),
+      )
+      if (typeof tokenResponse.token !== "string" || !tokenResponse.token.trim()
+        || !Number.isFinite(tokenResponse.refresh_in) || tokenResponse.refresh_in <= 0) {
+        throw new Error("Copilot token exchange returned invalid credentials metadata.")
+      }
+      await writeStoredCopilotToken(tokenResponse)
+      config.copilotToken = tokenResponse.token
+      config.copilotTokenGeneration = (config.copilotTokenGeneration ?? 0) + 1
+      scheduleCopilotTokenRefresh(tokenResponse.refresh_in)
+      return tokenResponse.refresh_in
+    })().finally(() => { refreshInFlight = undefined })
+    return refreshInFlight
   }
 
   const scheduleCopilotTokenRefresh = (refreshIn: number) => {
@@ -302,11 +320,10 @@ export const setupProxyAuth = async (
 
     copilotTokenRefreshTimer = setTimeout(async () => {
       try {
-        const nextRefreshIn = await applyCopilotToken()
+        await applyCopilotToken()
         log.info("Refreshed Copilot token")
-        scheduleCopilotTokenRefresh(nextRefreshIn)
-      } catch (error) {
-        log.error("Failed to refresh Copilot token:", error)
+      } catch {
+        log.error("Failed to refresh Copilot token; retrying in 60s")
         // Keep the last token active and retry soon; in-flight requests can
         // continue until the bearer token actually expires.
         scheduleCopilotTokenRefresh(60)
@@ -326,6 +343,7 @@ export const setupProxyAuth = async (
     config.copilotToken = storedToken.token
     refreshIn = getStoredTokenRemainingSeconds(storedToken)
     log.info(`Using cached Copilot token at ${paths.copilotTokenPath}`)
+    scheduleCopilotTokenRefresh(refreshIn)
   } else {
     try {
       refreshIn = await applyCopilotToken()
@@ -347,7 +365,14 @@ export const setupProxyAuth = async (
       refreshIn = await applyCopilotToken()
     }
   }
-  scheduleCopilotTokenRefresh(refreshIn)
+  config.refreshCopilotToken = async (rejectedToken, generation) => {
+    if (config.copilotToken !== rejectedToken || (config.copilotTokenGeneration ?? 0) !== generation) return
+    try {
+      await applyCopilotToken()
+    } catch {
+      throw new Error("Copilot token refresh failed; upstream request was not replayed.")
+    }
+  }
 
   return {
     githubLogin: await loadGitHubLogin(githubToken, config.vsCodeVersion),

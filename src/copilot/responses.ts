@@ -116,6 +116,7 @@ interface ResponsesTool {
   name: string
   description?: string
   parameters: Record<string, unknown>
+  strict: false
 }
 
 type ResponsesOutputItem =
@@ -780,6 +781,7 @@ function translateTools(
     name: tool.function.name,
     description: tool.function.description,
     parameters: normalizeResponsesToolSchema(tool.function.parameters),
+    strict: false,
   }))
 }
 

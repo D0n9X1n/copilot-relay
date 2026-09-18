@@ -401,6 +401,27 @@ Claude WebSearch is executed by the relay through Copilot `/responses` with
 grep -n "web_search_preview\|Failed to create responses\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
+Failed upstream HTTP requests keep the `unavailable` tool-result error code, but
+the accompanying text reports the actual upstream status and backend model:
+
+```text
+Copilot web search upstream service unavailable (HTTP 503; model gpt-6-astra).
+```
+
+A 503 means service unavailability; other 5xx responses mean server failure, 429
+means rate limiting, 401 means authentication was rejected, and 403 means access
+was denied. These do not establish missing model/tool support or token expiry.
+Other statuses report a generic request failure. The outer Claude response can
+still be HTTP 200, including an already-open SSE stream; inspect the tool result
+and upstream `return from upstream ... status=...` log entry, not only the outer
+status. An empty successful response instead says `did not return search results`.
+
+When available, an upstream error message or code is included after sanitization,
+capped at 240 characters. Recognized credential/request echoes and unrecognized
+structured bodies are omitted; no raw response headers or request payloads are added to logs.
+Retry policy and model selection are unchanged. This is diagnostic handling, not
+proof of search execution: links in generated text alone do not prove a search ran.
+
 By default WebSearch uses `gptModel`. To use a different Copilot Responses model:
 
 ```yaml
@@ -477,12 +498,30 @@ short-lived bearer token cache refreshed before expiry.
 grep -n "Failed to refresh Copilot token\|Using cached Copilot token\|Next Copilot token refresh" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
-If requests suddenly fail with auth errors:
+A cached bearer can be rejected before its advertised deadline. The relay tries
+one non-interactive refresh for HTTP 401 or a plain `forbidden` HTTP 403, both
+during preflight and normal requests. Concurrent failures share the refresh;
+explicit policy/model/quota denials do not trigger it. A 403 alone does not prove
+expiry or loss of account access.
 
-1. Check whether `github_token` exists.
-2. Check whether `copilot_token.json` exists.
-3. Check for `Failed to refresh Copilot token`.
-4. Run `copilot-relay auth` to refresh the GitHub login token.
+```sh
+grep -n "authentication rejected\|token refresh completed\|token recovery failed" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+`token refresh completed; retrying` means an exchange completed or a newer token
+was reused, not that inference succeeded. Inspect the retry's upstream status;
+persistent rejection remains visible. A failed exchange does not launch device
+authorization. Cancelled requests and already-started streams are never replayed.
+
+If auth errors persist:
+
+1. Check whether `github_token` and `copilot_token.json` exist without printing their contents.
+2. Check refresh/recovery failure logs and the final upstream status.
+3. Investigate explicit permission or quota errors separately from rejected credentials.
+4. Run `copilot-relay auth` only when GitHub login needs renewal; deleting the cache or reauthorizing is not the normal recovery path.
+
+After recovery, `copilot-relay status --deep` tests inference; local health and
+model-list endpoints alone do not prove upstream access.
 
 ## Claude Code settings are wrong
 

@@ -9,6 +9,8 @@ export interface ProxyConfig {
   port: number
   copilotBaseUrl: string
   copilotToken: string | undefined
+  copilotTokenGeneration?: number
+  refreshCopilotToken?: (rejectedToken: string, generation: number) => Promise<void>
   modelCatalog?: CopilotModelCatalog
   upstreamTimeoutMs: number
   vsCodeVersion: string
