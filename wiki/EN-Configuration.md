@@ -49,27 +49,46 @@ opusModel: claude-opus-5
 
 ### List available models
 
-Model availability depends on your Copilot account and organization policy. With
-GitHub Copilot CLI installed, run `copilot` in your terminal, then enter this
-command **inside its interactive session**:
+Model availability depends on your Copilot account, organization policy, and
+configured gateway. To fetch the complete catalog advertised by your relay's
+upstream, run:
 
-```text
-/model
+```sh
+copilot-relay models
 ```
 
-The picker lists account-visible models and the selected model's supported effort
-choices. Use the same account as the relay. Selecting a model there changes the
-Copilot CLI session, not the relay configuration. There is no `copilot-relay models`
-command.
+The command makes a fresh authenticated `GET /models` at the configured
+`copilotBaseUrl`, reusing the relay's cached credentials, token refresh, and
+`upstreamTimeoutSeconds`. Without usable cached credentials, the existing device
+login flow may ask you to authenticate. All valid upstream IDs are printed in
+sorted order, with duplicates removed; relay aliases such as `[1m]` are not added.
+Models outside the configured `gptModel` and `opusModel` mappings are included.
+Terminal control characters are stripped and sensitive gateway URL tails are
+redacted for safe display; ordinary model IDs are unchanged.
+An empty catalog is reported explicitly with exit code `0`; configuration,
+authentication, network, HTTP, timeout, and malformed-catalog failures exit `1`.
+A local timeout is reported separately from a real upstream HTTP 504.
 
-The authoritative relay catalog is authenticated `GET /models` at your configured
-`copilotBaseUrl`. Startup queries it and then probes both configured models.
-`copilot-relay status` shows configured relay IDs; local `GET /v1/models` also
-includes cached `context_window`, `max_input_tokens`, and `max_tokens` when
-discovery supplied them. Neither endpoint fetches the catalog or proves current
-model access. A custom gateway may
-have a different catalog from Copilot CLI. Never paste bearer tokens into commands,
-logs, or issue reports.
+It works while the relay is stopped and when a configured model ID is absent
+upstream. It does not bind a port, run startup preflight or inference probes,
+change your selected models, or alter Claude settings. The config loader still
+materializes resolved keys in `config.yaml`, and authentication may update its
+token cache, just as with other commands.
+
+**Advertised does not mean verified.** A catalog entry is not proof of successful
+inference or compatibility with relay requests, tools, or a particular effort.
+After choosing models, startup checks the configured IDs and probes them;
+`copilot-relay status --deep` checks a real request through the running relay.
+In contrast, `copilot-relay status` shows configured relay IDs, and local
+`GET /v1/models` also includes cached `context_window`, `max_input_tokens`, and
+`max_tokens` when discovery supplied them. Neither fetches the upstream catalog.
+
+For an interactive picker and any effort metadata it exposes, you can also run
+GitHub Copilot CLI (`copilot`), then enter `/model` **inside its interactive
+session**. Use the same account as the relay. That selection changes only the
+Copilot CLI session, not the relay configuration; a custom gateway may advertise
+a different catalog. Never paste bearer tokens into commands, logs, or issue
+reports.
 
 ### Choose a compatible effort
 
