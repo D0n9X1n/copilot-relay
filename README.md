@@ -146,11 +146,21 @@ The same folder stores `copilot_token.json` for the cached Copilot bearer token,
 
 ```sh
 copilot-relay auth
+copilot-relay models
 copilot-relay start
 copilot-relay restart
 copilot-relay status
 copilot-relay stop
 ```
+
+`models` fetches the complete upstream-advertised catalog from the configured
+`copilotBaseUrl` using the relay's authentication. It prints exact upstream IDs
+in sorted order, not just the configured relay models or their `[1m]` aliases.
+It works with the relay stopped and with configured model IDs that are no longer
+available. It does not start the server, change model selections or Claude
+settings, or send inference requests. Listing is not proof of inference, tool,
+or effort compatibility. Empty catalogs are reported explicitly; failures exit
+with code `1`. See [model discovery and configuration](wiki/EN-Configuration.md).
 
 `status` reports whether a relay is running, where it is listening, and whether
 it is reachable:

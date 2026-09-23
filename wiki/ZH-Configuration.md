@@ -48,24 +48,37 @@ opusModel: claude-opus-5
 
 ### 列出可用模型
 
-模型是否可用取决于 Copilot 账号及组织策略。安装 GitHub Copilot CLI 后，在终端运行
-`copilot`，然后**在其交互会话中**输入：
+模型是否可用取决于 Copilot 账号、组织策略及配置的网关。要获取 relay 上游公布的
+完整模型目录，运行：
 
-```text
-/model
+```sh
+copilot-relay models
 ```
 
-选择器会列出账号可见的模型及所选模型支持的 effort。请使用与 relay 相同的账号。
-在这里选择模型只会改变 Copilot CLI 会话，不会修改 relay 配置。不存在
-`copilot-relay models` 命令。
+该命令每次都会向配置的 `copilotBaseUrl` 发起认证的 `GET /models`，复用 relay 的
+缓存凭据、token 刷新逻辑及 `upstreamTimeoutSeconds`。没有可用缓存凭据时，现有的
+设备登录流程可能要求你完成认证。输出保留上游原始 ID，排序并去重，不会添加
+`[1m]` 等 relay 别名，也不会只列出 `gptModel` 和 `opusModel` 配置中的模型。
+为确保显示安全，终端控制字符会被移除，敏感网关 URL 的尾部会被脱敏；普通模型 ID
+保持不变。
+空目录会明确提示，退出码为 `0`；配置、认证、网络、HTTP、超时及目录格式错误时
+退出码为 `1`。本地超时与上游真正返回的 HTTP 504 会使用不同提示。
 
-Relay 使用的权威模型目录是配置的 `copilotBaseUrl` 上需要认证的 `GET /models`。
-启动时会查询该目录，再探测两个配置模型。`copilot-relay status` 显示配置的 relay ID；
-本地 `GET /v1/models` 还会在目录提供数据时返回缓存的 `context_window`、
-`max_input_tokens` 和 `max_tokens`。这两个接口都不会拉取上游目录，也不能证明模型
-当前可用。
-自建网关的模型目录可能与 Copilot CLI 不同。不要把 bearer token 粘贴到命令、日志或
-issue 中。
+Relay 未运行或配置的模型 ID 已不在上游目录中时，仍可使用此命令。它不会绑定端口、
+执行启动预检或推理探测、改变所选模型，也不会修改 Claude 设置。与其他命令一样，
+配置加载器仍会把补齐默认值后的配置写回 `config.yaml`，认证过程也可能更新 token 缓存。
+
+**公布在目录中不等于已验证可用。** 目录条目不能证明推理请求一定成功，也不能保证
+兼容 relay 请求、工具或某个 effort 档位。选好模型后，启动流程会检查配置的 ID 并
+发送探测请求；`copilot-relay status --deep` 则通过正在运行的 relay 检查真实请求。
+相比之下，`copilot-relay status` 显示配置的 relay ID；本地 `GET /v1/models` 还会在
+目录提供数据时返回缓存的 `context_window`、`max_input_tokens` 和 `max_tokens`。
+这两者都不会拉取上游目录。
+
+如果需要交互式选择器及其提供的 effort 元数据，也可运行 GitHub Copilot CLI
+（`copilot`），然后**在其交互会话中**输入 `/model`。请使用与 relay 相同的账号。
+该选择只影响 Copilot CLI 会话，不会修改 relay 配置；自建网关公布的目录可能不同。
+不要把 bearer token 粘贴到命令、日志或 issue 中。
 
 ### 选择兼容的 effort
 

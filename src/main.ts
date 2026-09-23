@@ -4,6 +4,7 @@
 import { defineCommand, runMain } from "citty"
 
 import { auth } from "./auth"
+import { models } from "./models"
 import { restart } from "./restart"
 import { start } from "./start"
 import { status } from "./status"
@@ -15,7 +16,7 @@ const main = defineCommand({
     description:
       "Yet, just another relay for Claude Code to use a GitHub Copilot subscription.",
   },
-  subCommands: { auth, restart, start, status, stop },
+  subCommands: { auth, models, restart, start, status, stop },
 })
 
 await runMain(main)
