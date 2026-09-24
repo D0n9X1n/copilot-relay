@@ -141,6 +141,7 @@ const startMockCopilot = async (
   onRequest?: (request: CapturedRequest) => void,
   options: {
     searchFailure?: { status: number; body: string }
+    searchResponse?: Record<string, unknown>
     functionCall?: { name: string; arguments: string }
   } = {},
 ) => {
@@ -393,7 +394,7 @@ const startMockCopilot = async (
           response.end(options.searchFailure.body)
           return
         }
-        response.end(JSON.stringify({
+        response.end(JSON.stringify(options.searchResponse ?? {
           id: "resp_web_search",
           created_at: 1,
           model: payload.model,
@@ -798,6 +799,48 @@ for (const stream of [false, true]) {
       }
     })
   }
+  for (const [status, output, detail] of [
+    ["completed", [], "completed without extractable text or sources"],
+    ["incomplete", [{ type: "reasoning", summary: [{ text: "PRIVATE_REASONING" }] }], "incomplete (max_output_tokens)"],
+    ["failed", [{ type: "message", content: [{ type: "output_text", text: "Partial - https://example.com/partial" }] }], "response failed"],
+    ["completed", [{ type: "web_search_call", status: "completed" }], "completed without extractable text or sources"],
+  ] as const) {
+    test(`WebSearch ${status} 2xx failure terminates once and preserves usage stream=${stream}`, async () => {
+      const mock = await startMockCopilot(undefined, undefined, {
+        searchResponse: { id: "resp_empty_evidence", status, output,
+          incomplete_details: { reason: "max_output_tokens" },
+          usage: { input_tokens: 55, output_tokens: 1200, output_tokens_details: { reasoning_tokens: 1190 } },
+        },
+      })
+      try {
+        const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "opus", max_tokens: 4000, stream,
+            messages: [{ role: "user", content: "Search the web for public docs." }],
+            tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
+          }),
+        }))
+        assert.equal(response.status, 200)
+        const text = await response.text()
+        assert(text.includes(detail))
+        assert.match(text, /"type":"web_search_tool_result_error","error_code":"unavailable"/)
+        assert.doesNotMatch(text, /PRIVATE_REASONING|https:\/\/example.com\/partial/)
+        if (stream) {
+          assert.equal((text.match(/event: message_start/g) ?? []).length, 1)
+          assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+          assert.match(text, /"output_tokens":1200/)
+          assert.doesNotMatch(text, /event: error/)
+        } else {
+          const result = JSON.parse(text)
+          assert.equal(result.id, "resp_empty_evidence")
+          assert.equal(result.usage.input_tokens, 55)
+          assert.equal(result.usage.output_tokens, 1200)
+        }
+        assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
+        assert.equal(mock.requests.filter((request) => request.path === "/responses").length, 1)
+      } finally { await mock.close() }
+    })
+  }
   for (const status of [503, 429, 401, 403, 400]) {
     test(`WebSearch HTTP ${status} stays a tool error with stream=${stream}`, async () => {
       const mock = await startMockCopilot(undefined, undefined, {
@@ -1198,7 +1241,7 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
     // which carries no other tools, so there is nothing left to advertise here.
     assert.equal(finalRequest.tools, undefined)
     assert.equal(finalRequest.messages?.at(-1)?.role, "user")
-    assert.match(finalRequest.messages?.at(-1)?.content ?? "", /Trusted bridge retrieval context/)
+    assert.match(finalRequest.messages?.at(-1)?.content ?? "", /Bridge retrieval context: upstream reported a web_search_call but omitted its completion status/)
     assert.equal(body.content[0]?.type, "server_tool_use")
     assert.equal(body.content[0]?.name, "web_search")
     assert.equal(body.content[0]?.input?.query, "GitHub Copilot docs")
@@ -1389,7 +1432,7 @@ test("POST /v1/messages keeps client tools usable after a WebSearch turn", async
     assert.equal(finalRequest.messages?.at(-1)?.role, "user")
     assert.match(
       finalRequest.messages?.at(-1)?.content ?? "",
-      /Trusted bridge retrieval context/,
+      /Bridge retrieval context: upstream reported a web_search_call but omitted its completion status/,
     )
 
     // The model can now act on what it found, in the same turn.
