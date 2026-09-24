@@ -10,6 +10,7 @@ import type {
   Tool,
 } from "~/copilot/types"
 
+import { HTTPError } from "~/lib/error"
 import { sanitizeUserIdentifier } from "./chat"
 import { normalizeResponsesToolSchema } from "./tool-schema"
 
@@ -22,6 +23,7 @@ export interface ResponsesApiResponse {
   id: string
   created_at: number
   model: string
+  status?: string
   output: Array<ResponsesOutputItem>
   reasoning?: ResponsesReasoningSummaryContainer | null
   usage?: {
@@ -131,7 +133,7 @@ interface ResponsesMessageOutputItem {
 }
 
 interface ResponsesMessageContentPart {
-  type: "output_text"
+  type: "output_text" | "refusal"
   text: string
 }
 
@@ -269,6 +271,12 @@ function deriveResponsesCacheKey(
 export function translateResponsesToChatCompletion(
   response: ResponsesApiResponse,
 ): ChatCompletionResponse {
+  if (response.status !== undefined && response.status !== "completed" && response.status !== "incomplete") {
+    throw new HTTPError("Upstream response did not complete", new Response(JSON.stringify({ error: { code: "upstream_response_failed" } }), { status: 502 }))
+  }
+  if (response.status === "incomplete" && !["max_output_tokens", "content_filter"].includes(response.incomplete_details?.reason ?? "")) {
+    throw new HTTPError("Upstream response incomplete", new Response(JSON.stringify({ error: { code: "upstream_response_incomplete" } }), { status: 502 }))
+  }
   const assistantMessages = response.output.filter(
     (item): item is ResponsesMessageOutputItem => item.type === "message",
   )
@@ -279,6 +287,7 @@ export function translateResponsesToChatCompletion(
 
   const content = assistantMessages
     .flatMap((item) => item.content)
+    .filter((part) => part.type === "output_text")
     .map((part) => part.text)
     .join("")
   const reasoningText = getResponsesReasoningText(response)
@@ -888,13 +897,15 @@ function getFinishReason(
   response: Pick<ResponsesApiResponse, "output" | "incomplete_details">,
   hasFunctionCalls: boolean,
 ): "stop" | "length" | "tool_calls" | "content_filter" {
+  if (response.output.some((item) => item.type === "message" && item.content.some((part) => part.type === "refusal"))) return "content_filter"
   if (hasFunctionCalls) {
     return "tool_calls"
   }
 
-  if (response.incomplete_details?.reason?.includes("max_output_tokens")) {
+  if (response.incomplete_details?.reason === "max_output_tokens") {
     return "length"
   }
+  if (response.incomplete_details?.reason === "content_filter") return "content_filter"
 
   return "stop"
 }

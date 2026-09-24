@@ -13,6 +13,9 @@ import {
 export interface CopilotModel {
   limits?: ModelTokenLimits
   tokenizer?: string
+  supportedEndpoints?: string[]
+  type?: string
+  reasoningEfforts?: string[]
 }
 
 export interface CopilotModelCatalog {
@@ -96,9 +99,13 @@ export async function loadCopilotModelCatalog(
       if (!isRecord(model) || typeof model.id !== "string" || !model.id) continue
       const capabilities = isRecord(model.capabilities) ? model.capabilities : undefined
       const limits = parseModelTokenLimits(capabilities?.limits)
+      const supports = isRecord(capabilities?.supports) ? capabilities.supports : undefined
       models.set(model.id, {
         ...(limits && { limits }),
         ...(typeof capabilities?.tokenizer === "string" && { tokenizer: capabilities.tokenizer }),
+        ...(Array.isArray(model.supported_endpoints) && { supportedEndpoints: model.supported_endpoints.filter((endpoint): endpoint is string => typeof endpoint === "string") }),
+        ...(typeof capabilities?.type === "string" && { type: capabilities.type }),
+        ...(Array.isArray(supports?.reasoning_effort) && { reasoningEfforts: supports.reasoning_effort.filter((effort): effort is string => typeof effort === "string") }),
       })
     }
     const catalog = { baseUrl: provider.baseUrl, models }

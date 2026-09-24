@@ -371,7 +371,7 @@ export function translateToClaude(
     role: "assistant",
     model: normalizeClaudeModelId(response.model),
     content: [...allThinkingBlocks, ...allTextBlocks, ...allToolUseBlocks],
-    stop_reason: mapOpenAIStopReasonToClaude(stopReason),
+    stop_reason: response.choices.some((choice) => choice.message.refusal) ? "refusal" : mapOpenAIStopReasonToClaude(stopReason),
     stop_sequence: null,
     usage: {
       input_tokens:

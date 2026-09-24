@@ -25,6 +25,12 @@ const createChatResponse = (model: string): ChatCompletionResponse => ({
   },
 })
 
+test("filtered chat output is a refusal, not normal completion", () => {
+  const response = createChatResponse("test-model")
+  response.choices[0]!.finish_reason = "content_filter"
+  assert.equal(translateToClaude(response).stop_reason, "refusal")
+})
+
 // Why: completed Copilot responses carry canonical upstream IDs. Claude Code
 // must receive the client-facing context identity without rewriting unrelated
 // model names.

@@ -1,6 +1,7 @@
 // Central logger: writes to console and ~/.copilot-relay/logs with daily
 // rotation and retention cleanup.
 import fs from "node:fs/promises"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { inspect } from "node:util"
 
 import consola from "consola"
@@ -32,6 +33,10 @@ const fileLevelByMethod: Record<string, number> = {
   info: consolaLevelByName.info,
   debug: consolaLevelByName.debug,
 }
+
+const loggingSuppressed = new AsyncLocalStorage<boolean>()
+
+export const withoutLogging = <T>(run: () => T): T => loggingSuppressed.run(true, run)
 
 let currentLogLevel = consolaLevelByName.info
 
@@ -125,6 +130,7 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
   fn: T,
 ): T =>
   ((...args: Array<unknown>) => {
+    if (loggingSuppressed.getStore()) return
     const methodLevel = fileLevelByMethod[level] ?? consolaLevelByName.info
     const writesToFile = methodLevel <= currentLogLevel
     const writesToConsole = methodLevel <= consola.level

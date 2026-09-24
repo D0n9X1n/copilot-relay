@@ -24,6 +24,7 @@ const { collectChatCompletionStream } = await import("../../src/copilot/stream")
 const { HTTPError } = await import("../../src/lib/error")
 const { normalizeClaudeModelId } = await import("../../src/lib/models")
 const { runtimeState } = await import("../../src/lib/state")
+const { probeModels } = await import("../../src/lib/model-probe")
 
 test.after(async () => {
   await fs.rm(tempHome, { recursive: true, force: true })
@@ -117,6 +118,27 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
   } finally {
     await mock.close()
   }
+})
+
+test("deep probes restore process routing and catalog state after a failed response", async (t) => {
+  const mock = await startModels({ error: "not a completion" })
+  const config = configFor(mock.baseUrl)
+  const routing = { gptModel: "before-gpt", opusModel: "before-opus" }
+  const catalog = { baseUrl: "before", models: new Map() }
+  runtimeState.modelRouting = routing
+  runtimeState.modelCatalog = catalog
+  runtimeState.upstreamBaseUrl = "before"
+  const interrupts = process.listenerCount("SIGINT")
+  const terms = process.listenerCount("SIGTERM")
+  t.mock.method(console, "log", () => {})
+  try {
+    assert.equal(await probeModels(config, [["exact-model", {}]], { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 2000 }), 2)
+    assert.equal(runtimeState.modelRouting, routing)
+    assert.equal(runtimeState.modelCatalog, catalog)
+    assert.equal(runtimeState.upstreamBaseUrl, "before")
+    assert.equal(process.listenerCount("SIGINT"), interrupts)
+    assert.equal(process.listenerCount("SIGTERM"), terms)
+  } finally { delete runtimeState.modelRouting; await mock.close() }
 })
 
 test("a changed upstream never reuses the previous provider's capacities", async () => {

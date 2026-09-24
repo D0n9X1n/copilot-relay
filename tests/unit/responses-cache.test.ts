@@ -4,8 +4,32 @@ import assert from "node:assert/strict"
 import {
   buildResponsesRequestPayload,
   shouldUseResponsesApiForModel,
+  translateResponsesToChatCompletion,
 } from "../../src/copilot/responses"
 import type { ChatCompletionsPayload } from "../../src/copilot/types"
+
+for (const status of ["failed", "cancelled", "queued", "in_progress", "unknown"]) {
+  test(`Responses ${status} cannot become a completed chat answer`, () => {
+    assert.throws(() => translateResponsesToChatCompletion({
+      id: "resp_failed", model: "gpt-6-astra", created_at: 1, status,
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "partial answer" }] }],
+    }), /did not complete/)
+  })
+}
+
+test("Responses incomplete output keeps budget exhaustion and filtering distinct", () => {
+  for (const [reason, expected] of [["max_output_tokens", "length"], ["content_filter", "content_filter"]]) {
+    const result = translateResponsesToChatCompletion({
+      id: "resp_partial", model: "gpt-6-astra", created_at: 1, status: "incomplete",
+      incomplete_details: { reason },
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "partial answer" }] }],
+    })
+    assert.equal(result.choices[0]?.finish_reason, expected)
+  }
+  assert.throws(() => translateResponsesToChatCompletion({
+    id: "resp_partial", model: "gpt-6-astra", created_at: 1, status: "incomplete", output: [],
+  }), /response incomplete/)
+})
 
 const basePayload = (
   overrides: Partial<ChatCompletionsPayload> = {},
