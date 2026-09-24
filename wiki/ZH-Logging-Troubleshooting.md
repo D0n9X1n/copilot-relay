@@ -388,7 +388,39 @@ Copilot web search upstream service unavailable (HTTP 503; model gpt-6-astra).
 403 表示访问被拒绝。这些状态不能证明模型或工具不受支持，也不能证明令牌已经过期。
 其他状态报告通用请求失败。外层 Claude 响应仍可能为 HTTP 200，包括已经打开的 SSE
 流；应检查工具结果和上游 `return from upstream ... status=...` 日志，而不只看外层
-状态码。成功但内容为空的响应则显示 `did not return search results`。
+状态码。HTTP 成功响应会单独分类，确认状态后才决定是否接受部分结果：
+
+| Responses 正文 | 提示 / 行为 |
+| --- | --- |
+| `incomplete` | `response incomplete (max_output_tokens)` 或 `content_filter`；未知原因记为 `unknown`，未提供原因记为 `unreported`。不接受部分链接。 |
+| `failed` / `cancelled` | `response failed` / `response cancelled`，即使部分文本中存在 URL 也不会作为成功结果。 |
+| `queued` / `in_progress` / 未知状态 | `response not complete (...)`；不会自动重试。 |
+| 搜索调用明确失败或尚未完成 | `search call did not complete`；不接受部分结果。 |
+| `completed`，但没有文本或可用结构化来源 | `completed without extractable text or sources`。 |
+| 有文本，但没有可用 URL 或结构化来源 | `returned text without usable source URLs`。 |
+| 缺少状态且没有可用结果 | `returned no usable results (response status unreported; no extractable text or sources)`。缺少元数据不代表搜索成功执行。 |
+| JSON 或正文格式错误 | `returned a malformed response`；不会附带原始正文。 |
+
+这些情况仍返回 `web_search_tool_result_error`，`error_code` 为 `unavailable`。
+2xx 失败会保留上游提供的输入/输出用量和有效响应 ID，不再全部替换成零用量及无关的
+随机 ID。缺少或不合法的 token 数只在 Claude 协议要求数字的字段中使用零；诊断摘要
+会显示 `unknown`，与上游明确报告的零区分开。
+
+`info` 级别的 `Copilot web search completion` 记录有界的单行元数据：`request_id`、
+`upstream_response_id`、配置的后端模型、请求/实际 effort、输出上限、响应状态、已知的
+未完成原因、输出条目数量、搜索调用状态计数、输入/输出/推理 token 数、来源格式、
+执行证据和结果分类。另一条 `Copilot web search tool result` 把这些 ID 与返回的
+`tool_use_id` 关联。不符合格式约束的 ID 会被省略，未知状态或类型使用固定标记；
+这两类日志都不会记录查询、提示词、响应文本、推理文本、请求头或任意错误对象。
+
+有结构化引用或来源 URL 时优先使用；否则保留现有的文本 URL 回退。缺少引用或搜索
+调用元数据不代表模型不支持搜索。只有明确报告完成的 `web_search_call` 才作为执行
+证据；其他结果会在最终回答上下文中明确标记为未验证，来源内容始终视为不可信数据。
+
+继承的 effort 和现有搜索输出上限（最多 1200 token）保持不变。
+`incomplete_reason=max_output_tokens` 加上报告的推理/输出用量可以证明该次请求耗尽
+输出预算，但不能证明历史空结果的原因。不要在原因未知时调大全局超时、改变主会话
+模型或 effort，或反复重试空响应。
 
 如果可用，会在清理后附上上游错误消息或错误码，最多 240 个字符。识别出的凭据或请求
 回显以及无法识别的结构化正文会被省略；不会新增原始响应头或请求 payload 日志。
