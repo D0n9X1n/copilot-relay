@@ -14,7 +14,7 @@ process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
 const consola = (await import("consola")).default
-const { log, setLogLevel } = await import("../../src/lib/log")
+const { log, setLogLevel, withoutLogging } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { getLogPath, paths } = await import("../../src/lib/paths")
 
@@ -54,6 +54,25 @@ test.beforeEach(async () => {
   await fs.rm(paths.logsDir, { force: true, recursive: true })
   consoleOutput.length = 0
   setLogLevel("debug")
+})
+
+test("diagnostic suppression covers both sinks and restores normal async logging", async () => {
+  let release!: () => void
+  const waiting = new Promise<void>((resolve) => { release = resolve })
+  const quiet = withoutLogging(async () => {
+    log.error("PRIVATE_DIAGNOSTIC_ERROR")
+    await waiting
+    log.info("PRIVATE_DIAGNOSTIC_INFO")
+    throw new Error("expected failure")
+  })
+  log.error("visible outside diagnostic")
+  release()
+  await assert.rejects(quiet, /expected failure/)
+  log.error("visible after diagnostic")
+  const file = await readActiveLog()
+  assert.doesNotMatch(file + consoleOutput.join("\n"), /PRIVATE_DIAGNOSTIC/)
+  assert.match(consoleOutput.join("\n"), /visible outside diagnostic/)
+  assert.match(consoleOutput.join("\n"), /visible after diagnostic/)
 })
 
 // Unique per test: registerSensitiveOrigin is process-lifetime and append-only,

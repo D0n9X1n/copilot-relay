@@ -384,6 +384,13 @@ test("every wiki link to a page carries .md in source", () => {
 // Why: Copilot availability and effort tiers are account-specific. The local
 // relay endpoint only echoes config, so both language guides must preserve the
 // live picker workflow and a direct, token-safe way to update all model knobs.
+test("README stays a concise feature overview and quick start with valid Wiki links", () => {
+  const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
+  assert(body.split("\n").length <= 80)
+  for (const required of ["## Features", "## Quick start", "copilot-relay auth", "copilot-relay start", "models --deep", "Wiki"]) assert(body.includes(required))
+  for (const match of body.matchAll(/\]\((wiki\/[^)#]+)\)/g)) assert(fs.existsSync(path.join(repoRoot, match[1]!)))
+})
+
 test("Configuration documents live model discovery and simple updates", () => {
   for (const page of ["EN-Configuration.md", "ZH-Configuration.md"]) {
     const body = readPage(page)
@@ -399,6 +406,11 @@ test("Configuration documents live model discovery and simple updates", () => {
       "thinkEffort",
       "yq -i",
       "copilot-relay restart",
+      "models --deep",
+      "--total-timeout",
+      "SENT/REPORTED",
+      "NOT_TESTED",
+      "130",
       "[1m]",
     ]) {
       assert.ok(

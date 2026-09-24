@@ -1,288 +1,66 @@
 # copilot-relay
 
+**Use Claude Code with the models available through your GitHub Copilot subscription.**
+
 [![CI](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/copilot-relay.svg?logo=npm)](https://www.npmjs.com/package/copilot-relay)
-[![npm downloads](https://img.shields.io/npm/dm/copilot-relay.svg?logo=npm)](https://www.npmjs.com/package/copilot-relay)
-[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-ready-24292f?logo=github)](https://github.com/D0n9X1n/copilot-relay/pkgs/npm/copilot-relay)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Claude Code](https://img.shields.io/badge/Claude%20Code-supported-d97757)](https://docs.anthropic.com/en/docs/claude-code/overview)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Yet, just another relay for Claude Code to use a GitHub Copilot subscription.
+## Features
 
-## Disclaimer
+- **Claude Code, familiar workflow** — Messages API compatibility, streaming responses, and tool calls.
+- **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
+- **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; existing selections survive upgrades.
+- **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.
+- **Know what works** — model discovery and opt-in per-model deep checks with clear results.*
+- **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux.
 
-This is a research-oriented project and is not affiliated with GitHub, GitHub
-Copilot, Anthropic, or Claude Code. It depends on upstream GitHub Copilot
-services and undocumented compatibility behavior, so Copilot availability, model
-access, API behavior, and runtime stability are not guaranteed.
+\* Model discovery, deep checks, and the Opus 5.5 fresh-install default require
+**v0.3.10 or later**.
 
-Public API:
+## Quick start
 
-- `POST /v1/messages`
-- `POST /v1/messages/count_tokens`
-- `GET /v1/models`
-- `GET /healthz`
-- `GET|HEAD /api/hello`
-
-`/api/hello` is a static reachability probe Claude Code sends on startup and
-around real traffic. Like `/healthz` it never contacts Copilot, so it proves the
-relay is listening and nothing more.
-
-Claude WebSearch is bridge-managed: when the model selects the WebSearch tool,
-the relay executes Copilot `/responses` with `web_search_preview`, then sends the
-retrieved context through a final model pass and returns Claude
-`server_tool_use` / `web_search_tool_result` blocks. The final pass keeps your
-other tools available, so the model can act on what it found in the same turn.
-
-Advertising WebSearch no longer costs streaming. The relay reads the model's
-response only as far as it takes to tell whether a search is coming, so a turn
-that never searches streams normally — which is most of them, since Claude Code
-offers the tool on every request.
-
-Unknown API routes return `500` and log method, path, selected headers, and
-request payload to help implement compatible endpoints later.
-
-Routing:
-
-| Requested model | Upstream model |
-| --- | --- |
-| contains `opus` | `claude-opus-5.5` |
-| `gpt-6-astra[1m]`, plain `gpt-6-astra`, or another non-Opus alias | `gpt-6-astra` |
-
-The fresh-install default is `gpt-6-astra`, exposed to Claude Code as
-`gpt-6-astra[1m]`. The selector changes Claude Code's client-side context budgeting
-only; Copilot receives the canonical `gpt-6-astra` ID. It does not enlarge
-upstream capacity. Existing `config.yaml` model choices are never migrated.
-If your account cannot use Astra, startup fails explicitly; choose a model your
-account supports rather than relying on an automatic fallback.
-
-The fresh-install Opus route uses `claude-opus-5.5`. Existing Opus selections stay
-unchanged. Automatic tools, JSON/SSE, and WebSearch recomposition are supported;
-upstream rejects forced `tool_choice` types `tool` and `any` with HTTP 400 rather
-than silently falling back to automatic selection. Verify account availability
-with `copilot-relay models` before switching.
-
-Claude Code can still show its built-in Haiku and Sonnet picker entries. The
-managed `model` field sets the startup default but does not restrict
-`availableModels`; selecting any non-Opus alias still follows the GPT route.
-
-## Install & run
+You need **Node.js 22+**, **Claude Code**, and a GitHub account with Copilot access
+to the models you select.
 
 ```sh
-npx copilot-relay@latest auth
-npx copilot-relay@latest start
-npx copilot-relay@latest restart
-npx copilot-relay@latest stop
-```
-
-With `claudeSetup: true`, `start` manages `ANTHROPIC_BASE_URL`, a dummy
-`ANTHROPIC_AUTH_TOKEN` when auth is absent, and the configured GPT default via
-the top-level `model` field in `~/.claude/settings.json`. Exact
-`gpt-6-astra` and `gpt-5.6-sol` overrides are normalized to Claude-facing
-`[1m]` identities when discovery reports exactly 1M; other reported windows use
-plain GPT IDs with Claude's numeric context setting. Unrelated model choices and
-existing token-budget overrides are preserved.
-
-Startup retains Copilot's actual context, prompt, and output limits and exposes
-them on `GET /v1/models`. Managed Claude setup seeds
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when absent.
-The default models support 1M total context, with up to 128K output tokens for
-both Astra and Opus 5.5. Input text is never shortened; smaller explicit output
-budgets remain respected. See [full-context configuration](wiki/EN-Configuration.md)
-for existing/manual Claude setups and the limits on input plus output.
-
-## Config
-
-Config lives at `~/.copilot-relay/config.yaml` and is hot-reloaded:
-
-```yaml
-host: 127.0.0.1
-port: 4142
-copilotBaseUrl: https://api.githubcopilot.com
-claudeSetup: true
-logLevel: info
-logRetentionDays: 3
-thinkEffort: max
-upstreamTimeoutSeconds: 180
-webSearchBackend:
-gptModel: gpt-6-astra
-opusModel: claude-opus-5.5
-```
-
-copilot-relay writes the resolved config back to this file, so every key is
-present after the first start. Shipped defaults therefore apply to fresh
-installs only — once a value is in your `config.yaml` it is never rewritten by
-an upgrade. To pick up a changed default, edit the key yourself. See
-[Configuration](wiki/EN-Configuration.md) / [配置说明](wiki/ZH-Configuration.md)
-for live model discovery, compatible thinking efforts, and copy-paste updates.
-
-`logLevel` controls verbosity:
-
-| Level | Logs |
-| --- | --- |
-| `error` | Startup, preflight, and request failures |
-| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, and local HTTP status codes |
-| `debug` | Info plus detailed Copilot timings and request payloads |
-
-Any other `logLevel` value is invalid and stops startup.
-
-Valid `thinkEffort` defaults: `low`, `medium`, `high`, `xhigh`, `max`.
-It is a fallback, not a forced override: Claude Code's `output_config.effort`
-wins, followed by the legacy `reasoning_effort` field, then `thinkEffort` when
-neither request field supplies a value. The selected effort is preserved through
-all model and WebSearch passes; existing config values are not rewritten.
-`none` and other invalid explicit defaults fail startup before authentication or
-config write-back, with a clear list of valid choices. They are not silently
-replaced with `max`. Explicit request-level `none` remains model-dependent.
-
-`upstreamTimeoutSeconds` controls the maximum time a single Claude request can
-spend waiting on upstream Copilot calls, including chat, Responses, preflight,
-and bridge-managed WebSearch calls. The default is `180`. Set `0` to disable the
-relay deadline for very long requests; client cancellation and provider/transport
-timeouts still apply. Existing saved timeouts are never changed by an upgrade.
-
-`webSearchBackend` controls bridge-managed Claude WebSearch. Leave it empty to
-use `gptModel`, or set a Copilot Responses model ID such as `gpt-5.5`.
-
-The same folder stores `copilot_token.json` for the cached Copilot bearer token, `github_token` for refresh/login, and `logs/` for runtime logs.
-
-## CLI
-
-```sh
+npm install -g copilot-relay
 copilot-relay auth
-copilot-relay models
 copilot-relay start
-copilot-relay restart
-copilot-relay status
-copilot-relay stop
 ```
 
-`models` fetches the complete upstream-advertised catalog from the configured
-`copilotBaseUrl` using the relay's authentication. It prints exact upstream IDs
-in sorted order, not just the configured relay models or their `[1m]` aliases.
-It works with the relay stopped and with configured model IDs that are no longer
-available. It does not start the server, change model selections or Claude
-settings, or send inference requests. Listing is not proof of inference, tool,
-or effort compatibility. Empty catalogs are reported explicitly; failures exit
-with code `1`. See [model discovery and configuration](wiki/EN-Configuration.md).
-
-`status` reports whether a relay is running, where it is listening, and whether
-it is reachable. This example is an existing installation that keeps its older
-model selection:
-
-```text
-copilot-relay 0.2.5
-  process    running (pid 93744, up 1h 16m)
-  version    0.2.5
-  listening  http://127.0.0.1:4142
-  health     ok (9ms)
-  models     gpt-6-astra[1m], claude-opus-5
-  upstream   not checked (use --deep)
-  log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
-  config     ~/.copilot-relay/config.yaml
-    host                    127.0.0.1
-    port                    4142
-    copilotBaseUrl          https://api.githubcopilot.com
-    claudeSetup             true
-    logLevel                info
-    logRetentionDays        3
-    thinkEffort             max
-    upstreamTimeoutSeconds  180
-    webSearchBackend        (unset — uses gptModel)
-    gptModel                gpt-6-astra
-    opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
-```
-
-The `config` block is every key `readAppConfig()` resolved, in
-`config.default.yaml` order. These are the values on disk: eight of them reload
-while the relay runs, while `host`, `port` and `claudeSetup` are read once at
-startup — the block says so rather than leaving you to discover it after an
-edit. `--json` emits the same values under `config`, with `webSearchBackend` as
-`null` when unset so the key set stays the same shape either way.
-
-The first line is the CLI you invoked; the `version` row is the build the
-running daemon reports about itself. They differ after an upgrade that has not
-been restarted yet — the new CLI is installed, the old process is still
-serving — and `status` says so rather than letting the header imply the upgrade
-took effect:
-
-```text
-  version    0.2.6 — MISMATCH, 0.3.0 is installed
-  ...
-  The running relay is 0.2.6; 0.3.0 is installed.
-  Restart it to serve the installed version: copilot-relay restart
-```
-
-A mismatch does not change the exit code: the relay works, it is just not the
-build you installed. A daemon older than v0.3.1 does not report a version at
-all, which shows as `unknown`.
-
-`--deep` additionally sends a real request through Copilot. That is the only
-check that proves the relay can actually serve Claude Code — a relay whose
-Copilot token expired an hour ago still answers `/healthz` and `/v1/models`,
-because neither contacts upstream. It is opt-in because it spends a few tokens.
-
-`--json` emits machine-readable output. Exit codes: `0` running and reachable,
-`1` not running, `2` running but not usable — the health probe failed, or
-`--deep` was requested and failed. `0` requires a live process *and* a passing
-health probe, so a relay that cannot answer `/healthz` never reports success.
-
-## Logging
-
-At `info`, every model request logs the requested model, upstream model, requested
-think effort, requested thinking, and effective think effort. Missing request
-effort is shown as `unset`, distinct from explicit `none`; full normal request
-payloads remain at `debug`.
-
-Upstream failures are logged at `error` with full request and response context in the same log file.
-
-Unsupported Claude API requests are logged at `error` with the local method/path
-and detailed request payload.
-
-Logs are written to `~/.copilot-relay/logs/copilot-relay.<local-date>.log`. The
-active file rotates at local midnight, and files older than `logRetentionDays`
-local calendar days are deleted. Rotation is what makes retention take effect:
-without it the single log file's mtime was refreshed by every append, so nothing
-ever aged out.
-
-Quick inspection:
+Follow the device-login prompt. Keep the relay running in this terminal; by default,
+startup configures Claude Code's connection in `~/.claude/settings.json`.
+Open a **second terminal** and run:
 
 ```sh
-tail -f ~/.copilot-relay/logs/copilot-relay.$(date +%F).log
-grep -n "Failed to create\\|Startup preflight failed" ~/.copilot-relay/logs/copilot-relay.*.log
+claude
 ```
 
-See [Logs and troubleshooting](wiki/EN-Logging-Troubleshooting.md)
-([中文](wiki/ZH-Logging-Troubleshooting.md)) for common debugging workflows.
+Configuration lives in `~/.copilot-relay/config.yaml`. Model access depends on your
+account and organization policy; if startup rejects a model, choose an available
+one using the [configuration guide](wiki/EN-Configuration.md).
 
-## Running it as a service
-
-To keep the relay running across reboots, see [`wiki/`](wiki/) — per-platform
-setup for macOS, Windows, and Linux, in English and 中文, each covering
-registration, how to verify it is *actually* working rather than merely
-listening, and how to stop it.
-
-The same pages are published to the [wiki tab](https://github.com/D0n9X1n/copilot-relay/wiki),
-which is generated from `wiki/` on every merge. Edit the folder, not the tab.
-
-## Development
-
-All documentation lives in [`wiki/`](wiki/), in English and 中文:
-
-| Page | Covers |
-| --- | --- |
-| [Architecture](wiki/EN-Architecture.md) ([中文](wiki/ZH-Architecture.md)) | Modules, request and startup flow, public API, runtime files |
-| [Internals](wiki/EN-Internals.md) ([中文](wiki/ZH-Internals.md)) | Translation, streaming, prompt caching, lifecycle, logging invariants |
-| [Development](wiki/EN-Development.md) ([中文](wiki/ZH-Development.md)) | Setup, tests, CI matrix, workflow, releasing |
-| [Configuration](wiki/EN-Configuration.md) ([中文](wiki/ZH-Configuration.md)) | Every config key, hot reload vs restart |
-| [Logs and troubleshooting](wiki/EN-Logging-Troubleshooting.md) ([中文](wiki/ZH-Logging-Troubleshooting.md)) | Log format, grep recipes, failure modes |
+Discover models and optionally test one (v0.3.10+):
 
 ```sh
-npm install
-npm run typecheck
-npm run build
-npm test
+copilot-relay models
+copilot-relay models --deep --model claude-opus-5.5
 ```
+
+Deep checks **consume Copilot usage** and test an isolated relay pipeline, not the
+running daemon. Use `copilot-relay status --deep` for daemon health, and
+`copilot-relay stop` when finished.
+
+## Go further
+
+**[Open the Wiki](https://github.com/D0n9X1n/copilot-relay/wiki)** · **[English / 中文](wiki/README.md)**
+
+- [Configure models and deep checks](wiki/EN-Configuration.md) · [中文](wiki/ZH-Configuration.md)
+- Run at login: [macOS](wiki/EN-macOS-LaunchAgent.md) · [Windows](wiki/EN-Windows-Service.md) · [Linux](wiki/EN-Linux-systemd.md)
+- [Troubleshoot](wiki/EN-Logging-Troubleshooting.md) · [Understand the architecture](wiki/EN-Architecture.md) · [Contribute](wiki/EN-Development.md)
+
+Unofficial research project; not affiliated with GitHub or Anthropic. Upstream
+services and compatibility can change. Model and tool support are not guaranteed;
+see the Wiki for known limitations. [MIT licensed](LICENSE).

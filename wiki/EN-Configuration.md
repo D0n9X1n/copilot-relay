@@ -90,6 +90,59 @@ Copilot CLI session, not the relay configuration; a custom gateway may advertise
 a different catalog. Never paste bearer tokens into commands, logs, or issue
 reports.
 
+### Test model availability
+
+Catalog listing is free of inference. Deep mode is opt-in and **consumes real
+Copilot usage**; use an exact model selection to avoid probing the whole catalog:
+
+```sh
+copilot-relay models --deep --model claude-opus-5.5
+copilot-relay models --deep --timeout 20 --total-timeout 120
+copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
+```
+
+The table shows `MODEL`, `STATUS`, `SENT/REPORTED` model IDs, `LATENCY`, and fixed
+`DETAILS`, followed by counts for each outcome. No response text is printed.
+
+| Status | Meaning |
+| --- | --- |
+| `PASS` | The selected model returned completed nonempty text. This is not tool coverage, all-effort coverage, or proof the answer is correct. |
+| `INCOMPLETE` | Generation did not finish. Positive reported output usage with budget exhaustion establishes reachability, not a completed answer. |
+| `FAIL` | HTTP/auth/network failure, timeout, refusal, unexpected output, missing/mismatched model, or empty completed response. |
+| `SKIPPED` | Advertised metadata excludes the required relay endpoint/effort or identifies a non-chat model, or the ID is unsafe/noncanonical. |
+| `NOT_TESTED` | The overall deadline or an interruption stopped the active probe or prevented a later probe; this is not a model failure. |
+
+The scope is **isolated relay pipeline; not running-daemon health**. The CLI
+passes a synthetic request through the normal in-process Messages handler,
+translation, upstream client, token refresh, and response translation. It
+selects the exact upstream ID in process-local routing for each sequential probe,
+then restores state. Simply sending every ID to the running daemon would instead
+remap them to `gptModel`/`opusModel` and falsely report per-model coverage. No port
+is bound, no daemon is restarted, and model config/Claude settings are unchanged.
+Use `status --deep` to check the running daemon's configured route.
+
+| Option | Default / behavior |
+| --- | --- |
+| `--model` | All advertised IDs; supplied ID must match the catalog exactly. Requires `--deep`. |
+| `--max-tokens` | 4096 per probe, clamped to catalog output and native non-streaming ceilings. |
+| `--effort` | Lowest advertised recognized value (`none`, `low`, `medium`, `high`, `xhigh`, `max`); missing metadata uses `low` marked unverified. An override unsupported by advertised metadata is skipped. |
+| `--timeout` | 30 seconds per probe, capped by a positive `upstreamTimeoutSeconds`. |
+| `--total-timeout` | 300 seconds for the probe phase. Discovery/auth precede this budget. |
+
+Numeric options accept positive whole numbers up to 2,147,483; all probe options
+require `--deep`. Even if config disables upstream deadlines, deep checks still
+have their own deadlines. Missing endpoint metadata is marked unverified rather
+than treated as proof of support. Model matching removes only the relay's known
+GPT context suffix; a different reported model cannot pass. Authentication can
+refresh tokens; the existing bounded retries may consume additional calls, but
+there is no new per-model retry loop. Ctrl+C aborts the active probe and marks
+remaining models not tested. Raw shared-pipeline logging is suppressed only for
+these diagnostic calls; normal relay logging is unaffected.
+
+Deep exit codes: `0` all selected models passed; `1` invalid options, selection,
+authentication, or discovery failure; `2` any other non-pass result or no models;
+`130` interruption. Ordinary `models` still reports an empty catalog with exit `0`.
+
 ### Choose a compatible effort
 
 `thinkEffort` is the default, not an override. The first non-null value wins:

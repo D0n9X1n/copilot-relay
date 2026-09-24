@@ -17,7 +17,7 @@ const secretPath = "/private-gateway-sentinel"
 async function fixture(
   t: TestContext,
   handle: (request: IncomingMessage, response: ServerResponse, attempt: number) => void,
-  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean } = {},
+  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean; deep?: boolean; interrupt?: boolean } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-models-"))
   const requests: Array<{ method: string | undefined; url: string | undefined; authorization: string | undefined }> = []
@@ -54,7 +54,7 @@ async function fixture(
     token: oldToken, refreshedAt: options.expiredToken ? 0 : Date.now(), refreshIn: 86400,
   }))
 
-  const run = async (args = ["models"]) => {
+  const run = async (args = ["models"], env: NodeJS.ProcessEnv = {}) => {
     const script = `
       globalThis.fetch = async (input) => {
         const url = String(input);
@@ -64,6 +64,7 @@ async function fixture(
         }
         throw new Error("UNEXPECTED_NETWORK_ACCESS");
       };
+      ${options.interrupt ? 'setTimeout(() => process.emit("SIGINT"), 1000);' : ''}
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ...${JSON.stringify(args)}];
       await import(${JSON.stringify(entry.href)});
     `
@@ -72,7 +73,7 @@ async function fixture(
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
         cwd, timeout: 15_000,
-        env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
+        env: { ...process.env, ...env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
         if (error?.killed || typeof code !== "number") {
@@ -93,8 +94,13 @@ async function fixture(
     assert.match(config, /gptModel: missing-gpt-model/)
     assert.match(config, /opusModel: missing-opus-model/)
     for (const request of requests) {
-      assert.equal(request.method, "GET")
-      assert.equal(request.url, `${secretPath}/models`)
+      if (request.method === "GET" || !options.deep) {
+        assert.equal(request.method, "GET")
+        assert.equal(request.url, `${secretPath}/models`)
+      } else {
+        assert.equal(request.method, "POST")
+        assert.ok([`${secretPath}/responses`, `${secretPath}/chat/completions`].includes(request.url!))
+      }
     }
     return result
   }
@@ -106,14 +112,16 @@ const respond = (response: ServerResponse, payload: unknown, status = 200) => {
   response.end(JSON.stringify(payload))
 }
 
-test("models help is registered without authentication or upstream access", async (t) => {
+test("models help is registered without upstream access in CI rendering", async (t) => {
   const f = await fixture(t, (_request, response) => respond(response, { data: [] }))
-  const help = await f.run(["--help"])
+  const env = { CI: "true", FORCE_COLOR: "0" }
+  const help = await f.run(["--help"], env)
   assert.equal(help.code, 0)
-  assert.match(help.stdout, /models\s+.*upstream/i)
-  const commandHelp = await f.run(["models", "--help"])
+  assert.match(help.stdout, /^\s*`?models`?\s+List upstream models;.*$/mi)
+  const commandHelp = await f.run(["models", "--help"], env)
   assert.equal(commandHelp.code, 0)
   assert.match(commandHelp.stdout, /upstream/i)
+  assert.match(commandHelp.stdout, /--deep/)
   assert.equal(f.requests.length, 0)
 })
 
@@ -218,6 +226,182 @@ test("models fails safely when rejected-token recovery fails", async (t) => {
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not fetch upstream model catalog/)
   assert.equal(f.requests.length, 1)
+})
+
+const deepCatalog = { data: [
+  { id: "gpt-6-astra", supported_endpoints: ["/responses"], capabilities: { type: "chat", supports: { reasoning_effort: ["max", "low"] }, limits: { max_context_window_tokens: 10000, max_prompt_tokens: 8000, max_output_tokens: 2000 } } },
+  { id: "claude-opus-5.5", supported_endpoints: ["/chat/completions"], capabilities: { type: "chat", supports: { reasoning_effort: ["low", "max"] } } },
+] }
+
+async function requestBody(request: IncomingMessage): Promise<Record<string, any>> {
+  let raw = ""
+  for await (const chunk of request) raw += chunk
+  return JSON.parse(raw)
+}
+const probeReply = (body: Record<string, any>, overrides: Record<string, unknown> = {}) => body.model === "gpt-6-astra" ? {
+  id: "resp_probe", created_at: 1, model: body.model, status: "completed",
+  output: [{ type: "message", content: [{ type: "output_text", text: "PRIVATE_PROBE_ANSWER" }] }],
+  usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 }, ...overrides,
+} : {
+  id: "chat_probe", created: 1, model: body.model,
+  choices: [{ index: 0, message: { role: "assistant", content: "PRIVATE_PROBE_ANSWER" }, finish_reason: "stop" }],
+  usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }, ...overrides,
+}
+
+test("models deep tests exact IDs through the isolated pipeline and prints a structured summary", async (t) => {
+  const sent: Array<Record<string, any>> = []
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    const body = await requestBody(req); sent.push(body); respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep"])
+  assert.equal(result.code, 0)
+  assert.match(result.stdout, /isolated relay pipeline/i)
+  assert.match(result.stdout, /not running-daemon health/i)
+  assert.match(result.stdout, /MODEL\s+STATUS\s+SENT\/REPORTED\s+LATENCY/)
+  assert.match(result.stdout, /Summary: 2 passed, 0 failed, 0 incomplete, 0 skipped, 0 not tested/)
+  assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
+  assert.deepEqual(sent.map((body) => body.model), ["claude-opus-5.5", "gpt-6-astra"])
+  assert.equal(sent[0]?.reasoning_effort, "low")
+  assert.equal(sent[1]?.reasoning.effort, "low")
+  assert.equal(sent[1]?.max_output_tokens, 2000)
+  assert(sent.every((body) => !body.tools))
+})
+
+test("models deep selection sends only the selected exact model", async (t) => {
+  const sent: string[] = []
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    const body = await requestBody(req); sent.push(body.model); respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra", "--effort", "max", "--max-tokens", "64"])
+  assert.equal(result.code, 0)
+  assert.deepEqual(sent, ["gpt-6-astra"])
+  assert.match(result.stdout, /tokens=64 effort=max/)
+})
+
+for (const [name, overrides, status] of [
+  ["incomplete", { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }, "INCOMPLETE"],
+  ["failed", { status: "failed" }, "FAIL"],
+  ["cancelled", { status: "cancelled" }, "FAIL"],
+  ["filtered", { status: "incomplete", incomplete_details: { reason: "content_filter" } }, "FAIL"],
+  ["empty", { output: [] }, "FAIL"],
+  ["refusal", { output: [{ type: "message", content: [{ type: "output_text", text: "partial" }, { type: "refusal", refusal: "PRIVATE_REFUSAL" }] }] }, "FAIL"],
+  ["wrong model", { model: "other-model" }, "FAIL"],
+] as const) {
+  test(`models deep never passes ${name} responses`, async (t) => {
+    const f = await fixture(t, async (req, res) => {
+      if (req.method === "GET") return respond(res, deepCatalog)
+      respond(res, probeReply(await requestBody(req), overrides))
+    }, { deep: true })
+    const result = await f.run(["models", "--deep", "--model", "gpt-6-astra"])
+    assert.equal(result.code, 2)
+    assert.match(result.stdout, new RegExp(status))
+    assert.match(result.stdout, /Summary: 0 passed/)
+    assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
+  })
+}
+
+test("models deep skips explicit unsupported capabilities without inference", async (t) => {
+  const f = await fixture(t, (_req, res) => respond(res, { data: [
+    { id: "embedding", capabilities: { type: "embeddings" } },
+    { id: "native-only", supported_endpoints: ["/v1/messages"] },
+    { id: "high-only", capabilities: { supports: { reasoning_effort: ["high"] } } },
+  ] }), { deep: true })
+  const result = await f.run(["models", "--deep", "--effort", "low"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /3 skipped/)
+  assert.equal(f.requests.length, 1)
+})
+
+for (const args of [["--model", "gpt-6-astra"], ["--deep", "--timeout", "0"], ["--deep", "--max-tokens", "NaN"], ["--deep", "--effort", "invalid"], ["--deep", "--model", "missing"]]) {
+  test(`models rejects invalid selection/options ${args.join(" ")}`, async (t) => {
+    const f = await fixture(t, (_req, res) => respond(res, deepCatalog), { deep: true })
+    const result = await f.run(["models", ...args])
+    assert.equal(result.code, 1)
+    assert.equal(f.requests.filter((request) => request.method === "POST").length, 0)
+  })
+}
+
+test("models deep handles HTTP errors without leaking shared pipeline logs", async (t) => {
+  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog)
+    : respond(res, { error: { message: "payload-private-sentinel" } }, 429), { deep: true })
+  const result = await f.run(["models", "--deep"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /rate-limited/)
+  assert.match(result.stdout, /2 failed/)
+})
+
+for (const interrupt of [false, true]) {
+  test(`models deep stops remaining probes on ${interrupt ? "interruption" : "total deadline"}`, async (t) => {
+    const f = await fixture(t, (req, res) => { if (req.method === "GET") respond(res, deepCatalog) }, { deep: true, interrupt })
+    const result = await f.run(["models", "--deep", "--timeout", "5", "--total-timeout", interrupt ? "10" : "1"])
+    assert.equal(result.code, interrupt ? 130 : 2)
+    assert.match(result.stdout, /claude-opus-5\.5\s+NOT_TESTED/)
+    assert.match(result.stdout, /Summary: 0 passed, 0 failed, 0 incomplete, 0 skipped, 2 not tested/)
+    assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+  })
+}
+
+test("models deep continues after a per-model timeout", async (t) => {
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    const body = await requestBody(req)
+    if (body.model === "gpt-6-astra") respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--timeout", "1"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /probe-timeout/)
+  assert.match(result.stdout, /Summary: 1 passed, 1 failed/)
+})
+
+test("models deep recovers a rejected inference token without printing response bodies", async (t) => {
+  const headers: string[] = []
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    const body = await requestBody(req)
+    headers.push(req.headers.authorization ?? "")
+    if (headers.length === 1) return respond(res, {}, 401)
+    respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra"])
+  assert.equal(result.code, 0)
+  assert.deepEqual(headers, [`Bearer ${oldToken}`, `Bearer ${newToken}`])
+  assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
+})
+
+test("models deep empty catalog has no successful checks", async (t) => {
+  const f = await fixture(t, (_req, res) => respond(res, { data: [] }), { deep: true })
+  const result = await f.run(["models", "--deep"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /Summary: 0 passed/)
+  assert.equal(f.requests.length, 1)
+})
+
+test("models deep rejects explicit chat refusals even alongside text", async (t) => {
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    const body = await requestBody(req)
+    respond(res, probeReply(body, { choices: [{ index: 0, finish_reason: "stop", message: {
+      role: "assistant", content: "partial", refusal: "PRIVATE_REFUSAL",
+    } }] }))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /refusal-or-unexpected-completion/)
+  assert.doesNotMatch(result.output, /PRIVATE_REFUSAL/)
+})
+
+test("models deep missing metadata is explicitly unverified", async (t) => {
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, { data: [{ id: "claude-opus-5.5" }] })
+    const body = await requestBody(req)
+    assert.equal(body.reasoning_effort, "low")
+    respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep"])
+  assert.equal(result.code, 0)
+  assert.match(result.stdout, /effort=low\(unverified\) endpoints=unverified/)
 })
 
 test("models fails safely during initial authentication", async (t) => {

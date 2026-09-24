@@ -80,6 +80,54 @@ Relay 未运行或配置的模型 ID 已不在上游目录中时，仍可使用�
 该选择只影响 Copilot CLI 会话，不会修改 relay 配置；自建网关公布的目录可能不同。
 不要把 bearer token 粘贴到命令、日志或 issue 中。
 
+### 测试模型可用性
+
+普通目录列表不执行推理。深度测试必须显式启用，并且**会消耗真实 Copilot 用量**。
+建议先选择准确模型，避免测试整个目录：
+
+```sh
+copilot-relay models --deep --model claude-opus-5.5
+copilot-relay models --deep --timeout 20 --total-timeout 120
+copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
+```
+
+表格显示 `MODEL`、`STATUS`、发送/报告的模型 ID（`SENT/REPORTED`）、`LATENCY`
+及固定诊断 `DETAILS`，最后汇总各类结果数量。不会打印响应文本。
+
+| 状态 | 含义 |
+| --- | --- |
+| `PASS` | 所选模型返回已完成的非空文本。不代表验证了工具、所有 effort 或答案正确性。 |
+| `INCOMPLETE` | 生成未完成。预算耗尽时的正数输出用量只能证明上游可达，不能当作完整回答。 |
+| `FAIL` | HTTP/认证/网络失败、超时、拒绝、异常输出、缺失或不匹配的模型 ID、已完成但为空的响应。 |
+| `SKIPPED` | 目录元数据不支持 relay 所需的接口/effort、模型不是聊天模型，或 ID 不安全/不规范。 |
+| `NOT_TESTED` | 总期限耗尽或中断，当前探测被停止或后续探测未发起；不计为模型失败。 |
+
+测试范围为 **isolated relay pipeline; not running-daemon health**，即隔离 relay
+处理流程，而非正在运行的守护进程健康检查。CLI 使用合成请求经过正常的进程内
+Messages handler、翻译、上游客户端、token 刷新和响应翻译。每次串行探测仅在本进程
+路由中选择准确上游 ID，结束后恢复状态。如果直接把每个 ID 发给运行中的 daemon，
+它们仍会被映射到 `gptModel`/`opusModel`，造成虚假的逐模型验证。此命令不会绑定端口、
+重启 daemon 或修改模型配置/Claude 设置。检查运行中 daemon 的配置路由请用
+`status --deep`。
+
+| 选项 | 默认值 / 行为 |
+| --- | --- |
+| `--model` | 默认测试全部公布的 ID；指定值必须准确匹配目录。需要 `--deep`。 |
+| `--max-tokens` | 每次 4096，并受目录中的输出上限及原生非流式输出上限约束。 |
+| `--effort` | 按 `none`、`low`、`medium`、`high`、`xhigh`、`max` 选择公布的最低档；无元数据时使用标为未验证的 `low`。目录明确不支持的覆盖值会跳过。 |
+| `--timeout` | 每个模型 30 秒，同时不超过正数的 `upstreamTimeoutSeconds`。 |
+| `--total-timeout` | 探测阶段总计 300 秒；目录查询和认证发生在此预算之前。 |
+
+数字选项只接受不超过 2,147,483 的正整数；所有探测选项都需要 `--deep`。即使配置禁用
+上游超时，深度测试仍有自己的期限。缺少接口元数据会标为未验证，而非视为支持证据。
+模型匹配只移除 relay 已知的 GPT context 后缀；报告为另一模型时不能通过。认证可刷新
+token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
+探测，并把后续模型标为未测试。仅这些诊断调用会抑制共享流程的原始日志，正常 relay
+日志不受影响。
+
+深度测试退出码：`0` 所选模型全部通过；`1` 选项、模型选择、认证或目录查询失败；
+`2` 任何其他未通过结果或无模型；`130` 中断。普通 `models` 的空目录仍以 `0` 退出。
+
 ### 选择兼容的 effort
 
 `thinkEffort` 是默认值，不再覆盖请求。按以下顺序使用第一个非 null 的值：

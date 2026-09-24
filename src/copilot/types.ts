@@ -71,6 +71,7 @@ interface ChatNonStreamingChoice {
 interface ChatResponseMessage {
   role: "assistant"
   content: string | null
+  refusal?: string | null
   reasoning_content?: string | null
   reasoning_opaque?: string | null
   reasoning_text?: string | null
