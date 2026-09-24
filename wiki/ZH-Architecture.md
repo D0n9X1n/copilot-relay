@@ -83,7 +83,7 @@ GitHub Copilot API
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 已有模型选择不会被迁移。如果账号无法使用 Astra，preflight 会失败；请在生成的配置中
@@ -177,7 +177,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 `host`、`port`、`claudeSetup` 只在启动时读取一次。其余八项热重载，对改动之后开始的

@@ -72,7 +72,7 @@ test("applies defaults only to absent keys", async () => {
   const config = await readAppConfig()
 
   assert.equal(config.port, 5000)
-  assert.equal(config.opusModel, "claude-opus-5")
+  assert.equal(config.opusModel, "claude-opus-5.5")
   assert.equal(config.gptModel, "gpt-6-astra")
   assert.equal(config.logRetentionDays, 3)
 })
@@ -81,8 +81,15 @@ test("applies defaults only to absent keys", async () => {
 test("uses shipped defaults for a fresh install", async () => {
   const config = await readAppConfig()
 
-  assert.equal(config.opusModel, "claude-opus-5")
+  assert.equal(config.opusModel, "claude-opus-5.5")
   assert.equal(config.gptModel, "gpt-6-astra")
+})
+
+test("preserves an existing Opus 5 selection after the default changes", async () => {
+  await writeConfigFile("opusModel: claude-opus-5\n")
+  assert.equal((await readAppConfig()).opusModel, "claude-opus-5")
+  assert.equal((await readAppConfig()).opusModel, "claude-opus-5")
+  assert.match(await readConfigFile(), /^opusModel: claude-opus-5$/m)
 })
 
 test("keeps an existing Sol model through repeated reads", async () => {

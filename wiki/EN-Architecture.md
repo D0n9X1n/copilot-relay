@@ -91,7 +91,7 @@ Preferred fresh-install defaults:
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 Existing model choices are never migrated. If Astra is unavailable to an account,
@@ -190,7 +190,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 `host`, `port`, and `claudeSetup` are read once at startup. The other eight

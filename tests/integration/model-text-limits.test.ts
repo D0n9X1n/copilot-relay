@@ -6,7 +6,7 @@ import path from "node:path"
 import test from "node:test"
 import { encode } from "gpt-tokenizer/encoding/o200k_base"
 
-import { astraLimits, modelCatalogPayload, opusLimits } from "../fixtures/model-limits"
+import { astraLimits, modelCatalogPayload, opusLimits, opus55Limits } from "../fixtures/model-limits"
 import type { ProxyConfig } from "../../src/lib/config"
 import type { ClaudeStreamEventData } from "../../src/claude/types"
 
@@ -41,7 +41,7 @@ test("unknown tokenizer names retain the conservative fallback without errors", 
       host: "127.0.0.1", port: 0, upstreamTimeoutMs: 0, vsCodeVersion: "1.99.3",
       modelCatalog: {
         baseUrl,
-        models: new Map([["claude-opus-5", { limits: opusLimits, tokenizer }]]),
+        models: new Map([["claude-opus-5.5", { limits: opus55Limits, tokenizer }]]),
       },
     })
     const response = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
@@ -58,10 +58,10 @@ test("unknown tokenizer names retain the conservative fallback without errors", 
   }
 })
 
-for (const model of ["gpt-6-astra", "claude-opus-5"]) {
+for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
   for (const stream of [false, true]) {
     test(`${model} preserves full prompt/output limits with stream=${stream}`, async () => {
-      const limits = model === "gpt-6-astra" ? astraLimits : opusLimits
+      const limits = model === "gpt-6-astra" ? astraLimits : model === "claude-opus-5.5" ? opus55Limits : opusLimits
       const input = textAtTokenLimit(limits.max_prompt_tokens)
       const output = textAtTokenLimit(limits.max_output_tokens)
       const requests: Array<{ path: string; body: Record<string, unknown> }> = []
@@ -132,7 +132,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5"]) {
         copilotToken: "test-token",
         host: "127.0.0.1", port: 0, upstreamTimeoutMs: 0, vsCodeVersion: "1.99.3",
       }
-      runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5" }
+      runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: model === "gpt-6-astra" ? "claude-opus-5.5" : model }
       runtimeState.upstreamBaseUrl = config.copilotBaseUrl
       try {
         await loadCopilotModelCatalog(config)
@@ -209,7 +209,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5"]) {
         } else {
           assert.equal(sent.path, "/chat/completions")
           assert.equal((sent.body.messages as Array<{ content: string }>)[0]?.content, input)
-          assert.equal(sent.body.max_tokens, 64_000)
+          assert.equal(sent.body.max_tokens, limits.max_output_tokens)
           assert.equal(sent.body.stream, true)
         }
       } finally {

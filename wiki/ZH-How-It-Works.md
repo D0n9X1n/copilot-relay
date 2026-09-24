@@ -77,7 +77,7 @@ OpenAI 兼容接口不会对外公开。
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 已有模型选择不会被迁移。如果账号无法使用 Astra，请明确选择可用模型；见

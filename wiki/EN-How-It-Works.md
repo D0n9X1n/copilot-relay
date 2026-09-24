@@ -78,7 +78,7 @@ Preferred fresh-install upstream models:
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 Existing model choices are never migrated. If your account cannot use Astra,

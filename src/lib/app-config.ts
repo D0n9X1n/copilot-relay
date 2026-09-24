@@ -43,7 +43,7 @@ const defaultConfig: AppConfig = {
   host: "127.0.0.1",
   logLevel: "info",
   logRetentionDays: 3,
-  opusModel: "claude-opus-5",
+  opusModel: "claude-opus-5.5",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,

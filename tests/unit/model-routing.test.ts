@@ -68,13 +68,20 @@ test("normalizes exact 1M GPT identities at each boundary", () => {
   }
 })
 
+test("keeps the verified Opus 5.5 upstream ID without context aliases", () => {
+  assert.equal(routeModelId("opus"), "claude-opus-5.5")
+  assert.equal(routeModelId("claude-opus-5.5"), "claude-opus-5.5")
+  assert.equal(normalizeCopilotModelId("claude-opus-5.5"), "claude-opus-5.5")
+  assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
+})
+
 test("defaults to Astra and keeps the Opus lane separate", () => {
   assert.deepEqual(defaultModelRouting, {
     gptModel: "gpt-6-astra",
-    opusModel: "claude-opus-5",
+    opusModel: "claude-opus-5.5",
   })
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5"])
-  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5"])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5"])
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 })
 
 // Why: model discovery is consumed by Claude Code while availability checks are

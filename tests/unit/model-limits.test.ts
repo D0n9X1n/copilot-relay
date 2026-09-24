@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
-import { astraLimits, modelCatalogPayload, opusLimits, solLimits } from "../fixtures/model-limits"
+import { astraLimits, modelCatalogPayload, opusLimits, opus55Limits, solLimits } from "../fixtures/model-limits"
 import type { ProxyConfig } from "../../src/lib/config"
 import type { ChatCompletionChunk } from "../../src/copilot/types"
 
@@ -71,6 +71,7 @@ const startModels = async (
 test("retains exact advertised limits and does not invent missing capacities", () => {
   assert.deepEqual(parseModelTokenLimits(astraLimits), astraLimits)
   assert.deepEqual(parseModelTokenLimits(opusLimits), opusLimits)
+  assert.deepEqual(parseModelTokenLimits(opus55Limits), opus55Limits)
   assert.deepEqual(parseModelTokenLimits(solLimits), solLimits)
   for (const limits of [
     undefined, null, {}, { max_output_tokens: 128_000 },
@@ -102,7 +103,9 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
     })
     assert.equal(normalizeClaudeModelId("gpt-6-astra"), "gpt-6-astra[1m]")
     assert.equal(normalizeClaudeModelId("gpt-5.6-sol[1m]"), "gpt-5.6-sol")
-    for (const [model, maximum] of [["gpt-6-astra", 128_000], ["claude-opus-5", 64_000]] as const) {
+    assert.deepEqual(getCachedCopilotModel(config, "claude-opus-5.5"), { limits: opus55Limits, tokenizer: "o200k_base" })
+    assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
+    for (const [model, maximum] of [["gpt-6-astra", 128_000], ["claude-opus-5", 64_000], ["claude-opus-5.5", 128_000]] as const) {
       assert.equal(await boundModelOutputTokens(config, model, maximum), maximum)
       assert.equal(await boundModelOutputTokens(config, model, maximum + 1), maximum)
       assert.equal(await boundModelOutputTokens(config, model, 16), 16)
