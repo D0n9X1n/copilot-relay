@@ -54,7 +54,7 @@ async function fixture(
     token: oldToken, refreshedAt: options.expiredToken ? 0 : Date.now(), refreshIn: 86400,
   }))
 
-  const run = async (args = ["models"]) => {
+  const run = async (args = ["models"], env: NodeJS.ProcessEnv = {}) => {
     const script = `
       globalThis.fetch = async (input) => {
         const url = String(input);
@@ -73,7 +73,7 @@ async function fixture(
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
         cwd, timeout: 15_000,
-        env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
+        env: { ...process.env, ...env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
         if (error?.killed || typeof code !== "number") {
@@ -112,14 +112,16 @@ const respond = (response: ServerResponse, payload: unknown, status = 200) => {
   response.end(JSON.stringify(payload))
 }
 
-test("models help is registered without authentication or upstream access", async (t) => {
+test("models help is registered without upstream access in CI rendering", async (t) => {
   const f = await fixture(t, (_request, response) => respond(response, { data: [] }))
-  const help = await f.run(["--help"])
+  const env = { CI: "true", FORCE_COLOR: "0" }
+  const help = await f.run(["--help"], env)
   assert.equal(help.code, 0)
-  assert.match(help.stdout, /models\s+.*upstream/i)
-  const commandHelp = await f.run(["models", "--help"])
+  assert.match(help.stdout, /^\s*`?models`?\s+List upstream models;.*$/mi)
+  const commandHelp = await f.run(["models", "--help"], env)
   assert.equal(commandHelp.code, 0)
   assert.match(commandHelp.stdout, /upstream/i)
+  assert.match(commandHelp.stdout, /--deep/)
   assert.equal(f.requests.length, 0)
 })
 
