@@ -16,8 +16,8 @@
 - **Know what works** — model discovery and opt-in per-model deep checks with clear results.*
 - **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux.
 
-\* Model discovery, deep checks, and the Opus 5.5 fresh-install default are on `main`
-for **v0.3.10**, not yet in the published v0.3.9 package.
+\* Model discovery, deep checks, and the Opus 5.5 fresh-install default require
+**v0.3.10 or later**.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ Configuration lives in `~/.copilot-relay/config.yaml`. Model access depends on y
 account and organization policy; if startup rejects a model, choose an available
 one using the [configuration guide](wiki/EN-Configuration.md).
 
-With the upcoming v0.3.10 CLI:
+Discover models and optionally test one (v0.3.10+):
 
 ```sh
 copilot-relay models
