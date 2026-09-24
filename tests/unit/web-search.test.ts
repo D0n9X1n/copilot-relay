@@ -23,6 +23,8 @@ const {
 const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names")
 const { HTTPError } = await import("../../src/lib/error")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
+const { log, setLogLevel } = await import("../../src/lib/log")
+const { getLogPath } = await import("../../src/lib/paths")
 test.after(async () => {
   await fs.rm(tempHome, { recursive: true, force: true })
 })
@@ -209,9 +211,142 @@ test("WebSearch recovers after a transient HTTP 503 with its existing retry", as
 test("successful empty WebSearch remains distinct from an HTTP error", async () => {
   await withSearchResponses([{ status: 200, body: JSON.stringify({ id: "empty", model: "gpt-6-astra", output: [] }) }], async (baseUrl, attempts) => {
     const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
-    assert.equal(search.text, "Copilot web search did not return search results.")
+    assert.equal(search.text, "Copilot web search returned no usable results (response status unreported; no extractable text or sources).")
     assert.equal(attempts(), 1)
   })
+})
+
+const searchMessage = (text: string) => ({ type: "message", content: [{ type: "output_text", text }] })
+
+for (const [name, fields, diagnostic] of [
+  ["completed empty", { status: "completed", output: [] }, /completed without extractable text or sources/],
+  ["reasoning only", { status: "completed", output: [{ type: "reasoning", summary: [{ text: "PRIVATE_REASONING" }] }] }, /completed without extractable text or sources/],
+  ["search call only", { status: "completed", output: [{ type: "web_search_call", status: "completed" }] }, /completed without extractable text or sources/],
+  ["incomplete budget", { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [searchMessage("Partial - https://example.com/partial")] }, /incomplete \(max_output_tokens\)/],
+  ["incomplete unknown reason", { status: "incomplete", incomplete_details: { reason: "PRIVATE_REASON" }, output: [] }, /incomplete \(unknown\)/],
+  ["failed", { status: "failed", error: { message: "PRIVATE_ERROR" }, output: [searchMessage("Partial - https://example.com/partial")] }, /response failed/],
+  ["cancelled", { status: "cancelled", output: [] }, /response cancelled/],
+  ["nonterminal", { status: "in_progress", output: [] }, /response not complete \(in_progress\)/],
+  ["text without URLs", { status: "completed", output: [searchMessage("PRIVATE_TEXT_WITHOUT_RESULTS")] }, /returned text without usable source URLs/],
+  ["search failed", { status: "completed", output: [{ type: "web_search_call", status: "failed" }, searchMessage("Partial - https://example.com/partial")] }, /search call did not complete/],
+] as const) {
+  test(`WebSearch classifies ${name} and preserves reported ID and usage`, async () => {
+    const body = JSON.stringify({ id: "resp_failure", model: "gpt-6-astra", ...fields,
+      usage: { input_tokens: 40, output_tokens: 1200, output_tokens_details: { reasoning_tokens: 1195 } },
+    })
+    await withSearchResponses([{ status: 200, body }], async (baseUrl, attempts) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+      assert.match(search.text, diagnostic)
+      assert.doesNotMatch(search.text, /PRIVATE_|https:\/\/example.com\/partial/)
+      assert.equal(search.id, "resp_failure")
+      assert.equal(search.inputTokens, 40)
+      assert.equal(search.outputTokens, 1200)
+      assert.deepEqual(search.results, [])
+      const result = createClaudeWebSearchResponse(search)
+      assert.equal(result.usage.output_tokens, 1200)
+      assert.equal(result.id, "resp_failure")
+      assert.equal(attempts(), 1)
+    })
+  })
+}
+
+for (const body of ["null", "[]", '{"output":{}}', '{"output":[null]}']) {
+  test(`WebSearch classifies malformed successful body ${body}`, async () => {
+    await withSearchResponses([{ status: 200, body }], async (baseUrl, attempts) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+      assert.match(search.text, /malformed response/)
+      assert.deepEqual(search.results, [])
+      assert.equal(attempts(), 1)
+    })
+  })
+}
+
+for (const source of ["annotation", "action", "text", "call-unreported"] as const) {
+  test(`WebSearch accepts ${source} results and carries evidence into final context`, async () => {
+    const output: Array<Record<string, unknown>> = source === "action" ? [{ type: "web_search_call", status: "completed", action: {
+      sources: [{ type: "url", title: "Actual source", url: "https://example.com/source" }],
+    } }] : [{ type: "message", content: [{ type: "output_text",
+      text: "Text fallback - https://example.com/fallback",
+      ...(source === "annotation" && { annotations: [{ type: "url_citation", title: "Actual source", url: "https://example.com/source" }] }),
+    }] }]
+    if (source === "call-unreported") output.unshift({ type: "web_search_call" })
+    await withSearchResponses([{ status: 200, body: JSON.stringify({ id: "resp_sources", status: "completed", output }) }], async (baseUrl) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
+      assert.equal(search.results[0]?.url, `https://example.com/${source === "text" || source === "call-unreported" ? "fallback" : "source"}`)
+      const mapper = createClaudeToolNameMapper([])
+      const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, search, mapper)
+      assert.equal(final.messages.at(-1)?.role, "user")
+      const context = String(final.messages.at(-1)?.content)
+      assert.match(context, source === "action" ? /reported a completed web_search_call/
+        : source === "call-unreported" ? /reported a web_search_call but omitted its completion status/
+        : /Search execution is unverified/)
+      assert.doesNotMatch(context, /Trusted bridge retrieval context|copilot-relay executed it/)
+    })
+  })
+}
+
+test("WebSearch logs bounded metadata with tool correlation and no response content", async () => {
+  const messages: string[] = []
+  log.setReporters([{ log: (entry) => { messages.push(entry.args.join(" ")) } }])
+  setLogLevel("info")
+  const requestId = "c11bb174-4235-4c3e-b284-18a78bd44e82"
+  const body = JSON.stringify({ id: "resp_evidence", model: "PRIVATE_UPSTREAM_MODEL", status: "incomplete",
+    incomplete_details: { reason: "max_output_tokens" }, error: { message: "PRIVATE_ERROR" },
+    output: [{ type: "reasoning", summary: [{ text: "PRIVATE_REASONING" }] }, { type: "web_search_call", status: "completed", action: { query: "PRIVATE_QUERY" } }],
+    usage: { input_tokens: 20, output_tokens: 1200, output_tokens_details: { reasoning_tokens: 1190 } },
+  })
+  try {
+    await withSearchResponses([{ status: 200, body }], async (baseUrl) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), { ...payload, max_tokens: 4000, output_config: { effort: "max" } }, "PRIVATE_QUERY", { requestId })
+      const result = createClaudeWebSearchResponse(search)
+      const tool = result.content[0]
+      assert(tool?.type === "server_tool_use")
+      const summary = messages.find((message) => message.includes("Copilot web search completion")) ?? ""
+      assert.match(summary, /upstream_response_id=resp_evidence/)
+      assert.match(summary, /requested_effort=max effective_effort=max output_cap=1200/)
+      assert.match(summary, /status=incomplete incomplete_reason=max_output_tokens/)
+      assert.match(summary, /reasoning:1/)
+      assert.match(summary, /completed:1/)
+      assert.match(summary, /input_tokens=20 output_tokens=1200 reasoning_tokens=1190/)
+      const correlation = messages.find((message) => message.includes(`tool_use_id=${tool.id}`)) ?? ""
+      assert.match(correlation, new RegExp(`request_id=${requestId}.*upstream_response_id=resp_evidence`))
+      for (const message of messages.filter((line) => line.includes("Copilot web search"))) {
+        assert(message.length < 1600)
+        assert.doesNotMatch(message, /[\r\n\x1b]|PRIVATE_/)
+      }
+      let file = ""
+      for (let attempt = 0; attempt < 50; attempt++) {
+        file = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+        if (file.includes(`tool_use_id=${tool.id}`)) break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      assert.match(file, /upstream_response_id=resp_evidence/)
+      assert.doesNotMatch(file, /PRIVATE_/)
+    })
+  } finally { setLogLevel("error") }
+})
+
+test("WebSearch omits hostile metadata and distinguishes missing usage from zero", async () => {
+  const messages: string[] = []
+  log.setReporters([{ log: (entry) => { messages.push(entry.args.join(" ")) } }])
+  setLogLevel("info")
+  try {
+    await withSearchResponses([{ status: 200, body: JSON.stringify({
+      id: "resp_bad\nPRIVATE_ID", model: "PRIVATE_MODEL", status: "PRIVATE_STATUS",
+      incomplete_details: { reason: "PRIVATE_REASON" }, output: [{ type: "PRIVATE_TYPE", status: "PRIVATE_CALL" }],
+      usage: { input_tokens: -1, output_tokens: "PRIVATE_USAGE", output_tokens_details: { reasoning_tokens: 0 } },
+    }) }], async (baseUrl) => {
+      const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "PRIVATE_QUERY")
+      assert.match(search.id, /^msg_/)
+      assert.equal(search.inputTokens, 0)
+      assert.equal(search.outputTokens, 0)
+      assert.doesNotMatch(search.text, /PRIVATE_/)
+      const summary = messages.find((line) => line.includes("Copilot web search completion")) ?? ""
+      assert.match(summary, /status=unknown/)
+      assert.match(summary, /input_tokens=unknown output_tokens=unknown reasoning_tokens=0/)
+      assert.doesNotMatch(messages.join("\n"), /PRIVATE_/)
+    })
+  } finally { setLogLevel("error") }
 })
 
 const startHangingMockCopilot = async () => {

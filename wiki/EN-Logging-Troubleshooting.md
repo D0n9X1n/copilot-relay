@@ -414,7 +414,47 @@ was denied. These do not establish missing model/tool support or token expiry.
 Other statuses report a generic request failure. The outer Claude response can
 still be HTTP 200, including an already-open SSE stream; inspect the tool result
 and upstream `return from upstream ... status=...` log entry, not only the outer
-status. An empty successful response instead says `did not return search results`.
+status. A successful HTTP response is classified separately before any partial
+results are accepted:
+
+| Responses body | Diagnostic / behavior |
+| --- | --- |
+| `incomplete` | `response incomplete (max_output_tokens)` or `content_filter`; unknown reasons are omitted as `unknown`, absent reasons as `unreported`. Partial links are not accepted. |
+| `failed` / `cancelled` | `response failed` / `response cancelled`, even if partial text contains URLs. |
+| `queued` / `in_progress` / unknown status | `response not complete (...)`; no automatic retry. |
+| Explicit unsuccessful/nonterminal search call | `search call did not complete`; no partial results. |
+| `completed`, no text or usable structured sources | `completed without extractable text or sources`. |
+| Text without usable URLs or structured sources | `returned text without usable source URLs`. |
+| Missing status and no usable results | `returned no usable results (response status unreported; no extractable text or sources)`. Missing metadata is not proof of successful execution. |
+| Malformed JSON/body | `returned a malformed response`; no raw body is included. |
+
+These remain `web_search_tool_result_error` with `error_code: unavailable`.
+Reported input/output usage and a valid upstream response ID survive 2xx failures,
+rather than being replaced by zero usage and an unrelated synthetic ID. Invalid or
+missing token counts use zero only where the Claude protocol requires a number;
+the diagnostic summary reports them as `unknown`.
+
+At `info`, `Copilot web search completion` records bounded single-line metadata:
+`request_id`, `upstream_response_id`, configured backend model, requested/effective
+effort, output cap, response status, recognized incomplete reason, output-item
+counts, search-call status counts, input/output/reasoning token counts, source
+format, provenance, and outcome. A second `Copilot web search tool result` entry
+correlates those IDs with the returned `tool_use_id`. IDs with unsupported shapes
+are omitted, and unknown status/type values become fixed markers; neither entry
+logs queries, prompts, response text, reasoning text, headers, or arbitrary errors.
+
+Structured citation/source URLs are preferred when available; otherwise the
+existing text-URL fallback remains supported. Missing citations or search-call
+metadata do not prove the model lacks search support. Only a reported completed
+`web_search_call` is treated as execution evidence; other results are explicitly
+unverified in the final-answer context, and source content remains untrusted.
+
+The inherited effort and existing search output cap (at most 1200 tokens) are
+unchanged. `incomplete_reason=max_output_tokens` with reported reasoning/output
+usage is evidence of budget exhaustion for that request, not proof of the cause
+of historical empty results. Do not fix an unknown cause by increasing the global
+timeout, changing the conversation model/effort, or repeatedly retrying empty
+responses.
 
 When available, an upstream error message or code is included after sanitization,
 capped at 240 characters. Recognized credential/request echoes and unrecognized
