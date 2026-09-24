@@ -26,7 +26,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 ## Keys
@@ -138,6 +138,22 @@ Astra. Higher effort generally trades latency and token use for more reasoning.
 Recheck the picker when changing either model instead of assuming every model
 accepts `max`.
 
+### Opus 5.5 compatibility
+
+Fresh installs use `opusModel: claude-opus-5.5`; existing configurations keep their
+saved value, including `claude-opus-5`. Check `copilot-relay models` before changing
+it: account entitlement, organization policy, and gateway availability still apply.
+The authenticated catalog and isolated relay checks on 2026-09-23 verified the
+exact `claude-opus-5.5` ID, JSON/SSE, automatic tool use and tool-result continuation,
+conversation continuation, `low`/`max` effort, and WebSearch final-answer recomposition.
+The catalog advertises all five configured efforts; no `[1m]` suffix is added to
+this Opus ID. WebSearch retrieval remains on `webSearchBackend` or `gptModel`.
+
+**Forced tool selection is not supported upstream:** `tool_choice` types `tool`
+and `any` return HTTP 400 for this model. Automatic tool selection works. The relay
+preserves the error rather than silently converting a required tool call to `auto`.
+These are request-level capability limits, not an authentication failure.
+
 ### Update the relay config
 
 Edit the existing keys, preserving unrelated settings. macOS or Linux:
@@ -164,7 +180,7 @@ Use `max` only after checking the other configured model. The fresh-install pair
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 thinkEffort: max
 ```
 
@@ -191,6 +207,7 @@ The live catalog checked on 2026-09-09 reported:
 | --- | ---: | ---: | ---: |
 | `gpt-6-astra` | 1,000,000 | 872,000 | 128,000 |
 | `claude-opus-5` | 1,000,000 | 936,000 | 64,000 |
+| `claude-opus-5.5` (checked 2026-09-23) | 1,000,000 | 1,000,000 | 128,000 |
 | `gpt-5.6-sol` | 1,050,000 | 922,000 | 128,000 |
 
 These are discovered values, not hardcoded runtime limits or results of a
@@ -198,6 +215,9 @@ million-token production request. Leave room for output, including reasoning,
 within the total window. The relay never truncates input or expands an explicit
 smaller output budget. Upstream remains the authority on whether a prompt fits.
 Both streamed and completed JSON responses can use the model's full output limit.
+Opus 5.5 advertises a native non-streaming ceiling of 16,000 tokens; above it the
+relay requests upstream SSE and buffers it for JSON callers. The 1M prompt ceiling
+does not mean a 1M prompt plus 128K output fits in the 1M total window.
 
 For an existing Claude Code setup, select the new identity explicitly:
 

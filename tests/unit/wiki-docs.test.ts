@@ -388,11 +388,14 @@ test("Configuration documents live model discovery and simple updates", () => {
   for (const page of ["EN-Configuration.md", "ZH-Configuration.md"]) {
     const body = readPage(page)
 
+    assert.match(body, /^opusModel: claude-opus-5\.5$/m)
+    assert.match(body, /tool_choice/)
+    assert.match(body, /^\| `claude-opus-5\.5`[^\n|]*\| 1,000,000 \| 1,000,000 \| 128,000 \|$/m)
     for (const required of [
       "/model",
       "GET /v1/models",
       "gpt-6-astra",
-      "claude-opus-5",
+      "claude-opus-5.5",
       "thinkEffort",
       "yq -i",
       "copilot-relay restart",

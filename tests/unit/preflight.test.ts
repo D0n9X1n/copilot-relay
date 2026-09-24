@@ -150,11 +150,26 @@ test("preflight uses canonical upstream model ids", async () => {
   }
 })
 
-for (const missing of ["gpt-6-astra", "claude-opus-5"]) {
+test("fresh default preflight probes Opus 5.5 without a context alias", async () => {
+  const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"])
+  runtimeState.thinkEffort = "max"
+  try {
+    await validateUpstream({
+      copilotBaseUrl: mock.baseUrl, copilotToken: "test-token", host: "127.0.0.1",
+      port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3",
+    }, "max")
+    assert.deepEqual(mock.requests.map((request) => request.path), ["/models", "/responses", "/chat/completions"])
+    const opus = mock.requests[2]?.body as { model: string; reasoning_effort: string }
+    assert.equal(opus.model, "claude-opus-5.5")
+    assert.equal(opus.reasoning_effort, "max")
+  } finally { await mock.close() }
+})
+
+for (const missing of ["gpt-6-astra", "claude-opus-5.5"]) {
   test(`preflight rejects unavailable ${missing} without changing models`, async () => {
-    const models = ["gpt-6-astra", "claude-opus-5", "gpt-5.6-sol"]
+    const models = ["gpt-6-astra", "claude-opus-5.5", "gpt-5.6-sol"]
     const mock = await startMockCopilot(models.filter((model) => model !== missing))
-    const routing = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5" }
+    const routing = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
     runtimeState.modelRouting = { ...routing }
     runtimeState.thinkEffort = "max"
 

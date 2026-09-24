@@ -25,7 +25,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 ## 字段说明
@@ -122,6 +122,20 @@ Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not 
 延迟和 token 消耗换取更多推理。切换任意模型时应重新检查选择器，而不是假设所有模型都
 接受 `max`。
 
+### Opus 5.5 兼容性
+
+全新安装使用 `opusModel: claude-opus-5.5`；已有配置保留保存的值，包括
+`claude-opus-5`。修改前先运行 `copilot-relay models`：账号权限、组织策略和网关
+可用性仍然适用。2026-09-23 的认证目录查询及隔离 relay 验证确认了准确 ID
+`claude-opus-5.5`，以及 JSON/SSE、自动工具调用及工具结果续接、对话续接、
+`low`/`max` effort 和 WebSearch 最终回答重组。目录公布了全部五种配置 effort；
+relay 不会为该 Opus ID 添加 `[1m]` 后缀。WebSearch 检索仍使用 `webSearchBackend`
+或 `gptModel`。
+
+**上游不支持强制工具选择：** 该模型的 `tool_choice` 类型 `tool` 和 `any` 返回
+HTTP 400，自动工具选择可以使用。Relay 会保留错误，不会把必须执行的工具调用
+静默改成 `auto`。这是请求级能力限制，不是认证失败。
+
 ### 更新 relay 配置
 
 修改已有的键并保留其他设置。macOS 或 Linux：
@@ -148,7 +162,7 @@ yq -i '.gptModel = "gpt-6-astra" | .thinkEffort = "max"' ~/.copilot-relay/config
 
 ```yaml
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 thinkEffort: max
 ```
 
@@ -172,12 +186,16 @@ context 计数，不能扩大上游容量。2026-09-09 查询的实时目录公�
 | --- | ---: | ---: | ---: |
 | `gpt-6-astra` | 1,000,000 | 872,000 | 128,000 |
 | `claude-opus-5` | 1,000,000 | 936,000 | 64,000 |
+| `claude-opus-5.5`（2026-09-23 验证） | 1,000,000 | 1,000,000 | 128,000 |
 | `gpt-5.6-sol` | 1,050,000 | 922,000 | 128,000 |
 
 这些值来自模型发现，并非运行时代码写死的限制，也不是通过生产环境中的百万 token
 请求测得。应在总窗口内为输出（包括推理）预留空间。Relay 不会截短输入，也不会扩大
 客户端明确指定的较小输出预算。Prompt 是否真正符合限制，仍由上游判定。
 流式和完整 JSON 响应都可以使用模型的完整输出上限。
+Opus 5.5 公布的原生非流式输出上限为 16,000 token；超过时 relay 会向上游请求 SSE，
+再为 JSON 调用方缓冲完整结果。1M prompt 上限不代表 1M 输入加 128K 输出能够一起
+放入 1M 总窗口。
 
 已有 Claude Code 配置需要明确选择新身份：
 

@@ -48,7 +48,7 @@ Routing:
 
 | Requested model | Upstream model |
 | --- | --- |
-| contains `opus` | `claude-opus-5` |
+| contains `opus` | `claude-opus-5.5` |
 | `gpt-6-astra[1m]`, plain `gpt-6-astra`, or another non-Opus alias | `gpt-6-astra` |
 
 The fresh-install default is `gpt-6-astra`, exposed to Claude Code as
@@ -57,6 +57,12 @@ only; Copilot receives the canonical `gpt-6-astra` ID. It does not enlarge
 upstream capacity. Existing `config.yaml` model choices are never migrated.
 If your account cannot use Astra, startup fails explicitly; choose a model your
 account supports rather than relying on an automatic fallback.
+
+The fresh-install Opus route uses `claude-opus-5.5`. Existing Opus selections stay
+unchanged. Automatic tools, JSON/SSE, and WebSearch recomposition are supported;
+upstream rejects forced `tool_choice` types `tool` and `any` with HTTP 400 rather
+than silently falling back to automatic selection. Verify account availability
+with `copilot-relay models` before switching.
 
 Claude Code can still show its built-in Haiku and Sonnet picker entries. The
 managed `model` field sets the startup default but does not restrict
@@ -83,7 +89,7 @@ Startup retains Copilot's actual context, prompt, and output limits and exposes
 them on `GET /v1/models`. Managed Claude setup seeds
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` when absent.
 The default models support 1M total context, with up to 128K output tokens for
-Astra and 64K for Opus. Input text is never shortened; smaller explicit output
+both Astra and Opus 5.5. Input text is never shortened; smaller explicit output
 budgets remain respected. See [full-context configuration](wiki/EN-Configuration.md)
 for existing/manual Claude setups and the limits on input plus output.
 
@@ -102,7 +108,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 gptModel: gpt-6-astra
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
 ```
 
 copilot-relay writes the resolved config back to this file, so every key is
@@ -163,7 +169,8 @@ or effort compatibility. Empty catalogs are reported explicitly; failures exit
 with code `1`. See [model discovery and configuration](wiki/EN-Configuration.md).
 
 `status` reports whether a relay is running, where it is listening, and whether
-it is reachable:
+it is reachable. This example is an existing installation that keeps its older
+model selection:
 
 ```text
 copilot-relay 0.2.5

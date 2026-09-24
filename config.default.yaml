@@ -58,4 +58,4 @@ webSearchBackend:
 gptModel: gpt-6-astra
 
 # Upstream Copilot model used for requests containing "opus".
-opusModel: claude-opus-5
+opusModel: claude-opus-5.5
