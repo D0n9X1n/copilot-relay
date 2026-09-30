@@ -25,8 +25,10 @@ const { HTTPError } = await import("../../src/lib/error")
 const { normalizeClaudeModelId } = await import("../../src/lib/models")
 const { runtimeState } = await import("../../src/lib/state")
 const { probeModels } = await import("../../src/lib/model-probe")
+const { flushLogs } = await import("../../src/lib/log")
 
 test.after(async () => {
+  await flushLogs()
   await fs.rm(tempHome, { recursive: true, force: true })
 })
 test.afterEach(() => {

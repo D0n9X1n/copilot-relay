@@ -14,10 +14,10 @@ const { createChatCompletions } = await import("../../src/copilot/chat")
 const { isRetryableFetchError } = await import("../../src/copilot/client")
 const { HTTPError } = await import("../../src/lib/error")
 const { runtimeState } = await import("../../src/lib/state")
-const { log, setLogLevel } = await import("../../src/lib/log")
+const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { getLogPath } = await import("../../src/lib/paths")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
-test.after(async () => { await fs.rm(tempHome, { recursive: true, force: true }) })
+test.after(async () => { await flushLogs(); await fs.rm(tempHome, { recursive: true, force: true }) })
 
 interface CapturedRequest {
   body: unknown

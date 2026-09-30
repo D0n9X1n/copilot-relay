@@ -13,7 +13,7 @@ process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
 const consola = (await import("consola")).default
-const { log, setLogLevel } = await import("../../src/lib/log")
+const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { getLogPath, paths } = await import("../../src/lib/paths")
 const { createChatCompletions } = await import("../../src/copilot/chat")
@@ -120,6 +120,7 @@ const proxyConfig = (copilotBaseUrl: string) => ({
 })
 
 test.beforeEach(async () => {
+  await flushLogs()
   await fs.rm(paths.logsDir, { force: true, recursive: true })
   consoleOutput.length = 0
   setLogLevel("debug")
@@ -296,5 +297,6 @@ test("leaves an unrelated upstream url intact", async () => {
 })
 
 test.after(async () => {
+  await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })
 })

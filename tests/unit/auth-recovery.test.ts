@@ -13,13 +13,13 @@ const { setupProxyAuth } = await import("../../src/lib/auth")
 const { fetchCopilot, getCopilotProviderContext } = await import("../../src/copilot/client")
 const { paths } = await import("../../src/lib/paths")
 const { HTTPError } = await import("../../src/lib/error")
-const { log } = await import("../../src/lib/log")
+const { log, flushLogs } = await import("../../src/lib/log")
 const { validateUpstream } = await import("../../src/lib/preflight")
 const { runtimeState } = await import("../../src/lib/state")
 const { createClaudeWebSearchExecution } = await import("../../src/claude/web-search")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
-test.after(async () => { await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
 
 const makeConfig = (baseUrl: string): ProxyConfig => ({
   copilotBaseUrl: baseUrl, copilotToken: undefined, host: "127.0.0.1", port: 0,
