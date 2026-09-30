@@ -1,14 +1,16 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 // Why: wiki/ is the only in-repo documentation tree and the source for the
 // GitHub Wiki tab. This suite pins the structural contract that makes that
 // true -- flatness, EN/ZH parity, resolvable links, and a publish transform
-// that leaves no broken link behind. It reads the repository from disk and
-// imports nothing from src/, so it needs no home-directory redirect.
+// that leaves no broken link behind. It imports nothing from src/; Python
+// subprocesses use temporary folders with both HOME and USERPROFILE isolated.
 const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../..")
 const wikiDir = path.join(repoRoot, "wiki")
 
@@ -23,21 +25,6 @@ const wikiPages = (): string[] =>
 
 const readPage = (name: string): string =>
   fs.readFileSync(path.join(wikiDir, name), "utf8")
-
-// Matches the markdown inline links the publish workflow's sed rewrites:
-// ](Some-Page.md). Anything with a path separator, an anchor, or a scheme is
-// deliberately excluded here and asserted against separately.
-const simplePageLinkPattern = /\]\(([A-Za-z0-9-]+)\.md\)/g
-
-// Any relative markdown link, including ones the transform cannot rewrite.
-const relativeMarkdownLinkPattern = /\]\((?!https?:\/\/|#)([^)\s]+\.md(?:#[^)\s]*)?)\)/g
-
-// Strip fenced blocks first, then inline code spans. Markdown inside backticks
-// is not a link -- the Development pages document the cross-page-anchor rule by
-// showing `](EN-Internals.md#section)` verbatim, and scanning that as a real
-// link would make the rule impossible to write down.
-const stripCode = (markdown: string): string =>
-  markdown.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "")
 
 // Why: the docs/ tree is gone, so nothing tracked may point a reader at it.
 // External URLs are stripped first so docs.anthropic.com and docs.github.com --
@@ -103,89 +90,84 @@ test("the consolidated documentation pages exist in both languages", () => {
   }
 })
 
-test("every relative markdown link resolves to a file that exists", () => {
-  const pages = wikiPages()
+const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
 
-  for (const page of pages) {
-    const body = stripCode(readPage(page))
+// Execute production publishing code, never a second copy of its transform.
+const runWikiScript = (script: string, args: string[], home: string): void => {
+  const result = spawnSync(python, [path.join(repoRoot, "scripts", script), ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      PYTHONDONTWRITEBYTECODE: "1",
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUTF8: "1",
+    },
+  })
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+}
 
-    for (const match of body.matchAll(relativeMarkdownLinkPattern)) {
-      const target = match[1] ?? ""
-      const [file] = target.split("#")
-
-      assert.ok(
-        fs.existsSync(path.join(wikiDir, file ?? "")),
-        `wiki/${page} links to ${target}, which does not exist`,
-      )
-    }
+test("wiki publishing preserves code examples and verifies real navigation fixtures", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-wiki-fixtures-"))
+  try {
+    runWikiScript("publish-wiki_tests.py", [], home)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })
 
-// Why: the publish workflow's sed only rewrites ](Page.md). A link written as
-// ](Page.md#anchor) keeps its .md on the wiki tab and 404s there, so the source
-// must never contain one. Same-page #anchor links are untouched and fine.
-test("no cross-page link carries an anchor the publish transform cannot strip", () => {
-  for (const page of wikiPages()) {
-    const body = stripCode(readPage(page))
-
-    for (const match of body.matchAll(relativeMarkdownLinkPattern)) {
-      const target = match[1] ?? ""
-
-      assert.ok(
-        !target.includes("#"),
-        `wiki/${page} links to ${target}; publish-wiki.yml cannot strip .md from an anchored link`,
-      )
-    }
+// Build validates source .md links, flat targets and no cross-page anchors;
+// verify checks the extensionless published targets using that same code parser.
+test("the actual publish script validates source and published navigation", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-wiki-publish-"))
+  const destination = path.join(home, "wiki")
+  fs.mkdirSync(destination)
+  try {
+    runWikiScript("publish-wiki.py", ["build", wikiDir, destination], home)
+    assert.ok(fs.existsSync(path.join(destination, "Home.md")))
+    assert.equal(fs.existsSync(path.join(destination, "README.md")), false)
+    runWikiScript("publish-wiki.py", ["verify", destination], home)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
   }
 })
 
-test("relative markdown links stay flat and extensionless-ready", () => {
-  for (const page of wikiPages()) {
-    const body = stripCode(readPage(page))
-
-    for (const match of body.matchAll(relativeMarkdownLinkPattern)) {
-      const target = match[1] ?? ""
-
-      assert.ok(
-        !target.includes("/"),
-        `wiki/${page} links to ${target}; wiki links must be flat page names`,
-      )
-    }
+test("wiki workflow and verification guides use the shared publishing script", () => {
+  const workflow = fs.readFileSync(path.join(repoRoot, ".github/workflows/publish-wiki.yml"), "utf8")
+  assert.match(workflow, /"scripts\/publish-wiki\.py"/)
+  assert.match(workflow, /"scripts\/publish-wiki_tests\.py"/)
+  assert.match(workflow, /actions\/setup-python@/)
+  assert.match(workflow, /python3 scripts\/publish-wiki\.py build wiki wiki-repo/)
+  assert.match(workflow, /python3 scripts\/publish-wiki\.py verify wiki-repo/)
+  assert.doesNotMatch(workflow, /sed -i|find wiki-repo|cp wiki\/\*\.md/)
+  for (const name of ["CLAUDE.md", "wiki/EN-Development.md", "wiki/ZH-Development.md"]) {
+    const body = fs.readFileSync(path.join(repoRoot, name), "utf8")
+    assert.ok(body.includes("python3 scripts/publish-wiki.py verify /tmp/relay-wiki"), name)
+    assert.doesNotMatch(body, /grep -rn/, name)
   }
 })
 
-// Why: reproduces .github/workflows/publish-wiki.yml in memory -- README.md
-// becomes Home.md and ](Page.md) loses its extension -- then asserts the
-// published tree has no internal .md link left and every target exists.
-test("the publish transform leaves no broken link on the wiki tab", () => {
-  const published = new Map<string, string>()
-
-  for (const page of wikiPages()) {
-    const publishedName = page === "README.md" ? "Home.md" : page
-    published.set(publishedName, readPage(page).replace(simplePageLinkPattern, "]($1)"))
-  }
-
-  assert.ok(published.has("Home.md"), "wiki/README.md must publish as Home.md")
-
-  for (const [name, body] of published) {
-    const withoutCode = stripCode(body)
-
-    for (const match of withoutCode.matchAll(relativeMarkdownLinkPattern)) {
-      assert.fail(
-        `published ${name} still contains an internal .md link: ${match[1]}`,
-      )
+test("paired architecture guides use Mermaid for overview, request, and lifecycle flows", () => {
+  for (const language of ["EN", "ZH"]) {
+    const architecture = readPage(`${language}-Architecture.md`)
+    const overview = readPage(`${language}-How-It-Works.md`)
+    for (const body of [architecture, overview]) {
+      assert.match(body, /```mermaid\nflowchart/)
+      assert.match(body, /```mermaid\nsequenceDiagram/)
+      assert.doesNotMatch(body, /```text\nClaude Code/)
+      assert.ok(body.includes("`src/start.ts`"))
+      assert.ok(body.includes("`startRelay`"))
+      assert.ok(body.includes("`src/routes/claude.ts`"))
+      assert.ok(body.includes("`claudeRoutes`"))
+      assert.ok(body.includes("SIGTERM"))
+      assert.ok(body.includes("closeIdleConnections"))
     }
-
-    // Every rewritten page link must name a page that was actually published.
-    for (const match of withoutCode.matchAll(/\]\((?!https?:\/\/|#)([A-Za-z0-9-]+)\)/g)) {
-      const target = `${match[1]}.md`
-      const resolved = target === "README.md" ? "Home.md" : target
-
-      assert.ok(
-        published.has(resolved) || published.has(target),
-        `published ${name} links to ${match[1]}, which is not a published page`,
-      )
-    }
+    assert.ok(architecture.includes("`findRelayOnPort`"))
+    assert.ok(architecture.includes("`findRelayProcessIds`"))
   }
 })
 
@@ -294,91 +276,6 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
       )
     }
   }
-})
-
-// Why: wiki/ is browsed in the repository as well as published. GitHub resolves
-// ](EN-Internals.md) in the folder view but 404s on ](EN-Internals); the wiki
-// tab is the reverse. The publish workflow's sed is the only thing allowed to
-// drop the extension, so source must always carry it -- an extensionless page
-// link is broken for every reader of the repo.
-const publishedPageNames = (): Set<string> => {
-  const names = new Set<string>()
-
-  for (const page of wikiPages()) {
-    names.add(page.slice(0, -".md".length))
-  }
-
-  // README.md publishes as Home.md, so an author may reach for either name.
-  // Both name a page, and neither resolves in source without .md.
-  names.add("Home")
-
-  return names
-}
-
-// True when a target names a wiki page but omits the .md the repository view
-// needs. Pure, so the rule can be fixture-tested without touching the repo.
-const isExtensionlessPageLink = (
-  target: string,
-  pageNames: Set<string>,
-): boolean => {
-  if (target.startsWith("#")) return false
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(target)) return false
-
-  const file = target.split("#")[0] ?? ""
-
-  if (file === "" || file.endsWith(".md")) return false
-
-  return pageNames.has(file)
-}
-
-test("the extensionless-link rule accepts and rejects the right targets", () => {
-  const pageNames = new Set(["EN-Internals", "README", "Home"])
-
-  for (const rejected of ["EN-Internals", "README", "Home", "EN-Internals#top"]) {
-    assert.ok(
-      isExtensionlessPageLink(rejected, pageNames),
-      `${rejected} names a wiki page without .md and must be rejected`,
-    )
-  }
-
-  for (const accepted of [
-    "EN-Internals.md",
-    "EN-Internals.md#streaming",
-    "https://github.com/D0n9X1n/copilot-relay",
-    "https://example.com/EN-Internals",
-    "mailto:someone@example.com",
-    "#same-page-anchor",
-    "LICENSE",
-    "diagram.png",
-  ]) {
-    assert.ok(
-      !isExtensionlessPageLink(accepted, pageNames),
-      `${accepted} must be accepted by the extensionless-link rule`,
-    )
-  }
-})
-
-test("every wiki link to a page carries .md in source", () => {
-  const pageNames = publishedPageNames()
-  const offenders: string[] = []
-
-  for (const page of wikiPages()) {
-    const body = stripCode(readPage(page))
-
-    for (const match of body.matchAll(/\]\(([^)\s]+)\)/g)) {
-      const target = match[1] ?? ""
-
-      if (isExtensionlessPageLink(target, pageNames)) {
-        offenders.push(`wiki/${page} -> ${target}`)
-      }
-    }
-  }
-
-  assert.deepEqual(
-    offenders,
-    [],
-    `these links omit .md and break when browsing wiki/ in the repository:\n${offenders.join("\n")}`,
-  )
 })
 
 // Why: Copilot availability and effort tiers are account-specific. The local

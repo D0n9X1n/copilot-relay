@@ -11,16 +11,6 @@ import { mapOpenAIStopReasonToClaude } from "~/claude/utils"
 import type { ChatCompletionChunk } from "~/copilot/types"
 import { normalizeClaudeModelId } from "~/lib/models"
 
-function isToolBlockOpen(state: ClaudeStreamState): boolean {
-  if (!state.contentBlockOpen) {
-    return false
-  }
-
-  return Object.values(state.toolCalls).some(
-    (tc) => tc.claudeBlockIndex === state.contentBlockIndex,
-  )
-}
-
 const closeOpenContentBlock = (
   events: Array<ClaudeStreamEventData>,
   state: ClaudeStreamState,
@@ -116,7 +106,7 @@ export function translateChunkToClaudeEvents(
   if (delta.content) {
     // Text deltas cannot be appended to an open thinking or tool_use block, so
     // close whichever block is active before starting/resuming text output.
-    if (state.thinkingBlockOpen || isToolBlockOpen(state)) {
+    if (state.thinkingBlockOpen) {
       closeOpenContentBlock(events, state)
     }
 
@@ -142,55 +132,38 @@ export function translateChunkToClaudeEvents(
     })
   }
 
-  if (delta.tool_calls) {
-    for (const toolCall of delta.tool_calls) {
-      if (toolCall.id && toolCall.function?.name) {
-        // The first tool delta opens a Claude tool_use block; later argument
-        // deltas are routed back to this block by Copilot's tool call index.
-        if (state.contentBlockOpen) {
-          closeOpenContentBlock(events, state)
-        }
-
-        const toolName = toolNameMapper.toClaude(toolCall.function.name)
-        const claudeBlockIndex = state.contentBlockIndex
-        state.toolCalls[toolCall.index] = {
-          id: toolCall.id,
-          name: toolName,
-          claudeBlockIndex,
-        }
-
-        events.push({
-          type: "content_block_start",
-          index: claudeBlockIndex,
-          content_block: {
-            type: "tool_use",
-            id: toolCall.id,
-            name: toolName,
-            input: {},
-          },
-        })
-        state.contentBlockOpen = true
-      }
-
-      if (toolCall.function?.arguments) {
-        const toolCallInfo = state.toolCalls[toolCall.index]
-        if (toolCallInfo) {
-          events.push({
-            type: "content_block_delta",
-            index: toolCallInfo.claudeBlockIndex,
-            delta: {
-              type: "input_json_delta",
-              partial_json: toolCall.function.arguments,
-            },
-          })
-        }
-      }
+  for (const toolCall of delta.tool_calls ?? []) {
+    if (!Number.isSafeInteger(toolCall.index) || toolCall.index < 0) throw new Error("Invalid upstream tool index.")
+    const previous = state.toolCalls[toolCall.index]
+    if (!previous && (!toolCall.id || !toolCall.function?.name)) {
+      throw new Error("Upstream tool arguments arrived before their tool identity.")
     }
+    const current = previous ?? {
+      id: toolCall.id!, name: toolNameMapper.toClaude(toolCall.function!.name!), claudeBlockIndex: -1, arguments: "",
+    }
+    if (previous && ((toolCall.id && toolCall.id !== current.id)
+      || (toolCall.function?.name && toolNameMapper.toClaude(toolCall.function.name) !== current.name))) {
+      throw new Error("Upstream tool identity changed during streaming.")
+    }
+    current.arguments = (current.arguments ?? "") + (toolCall.function?.arguments ?? "")
+    state.toolCalls[toolCall.index] = current
   }
 
   if (choice.finish_reason) {
-    if (state.contentBlockOpen) {
-      closeOpenContentBlock(events, state)
+    closeOpenContentBlock(events, state)
+    if (choice.finish_reason === "tool_calls") {
+      for (const toolCall of Object.values(state.toolCalls)) {
+        const argumentsText = toolCall.arguments ?? ""
+        const input: unknown = JSON.parse(argumentsText)
+        if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Upstream tool input must be a JSON object.")
+        const index = state.contentBlockIndex++
+        toolCall.claudeBlockIndex = index
+        events.push(
+          { type: "content_block_start", index, content_block: { type: "tool_use", id: toolCall.id, name: toolCall.name, input: {} } },
+          { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: argumentsText } },
+          { type: "content_block_stop", index },
+        )
+      }
     }
 
     events.push(

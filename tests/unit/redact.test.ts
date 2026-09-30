@@ -211,6 +211,51 @@ test("redacts a url nested inside inspected object text", () => {
   assert.ok(scrubbed.includes(`'https://${host}[redacted]'`))
 })
 
+// inspect() turns separators inside nested strings into literal backslash
+// sequences. The second URL must not become an unchecked part of the first.
+for (const [name, separator] of [
+  ["LF", "\\n"],
+  ["CRLF", "\\r\\n"],
+  ["CR", "\\r"],
+  ["TAB", "\\t"],
+  ["U+2028", "\\u2028"],
+  ["U+2029", "\\u2029"],
+] as const) {
+  test(`redacts successive URL starts after an escaped ${name} separator`, () => {
+    const origin = `https://${uniqueHost("escaped-adjacent")}`
+    const publicUrl = "https://public.fixture.invalid/a"
+    registerSensitiveOrigin(`${origin}/ESCAPED_SECRET`)
+    const input = `${publicUrl}${separator}${origin}/ESCAPED_SECRET`
+    const expected = `${publicUrl}${separator}${origin}[redacted]`
+
+    assert.equal(scrubSensitiveUrls(input), expected)
+    assert.equal(scrubSensitiveUrls(expected), expected)
+    const unregistered = `${publicUrl}${separator}https://other.fixture.invalid/KEEP_ME`
+    assert.equal(scrubSensitiveUrls(unregistered), unregistered)
+  })
+}
+
+test("redacts an inner query URL while a registered outer URL hides its whole tail", () => {
+  const inner = `https://${uniqueHost("query-inner")}`
+  const outer = `https://${uniqueHost("query-outer")}`
+  registerSensitiveOrigin(`${inner}/INNER_SECRET`)
+  registerSensitiveOrigin(`${outer}/OUTER_SECRET`)
+
+  const prefix = "http://public.fixture.invalid/?next=https://middle.fixture.invalid/?target="
+  const input = `${prefix}${inner.toUpperCase()}/INNER_SECRET?token=!!!`
+  const expected = `${prefix}${inner}[redacted]`
+  assert.equal(scrubSensitiveUrls(input), expected)
+  assert.equal(scrubSensitiveUrls(expected), expected)
+  assert.equal(
+    scrubSensitiveUrls(`${outer}/OUTER_SECRET?next=${inner}/INNER_SECRET`),
+    `${outer}[redacted]`,
+  )
+  assert.equal(
+    scrubSensitiveUrls(`${outer}/?next=https://other.fixture.invalid/MUST_NOT_RESTORE`),
+    `${outer}[redacted]`,
+  )
+})
+
 // Why: these run on live log arguments and on status output. Mutating a caller's
 // string or leaking state between calls would corrupt what is being reported.
 test("is pure: repeated calls agree and inputs are unchanged", () => {

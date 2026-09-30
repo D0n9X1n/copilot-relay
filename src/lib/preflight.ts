@@ -1,12 +1,15 @@
 // Startup preflight: fail fast if configured models or think effort cannot be used upstream.
+import { randomUUID } from "node:crypto"
+
+import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
 import { getUpstreamModelIds } from "~/lib/models"
 import { loadCopilotModelCatalog } from "~/copilot/models"
-import type { ChatCompletionsPayload } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
+import { handleNativeMessages, shouldUseNativeMessages } from "~/copilot/native"
 
 const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   const catalog = await loadCopilotModelCatalog(config)
@@ -30,7 +33,7 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   }
 }
 
-const createProbePayload = (model: string): ChatCompletionsPayload => ({
+const createProbePayload = (model: string) => ({
   model,
   max_tokens: 16,
   stream: false,
@@ -40,7 +43,7 @@ const createProbePayload = (model: string): ChatCompletionsPayload => ({
       content: "Reply with OK only.",
     },
   ],
-})
+} satisfies ClaudeMessagesPayload)
 
 const validateModelRequest = async (
   config: ProxyConfig,
@@ -48,20 +51,25 @@ const validateModelRequest = async (
   thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   try {
-    // Probe through the same internal chat path as real requests so routing,
-    // token headers, think effort, and /responses fallback are validated together.
-    const response = await createChatCompletions(
-      config,
-      createProbePayload(model),
-      {
-        client: "generic",
-        requestedModel: model,
-        timeoutMs: config.upstreamTimeoutMs,
-      },
-    )
+    // Select the same transport as real requests, including native Messages.
+    if (shouldUseNativeMessages(config, model)) {
+      await handleNativeMessages(config, {
+        ...createProbePayload(model), output_config: { effort: thinkEffort },
+      }, { requestId: randomUUID() })
+    } else {
+      const response = await createChatCompletions(
+        config,
+        createProbePayload(model),
+        {
+          client: "generic",
+          requestedModel: model,
+          timeoutMs: config.upstreamTimeoutMs,
+        },
+      )
 
-    if (typeof response !== "object" || response === null || !("choices" in response)) {
-      throw new Error(`Preflight request for ${model} unexpectedly streamed`)
+      if (typeof response !== "object" || response === null || !("choices" in response)) {
+        throw new Error(`Preflight request for ${model} unexpectedly streamed`)
+      }
     }
 
     log.info(`Preflight OK: model=${model} think_effort=${thinkEffort}`)

@@ -114,7 +114,14 @@ export interface ClaudeAssistantMessage {
   content: string | Array<ClaudeAssistantContentBlock>
 }
 
-export type ClaudeMessage = ClaudeUserMessage | ClaudeAssistantMessage
+export interface ClaudeSystemMessage {
+  role: "system"
+  content: string | Array<ClaudeTextBlock>
+  output_config?: { effort: ReasoningEffort }
+  clear_at?: "next_user_message"
+}
+
+export type ClaudeMessage = ClaudeUserMessage | ClaudeAssistantMessage | ClaudeSystemMessage
 
 export interface ClaudeTool {
   name: string
@@ -242,6 +249,7 @@ export interface ClaudeStreamState {
       id: string
       name: string
       claudeBlockIndex: number
+      arguments?: string
     }
   }
 }

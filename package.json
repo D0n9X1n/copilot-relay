@@ -37,8 +37,8 @@
     "prepack": "npm run build",
     "start": "node dist/main.js",
     "test": "npm run test:unit && npm run test:integration",
-    "test:integration": "node --import tsx --test \"tests/integration/**/*.test.ts\"",
-    "test:unit": "node --import tsx --test \"tests/unit/**/*.test.ts\"",
+    "test:integration": "node --import ./scripts/test-bootstrap.mjs --import tsx --test \"tests/integration/**/*.test.ts\"",
+    "test:unit": "node --import ./scripts/test-bootstrap.mjs --import tsx --test \"tests/unit/**/*.test.ts\"",
     "typecheck": "tsc"
   },
   "dependencies": {

@@ -1,7 +1,5 @@
 // Optional writer for Claude Code settings so it points at the local proxy.
-import fs from "node:fs/promises"
-import path from "node:path"
-
+import { readFileSnapshot, writeFileSnapshot } from "~/lib/atomic-file"
 import { normalizeClaudeModelId, type ModelTokenLimits } from "~/lib/models"
 
 interface ApplyClaudeConfigInput {
@@ -66,17 +64,9 @@ export async function applyClaudeConfig(
 ): Promise<ApplyClaudeResult> {
   const { configPath, baseUrl, gptModel } = input
 
-  let raw = ""
-  let created = false
-  try {
-    raw = await fs.readFile(configPath, "utf8")
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      created = true
-    } else {
-      throw error
-    }
-  }
+  const snapshot = await readFileSnapshot(configPath)
+  const raw = snapshot.raw ?? ""
+  const created = snapshot.raw === null
 
   let parsed: Record<string, unknown> = {}
   if (!created && raw.trim().length === 0) {
@@ -147,7 +137,6 @@ export async function applyClaudeConfig(
     return { configPath, changed: false, created: false, previousBaseUrl }
   }
 
-  await fs.mkdir(path.dirname(configPath), { recursive: true })
-  await fs.writeFile(configPath, serialized)
+  await writeFileSnapshot(snapshot, serialized)
   return { configPath, changed: true, created, previousBaseUrl }
 }

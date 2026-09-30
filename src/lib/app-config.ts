@@ -9,6 +9,12 @@ import {
   isConfiguredReasoningEffort,
   type ConfiguredReasoningEffort,
 } from "~/lib/models"
+import {
+  FileConflictError,
+  readFileSnapshot,
+  writeFileSnapshot,
+  type FileSnapshot,
+} from "~/lib/atomic-file"
 import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
@@ -26,6 +32,7 @@ export interface AppConfig {
   thinkEffort: ConfiguredReasoningEffort
   upstreamTimeoutSeconds: number
   webSearchBackend?: string
+  claudeUpstreamApi?: "auto" | "messages" | "chat-completions"
 }
 
 /**
@@ -48,6 +55,7 @@ const defaultConfig: AppConfig = {
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,
   webSearchBackend: undefined,
+  claudeUpstreamApi: "chat-completions",
 }
 
 export const isLogLevelName = (value: unknown): value is LogLevelName =>
@@ -75,37 +83,46 @@ export const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
   return normalized
 }
 
+const normalizeClaudeUpstreamApi = (value: unknown): AppConfig["claudeUpstreamApi"] => {
+  if (value === undefined) return undefined
+  if (value === "auto" || value === "messages" || value === "chat-completions") return value
+  throw new Error("Invalid claudeUpstreamApi: expected auto, messages, or chat-completions")
+}
+
 const normalizeBoolean = (value: unknown): boolean | undefined => {
-  if (typeof value === "boolean") {
-    return value
+  if (value === undefined) return undefined
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    if (value.toLowerCase() === "true") return true
+    if (value.toLowerCase() === "false") return false
   }
-  if (typeof value !== "string") {
-    return undefined
-  }
-  const normalized = value.toLowerCase()
-  if (normalized === "true") return true
-  if (normalized === "false") return false
-  return undefined
+  throw new Error("Invalid claudeSetup: expected true or false")
 }
 
-const normalizePort = (value: unknown): number | undefined => {
-  const port =
-    typeof value === "number" ? value
-    : typeof value === "string" ? Number.parseInt(value, 10)
-    : Number.NaN
-  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined
-}
-
-const normalizePositiveInteger = (value: unknown): number | undefined => {
-  const number =
-    typeof value === "number" ? value
-    : typeof value === "string" ? Number.parseInt(value, 10)
-    : Number.NaN
-  return Number.isInteger(number) && number > 0 ? number : undefined
+const normalizeInteger = (
+  value: unknown,
+  key: string,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number | undefined => {
+  if (value === undefined) return undefined
+  const number = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
+  if (typeof number !== "number" || !Number.isSafeInteger(number)
+    || number < minimum || number > maximum) {
+    throw new Error(`Invalid ${key}: expected an integer from ${minimum} to ${maximum}`)
+  }
+  return number
 }
 
 const normalizeString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined
+
+const normalizeRequiredString = (value: unknown, key: string): string | undefined => {
+  if (value === undefined) return undefined
+  const normalized = normalizeString(value)
+  if (normalized === undefined) throw new Error(`Invalid ${key}: expected a non-empty string`)
+  return normalized
+}
 
 /**
  * A conventional http(s) URL: scheme followed by a literal "//" authority.
@@ -250,155 +267,107 @@ export const normalizeUpstreamTimeoutSeconds = (
   return timeout
 }
 
-const readRawConfig = async (): Promise<Record<string, unknown>> => {
-  try {
-    const content = await fs.readFile(paths.configPath, "utf8")
-    return parseConfigYaml(content)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      for (const legacyPath of paths.legacyConfigPaths) {
-        try {
-          const content = await fs.readFile(legacyPath, "utf8")
-          return parseConfigYaml(content)
-        } catch (legacyError) {
-          if ((legacyError as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw legacyError
-          }
-        }
-      }
-      return readDefaultConfigTemplate()
-    }
-    throw error
+const readStartupDocument = async (snapshot: FileSnapshot): Promise<string> => {
+  if (snapshot.raw !== null) return snapshot.raw
+  for (const legacyPath of paths.legacyConfigPaths) {
+    const legacy = await readFileSnapshot(legacyPath)
+    if (legacy.raw !== null) return legacy.raw
   }
+  return readDefaultConfigTemplate()
 }
 
-const readDefaultConfigTemplate = async (): Promise<Record<string, unknown>> => {
+const readDefaultConfigTemplate = async (): Promise<string> => {
   let currentDir = dirname(fileURLToPath(import.meta.url))
-
-  // Bundled code may run from src/ during development or from dist/ after
-  // packaging, so walk upward until the package-level config template is found.
+  // Both src/ and a packaged dist/ locate the package-level template this way.
   while (true) {
     try {
-      const content = await fs.readFile(
-        resolve(currentDir, "config.default.yaml"),
-        "utf8",
-      )
-      return parseConfigYaml(content)
-    } catch {
+      return await fs.readFile(resolve(currentDir, "config.default.yaml"), "utf8")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       const parentDir = dirname(currentDir)
-      if (parentDir === currentDir) {
-        return {}
-      }
+      if (parentDir === currentDir) return ""
       currentDir = parentDir
     }
   }
 }
 
-const unquoteYamlScalar = (value: string): string => {
+const configAliases: Record<string, keyof AppConfig> = {
+  claude_setup: "claudeSetup",
+  copilot_base_url: "copilotBaseUrl",
+  gpt_model: "gptModel",
+  log_level: "logLevel",
+  log_retention_days: "logRetentionDays",
+  opus_model: "opusModel",
+  think_effort: "thinkEffort",
+  upstream_timeout_seconds: "upstreamTimeoutSeconds",
+  web_search_backend: "webSearchBackend",
+  claude_upstream_api: "claudeUpstreamApi",
+}
+const configKeys = Object.keys(defaultConfig) as Array<keyof AppConfig>
+
+// This is deliberately a flat scalar subset, not a permissive partial YAML
+// parser. Quoted hashes stay literal; only whitespace-delimited hashes comment.
+const parseYamlScalar = (value: string): string => {
   const trimmed = value.trim()
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1)
+  if (trimmed.startsWith("'")) {
+    const match = /^'((?:[^']|'')*)'(?:[ \t]+#.*)?[ \t]*$/.exec(trimmed)
+    if (match) return match[1].replaceAll("''", "'")
+  } else if (trimmed.startsWith('"')) {
+    const match = /^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?[ \t]*$/.exec(trimmed)
+    if (match) {
+      try { return JSON.parse(match[1]) as string } catch { /* invalid escape */ }
+    }
+  } else {
+    const plain = trimmed.replace(/(^|[ \t]+)#.*$/, "").trim()
+    if (!/^[\[\]{},&*!>|%@`]/.test(plain) && !/:[ \t]/.test(plain)) return plain
   }
-  return trimmed
+  throw new Error("Invalid config scalar: unsupported YAML syntax")
 }
 
 const parseConfigYaml = (content: string): Record<string, unknown> => {
   const config: Record<string, unknown> = {}
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue
-    }
-
-    const match = trimmed.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/)
+  const seen = new Set<string>()
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue
+    const match = /^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)$/.exec(line)
     if (!match) {
-      throw new Error(`Invalid config line in ${paths.configPath}: ${line}`)
+      // Do not echo an invalid line: config values can contain private data.
+      throw new Error(`Invalid config syntax on line ${index + 1}: expected a flat scalar key`)
     }
-
     const [, key, value] = match
-    // The runtime config intentionally supports only a flat key/value YAML
-    // subset. That keeps startup dependency-free and makes bad edits fail
-    // predictably instead of being partially interpreted.
-    switch (key) {
-      case "claudeSetup":
-      case "claude_setup": {
-        config.claudeSetup = unquoteYamlScalar(value)
-        break
-      }
-      case "copilotBaseUrl":
-      case "copilot_base_url": {
-        config.copilotBaseUrl = unquoteYamlScalar(value)
-        break
-      }
-      case "host": {
-        config.host = unquoteYamlScalar(value)
-        break
-      }
-      case "gptModel":
-      case "gpt_model": {
-        config.gptModel = unquoteYamlScalar(value)
-        break
-      }
-      case "logLevel":
-      case "log_level": {
-        config.logLevel = unquoteYamlScalar(value)
-        break
-      }
-      case "logRetentionDays":
-      case "log_retention_days": {
-        config.logRetentionDays = unquoteYamlScalar(value)
-        break
-      }
-      case "opusModel":
-      case "opus_model": {
-        config.opusModel = unquoteYamlScalar(value)
-        break
-      }
-      case "port": {
-        config.port = unquoteYamlScalar(value)
-        break
-      }
-      case "thinkEffort":
-      case "think_effort": {
-        config.thinkEffort = unquoteYamlScalar(value)
-        break
-      }
-      case "upstreamTimeoutSeconds":
-      case "upstream_timeout_seconds": {
-        config.upstreamTimeoutSeconds = unquoteYamlScalar(value)
-        break
-      }
-      case "webSearchBackend":
-      case "web_search_backend": {
-        config.webSearchBackend = unquoteYamlScalar(value)
-        break
-      }
-      default: {
-        break
-      }
-    }
+    const canonical = Object.hasOwn(configAliases, key) ? configAliases[key] : key
+    if (seen.has(canonical)) throw new Error(`Duplicate config key on line ${index + 1}`)
+    seen.add(canonical)
+    const scalar = parseYamlScalar(value)
+    if (Object.hasOwn(defaultConfig, canonical)) config[canonical] = scalar
   }
   return config
 }
 
-const writeConfig = async (config: AppConfig): Promise<void> => {
-  await fs.mkdir(paths.appDir, { recursive: true })
-  const content = serializeConfig(config)
-  const existing = await fs.readFile(paths.configPath, "utf8").catch(() => "")
-  if (existing === content) {
-    return
-  }
-  await fs.writeFile(paths.configPath, content, { mode: 0o600 })
+const materializeMissingKeys = (
+  document: string,
+  raw: Record<string, unknown>,
+  config: AppConfig,
+): string => {
+  const missing = new Set(configKeys.filter((key) => !Object.hasOwn(raw, key)))
+  if (missing.size === 0) return document
+  // Reuse the generated guidance only for absent keys. Never serialize an
+  // explicitly supplied value over its spelling, comments, or unknown neighbors.
+  const additions = serializeConfig(config).split("\n\n").filter((section) => {
+    const key = /^([A-Za-z][A-Za-z0-9]*):/m.exec(section)?.[1]
+    return key !== undefined && missing.has(key as keyof AppConfig)
+  }).join("\n\n").trimEnd()
+  const newline = document.includes("\r\n") ? "\r\n" : "\n"
+  const separator = document && !document.endsWith("\n") ? newline : ""
+  return document + separator + newline + additions.replaceAll("\n", newline) + newline
 }
 
 const serializeConfig = (config: AppConfig): string =>
   [
     "# copilot-relay configuration",
     "#",
-    "# This file is hot-reloaded while copilot-relay is running.",
+    "# Valid complete edits hot-reload without rewriting this file.",
+    "# host, port, and claudeSetup require restart.",
     "",
     "# Local host for the Claude Code-compatible HTTP server.",
     `host: ${config.host}`,
@@ -414,12 +383,11 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# Log verbosity:",
     "#   error - startup/preflight/request failures only",
-    "#   info  - error logs plus startup/preflight status, model/effort summaries,",
-    "#           and local HTTP status codes",
-    "#   debug - info logs plus detailed Copilot timings and request payloads",
+    "#   info  - errors plus status, model/effort and semantic completion summaries",
+    "#   debug - info plus full private bodies in ~/.copilot-relay/captures; may contain secrets",
     `logLevel: ${config.logLevel}`,
     "",
-    "# Number of days to keep files in ~/.copilot-relay/logs.",
+    "# Number of days to keep relay logs and settled debug captures.",
     `logRetentionDays: ${config.logRetentionDays}`,
     "",
     `# Fallback effort when the request omits it: ${configurableReasoningEfforts.join(", ")}.`,
@@ -431,6 +399,9 @@ const serializeConfig = (config: AppConfig): string =>
     "# Copilot model used for bridge-managed Claude WebSearch. Empty uses gptModel.",
     `webSearchBackend: ${config.webSearchBackend ?? ""}`,
     "",
+    "# Claude upstream protocol: auto, messages, or chat-completions.",
+    `claudeUpstreamApi: ${config.claudeUpstreamApi ?? "chat-completions"}`,
+    "",
     "# Model routing: requests containing \"opus\" use opusModel; all others use gptModel.",
     "",
     "# Upstream Copilot model used for non-Opus requests.",
@@ -441,83 +412,73 @@ const serializeConfig = (config: AppConfig): string =>
     "",
   ].join("\n")
 
+const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
+  claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
+  copilotBaseUrl: normalizeCopilotBaseUrl(
+    normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
+  ) ?? defaultConfig.copilotBaseUrl,
+  gptModel: normalizeRequiredString(raw.gptModel, "gptModel") ?? defaultConfig.gptModel,
+  host: normalizeRequiredString(raw.host, "host") ?? defaultConfig.host,
+  logLevel: normalizeLogLevel(raw.logLevel) ?? defaultConfig.logLevel,
+  logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
+    ?? defaultConfig.logRetentionDays,
+  opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
+  port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
+  thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
+  upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
+    ?? defaultConfig.upstreamTimeoutSeconds,
+  webSearchBackend: normalizeString(raw.webSearchBackend),
+  claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
+})
+
 export async function readAppConfig(): Promise<AppConfig> {
-  const raw = await readRawConfig()
-  const claudeSetup = normalizeBoolean(raw.claudeSetup)
-  const host = normalizeString(raw.host)
-  const logLevel = normalizeLogLevel(raw.logLevel)
-  const logRetentionDays = normalizePositiveInteger(raw.logRetentionDays)
-  const port = normalizePort(raw.port)
-  const thinkEffort = normalizeThinkEffort(raw.thinkEffort)
-  const upstreamTimeoutSeconds = normalizeUpstreamTimeoutSeconds(
-    raw.upstreamTimeoutSeconds,
-  )
-
-  // Every field follows the same rule: whatever the user's config holds wins,
-  // and a shipped default applies only where the key is absent.
-  const config: AppConfig = {
-    claudeSetup: claudeSetup ?? defaultConfig.claudeSetup,
-    copilotBaseUrl:
-      normalizeCopilotBaseUrl(raw.copilotBaseUrl) ?? defaultConfig.copilotBaseUrl,
-    gptModel: normalizeString(raw.gptModel) ?? defaultConfig.gptModel,
-    host: host ?? defaultConfig.host,
-    logLevel: logLevel ?? defaultConfig.logLevel,
-    logRetentionDays: logRetentionDays ?? defaultConfig.logRetentionDays,
-    opusModel: normalizeString(raw.opusModel) ?? defaultConfig.opusModel,
-    port: port ?? defaultConfig.port,
-    thinkEffort: thinkEffort ?? defaultConfig.thinkEffort,
-    upstreamTimeoutSeconds:
-      upstreamTimeoutSeconds ?? defaultConfig.upstreamTimeoutSeconds,
-    webSearchBackend: normalizeString(raw.webSearchBackend),
-  }
-
-  await writeConfig(config)
+  const snapshot = await readFileSnapshot(paths.configPath)
+  const document = await readStartupDocument(snapshot)
+  const raw = parseConfigYaml(document)
+  const config = resolveConfig(raw)
+  const content = document ? materializeMissingKeys(document, raw, config) : serializeConfig(config)
+  if (content !== snapshot.raw) await writeFileSnapshot(snapshot, content)
   return config
 }
 
-const getConfigMtime = async (): Promise<number> => {
-  try {
-    return (await fs.stat(paths.configPath)).mtimeMs
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0
-    }
-    throw error
-  }
-}
+const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>
+  left.resolvedPath === right.resolvedPath && left.raw === right.raw && left.mode === right.mode
+  && JSON.stringify(left.identity) === JSON.stringify(right.identity)
 
 export const watchAppConfig = (
   onReload: (config: AppConfig) => void,
 ): ReturnType<typeof setInterval> => {
-  let lastMtime = 0
-
+  let lastSnapshot: FileSnapshot | undefined
+  let reloading = false
   const timer = setInterval(async () => {
+    if (reloading) return
+    reloading = true
     try {
-      const nextMtime = await getConfigMtime()
-      if (nextMtime === lastMtime) {
-        return
+      const snapshot = await readFileSnapshot(paths.configPath)
+      if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) return
+      if (snapshot.raw === null) throw new Error("Config file is missing")
+      const raw = parseConfigYaml(snapshot.raw)
+      // Removing even an optional-but-materialized field during an editor save
+      // is not permission to restore its default or change the live backend.
+      if (configKeys.some((key) => !Object.hasOwn(raw, key))) {
+        throw new Error("Config reload requires every materialized key")
       }
-
-      lastMtime = nextMtime
-      onReload(await readAppConfig())
+      const config = resolveConfig(raw)
+      const current = await readFileSnapshot(paths.configPath)
+      if (!sameSnapshot(snapshot, current)) throw new FileConflictError()
+      onReload(config)
+      // Failed verification or application must remain retryable without a new edit.
+      lastSnapshot = snapshot
     } catch (error) {
-      // Config editors can briefly write invalid partial files. Keep the last
-      // good runtime config rather than degrading live requests mid-edit.
       if (error instanceof InvalidThinkEffortError) {
         log.error(`${error.message} Keeping the previous runtime settings.`)
       } else {
         log.error(`Could not reload config. Check ${paths.configPath} for invalid values or file errors.`)
       }
+    } finally {
+      reloading = false
     }
   }, 1000)
-
-  if (typeof timer.unref === "function") {
-    timer.unref()
-  }
-
-  void getConfigMtime().then((mtime) => {
-    lastMtime = mtime
-  })
-
+  if (typeof timer.unref === "function") timer.unref()
   return timer
 }

@@ -2,8 +2,8 @@
 #
 # This file is copied to ~/.copilot-relay/config.yaml on first start.
 # Edit the user config file, not this template, for local changes.
-# Most values hot-reload while the service is running. host and port still
-# require restart because the listening socket is already bound.
+# Valid complete edits hot-reload without rewriting this file.
+# host, port, and claudeSetup require restart.
 #
 # Values here apply to a fresh install only. copilot-relay writes the resolved
 # config back to disk, so once a key exists in your config.yaml it is yours:
@@ -26,13 +26,12 @@ claudeSetup: true
 
 # Log verbosity:
 #   error - startup/preflight/request failures only
-#   info  - error logs plus startup/preflight status, model/effort summaries,
-#           and local HTTP status codes
-#   debug - info logs plus detailed Copilot timings and request payloads
+#   info  - errors plus status, model/effort and semantic completion summaries
+#   debug - info plus full private bodies in ~/.copilot-relay/captures; may contain secrets
 # Any other value is invalid and stops startup.
 logLevel: info
 
-# Number of days to keep files in ~/.copilot-relay/logs.
+# Number of days to keep relay logs and settled debug captures.
 # Counted in local calendar days: 3 keeps today plus the previous two days.
 # The active log file is copilot-relay.<local-date>.log and rotates at local
 # midnight, which is what makes this setting take effect at all.
@@ -51,6 +50,11 @@ upstreamTimeoutSeconds: 180
 # Copilot model used for bridge-managed Claude WebSearch.
 # Leave empty to use gptModel.
 webSearchBackend:
+
+# Claude upstream protocol: auto selects advertised native Messages support.
+# Keep the proven chat route until native cache non-regression is measured.
+# Explicit alternatives: auto, messages.
+claudeUpstreamApi: chat-completions
 
 # Model routing: requests containing "opus" use opusModel; all others use gptModel.
 #

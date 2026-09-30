@@ -6,11 +6,21 @@
 ~/.copilot-relay/config.yaml
 ```
 
-第一次启动时会从包内模板生成。
+第一次启动时会从包内模板生成。此后加载时，relay 会保留已有文本、注释、键的顺序、
+未知的扁平标量键及显式值，只为缺失的键追加默认值。写入基于检查过的文件快照
+（snapshot），原子替换解析后的目标，因此符号链接本身不被替换，已检测到的并发编辑
+不会被覆盖。升级不会把已保存的值迁移为新默认值。
 
-想看补齐默认值之后的全部配置项、以及其中哪些需要重启才生效，直接运行
-`copilot-relay status`，它会把解析后的配置打印出来，不用再回头翻文件。注意那是**磁盘上**
-的值：如果守护进程在你上次编辑之前就已经在跑了，它未必已经读到这些值。
+仅支持扁平标量 YAML。已知键的无效值、重复键（包括别名）及不受支持的语法会在写回前
+报错，文件保留原样供你修正。`webSearchBackend` 留空合法，不代表应清空其他设置。
+热重载是**只读（read-only）**的，只接受稳定、有效且包含全部已落盘键的文档；编辑器
+保存中的片段或空文件不会替换上一次有效的运行时设置。请补回缺失键，不要靠删除键来
+恢复默认值。写入机制的保证见[内部实现](ZH-Internals.md)。
+
+要看补齐默认值后的全部配置项及哪些需要重启，运行 `copilot-relay status`。这些是
+**磁盘上**的值，不能证明 daemon 已经加载。配置损坏时，`status` 输出不回显敏感内容的
+诊断并以 `2` 退出；`stop` 仍可根据已验证的进程身份尝试恢复。见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 ## 示例
 
@@ -24,6 +34,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
+claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
@@ -36,13 +47,39 @@ opusModel: claude-opus-5.5
 | `port` | 本地端口，默认 `4142`。 |
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
-| `logLevel` | 只能是 `error`、`info`、`debug`。其他值会导致启动失败。 |
-| `logRetentionDays` | `~/.copilot-relay/logs/` 下普通 `.log` 文件保留天数。 |
+| `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
+| `logRetentionDays` | 普通 relay 日志与 debug 捕获保留的本地日历天数，包含今天；正整数，默认 `3`。活动/未知捕获受到保护，清理规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。 |
 | `thinkEffort` | 请求未指定时使用的默认推理强度：`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
+| `claudeUpstreamApi` | Claude 上游协议：`chat-completions`（默认）、`auto` 或 `messages`。不改变非 Claude 模型的路由。 |
 | `gptModel` | 非 Opus 请求使用的上游模型。 |
 | `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
+
+## 选择 Claude 的上游协议
+
+先按原规则选择模型（`opusModel` 或 `gptModel`）。如果选中的上游 ID 以 `claude-`
+开头，再由 `claudeUpstreamApi` 决定协议：
+
+| 值 | 行为 |
+| --- | --- |
+| `chat-completions` | 默认值。保留经翻译的 Copilot `/chat/completions` 路径。 |
+| `auto` | 仅在当前上游的缓存模型目录公布了 `/v1/messages` 时使用该原生接口，否则走翻译路径。 |
+| `messages` | 强制 Claude 模型走原生 `/v1/messages`，即使目录未公布支持；上游拒绝仍作为错误返回。 |
+
+所有模式下，非 Claude 模型的 chat/Responses 选择规则保持不变。原生传输保留带签名的
+thinking、缓存标记、原位置的 system 角色与控制字段；不会为了绕过拒答或错误而悄悄改走
+另一个 API。发布默认值仍为 `chat-completions`。2026-09-30 的小规模匹配合成试验在
+`low` effort 下测得热回合按 token 加权的缓存读取率：chat 99.8384%，native 99.7980%，
+相差约 0.04 个百分点。第二次为平衡执行顺序而让 native 先执行的试验，在其冷回合拒答后
+停止；完成的那次试验不能证明广泛无退化或计费成本等价。这些是隔离检查，不是对当前
+生产 relay 的验证，端口 4142 未受影响。方法与用量见[内部实现](ZH-Internals.md)。
+仍未证明历史拒答是推理内容扁平化导致的。
+
+原生 bridge-managed WebSearch 只支持自动选择。声明 WebSearch 时，`any` 或显式强制
+搜索在检索/SSE 之前返回 HTTP 400 JSON，每回合最多一次搜索。确定性的 relay 标记让续接时能够还原原始、带签名的上游历史。
+旧 chat bridge 历史与 native bridge 历史不能透明互换：已有搜索会话应继续使用原路由，
+切换后开始新会话。协议边界而不只是模型可用性，详见[内部实现](ZH-Internals.md)。
 
 ## 选择模型和 thinking effort
 
@@ -120,8 +157,9 @@ Messages handler、翻译、上游客户端、token 刷新和响应翻译。每�
 
 数字选项只接受不超过 2,147,483 的正整数；所有探测选项都需要 `--deep`。即使配置禁用
 上游超时，深度测试仍有自己的期限。缺少接口元数据会标为未验证，而非视为支持证据。
-模型匹配只移除 relay 已知的 GPT context 后缀；报告为另一模型时不能通过。认证可刷新
-token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
+模型匹配会移除 relay 已知的 GPT context 后缀。仅在通过原生 `/v1/messages` 探测目录
+ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus-5-5`。配置和
+`--model` 仍使用目录拼写，其他不匹配仍失败。认证可刷新 token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
 探测，并把后续模型标为未测试。仅这些诊断调用会抑制共享流程的原始日志，正常 relay
 日志不受影响。
 
@@ -141,6 +179,11 @@ token，现有的有界重试可能产生额外调用，但不会新增逐模型
 `thinking.budget_tokens` 不是 effort 档位，不会被换算成某个档位。格式不正确的显式
 effort 返回 `400`，不会静默改用默认值。若所选上游模型不支持该 effort，仍会返回上游
 错误；relay 不会替换成其他档位。
+
+翻译路径仅在逐消息 system `output_config` 的唯一键为 `effort`、取值属于五种配置档位，
+且与当前请求解析后的 effort 完全相同时接受它。System 文本和消息顺序保留；这个冗余
+标记不能改变 effort。不同的历史档位、额外/未知键或 `clear_at` 都在上游操作/SSE 之前
+返回 HTTP 400 JSON。见[内部实现](ZH-Internals.md)。
 
 选定的 effort 在 chat/Responses、流式/JSON，以及 WebSearch 的决策、检索和最终回答
 调用中保持一致。配置热重载只影响之后的请求，不会改变进行中请求的后续调用。
@@ -180,9 +223,15 @@ Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not 
 relay 不会为该 Opus ID 添加 `[1m]` 后缀。WebSearch 检索仍使用 `webSearchBackend`
 或 `gptModel`。
 
-**上游不支持强制工具选择：** 该模型的 `tool_choice` 类型 `tool` 和 `any` 返回
-HTTP 400，自动工具选择可以使用。Relay 会保留错误，不会把必须执行的工具调用
-静默改成 `auto`。这是请求级能力限制，不是认证失败。
+**2026-09-23 的验证使用翻译路径：** 该模型的 `tool_choice` 类型 `tool` 和 `any`
+返回 HTTP 400，自动工具选择可用。该观察不是对原生 API 能力的测量。Relay 会保留
+上游错误，不会把必须执行的工具调用静默改成 `auto`。原生 bridge 搜索的限制见上文。
+这些是请求级能力限制，不能据此断定认证失败。
+
+2026-09-30 的隔离检查使用真实 Claude Code 2.1.285，在原生路径上完成了两个模型回合的
+`Read` → 工具结果 → `OK`。最初两次请求因不支持 `safeguards` 收到 HTTP 400，随后
+Claude Code 自行降低了请求能力。Relay 没有剥离该字段或绕过安全控制。这只是有限的
+兼容性证据，不是当前生产验证；缓存计数及重放证据见[内部实现](ZH-Internals.md)。
 
 ### 更新 relay 配置
 
@@ -240,6 +289,11 @@ context 计数，不能扩大上游容量。2026-09-09 查询的实时目录公�
 这些值来自模型发现，并非运行时代码写死的限制，也不是通过生产环境中的百万 token
 请求测得。应在总窗口内为输出（包括推理）预留空间。Relay 不会截短输入，也不会扩大
 客户端明确指定的较小输出预算。Prompt 是否真正符合限制，仍由上游判定。
+本地 `/v1/messages/count_tokens` 仅供预算参考，不是计费。文本使用可用 tokenizer，
+每张图片固定计入 4096-token 余量，不对其 base64/URL 数据做 token 编码、解码或拉取。
+原生 usage 分别报告非缓存输入、缓存读取和缓存写入，单独的原生 `input_tokens` 不是
+完整 prompt 大小。实测计数及分母定义见[内部实现](ZH-Internals.md)。
+
 流式和完整 JSON 响应都可以使用模型的完整输出上限。
 Opus 5.5 公布的原生非流式输出上限为 16,000 token；超过时 relay 会向上游请求 SSE，
 再为 JSON 调用方缓冲完整结果。1M prompt 上限不代表 1M 输入加 128K 输出能够一起
@@ -326,6 +380,7 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 - `upstreamTimeoutSeconds`
 - `copilotBaseUrl`
 - `webSearchBackend`
+- `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
 
@@ -338,7 +393,11 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 `host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
 host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。
 
-改 `gptModel` 会立刻改变上游路由，但不会重写 `~/.claude/settings.json` 中已有的模型或
+每个通过接入检查的请求都会在读取正文前快照路由、协议模式、超时、搜索后端、effort
+默认值及目录视图。重载只影响新请求，不改变活动回合的重试或后续调用。凭据是例外：
+每次尝试都会读取实时刷新的 token。
+
+改 `gptModel` 会改变新请求的上游路由，但不会重写 `~/.claude/settings.json` 中已有的模型或
 token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。
 
 ## Claude Code 配置
@@ -365,6 +424,11 @@ CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预�
 超过 Opus 的上限。若网关没有提供有效的限制元数据，启动日志会说明限制不可用，
 并保留客户端的显式预算，而不是猜测容量。`claudeSetup: false` 时，请自行配置这些
 客户端变量。
+设置写入同样使用快照及原子替换；不会覆盖格式错误或已经存在的空设置文件，其他无关
+值也会保留。
+
+本地占位 token **不是网络认证**。Host/Origin 与 JSON content-type 检查减少的是浏览器
+来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，见[架构](ZH-Architecture.md)。
 
 ## 运行时文件
 
@@ -375,6 +439,7 @@ CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预�
   copilot_token.json
   logs/copilot-relay.2026-07-25.log   <- 当前文件，本地零点轮转
   logs/copilot-relay.2026-07-24.log
+  captures/<local-date>/<request-id>/   <- 仅 debug；私有完整正文
 ```
 
 `github_token` 是登录来源。`copilot_token.json` 是短期 Copilot bearer token

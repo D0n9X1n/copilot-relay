@@ -8,7 +8,8 @@ interface PackageJson {
   version?: string
 }
 
-const packageName = "copilot-relay"
+// GitHub Packages uses an owner scope; runtime bytes are otherwise identical.
+const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?copilot-relay$/
 
 const readPackageVersion = (): string => {
   let currentDir = dirname(fileURLToPath(import.meta.url))
@@ -21,7 +22,8 @@ const readPackageVersion = (): string => {
       ) as PackageJson
 
       if (
-        packageJson.name === packageName
+        typeof packageJson.name === "string"
+        && packageName.test(packageJson.name)
         && typeof packageJson.version === "string"
       ) {
         return packageJson.version

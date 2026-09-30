@@ -13,7 +13,8 @@ const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { opus55Limits } = await import("../fixtures/model-limits")
 
-test.after(async () => { await fs.rm(home, { recursive: true, force: true }) })
+const { flushLogs } = await import("../../src/lib/log")
+test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
 test.afterEach(() => { delete runtimeState.thinkEffort })
 
 async function fixture(t: import("node:test").TestContext) {

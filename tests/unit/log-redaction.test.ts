@@ -14,7 +14,7 @@ process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
 const consola = (await import("consola")).default
-const { log, setLogLevel, withoutLogging } = await import("../../src/lib/log")
+const { log, setLogLevel, withoutLogging, flushLogs, registerLogSecret } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { getLogPath, paths } = await import("../../src/lib/paths")
 
@@ -51,6 +51,7 @@ const readActiveLog = async (): Promise<string> => {
 }
 
 test.beforeEach(async () => {
+  await flushLogs()
   await fs.rm(paths.logsDir, { force: true, recursive: true })
   consoleOutput.length = 0
   setLogLevel("debug")
@@ -192,6 +193,168 @@ test("keeps one entry on one physical line while redacting", async () => {
   assert.ok(!lines[0].includes("LINE_SECRET"))
   assert.ok(lines[0].includes("[redacted]"))
   assert.match(lines[0], /status: 400/)
+})
+
+// Raw line separators delimit adjacent URLs. Escaping first turns them into
+// path characters on the public URL and can hide the sensitive origin from the
+// scrubber. Both sinks must receive the same redacted, then single-line value.
+for (const [name, separator, escaped] of [
+  ["LF", "\n", "\\n"],
+  ["CRLF", "\r\n", "\\r\\n"],
+  ["CR", "\r", "\\r"],
+  ["U+2028", String.fromCodePoint(0x2028), "\\u2028"],
+  ["U+2029", String.fromCodePoint(0x2029), "\\u2029"],
+] as const) {
+  for (const kind of ["string", "Error stack"] as const) {
+    test(`redacts adjacent ${name} URLs from ${kind} before escaping both sinks`, async () => {
+      const origin = `https://${uniqueHost("adjacent")}`
+      const publicUrl = "https://public.fixture.invalid/"
+      const secretUrl = `${origin}/PRIVATE_SENTINEL`
+      registerSensitiveOrigin(secretUrl)
+      const text = `${publicUrl}${separator}${secretUrl}`
+      let value: string | Error = text
+      if (kind === "Error stack") {
+        value = new Error("adjacent URLs")
+        value.stack = `Error: adjacent URLs ${text}`
+      }
+
+      log.error("Adjacent URLs", value)
+      await flushLogs()
+      const fileContent = await fs.readFile(getLogPath(), "utf8")
+      assert.ok(fileContent.endsWith("\n"))
+      assert.equal(consoleOutput.length, 1)
+      const fileValue = fileContent.slice(0, -1).replace(/^\S+ error /, "")
+      assert.equal(fileValue, consoleOutput[0], "both sinks must receive identical final text")
+
+      for (const [sink, content] of [["file", fileValue], ["console", consoleOutput[0]]]) {
+        assert.ok(!content.includes("PRIVATE_SENTINEL"), `${sink} leaked the adjacent URL secret`)
+        assert.ok(content.includes(`${publicUrl}${escaped}${origin}[redacted]`), `${sink} lost the URL boundary`)
+        assert.doesNotMatch(content, /[\r\n]/, `${sink} emitted a physical line separator`)
+        assert.ok(!content.includes(separator), `${sink} retained the physical ${name} separator`)
+      }
+    })
+  }
+}
+
+// Unlike top-level strings, nested strings have already been escaped by
+// inspect() before the logger can scrub them. Exercise the real rendering path.
+for (const [name, separator] of [
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+  ["CR", "\r"],
+  ["TAB", "\t"],
+  ["U+2028", "\\u2028"],
+  ["U+2029", "\\u2029"],
+] as const) {
+  for (const kind of ["object", "array", "Error cause"] as const) {
+    test(`redacts inspect-escaped ${name} URLs inside a nested ${kind} in both sinks`, async () => {
+      const origin = `https://${uniqueHost("inspected-adjacent")}`
+      const publicUrl = "https://public.fixture.invalid/a"
+      registerSensitiveOrigin(`${origin}/NESTED_ADJACENT_SECRET`)
+      const text = `${publicUrl}${separator}${origin}/NESTED_ADJACENT_SECRET`
+      const value = kind === "object" ? { context: { nested: text }, status: 502 }
+        : kind === "array" ? { context: [{ nested: [text] }], status: 502 }
+        : new Error("upstream failed", { cause: { nested: text, status: 502 } })
+
+      log.error("Nested adjacent URLs", value)
+      await flushLogs()
+      const file = await fs.readFile(getLogPath(), "utf8")
+      assert.ok(file.endsWith("\n"))
+      assert.equal(consoleOutput.length, 1)
+      const fileValue = file.slice(0, -1).replace(/^\S+ error /, "")
+      assert.equal(fileValue, consoleOutput[0])
+      for (const [sink, content] of [["file", fileValue], ["console", consoleOutput[0]]]) {
+        assert.ok(!content.includes("NESTED_ADJACENT_SECRET"), `${sink} leaked the nested URL secret`)
+        assert.ok(content.includes(`${origin}[redacted]`), `${sink} lost the redaction marker`)
+        assert.ok(content.includes(publicUrl), `${sink} altered the public URL`)
+        assert.match(content, /status: 502/)
+        assert.doesNotMatch(content, /[\r\n]/)
+        for (const codePoint of [0x2028, 0x2029]) {
+          assert.ok(!content.includes(String.fromCodePoint(codePoint)))
+        }
+      }
+    })
+  }
+}
+
+const readSinkValue = async (): Promise<string> => {
+  await flushLogs()
+  const file = await fs.readFile(getLogPath(), "utf8")
+  assert.ok(file.endsWith("\n"))
+  assert.equal(consoleOutput.length, 1)
+  const rendered = file.slice(0, -1).replace(/^\S+ error /, "")
+  assert.equal(rendered, consoleOutput[0])
+  return rendered
+}
+
+for (const kind of ["plain", "nested", "Error", "headers", "JSON escaped", "inspect escaped"] as const) {
+  test(`redacts a registered exact secret echoed in ${kind} output in both sinks`, async () => {
+    const secret = `LOG_SECRET_${kind.replaceAll(" ", "_")}_first\\part\n\t"quoted"_last`
+    registerLogSecret(secret)
+    const echoed = `Bearer ${secret}`
+    const value = kind === "plain" ? echoed
+      : kind === "nested" ? { response: { body: [{ message: echoed }] } }
+      : kind === "Error" ? new Error(echoed, { cause: { echoed } })
+      : kind === "headers" ? { headers: { "x-upstream-error": echoed } }
+      : kind === "JSON escaped" ? JSON.stringify({ error: { message: echoed } })
+      : inspect({ nested: echoed }, { compact: true, breakLength: Infinity })
+
+    log.error("upstream failure", value)
+    const rendered = await readSinkValue()
+    assert.ok(!rendered.includes(`LOG_SECRET_${kind.replaceAll(" ", "_")}_first`))
+    assert.ok(!rendered.includes("quoted"))
+    assert.match(rendered, /\[redacted\]/)
+    assert.match(rendered, /upstream failure/)
+  })
+}
+
+test("ignores empty secret registrations and retains every previously registered secret", async () => {
+  registerLogSecret(undefined)
+  registerLogSecret("")
+  registerLogSecret("ROTATED_LOG_SECRET_OLD")
+  registerLogSecret("ROTATED_LOG_SECRET_NEW")
+  registerLogSecret("ROTATED_LOG_SECRET_OLD")
+
+  log.error("old=ROTATED_LOG_SECRET_OLD new=ROTATED_LOG_SECRET_NEW keep=this")
+  assert.equal(await readSinkValue(), "old=[redacted] new=[redacted] keep=this")
+})
+
+test("redacts overlapping registered values longest first", async () => {
+  registerLogSecret("OVERLAPPING_LOG_SECRET")
+  registerLogSecret("OVERLAPPING_LOG_SECRET_PRIVATE_SUFFIX")
+  log.error("token=OVERLAPPING_LOG_SECRET_PRIVATE_SUFFIX")
+  assert.equal(await readSinkValue(), "token=[redacted]")
+})
+
+test("redacts complete secrets before the 16 KiB final argument boundary", async () => {
+  const secret = "FINAL_CAP_SECRET_PREFIX_" + "s".repeat(600)
+  registerLogSecret(secret)
+  log.error("x".repeat(16 * 1024 - 200) + secret + "z".repeat(2 * 1024 * 1024))
+  const rendered = await readSinkValue()
+  assert.ok(!rendered.includes("FINAL_CAP_SECRET_PREFIX"), "truncation exposed a partial secret")
+  assert.match(rendered, /\[redacted\]/)
+  assert.ok(rendered.endsWith("[truncated]"))
+  assert.ok(Buffer.byteLength(rendered) <= 16 * 1024)
+})
+
+for (const [name, prefix, visibleLength] of [
+  ["plain", "INSPECT_CAP_SECRET_PREFIX_", 20],
+  ["escaped", "INSPECT_ESCAPED_\\segment\n\t\"quoted\"", 40],
+] as const) {
+  test(`redacts a ${name} secret cut by inspect's 4000-character nested-string limit`, async () => {
+    const secret = prefix + "s".repeat(200)
+    registerLogSecret(secret)
+    log.error({ nested: "x".repeat(4000 - visibleLength) + secret + "z".repeat(1000) })
+    const rendered = await readSinkValue()
+    assert.ok(!rendered.includes(prefix.slice(0, 15)), "inspect exposed a partial secret")
+    assert.match(rendered, /\[redacted\]/)
+    assert.match(rendered, /more characters/)
+  })
+}
+
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(tempHome, { recursive: true, force: true })
 })
 
 // Why: the disk gate is a separate decision from the console one. Redacting

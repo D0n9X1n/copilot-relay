@@ -141,6 +141,79 @@ test("deep probes restore process routing and catalog state after a failed respo
   } finally { delete runtimeState.modelRouting; await mock.close() }
 })
 
+for (const claudeUpstreamApi of ["auto", "messages"] as const) {
+  test(`deep probes use the native-only exact Claude model in ${claudeUpstreamApi} mode`, async (t) => {
+    const id = "claude-sonnet-probe"
+    const model = {
+      type: "chat", supportedEndpoints: ["/v1/messages"], reasoningEfforts: ["low", "high"],
+      limits: { max_context_window_tokens: 1000, max_prompt_tokens: 968, max_output_tokens: 32, max_non_streaming_output_tokens: 12 },
+    }
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+    let reportedModel = id
+    const upstream = createServer(async (request, response) => {
+      let raw = ""
+      for await (const chunk of request) raw += chunk
+      requests.push({ path: request.url ?? "/", body: raw ? JSON.parse(raw) as Record<string, unknown> : {} })
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify({
+        id: "msg_probe", type: "message", role: "assistant", model: reportedModel,
+        content: [{ type: "text", text: "OK" }], stop_reason: "end_turn", stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }))
+    })
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
+    const address = upstream.address()
+    assert.ok(address && typeof address === "object")
+    const config = { ...configFor(`http://127.0.0.1:${address.port}`), claudeUpstreamApi }
+    config.modelCatalog = { baseUrl: config.copilotBaseUrl, models: new Map([[id, model]]) }
+    const lines: string[] = []
+    t.mock.method(console, "log", (line: string) => { lines.push(line) })
+    const options = { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 2000, effort: "high" as const }
+    try {
+      assert.equal(await probeModels(config, [[id, model]], options), 0, lines.join("\n"))
+      assert.deepEqual(requests, [{ path: "/v1/messages", body: {
+        model: id, max_tokens: 12, stream: false, output_config: { effort: "high" },
+        messages: [{ role: "user", content: "Reply with OK only." }],
+      } }])
+      assert.match(lines.join("\n"), /1 passed, 0 failed, 0 incomplete, 0 skipped/)
+
+      for (const mode of [undefined, "chat-completions"] as const) {
+        assert.equal(await probeModels({ ...config, claudeUpstreamApi: mode }, [[id, model]], options), 2)
+        assert.equal(requests.length, 1)
+      }
+      assert.match(lines.join("\n"), /SKIPPED\s+.*unsupported-relay-endpoint/)
+
+      assert.equal(await probeModels(config, [[id, model]], { ...options, effort: "max" }), 2)
+      assert.equal(requests.length, 1)
+      assert.match(lines.join("\n"), /SKIPPED\s+.*unsupported-effort/)
+
+      reportedModel = "claude-other-model"
+      assert.equal(await probeModels(config, [[id, model]], { ...options, maxTokens: 8 }), 2)
+      assert.equal(requests[1]?.body.max_tokens, 8)
+      assert.equal(requests[1]?.body.model, id)
+      assert.match(lines.join("\n"), /FAIL\s+.*model-mismatch/)
+    } finally {
+      upstream.closeAllConnections()
+      await new Promise<void>((resolve) => upstream.close(() => resolve()))
+    }
+  })
+}
+
+test("native deep probe accepts only the verified Opus 5.5 provider spelling", async (t) => {
+  const { withRecordedTransport } = await import("../../src/lib/request-trace")
+  const id = "claude-opus-5.5"
+  const model = { type: "chat", supportedEndpoints: ["/v1/messages"], reasoningEfforts: ["low"] }
+  const config = { ...configFor("https://fixture.invalid"), claudeUpstreamApi: "messages" as const, modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([[id, model]]) } }
+  t.mock.method(console, "log", () => {})
+  for (const [reported, expected] of [["claude-opus-5-5", 0], ["claude-opus-5-5-preview", 2], ["claude-opus-5", 2]] as const) {
+    await withRecordedTransport({ fetch: async () => Response.json({
+      id: "msg_native", model: reported, type: "message", role: "assistant", content: [{ type: "text", text: "OK" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 },
+    }), refresh: async () => {} }, async () => {
+      assert.equal(await probeModels(config, [[id, model]], { maxTokens: 16, timeoutMs: 1000, totalTimeoutMs: 2000 }), expected)
+    })
+  }
+})
+
 test("a changed upstream never reuses the previous provider's capacities", async () => {
   const first = await startModels()
   const second = await startModels({

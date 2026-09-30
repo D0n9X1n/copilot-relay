@@ -5,7 +5,8 @@ import { Agent, fetch as undiciFetch } from "undici"
 
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
-import { log } from "~/lib/log"
+import { log, registerLogSecret } from "~/lib/log"
+import { getRequestTrace, markDiscardedResponse, recordedFetch, recordedRefresh } from "~/lib/request-trace"
 
 const copilotVersion = "0.26.7"
 const editorPluginVersion = `copilot-chat/${copilotVersion}`
@@ -61,6 +62,7 @@ export const createCopilotRequestSignal = (
 ): AbortSignal | undefined => {
   const signals = [
     signal,
+    getRequestTrace()?.signal,
     timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
   ].filter((value): value is AbortSignal => value !== undefined)
 
@@ -264,6 +266,8 @@ export const fetchCopilot = async (
   for (let attempt = 1; attempt <= maxFetchAttempts + 1; attempt++) {
     const upstreamRequestId = randomUUID()
     const attemptedToken = provider.token!
+    registerLogSecret(attemptedToken)
+    getRequestTrace()?.protectCredential(attemptedToken)
     const attemptedGeneration = provider.tokenGeneration ?? 0
     let response: Response
     try {
@@ -272,11 +276,14 @@ export const fetchCopilot = async (
         options.requestId,
         `send upstream method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
       )
-      response = await undiciFetch(`${provider.baseUrl}${path}`, {
-        ...init,
-        headers: buildHeaders({ ...provider, token: attemptedToken }, init, options, upstreamRequestId),
-        dispatcher: copilotDispatcher,
-        signal,
+      const headers = buildHeaders({ ...provider, token: attemptedToken }, init, options, upstreamRequestId)
+      response = await recordedFetch({
+        method: init.method ?? "GET", path, body: init.body, headers, upstreamRequestId, signal,
+      }, async () => {
+        const result = await undiciFetch(`${provider.baseUrl}${path}`, { ...init, headers, dispatcher: copilotDispatcher, signal })
+        const response = new Response(result.body as ReadableStream<Uint8Array> | null, { status: result.status, statusText: result.statusText, headers: result.headers })
+        Object.defineProperty(response, "url", { value: result.url })
+        return response
       })
       const ms = Math.round(performance.now() - started)
       logUpstreamLifecycle(
@@ -321,9 +328,10 @@ export const fetchCopilot = async (
       if (!authRecoveryUsed && provider.refreshToken && await isAuthRejection(response, signal)) {
         authRecoveryUsed = true
         log.info(`${formatRequestId(options.requestId)}Copilot ${path} authentication rejected status=${response.status}; refreshing token`)
+        markDiscardedResponse(response)
         await response.body?.cancel()
         signal?.throwIfAborted()
-        await waitWithSignal(provider.refreshToken(attemptedToken, attemptedGeneration), signal)
+        await recordedRefresh(() => waitWithSignal(provider.refreshToken!(attemptedToken, attemptedGeneration), signal))
         signal?.throwIfAborted()
         log.info(`${formatRequestId(options.requestId)}Copilot token refresh completed; retrying ${path}`)
         continue
@@ -338,6 +346,7 @@ export const fetchCopilot = async (
     if (!shouldRetryResponse(response) || transientRetries >= maxFetchAttempts - 1) return response
     transientRetries++
     log.error(`${formatRequestId(options.requestId)}Copilot ${path} returned ${response.status}; retrying (${transientRetries}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`)
+    markDiscardedResponse(response)
     await response.body?.cancel()
   }
 

@@ -1,14 +1,37 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import childProcess from "node:child_process"
 import fs from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
 import path from "node:path"
+import { promisify } from "node:util"
 
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-status-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
+
+// The port-scoping regressions use an empty synthetic listener inventory, never
+// the developer's processes. Capture the boundary before lifecycle promisifies it.
+const originalExecFile = childProcess.execFile
+const originalKill = process.kill
+const discoveryCalls: Array<{ file: string; args: string[] }> = []
+const signalCalls: Array<Parameters<typeof process.kill>> = []
+const fakeExecFile = () => { throw new Error("Real process discovery is forbidden") }
+Object.defineProperty(fakeExecFile, promisify.custom, {
+  value: async (file: string, args: string[]) => {
+    discoveryCalls.push({ file, args })
+    return { stdout: "", stderr: "" }
+  },
+})
+childProcess.execFile = fakeExecFile as unknown as typeof childProcess.execFile
+process.kill = (...args) => {
+  signalCalls.push(args)
+  throw new Error("Real signals are forbidden")
+}
+syncBuiltinESMExports()
 
 const { checkDeep, hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
   await import("../../src/status")
@@ -506,7 +529,7 @@ test("keeps the --json config key set stable when webSearchBackend is unset", ()
     config: Record<string, unknown>
   }
 
-  assert.equal(Object.keys(parsed.config).length, 11)
+  assert.equal(Object.keys(parsed.config).length, 12)
   assert.ok("webSearchBackend" in parsed.config)
   assert.equal(parsed.config.webSearchBackend, null)
 })
@@ -606,7 +629,7 @@ test("hides copilot base url path, query and fragment in --json output", () => {
 
   const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
   // Key set and count must not shift just because one value is now redacted.
-  assert.equal(Object.keys(parsed.config).length, 11)
+  assert.equal(Object.keys(parsed.config).length, 12)
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
 })
 
@@ -666,5 +689,20 @@ test("keeps key order and exit codes unchanged under redaction", () => {
 })
 
 test.after(async () => {
+  childProcess.execFile = originalExecFile
+  process.kill = originalKill
+  syncBuiltinESMExports()
   await fs.rm(tempHome, { force: true, recursive: true })
+  assert.deepEqual(signalCalls, [])
+  assert.equal(discoveryCalls.length, 2)
+  for (const { file, args } of discoveryCalls) {
+    if (process.platform === "win32") {
+      assert.equal(file, "powershell.exe")
+      assert.match(args.join(" "), /Get-NetTCPConnection -LocalPort 4199/)
+      assert.doesNotMatch(args.join(" "), /Win32_Process/)
+    } else {
+      assert.equal(file, "lsof")
+      assert.deepEqual(args, ["-nP", "-iTCP:4199", "-sTCP:LISTEN", "-t"])
+    }
+  }
 })
