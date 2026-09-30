@@ -23,9 +23,10 @@ const {
 const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names")
 const { HTTPError } = await import("../../src/lib/error")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
-const { log, setLogLevel } = await import("../../src/lib/log")
+const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { getLogPath } = await import("../../src/lib/paths")
 test.after(async () => {
+  await flushLogs()
   await fs.rm(tempHome, { recursive: true, force: true })
 })
 

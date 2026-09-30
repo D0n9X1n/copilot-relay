@@ -91,6 +91,73 @@ test("bootstrap silences its logger without silencing a spawned CLI help command
   }
 })
 
+for (const suite of ["chat-completions", "auth-recovery", "model-limits", "web-search", "url-leak-evidence"]) {
+  test(`${suite} teardown drains delayed log writes before removing its home`, async () => {
+    const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "relay-log-teardown-"))
+    const guard = path.join(fixture, "guard.mjs")
+    await fs.writeFile(guard, `
+      import assert from "node:assert/strict";
+      import fs from "node:fs/promises";
+      import os from "node:os";
+      import path from "node:path";
+      import test from "node:test";
+      const after = test.after;
+      test.after = (hook, ...options) => after(async (...args) => {
+        const { log, flushLogs } = await import(${JSON.stringify(new URL("../../src/lib/log.ts", import.meta.url).href)});
+        const { paths, getLogPath } = await import(${JSON.stringify(new URL("../../src/lib/paths.ts", import.meta.url).href)});
+        await flushLogs();
+        const home = os.homedir();
+        const mkdir = fs.mkdir, open = fs.open, rm = fs.rm;
+        let release, entered, closed = false;
+        const waiting = new Promise(resolve => { entered = resolve });
+        const gate = new Promise(resolve => { release = resolve });
+        fs.mkdir = async (...args) => {
+          if (args[0] === paths.logsDir) { entered(); await gate }
+          return mkdir(...args);
+        };
+        fs.open = async (...args) => {
+          const handle = await open(...args);
+          if (args[0] === getLogPath()) {
+            const close = handle.close.bind(handle);
+            handle.close = async () => { await close(); closed = true };
+          }
+          return handle;
+        };
+        fs.rm = async (target, ...args) => {
+          if (path.resolve(String(target)) === path.resolve(home)) {
+            assert.equal(closed, true, "LOG_WRITE_PENDING_AT_HOME_REMOVAL");
+          }
+          return rm(target, ...args);
+        };
+        try {
+          log.info("Teardown log-drain fixture");
+          await waiting;
+          setImmediate(release);
+          await hook(...args);
+          assert.equal(closed, true);
+          await assert.rejects(fs.access(home), { code: "ENOENT" });
+          console.log("LOG_TEARDOWN_DRAIN_VERIFIED");
+        } finally {
+          release();
+          await flushLogs();
+          fs.mkdir = mkdir; fs.open = open; fs.rm = rm;
+        }
+      }, ...options);
+    `)
+    try {
+      const env = { ...process.env }
+      delete env.NODE_TEST_CONTEXT
+      const { stdout } = await execute(process.execPath, [
+        "--import", bootstrap, "--import", tsx, "--import", pathToFileURL(guard).href,
+        "--test", "--test-name-pattern=^__teardown_order_only__$", path.join(root, "tests/unit", `${suite}.test.ts`),
+      ], { cwd: root, env, timeout: 20_000, maxBuffer: 1024 * 1024 })
+      assert.match(stdout, /LOG_TEARDOWN_DRAIN_VERIFIED/)
+    } finally {
+      await fs.rm(fixture, { recursive: true, force: true })
+    }
+  })
+}
+
 test("dependency lock pins the manifest and all platform-specific build dependencies", async () => {
   const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))
   const lock = JSON.parse(await fs.readFile(path.join(root, "package-lock.json"), "utf8"))
