@@ -350,7 +350,7 @@ test("leaves malformed Claude settings shapes untouched", async () => {
 })
 
 for (const symlinked of [false, true]) {
-  test(`atomically publishes ${symlinked ? "symlinked" : "regular"} settings while open readers keep the old bytes`, {
+  test(`atomically publishes ${symlinked ? "symlinked" : "regular"} settings without corrupting open readers`, {
     skip: symlinked && process.platform === "win32",
   }, async () => {
     await withTemporarySettings(async (configPath) => {
@@ -359,30 +359,35 @@ for (const symlinked of [false, true]) {
       const original = `${JSON.stringify({ theme: "dark", permissions: { allow: ["Read"] } })}\n`
       await fs.writeFile(target, original, { mode: 0o640 })
       if (symlinked) await fs.symlink("managed.json", configPath)
+      const input = { baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra" }
       const reader = await fs.open(target, "r")
       try {
-        const result = await applyClaudeConfig({
-          baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra",
-        })
-        assert.equal(result.changed, true)
+        if (process.platform === "win32") {
+          await assert.rejects(applyClaudeConfig(input), { code: "EPERM", syscall: "rename" })
+          assert.equal(await fs.readFile(target, "utf8"), original)
+          assert.deepEqual(await fs.readdir(path.dirname(configPath)), ["settings.json"])
+        } else {
+          assert.equal((await applyClaudeConfig(input)).changed, true)
+        }
         assert.equal(await reader.readFile("utf8"), original, "an open reader must never see a truncated/replaced payload")
-        const settings = await readSettings(configPath)
-        assert.equal(settings.theme, "dark")
-        assert.deepEqual(settings.permissions, { allow: ["Read"] })
-        assert.equal((settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "http://relay.test.invalid")
-        if (symlinked) {
-          assert.equal((await fs.lstat(configPath)).isSymbolicLink(), true)
-          assert.equal(await fs.readlink(configPath), "managed.json")
-          assert.deepEqual(await readSettings(target), settings)
-        }
-        if (process.platform !== "win32") {
-          assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
-        }
-        assert.deepEqual((await fs.readdir(path.dirname(configPath))).sort(),
-          symlinked ? ["managed.json", "settings.json"] : ["settings.json"])
       } finally {
         await reader.close()
       }
+      if (process.platform === "win32") assert.equal((await applyClaudeConfig(input)).changed, true)
+      const settings = await readSettings(configPath)
+      assert.equal(settings.theme, "dark")
+      assert.deepEqual(settings.permissions, { allow: ["Read"] })
+      assert.equal((settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "http://relay.test.invalid")
+      if (symlinked) {
+        assert.equal((await fs.lstat(configPath)).isSymbolicLink(), true)
+        assert.equal(await fs.readlink(configPath), "managed.json")
+        assert.deepEqual(await readSettings(target), settings)
+      }
+      if (process.platform !== "win32") {
+        assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
+      }
+      assert.deepEqual((await fs.readdir(path.dirname(configPath))).sort(),
+        symlinked ? ["managed.json", "settings.json"] : ["settings.json"])
     })
   })
 }

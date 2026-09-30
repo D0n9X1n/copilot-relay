@@ -110,7 +110,7 @@ test("dependency lock pins the manifest and all platform-specific build dependen
 
 // These are dependency assertions over the actual workflow, not a mock runner.
 const workflowJobs = (yaml: string): Record<string, string> => Object.fromEntries(
-  [...yaml.matchAll(/^  ([a-z][a-z0-9-]*):\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n|$(?![\s\S]))/gm)]
+  [...yaml.matchAll(/^  ([a-z][a-z0-9-]*):\r?\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\r?\n|$(?![\s\S]))/gm)]
     .filter((match) => match.index! > yaml.indexOf("\njobs:"))
     .map((match) => [match[1], match[2]]),
 )
@@ -154,7 +154,7 @@ test("release graph validates tags then gates immutable publishers on every plat
   }
   assert.match(jobs["github-release"], /gh release download/)
   assert.match(jobs["github-release"], /cmp --/)
-  assert.match(publish, /concurrency:\n  group:.*(?:inputs\.tag|github\.ref_name)/)
+  assert.match(publish, /concurrency:\r?\n  group:.*(?:inputs\.tag|github\.ref_name)/)
   assert.match(publish, /cancel-in-progress: false/)
   assert.doesNotMatch(publish + ci, /npm install --no-audit/)
 })
@@ -188,6 +188,18 @@ const workflowRunBlock = (yaml: string, job: string): string => {
   assert.ok(block.length)
   return `${block.join("\n").trimEnd()}\n`
 }
+
+test("release workflow extraction preserves the same jobs and shell blocks with LF or CRLF", async () => {
+  const lf = (await fs.readFile(publishWorkflow, "utf8")).replace(/\r\n/g, "\n")
+  const crlf = lf.replace(/\n/g, "\r\n")
+  const jobs = workflowJobs(lf)
+  assert.deepEqual(Object.keys(jobs), ["validate", "candidates", "test", "publish-npm", "publish-github", "github-release"])
+  assert.deepEqual(Object.fromEntries(Object.entries(workflowJobs(crlf))
+    .map(([name, body]) => [name, body.replace(/\r\n/g, "\n")])), jobs)
+  for (const name of ["validate", "candidates", "publish-npm", "publish-github", "github-release"]) {
+    assert.equal(workflowRunBlock(crlf, name), workflowRunBlock(lf, name))
+  }
+})
 
 // The only executable CLIs on PATH are these fakes and wrappers around a small
 // set of local shell utilities. Windows deliberately uses Git Bash, not WSL or
@@ -375,7 +387,7 @@ test("offline registry mutation proof rejects removal of the real integrity comp
   for (const job of ["publish-npm", "publish-github"]) {
     const result = await offlineWorkflow(job, { registry: "different" }, yaml => {
       const jobText = workflowJobs(yaml)[job]
-      const mutated = jobText.replace(/^[ \t]+test "\$existing" = "\$integrity".*\n/m, "")
+      const mutated = jobText.replace(/^[ \t]+test "\$existing" = "\$integrity".*\r?\n/m, "")
       assert.notEqual(mutated, jobText, "mutation must remove exactly the integrity guard")
       return yaml.replace(jobText, () => mutated)
     })
@@ -401,26 +413,26 @@ test("offline validation and asset comparisons reject temporary fail-open mutati
     check: (result: Awaited<ReturnType<typeof offlineWorkflow>>) => void
   }> = [
     {
-      job: "validate", scenario: { tag: "v1.2.4" }, guard: /^[ \t]+assert\.equal\(tag,.*\n/m,
+      job: "validate", scenario: { tag: "v1.2.4" }, guard: /^[ \t]+assert\.equal\(tag,.*\r?\n/m,
       check: result => { assert.notEqual(result.code, 0, "tag mismatch must fail"); assert.equal(result.outputs, "") },
     },
     {
-      job: "validate", scenario: { lockVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.version,.*\n/m,
+      job: "validate", scenario: { lockVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.version,.*\r?\n/m,
       check: result => { assert.notEqual(result.code, 0, "lock mismatch must fail"); assert.equal(result.outputs, "") },
     },
     {
-      job: "validate", scenario: { lockRootVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.packages.*\n/m,
+      job: "validate", scenario: { lockRootVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.packages.*\r?\n/m,
       check: result => { assert.notEqual(result.code, 0, "lock root mismatch must fail"); assert.equal(result.outputs, "") },
     },
     ...(["publish-npm", "publish-github"] as const).map(job => ({
-      job, scenario: { registry: "unavailable" as const }, guard: /^[ \t]+node -e .*E404.*\n/m,
+      job, scenario: { registry: "unavailable" as const }, guard: /^[ \t]+node -e .*E404.*\r?\n/m,
       check: (result: Awaited<ReturnType<typeof offlineWorkflow>>) => {
         assert.notEqual(result.code, 0, "non-404 registry lookup must fail")
         assert.ok(result.operations.every(op => op.args[0] !== "publish"))
       },
     })),
     {
-      job: "github-release", scenario: { release: "partial-different" }, guard: /^[ \t]+cmp --.*\n/m,
+      job: "github-release", scenario: { release: "partial-different" }, guard: /^[ \t]+cmp --.*\r?\n/m,
       check: result => {
         assert.notEqual(result.code, 0, "different release assets must fail")
         assert.ok(result.operations.every(op => !["upload", "edit"].includes(op.args[1])))

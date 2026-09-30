@@ -155,10 +155,12 @@ test("paired architecture guides use Mermaid for overview, request, and lifecycl
   for (const language of ["EN", "ZH"]) {
     const architecture = readPage(`${language}-Architecture.md`)
     const overview = readPage(`${language}-How-It-Works.md`)
-    for (const body of [architecture, overview]) {
-      assert.match(body, /```mermaid\nflowchart/)
-      assert.match(body, /```mermaid\nsequenceDiagram/)
-      assert.doesNotMatch(body, /```text\nClaude Code/)
+    for (const body of [architecture, overview].flatMap(text => [
+      text.replace(/\r\n/g, "\n"), text.replace(/\r?\n/g, "\r\n"),
+    ])) {
+      assert.match(body, /```mermaid\r?\nflowchart/)
+      assert.match(body, /```mermaid\r?\nsequenceDiagram/)
+      assert.doesNotMatch(body, /```text\r?\nClaude Code/)
       assert.ok(body.includes("`src/start.ts`"))
       assert.ok(body.includes("`startRelay`"))
       assert.ok(body.includes("`src/routes/claude.ts`"))

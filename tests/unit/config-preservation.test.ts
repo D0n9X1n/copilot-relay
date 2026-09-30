@@ -204,17 +204,25 @@ test("startup preserves a config symlink and appends only missing keys to its ta
   assert.ok((await fs.lstat(paths.configPath)).isSymbolicLink())
 })
 
-test("missing defaults are published atomically without changing an open reader's snapshot", async () => {
+test("missing defaults are published atomically without corrupting an open reader", async () => {
   const original = "# an already open document\nport: 4193\n"
   await writeConfigFile(original)
   const reader = await fs.open(paths.configPath, "r")
   try {
-    await readAppConfig()
+    if (process.platform === "win32") {
+      await assert.rejects(readAppConfig(), { code: "EPERM", syscall: "rename" })
+      assert.equal(await readConfigFile(), original)
+      assert.deepEqual(await fs.readdir(paths.appDir), ["config.yaml"])
+    } else {
+      await readAppConfig()
+    }
     assert.equal(await reader.readFile("utf8"), original)
-    assert.match(await readConfigFile(), /^webSearchBackend:/m)
   } finally {
     await reader.close()
   }
+  if (process.platform === "win32") await readAppConfig()
+  assert.match(await readConfigFile(), /^webSearchBackend:/m)
+  assert.deepEqual(await fs.readdir(paths.appDir), ["config.yaml"])
 })
 
 test("startup refuses to publish defaults over a newer edit after its snapshot read", async (t) => {

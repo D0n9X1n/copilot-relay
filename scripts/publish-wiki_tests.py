@@ -25,7 +25,7 @@ class PublishWikiTests(unittest.TestCase):
                                 PYTHONUTF8="1")
 
     def write(self, name, body, directory=None):
-        (directory or self.source).joinpath(name).write_text(body, encoding="utf-8")
+        (directory or self.source).joinpath(name).write_text(body, encoding="utf-8", newline="")
 
     def cli(self, *arguments):
         return subprocess.run([sys.executable, str(SCRIPT), *map(str, arguments)],
@@ -183,15 +183,18 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                                  (code + continuation + '[home](Home)\n').encode("utf-8"))
                 self.success("verify", self.destination)
 
-    def test_crlf_indented_examples_are_preserved_byte_for_byte(self):
-        code = b'    [literal](README.md)\r\n    [r]: Missing.md#section\r\n\r\n'
-        body = code + b'[home][r]\r\n\r\n> [r]:\r\n>   README.md\r\n'
-        (self.source / "README.md").write_bytes(body)
-        self.success("build", self.source, self.destination)
-        expected = code + b'[home][r]\r\n\r\n> [r]:\r\n>   Home\r\n'
-        self.assertEqual((self.destination / "Home.md").read_bytes(), expected)
-        self.success("verify", self.destination)
-        self.assertEqual((self.destination / "Home.md").read_bytes(), expected)
+    def test_lf_and_crlf_indented_examples_are_preserved_byte_for_byte(self):
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=newline):
+                code = '    [literal](README.md)\n    [r]: Missing.md#section\n\n'.replace("\n", newline)
+                body = code + '[home][r]\n\n> [r]:\n>   README.md\n'.replace("\n", newline)
+                self.write("README.md", body)
+                self.assertEqual((self.source / "README.md").read_bytes(), body.encode("utf-8"))
+                self.success("build", self.source, self.destination)
+                expected = (code + '[home][r]\n\n> [r]:\n>   Home\n'.replace("\n", newline)).encode("utf-8")
+                self.assertEqual((self.destination / "Home.md").read_bytes(), expected)
+                self.success("verify", self.destination)
+                self.assertEqual((self.destination / "Home.md").read_bytes(), expected)
 
     def test_indentation_continuing_paragraphs_is_not_code(self):
         examples = ('Paragraph\n    [home](README.md)\n',
