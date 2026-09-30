@@ -21,8 +21,13 @@ async function fixture(
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-models-"))
   const requests: Array<{ method: string | undefined; url: string | undefined; authorization: string | undefined }> = []
+  let interruptProbe: (() => void) | undefined
   const server = createServer((request, response) => {
     requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization })
+    if (request.method === "POST") {
+      interruptProbe?.()
+      interruptProbe = undefined
+    }
     handle(request, response, requests.length)
   })
   t.after(async () => {
@@ -64,7 +69,13 @@ async function fixture(
         }
         throw new Error("UNEXPECTED_NETWORK_ACCESS");
       };
-      ${options.interrupt ? 'setTimeout(() => process.emit("SIGINT"), 1000);' : ''}
+      ${options.interrupt ? `
+        process.stdin.once("data", () => {
+          if (!process.emit("SIGINT")) throw new Error("PROBE_INTERRUPT_HANDLER_NOT_READY");
+          console.log("PROBE_INTERRUPT_DELIVERED");
+          process.stdin.pause();
+        });
+      ` : ''}
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ...${JSON.stringify(args)}];
       await import(${JSON.stringify(entry.href)});
     `
@@ -82,7 +93,8 @@ async function fixture(
         }
         resolve({ code, rawStdout: stdout, stdout: stripVTControlCharacters(stdout), output: stripVTControlCharacters(stdout + stderr) })
       })
-      child.stdin?.end()
+      if (options.interrupt) interruptProbe = () => child.stdin!.end("interrupt\n")
+      else child.stdin?.end()
     })
     const logFiles = await fs.readdir(path.join(appDir, "logs")).catch(() => [])
     const logs = (await Promise.all(logFiles.map((name) => fs.readFile(path.join(appDir, "logs", name), "utf8")))).join("\n")
@@ -337,6 +349,11 @@ for (const interrupt of [false, true]) {
     const f = await fixture(t, (req, res) => { if (req.method === "GET") respond(res, deepCatalog) }, { deep: true, interrupt })
     const result = await f.run(["models", "--deep", "--timeout", "5", "--total-timeout", interrupt ? "10" : "1"])
     assert.equal(result.code, interrupt ? 130 : 2)
+    if (interrupt) {
+      assert.match(result.stdout, /PROBE_INTERRUPT_DELIVERED/)
+      assert.match(result.stdout, /cancelled/)
+      assert.doesNotMatch(result.output, /PROBE_INTERRUPT_HANDLER_NOT_READY/)
+    }
     assert.match(result.stdout, /claude-opus-5\.5\s+NOT_TESTED/)
     assert.match(result.stdout, /Summary: 0 passed, 0 failed, 0 incomplete, 0 skipped, 2 not tested/)
     assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
