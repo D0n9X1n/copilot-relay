@@ -6,12 +6,26 @@
 ~/.copilot-relay/config.yaml
 ```
 
-The file is created from the package template on first start.
+The file is created from the package template on first start. On subsequent
+loads, the relay preserves your existing text, comments, key order, unknown flat
+scalar keys, and explicit values; it appends defaults only for absent keys.
+Writes use a checked file snapshot and atomic replacement of the resolved target,
+so a symlink remains a symlink and detected concurrent edits are not overwritten.
+Upgrades do not migrate saved values to new defaults.
 
-To see every key after defaults are resolved, and which of them need a
-restart, run `copilot-relay status`. It prints the resolved config rather than
-making you read the file back. Those are the values *on disk*: a daemon that has
-been running since before your last edit has not necessarily read them.
+Only flat scalar YAML is supported. Invalid known values, duplicate keys (including
+aliases), and unsupported syntax fail before write-back; the file is left for you
+to correct. Empty `webSearchBackend` is valid, not an instruction to erase other
+settings. Hot reload is **read-only** and accepts only a stable, valid document
+containing every materialized key; a partial or empty editor save keeps the last
+valid runtime settings. Restore the missing keys rather than deleting one to
+request its default. See [Internals](EN-Internals.md) for the writer's guarantees.
+
+To see every key after defaults are resolved, and which of them need a restart,
+run `copilot-relay status`. These are the values *on disk*, not proof the daemon
+has loaded them. With broken config, `status` exits `2` with a safe diagnostic;
+`stop` can still attempt recovery using verified process identities. See
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 ## Example
 
@@ -25,6 +39,7 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
+claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
@@ -37,13 +52,46 @@ opusModel: claude-opus-5.5
 | `port` | Local port. Default: `4142`. |
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
-| `logLevel` | One of `error`, `info`, `debug`. Any other value fails startup. |
-| `logRetentionDays` | Days to keep normal `.log` files under `~/.copilot-relay/logs/`. |
+| `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
+| `logRetentionDays` | Local calendar days to retain normal relay logs and debug captures, including today; positive integer, default `3`. Active/unknown captures are protected; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for cleanup rules. |
 | `thinkEffort` | Fallback reasoning effort when the request omits it: `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
+| `claudeUpstreamApi` | Claude upstream protocol: `chat-completions` (default), `auto`, or `messages`. Does not change non-Claude routing. |
 | `gptModel` | Upstream model for non-Opus requests. |
 | `opusModel` | Upstream model for requested models containing `opus`. |
+
+## Choose Claude's upstream protocol
+
+Model selection still happens first (`opusModel` or `gptModel`). For a selected
+upstream ID starting with `claude-`, `claudeUpstreamApi` then chooses:
+
+| Value | Behavior |
+| --- | --- |
+| `chat-completions` | Default. Keep the translated Copilot `/chat/completions` path. |
+| `auto` | Use native `/v1/messages` only when the current provider's cached model catalog advertises that endpoint; otherwise use the translated path. |
+| `messages` | Force native `/v1/messages` for Claude models, even without an advertised capability. Upstream rejection remains an error. |
+
+Non-Claude models keep their existing chat/Responses selection in every mode.
+Native transport preserves signed thinking, cache markers, in-place system roles
+and controls; it does not silently retry a refusal or failure through another API.
+`chat-completions` remains the shipped default. A bounded 2026-09-30 matched
+synthetic trial at `low` effort measured warm token-weighted cache reads of
+99.8384% for chat and 99.7980% for native (about 0.04 percentage points apart).
+A second, counterbalanced native-first trial stopped on its cold-turn refusal;
+the completed trial does not establish broad non-regression or billing-cost
+equivalence. These were isolated checks, not validation of the current production
+relay; port 4142 was untouched. Methods and usage counts are in
+[Internals](EN-Internals.md). Reasoning flattening is still not proven to have
+caused the historical refusal.
+
+Native bridge-managed WebSearch supports automatic selection only. With WebSearch
+advertised, `any` or an explicitly forced search returns HTTP 400 JSON before
+retrieval/SSE; only one search is allowed per turn. Its deterministic relay marker restores the original signed provider
+history on continuation. Old chat-bridge history and native-bridge history are
+not transparently interchangeable: keep an existing search conversation on its
+original route, or begin a new conversation after switching. See
+[Internals](EN-Internals.md) for protocol boundaries, not just model availability.
 
 ## Choose models and thinking effort
 
@@ -132,9 +180,11 @@ Use `status --deep` to check the running daemon's configured route.
 Numeric options accept positive whole numbers up to 2,147,483; all probe options
 require `--deep`. Even if config disables upstream deadlines, deep checks still
 have their own deadlines. Missing endpoint metadata is marked unverified rather
-than treated as proof of support. Model matching removes only the relay's known
-GPT context suffix; a different reported model cannot pass. Authentication can
-refresh tokens; the existing bounded retries may consume additional calls, but
+than treated as proof of support. Model matching removes the relay's known GPT
+context suffix. Only for a native `/v1/messages` probe of catalog ID
+`claude-opus-5.5`, it also accepts the observed provider spelling `claude-opus-5-5`.
+Keep the catalog spelling in config and `--model`; other mismatches still fail.
+Authentication can refresh tokens; the existing bounded retries may consume additional calls, but
 there is no new per-model retry loop. Ctrl+C aborts the active probe and marks
 remaining models not tested. Raw shared-pipeline logging is suppressed only for
 these diagnostic calls; normal relay logging is unaffected.
@@ -157,6 +207,13 @@ For example, `output_config: {"effort": "low"}` uses `low` even when
 Malformed explicit effort returns `400` rather than silently choosing the default.
 An effort unsupported by the selected upstream model remains an upstream error;
 the relay does not substitute another level.
+
+On the translated path, an in-message system `output_config` is accepted only
+when its sole key is `effort`, its value is one of the five configured effort
+levels, and it exactly matches the current request's resolved effort. System
+text and message order are preserved; this redundant marker cannot change effort.
+Different historical levels, extra/unknown keys, or `clear_at` return HTTP 400
+JSON before upstream work or SSE. See [Internals](EN-Internals.md).
 
 The selected effort stays the same through chat/Responses, streaming/JSON, and
 WebSearch decision, retrieval, and final-answer passes. A config reload affects
@@ -202,10 +259,19 @@ conversation continuation, `low`/`max` effort, and WebSearch final-answer recomp
 The catalog advertises all five configured efforts; no `[1m]` suffix is added to
 this Opus ID. WebSearch retrieval remains on `webSearchBackend` or `gptModel`.
 
-**Forced tool selection is not supported upstream:** `tool_choice` types `tool`
-and `any` return HTTP 400 for this model. Automatic tool selection works. The relay
-preserves the error rather than silently converting a required tool call to `auto`.
-These are request-level capability limits, not an authentication failure.
+**The 2026-09-23 checks used the translated path:** `tool_choice` types `tool`
+and `any` returned HTTP 400 for this model, while automatic selection worked.
+That observation is not a native-API capability measurement. The relay preserves
+upstream errors rather than silently converting a required tool call to `auto`.
+Native bridge-search restrictions are described above. These are request-level
+capability limits, not proof of an authentication failure.
+
+An isolated 2026-09-30 check with real Claude Code 2.1.285 completed a native
+`Read` → tool result → `OK` sequence over two model turns. The first two requests
+received HTTP 400 for unsupported `safeguards`; Claude Code then downgraded its
+own request. The relay did not strip that field or bypass a safeguard. This is
+narrow compatibility evidence, not current production validation; see
+[Internals](EN-Internals.md) for cache accounting and replay evidence.
 
 ### Update the relay config
 
@@ -267,6 +333,12 @@ These are discovered values, not hardcoded runtime limits or results of a
 million-token production request. Leave room for output, including reasoning,
 within the total window. The relay never truncates input or expands an explicit
 smaller output budget. Upstream remains the authority on whether a prompt fits.
+Local `/v1/messages/count_tokens` is advisory, not billing. Text uses the available
+tokenizer; each image contributes a fixed 4096-token allowance without tokenizing,
+decoding or fetching its base64/URL data. Native usage separates noncached input,
+cache reads and cache writes, so native `input_tokens` alone is not total prompt
+size. See [Internals](EN-Internals.md) for measured counts and denominators.
+
 Both streamed and completed JSON responses can use the model's full output limit.
 Opus 5.5 advertises a native non-streaming ceiling of 16,000 tokens; above it the
 relay requests upstream SSE and buffers it for JSON callers. The 1M prompt ceiling
@@ -364,6 +436,7 @@ Hot-reloaded, applying to work that starts after the change:
 - `upstreamTimeoutSeconds`
 - `copilotBaseUrl`
 - `webSearchBackend`
+- `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
 
@@ -377,9 +450,14 @@ Requires restart:
 `claudeSetup` is read once during startup, so toggling it changes nothing until
 the relay starts again.
 
-Changing `gptModel` reroutes upstream requests immediately, but does not rewrite
-the model or token settings already saved in `~/.claude/settings.json`. Check
-those settings when switching models; managed setup only seeds absent budgets.
+Each admitted request snapshots routing, protocol mode, timeout, search backend,
+effort fallback, and the catalog view before reading its body. Reloads affect new
+requests, not retries or later passes of an active turn. Credentials are the
+exception: each attempt reads the live refreshed token.
+
+Changing `gptModel` reroutes new upstream requests, but does not rewrite the model
+or token settings already saved in `~/.claude/settings.json`. Check those settings
+when switching models; managed setup only seeds absent budgets.
 
 ## Claude Code settings
 
@@ -406,6 +484,13 @@ ceiling, so the common client setting cannot exceed the Opus limit when switchin
 from Astra. When a gateway omits valid limit metadata, startup logs that limits
 are unavailable and leaves explicit budgets unchanged rather than inventing them.
 With `claudeSetup: false`, configure these client variables yourself.
+The settings writer uses the same snapshot/atomic replacement boundary; malformed
+or existing empty settings files are not overwritten, and unrelated values remain.
+
+The local dummy token is **not network authentication**. Host/Origin checks and
+JSON content-type validation reduce browser-origin misuse, not access by an
+arbitrary network client. Keep the listener on loopback; see
+[Architecture](EN-Architecture.md).
 
 ## Runtime files
 
@@ -416,6 +501,7 @@ With `claudeSetup: false`, configure these client variables yourself.
   copilot_token.json
   logs/copilot-relay.2026-07-25.log   <- active, rotates at local midnight
   logs/copilot-relay.2026-07-24.log
+  captures/<local-date>/<request-id>/   <- debug only; private full bodies
 ```
 
 `github_token` is the login source. `copilot_token.json` is a short-lived Copilot

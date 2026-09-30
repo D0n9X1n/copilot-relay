@@ -25,9 +25,11 @@ process.env.CONSOLA_LEVEL = "0"
 const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { appVersion } = await import("../../src/lib/version")
+const { flushLogs } = await import("../../src/lib/log")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 test.after(async () => {
+  await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })
 })
 
@@ -828,13 +830,13 @@ for (const stream of [false, true]) {
         if (stream) {
           assert.equal((text.match(/event: message_start/g) ?? []).length, 1)
           assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
-          assert.match(text, /"output_tokens":1200/)
+          const terminal = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5))).find((event) => event.type === "message_delta")
+          assert.deepEqual(terminal.usage, { input_tokens: 56, output_tokens: 1201, server_tool_use: { web_search_requests: 1 } })
           assert.doesNotMatch(text, /event: error/)
         } else {
           const result = JSON.parse(text)
           assert.equal(result.id, "resp_empty_evidence")
-          assert.equal(result.usage.input_tokens, 55)
-          assert.equal(result.usage.output_tokens, 1200)
+          assert.deepEqual(result.usage, { input_tokens: 56, output_tokens: 1201, server_tool_use: { web_search_requests: 1 } })
         }
         assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
         assert.equal(mock.requests.filter((request) => request.path === "/responses").length, 1)

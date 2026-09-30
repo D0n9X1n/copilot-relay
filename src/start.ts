@@ -2,13 +2,15 @@
 import { type ServerType } from "@hono/node-server"
 import { defineCommand } from "citty"
 
+import { getRelayBaseUrl } from "~/lib/address"
 import { setupProxyAuth } from "~/lib/auth"
 import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { readProxyConfig } from "~/lib/config"
 import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
-import { cleanupLogs, log, setLogLevel } from "~/lib/log"
+import { cleanupLogs, flushLogs, log, setLogLevel } from "~/lib/log"
+import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
 import { defaultReasoningEffort, getExposedModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
@@ -46,6 +48,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   }
   setLogLevel(appConfig.logLevel)
   await cleanupLogs(appConfig.logRetentionDays)
+  await cleanupCaptures(appConfig.logRetentionDays)
 
   const claudeConfigPath = defaultClaudeConfigPath
   const config = readProxyConfig(appConfig)
@@ -60,7 +63,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // must stay redacted on its way to the log. See #47.
     registerSensitiveOrigin(nextConfig.copilotBaseUrl)
     setLogLevel(nextConfig.logLevel)
-    void cleanupLogs(nextConfig.logRetentionDays)
+    void cleanupLogs(nextConfig.logRetentionDays).catch(() => log.error("Log retention failed; existing logs retained."))
+    void cleanupCaptures(nextConfig.logRetentionDays)
+    if (nextConfig.logLevel === "debug" && !runtimeState.debug) log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
     runtimeState.debug = nextConfig.logLevel === "debug"
     runtimeState.thinkEffort = nextConfig.thinkEffort
     config.copilotBaseUrl = nextConfig.copilotBaseUrl
@@ -69,6 +74,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     config.port = nextConfig.port
     config.upstreamTimeoutMs = nextConfig.upstreamTimeoutSeconds * 1000
     config.webSearchBackend = nextConfig.webSearchBackend
+    config.claudeUpstreamApi = nextConfig.claudeUpstreamApi
     runtimeState.modelRouting = {
       gptModel: nextConfig.gptModel,
       opusModel: nextConfig.opusModel,
@@ -100,12 +106,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     log.error("GitHub user: unavailable")
   }
 
-  log.info(
-    `copilot-relay listening on http://${config.host}:${config.port}`,
-  )
+  const baseUrl = getRelayBaseUrl(config.host, config.port)
+  log.info(`copilot-relay listening on ${baseUrl}`)
   log.info(`copilot base url: ${formatUrlForDisplay(config.copilotBaseUrl)}`)
-
-  const baseUrl = `http://${config.host}:${config.port}`
   if (appConfig.claudeSetup) {
     try {
       const gptLimits = getCachedCopilotModel(config, appConfig.gptModel)?.limits
@@ -143,7 +146,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       )
     }
   }
-  watchAppConfig((nextConfig) => {
+  const configWatcher = watchAppConfig((nextConfig) => {
     applyRuntimeConfig(nextConfig)
     log.info(
       `Config reloaded: logLevel=${nextConfig.logLevel} thinkEffort=${nextConfig.thinkEffort} upstreamTimeoutSeconds=${nextConfig.upstreamTimeoutSeconds}`,
@@ -194,7 +197,10 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   } finally {
     process.off("SIGINT", shutdown)
     process.off("SIGTERM", shutdown)
+    clearInterval(configWatcher)
     await clearRelayPidFile()
+    await flushCaptures()
+    await flushLogs()
   }
 }
 

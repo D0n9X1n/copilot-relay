@@ -4,8 +4,9 @@ import { defineCommand } from "citty"
 import type { AppConfig } from "~/lib/app-config"
 
 import { readAppConfig } from "~/lib/app-config"
+import { getRelayBaseUrl } from "~/lib/address"
 import { readProxyConfig } from "~/lib/config"
-import { findRelayOnPort } from "~/lib/lifecycle"
+import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
 import { setLogLevel } from "~/lib/log"
 import { getLogPath, paths } from "~/lib/paths"
 import {
@@ -66,6 +67,7 @@ export const toStatusConfig = (config: AppConfig): StatusConfig => ({
   ...config,
   copilotBaseUrl: formatUrlForDisplay(config.copilotBaseUrl),
   webSearchBackend: config.webSearchBackend ?? null,
+  claudeUpstreamApi: config.claudeUpstreamApi ?? "chat-completions",
 })
 
 export interface RelayStatus {
@@ -170,6 +172,7 @@ const configRowOrder: Record<keyof StatusConfig, number> = {
   webSearchBackend: 8,
   gptModel: 9,
   opusModel: 10,
+  claudeUpstreamApi: 11,
 }
 
 const configRowKeys = (
@@ -441,10 +444,15 @@ export const checkDeep = async (
   }
 }
 
+class StatusConfigError extends Error {}
+
 export const collectStatus = async (options: {
   deep: boolean
 }): Promise<RelayStatus> => {
-  const appConfig = await readAppConfig()
+  const appConfig = await readAppConfig().catch(() => {
+    // Do not claim "not running" or probe a guessed port when config is invalid.
+    throw new StatusConfigError(`Could not read config at ${paths.configPath}; fix it before checking status.`)
+  })
   setLogLevel(appConfig.logLevel)
   // Before any probe runs, so a URL this origin appears in - a fetch failure
   // from checkHealth or checkDeep, which quotes the URL it tried - is already
@@ -475,7 +483,7 @@ export const collectStatus = async (options: {
   // Address comes from the same record as the pid, so the two can never
   // describe different processes. The pid file's port is where the socket is
   // actually bound: hot reload updates config.port without rebinding.
-  const baseUrl = `http://${relay.host}:${relay.port}`
+  const baseUrl = getRelayBaseUrl(relay.host, relay.port)
 
   const health = await checkHealth(baseUrl)
   const models = health.result.ok ? await readModels(baseUrl) : []
@@ -522,7 +530,19 @@ export const status = defineCommand({
     },
   },
   async run({ args }) {
-    const result = await collectStatus({ deep: Boolean(args.deep) })
+    let result: RelayStatus
+    try {
+      result = await collectStatus({ deep: Boolean(args.deep) })
+    } catch (error) {
+      if (!(error instanceof StatusConfigError) && !(error instanceof RelayInspectionError)) throw error
+      const diagnostic = error instanceof RelayInspectionError
+        ? "Could not verify relay process state; status is unknown."
+        : sanitizeTerminalString(error.message)
+      if (args.json) console.log(JSON.stringify({ error: diagnostic, configPath: paths.configPath }))
+      else console.error(diagnostic)
+      process.exitCode = exitCodes.notUsable
+      return
+    }
 
     // stdout, not the logger: this is the command's output, and routing it
     // through the logger would write a log line every time it is polled.

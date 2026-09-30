@@ -173,6 +173,7 @@ interface ResponsesStreamEnvelope {
     output?: Array<ResponsesOutputItem>
     reasoning?: ResponsesReasoningSummaryContainer | null
     incomplete_details?: ResponsesApiResponse["incomplete_details"]
+    status?: string
   }
   item?:
     | Partial<ResponsesMessageOutputItem>
@@ -342,12 +343,18 @@ export async function* translateResponsesStreamToChatCompletionStream(
     toolStartedByIndex: {},
   }
 
+  let completed = false
   for await (const rawEvent of responseStream) {
-    if (!rawEvent.data || rawEvent.data === "[DONE]") {
-      continue
-    }
+    if (!rawEvent.data || rawEvent.data === "[DONE]") continue
+    if (completed) throw new Error("Copilot Responses stream emitted data after its terminal event.")
 
     const event = JSON.parse(rawEvent.data) as ResponsesStreamEnvelope
+    if (!event || typeof event.type !== "string" || event.type === "error"
+      || event.type === "response.failed" || event.type === "response.cancelled") {
+      throw new HTTPError("Upstream response failed", new Response(JSON.stringify({
+        error: { type: "api_error", code: "upstream_response_failed", message: "Upstream response failed." },
+      }), { status: 502, headers: { "content-type": "application/json" } }))
+    }
 
     if (event.response) {
       state.responseId = event.response.id
@@ -451,9 +458,16 @@ export async function* translateResponsesStreamToChatCompletionStream(
       continue
     }
 
-    if (event.type === "response.completed") {
-      if (!event.response) {
-        continue
+    if (event.type === "response.completed" || event.type === "response.incomplete") {
+      if (!event.response) throw new Error("Upstream terminal event is missing its response.")
+      const completion = translateResponsesToChatCompletion({
+        ...event.response,
+        status: event.type === "response.incomplete" ? "incomplete" : event.response.status ?? "completed",
+        output: event.response.output ?? [],
+      })
+      for (const [output_index, item] of (event.response.output ?? []).entries()) {
+        if (item.type === "reasoning") continue
+        for (const chunk of handleOutputItemDone(state, { type: "response.output_item.done", output_index, item })) yield chunk
       }
 
       const reasoningText = getResponsesReasoningText({
@@ -475,22 +489,15 @@ export async function* translateResponsesStreamToChatCompletionStream(
         },
         {
           delta: {},
-          finishReason: getFinishReason(
-            {
-              output: event.response.output ?? [],
-              incomplete_details: event.response.incomplete_details,
-            },
-            (event.response.output ?? []).some(
-              (item) => item.type === "function_call",
-            ),
-          ),
+          finishReason: completion.choices[0]?.finish_reason,
           usage: translateUsage(event.response.usage),
         },
       )
-      yield { data: "[DONE]" }
-      return
+      completed = true
     }
   }
+  if (!completed) throw new Error("Copilot Responses stream ended without a terminal event.")
+  yield { data: "[DONE]" }
 }
 
 function handleOutputItemAdded(
@@ -898,14 +905,9 @@ function getFinishReason(
   hasFunctionCalls: boolean,
 ): "stop" | "length" | "tool_calls" | "content_filter" {
   if (response.output.some((item) => item.type === "message" && item.content.some((part) => part.type === "refusal"))) return "content_filter"
-  if (hasFunctionCalls) {
-    return "tool_calls"
-  }
-
-  if (response.incomplete_details?.reason === "max_output_tokens") {
-    return "length"
-  }
+  if (response.incomplete_details?.reason === "max_output_tokens") return "length"
   if (response.incomplete_details?.reason === "content_filter") return "content_filter"
+  if (hasFunctionCalls) return "tool_calls"
 
   return "stop"
 }

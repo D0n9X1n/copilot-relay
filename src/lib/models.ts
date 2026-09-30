@@ -1,5 +1,5 @@
 // Config-driven model routing and think-effort validation.
-import { runtimeState } from "~/lib/state"
+import { getRuntimeState } from "~/lib/state"
 import { HTTPError } from "~/lib/error"
 
 export const configurableReasoningEfforts = ["low", "medium", "high", "xhigh", "max"] as const
@@ -64,7 +64,7 @@ export function getRequestReasoningEffort(request: {
 export const resolveReasoningEffort = (
   requested?: ReasoningEffort | null,
 ): ReasoningEffort =>
-  requested ?? runtimeState.thinkEffort ?? defaultReasoningEffort
+  requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
 const oneMillionContextModelPattern = /^(gpt-5\.6-sol|gpt-6-astra)(?:\[1m\])*$/i
 
@@ -80,9 +80,9 @@ export const normalizeClaudeModelId = (
   const normalized = normalizeOneMillionContextModel(model)
   if (!normalized) return model
 
-  const catalog = runtimeState.modelCatalog
+  const catalog = getRuntimeState().modelCatalog
   contextWindowTokens ??=
-    catalog?.baseUrl === runtimeState.upstreamBaseUrl ?
+    catalog?.baseUrl === getRuntimeState().upstreamBaseUrl ?
       catalog?.models.get(normalized)?.limits?.max_context_window_tokens
     : undefined
   // [1m] overrides Claude's numeric context setting. Use the plain ID when
@@ -96,7 +96,7 @@ export const normalizeCopilotModelId = (model: string): string =>
   normalizeOneMillionContextModel(model) ?? model
 
 const getConfiguredModelRouting = (): ModelRoutingConfig =>
-  runtimeState.modelRouting ?? defaultModelRouting
+  getRuntimeState().modelRouting ?? defaultModelRouting
 
 export const getModelRouting = (): ModelRoutingConfig => {
   const routing = getConfiguredModelRouting()

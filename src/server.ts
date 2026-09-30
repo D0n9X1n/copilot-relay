@@ -1,12 +1,14 @@
 // HTTP server assembly: exposes only Claude Code-compatible public routes.
 import { randomUUID } from "node:crypto"
+import { isIPv4 } from "node:net"
 
-import { createAdaptorServer, type ServerType } from "@hono/node-server"
+import { createAdaptorServer, type HttpBindings, type ServerType } from "@hono/node-server"
 import { Hono } from "hono"
-import { cors } from "hono/cors"
 
-import type { ProxyConfig, ProxyEnv } from "~/lib/config"
-import { log } from "~/lib/log"
+import { snapshotProxyConfig, type ProxyConfig, type ProxyEnv } from "~/lib/config"
+import { isDebugLogging, log } from "~/lib/log"
+import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
+import { cleanupCapturesIfDue, isReplayTransport, RequestTrace, withRequestTrace } from "~/lib/request-trace"
 import { appVersion } from "~/lib/version"
 import { claudeRoutes } from "~/routes/claude"
 
@@ -50,8 +52,35 @@ const formatStatusLog = (
   return status >= 400 && errorMessage ? `${base} error=${JSON.stringify(errorMessage)}` : base
 }
 
+// Parse an authority, not an arbitrary URL. WHATWG URL alone would also accept
+// userinfo, paths, escaped hostnames and shorthand/octal IPv4 spellings.
+const parseAuthority = (authority: string, protocol: string): URL | undefined => {
+  if (protocol !== "http:" && protocol !== "https:") return undefined
+  const match = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::([0-9]+))?$/i.exec(authority)
+  if (!match || (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 65535))) return undefined
+  try {
+    const url = new URL(`${protocol}//${authority}`)
+    if (isIPv4(url.hostname) && url.hostname !== match[1]) return undefined
+    return url
+  } catch {
+    return undefined
+  }
+}
+
+const effectivePort = (url: URL): number => Number(url.port || (url.protocol === "https:" ? 443 : 80))
+
+const isAllowedHostname = (hostname: string, configuredHost: string | undefined): boolean =>
+  hostname === "localhost"
+  || hostname === "[::1]"
+  || (isIPv4(hostname) && hostname.startsWith("127."))
+  || (hostname !== "0.0.0.0" && hostname !== "[::]" && hostname === configuredHost)
+
 export const createServer = (config: ProxyConfig) => {
-  const app = new Hono<ProxyEnv>()
+  const app = new Hono<ProxyEnv & { Bindings: Partial<HttpBindings> }>()
+  // Hot reload mutates config, but cannot rebind the socket. Admission must
+  // continue describing this listener until it is restarted.
+  const { host, port } = config
+  const configuredHost = parseAuthority(host.includes(":") && !host.startsWith("[") ? `[${host}]` : host, "http:")?.hostname
 
   app.use("*", async (c, next) => {
     const requestId = randomUUID()
@@ -77,7 +106,62 @@ export const createServer = (config: ProxyConfig) => {
       ))
     }
   })
-  app.use("*", cors())
+  app.use("*", async (c, next) => {
+    const url = new URL(c.req.url)
+    // The Node adapter supplies the real socket. This also pins an ephemeral
+    // listener; an unbound in-process app with port 0 has no actual port yet.
+    const incoming = c.env?.incoming
+    const boundPort = incoming?.socket.localPort ?? port
+    const rawTarget = incoming?.url
+    const absoluteTarget = rawTarget && !rawTarget.startsWith("/") ? /^(https?):\/\/([^/?#]+)/i.exec(rawTarget) : undefined
+    const authority = absoluteTarget ? parseAuthority(absoluteTarget[2], `${absoluteTarget[1].toLowerCase()}:`) : parseAuthority(url.host, url.protocol)
+    const hostHeader = c.req.header("host")
+    const headerAuthority = hostHeader === undefined ? authority : parseAuthority(hostHeader, url.protocol)
+    if (!authority || !headerAuthority || url.username || url.password
+      || (rawTarget !== undefined && !rawTarget.startsWith("/") && !absoluteTarget)
+      || headerAuthority.origin !== authority.origin
+      || !isAllowedHostname(authority.hostname, configuredHost)
+      || (boundPort !== 0 && effectivePort(authority) !== boundPort)
+      || (incoming && (hostHeader === undefined || url.protocol !== "http:"))) {
+      const message = "Request authority is not allowed"
+      c.set("requestErrorMessage", message)
+      return c.json({ error: { message } }, 403)
+    }
+    const origin = c.req.header("origin")
+    if (origin !== undefined) {
+      const match = /^(https?:)\/\/([^/?#]+)$/i.exec(origin)
+      const parsedOrigin = match ? parseAuthority(match[2], match[1].toLowerCase()) : undefined
+      if (!parsedOrigin || parsedOrigin.origin !== authority.origin) {
+        const message = "Request origin is not allowed"
+        c.set("requestErrorMessage", message)
+        return c.json({ error: { message } }, 403)
+      }
+    }
+    if (c.req.method === "POST"
+      && (c.req.path === "/v1/messages" || c.req.path === "/v1/messages/count_tokens")
+      && (incoming ? Boolean(incoming.headers["transfer-encoding"])
+        || Number(incoming.headers["content-length"] ?? 0) > 0 : c.req.raw.body !== null)
+      && c.req.header("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+      const message = "Content-Type must be application/json"
+      c.set("requestErrorMessage", message)
+      return c.json({ error: { message } }, 415)
+    }
+    await next()
+  })
+
+  app.use("/v1/*", async (c, next) => {
+    if (c.req.method !== "POST") { await next(); return }
+    if (!isReplayTransport()) cleanupCapturesIfDue()
+    const policy = snapshotProxyConfig(config)
+    const runtime = snapshotRuntimeState()
+    const trace = await RequestTrace.create(c.get("requestId"), c.req.raw, policy, runtime, !isReplayTransport() && isDebugLogging())
+    c.set("config", policy)
+    c.set("requestTrace", trace)
+    c.req.raw = trace.captureRequest(c.req.raw)
+    await withRuntimeState(runtime, () => withRequestTrace(trace, next))
+    c.res = trace.captureResponse(c.res)
+    trace.responseReady()
+  })
 
   app.onError((error, c) => {
     c.set("requestErrorMessage", error.message)

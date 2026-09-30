@@ -4,6 +4,8 @@ import {
   normalizeClaudeModelId,
   resolveReasoningEffort,
   routeModelId,
+  isConfiguredReasoningEffort,
+  type ReasoningEffort,
 } from "~/lib/models"
 import type {
   ChatCompletionResponse,
@@ -30,6 +32,7 @@ import {
   type ClaudeUserMessage,
 } from "~/claude/types"
 import { mapOpenAIStopReasonToClaude } from "~/claude/utils"
+import { HTTPError } from "~/lib/error"
 import {
   createClaudeToolNameMapper,
   getToolNameMapperOptionsForModel,
@@ -50,6 +53,8 @@ export function translateToOpenAI(
     ...getToolNameMapperOptionsForModel(model),
   })
   const tools = translateClaudeToolsToOpenAI(payload.tools, mapper)
+  const effort = resolveReasoningEffort(getRequestReasoningEffort(payload))
+  validateClaudeMessages(payload.messages, false, effort)
   const messages = translateClaudeMessagesToOpenAI(
     payload.messages,
     payload.system,
@@ -64,7 +69,7 @@ export function translateToOpenAI(
     stream: payload.stream,
     temperature: payload.temperature,
     top_p: payload.top_p,
-    reasoning_effort: resolveReasoningEffort(getRequestReasoningEffort(payload)),
+    reasoning_effort: effort,
     user: payload.metadata?.user_id,
     tools,
     tool_choice:
@@ -74,17 +79,50 @@ export function translateToOpenAI(
   }
 }
 
+export function validateClaudeMessages(messages: ClaudeMessage[], native = false, effort?: ReasoningEffort): void {
+  if (!Array.isArray(messages)) throw invalidMessage("Messages must be an array.")
+  for (const message of messages) {
+    if (!message || !["user", "assistant", "system"].includes(message.role)) throw invalidMessage("Unsupported message role.")
+    if (message.role !== "system") continue
+    const control = message.output_config
+    const redundantEffort = control !== null && typeof control === "object" && !Array.isArray(control)
+      && Object.keys(control).length === 1 && isConfiguredReasoningEffort(control.effort) && control.effort === effort
+    if (!native && (message.clear_at !== undefined || control !== undefined && !redundantEffort)) {
+      throw invalidMessage("Per-message system controls require the native Messages route unless effort exactly matches the request.")
+    }
+    if (typeof message.content !== "string" && (!Array.isArray(message.content)
+      || message.content.some((block) => !block || block.type !== "text" || typeof block.text !== "string"))) {
+      throw invalidMessage("System message content must contain only text.")
+    }
+  }
+}
+
 function translateClaudeMessagesToOpenAI(
   claudeMessages: Array<ClaudeMessage>,
   system: string | Array<ClaudeTextBlock> | undefined,
   toolNameMapper: ClaudeToolNameMapper,
 ): Array<Message> {
   const systemMessages = handleSystemPrompt(system)
-  const otherMessages = claudeMessages.flatMap((message) =>
-    message.role === "user" ? handleUserMessage(message) : handleAssistantMessage(message, toolNameMapper),
-  )
+  const otherMessages = claudeMessages.flatMap((message): Array<Message> => {
+    switch (message.role) {
+      case "user":
+        return handleUserMessage(message)
+      case "assistant":
+        return handleAssistantMessage(message, toolNameMapper)
+      case "system":
+        return handleSystemPrompt(message.content)
+      default:
+        throw invalidMessage("Unsupported message role.")
+    }
+  })
   return [...systemMessages, ...otherMessages]
 }
+
+const invalidMessage = (message: string): HTTPError => new HTTPError(message,
+  new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message } }), {
+    status: 400, headers: { "content-type": "application/json" },
+  }), message)
+
 
 function handleSystemPrompt(
   system: string | Array<ClaudeTextBlock> | undefined,
@@ -356,9 +394,9 @@ export function translateToClaude(
       ),
     )
     allTextBlocks.push(...getClaudeTextBlocks(choice.message.content))
-    allToolUseBlocks.push(
-      ...getClaudeToolUseBlocks(choice.message.tool_calls, toolNameMapper),
-    )
+    if (choice.finish_reason === "tool_calls" && !choice.message.refusal) {
+      allToolUseBlocks.push(...getClaudeToolUseBlocks(choice.message.tool_calls, toolNameMapper))
+    }
 
     if (choice.finish_reason === "tool_calls" || stopReason === "stop") {
       stopReason = choice.finish_reason
@@ -428,9 +466,7 @@ function getClaudeToolUseBlocks(
 }
 
 function safeJsonParse(input: string): Record<string, unknown> {
-  try {
-    return JSON.parse(input) as Record<string, unknown>
-  } catch {
-    return { raw: input }
-  }
+  const parsed: unknown = JSON.parse(input)
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Upstream tool input must be a JSON object.")
+  return parsed as Record<string, unknown>
 }

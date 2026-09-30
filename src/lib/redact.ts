@@ -141,61 +141,49 @@ export const scrubSensitiveUrls = (text: string): string => {
   }
 
   return text.replace(absoluteUrlPattern, (match) => {
-    // The whole match is treated as the URL - nothing is trimmed off the end
-    // and nothing is restored after the marker.
-    //
-    // Trailing punctuation used to be trimmed as presumed prose and put back
-    // afterwards. In a query string it is not prose, it is the value:
-    // `?token=!!!` is a valid configured URL whose secret is punctuation and
-    // nothing else, and the restore handed that token back whole. Arbitrary
-    // log text cannot tell a token made of punctuation from a sentence that
-    // ends in one, so the ambiguity is resolved toward disclosure safety: a
-    // sentence-ending period after a sensitive URL is absorbed into the
-    // marker. That costs a character of prose on origins already known to
-    // carry a secret; the alternative cost was the secret.
-    //
-    // Unregistered origins are returned untouched below, so ordinary
-    // diagnostic URLs keep their punctuation byte-for-byte.
-    //
-    // There is also no text-level shortcut for already-scrubbed input.
-    // Skipping anything that *ended* with the marker was a bypass, not an
-    // optimization: `https://host/tenant/SECRET[redacted]` is a valid
-    // configured value, and that check handed it back with the secret intact.
-    // Idempotence is structural instead - `origin[redacted]` is not a
-    // parseable URL, because a bracket is illegal in a hostname unless it
-    // delimits an IPv6 literal, so parseHttpUrl rejects it and a second pass
-    // finds nothing to rewrite, for a bare host, a host with a port, and an
-    // IPv6 literal alike.
-    const parsed = parseHttpUrl(match)
-    if (!parsed || !sensitiveOrigins.has(parsed.origin)) {
-      return match
-    }
-
-    // Where the authority ends in the *matched text*, which may differ from
-    // the canonical origin in case or port. Nothing after it means nothing to
-    // hide.
-    //
-    // Backslash ends the authority exactly as "/" does: WHATWG normalizes it
-    // to "/" for http(s), so `https://host\tenant` has "tenant" in its path,
-    // not its host. Omitting it here would classify that URL as origin-only
-    // and return it unredacted.
-    const authorityStart = match.indexOf("://") + 3
-    let authorityEnd = match.length
-    for (let index = authorityStart; index < match.length; index += 1) {
-      const character = match[index]
-      if (
-        character === "/"
-        || character === "\\"
-        || character === "?"
-        || character === "#"
-      ) {
-        authorityEnd = index
-        break
+    // inspect() escapes whitespace inside nested strings, so several URLs can
+    // share one regex match. Check each URL start without decoding backslashes:
+    // they are also valid gateway path separators. A registered outer URL still
+    // consumes its entire tail, including any URLs embedded in its query.
+    const segments = match.split(/(?=https?:\/\/)/i)
+    let prefix = ""
+    for (const segment of segments) {
+      const parsed = parseHttpUrl(segment)
+      if (!parsed || !sensitiveOrigins.has(parsed.origin)) {
+        prefix += segment
+        continue
       }
-    }
 
-    return authorityEnd === match.length ?
-        match
-      : `${parsed.origin}${redactedMarker}`
+      // Hide the whole remaining tail; never restore presumed punctuation.
+      // `?token=!!!` can be a secret consisting entirely of punctuation, not
+      // prose after a URL. Unregistered prefixes stay byte-for-byte unchanged.
+      //
+      // Idempotence is structural, not a shortcut for text ending in our marker:
+      // `https://host/tenant/SECRET[redacted]` must still redact, whereas
+      // `origin[redacted]` is not parseable (including IPv6 and explicit ports).
+      //
+      // Find the authority in the matched spelling, not the canonical origin.
+      // Backslash ends it just like "/": WHATWG normalizes `https://host\tenant`
+      // to a path. Treating that as origin-only would leak the entire tail.
+      const authorityStart = segment.indexOf("://") + 3
+      let authorityEnd = segment.length
+      for (let index = authorityStart; index < segment.length; index += 1) {
+        const character = segment[index]
+        if (
+          character === "/"
+          || character === "\\"
+          || character === "?"
+          || character === "#"
+        ) {
+          authorityEnd = index
+          break
+        }
+      }
+      if (authorityEnd !== segment.length) {
+        return `${prefix}${parsed.origin}${redactedMarker}`
+      }
+      prefix += segment
+    }
+    return prefix
   })
 }

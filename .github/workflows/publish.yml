@@ -11,29 +11,210 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  test:
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+      version: ${{ steps.tag.outputs.version }}
+      owner: ${{ steps.tag.outputs.owner }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate tag, committed version and lockfile
+        id: tag
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const tag = process.env.RELEASE_TAG;
+          const numeric = '(?:0|[1-9][0-9]*)';
+          const pre = `(?:${numeric}|[0-9]*[A-Za-z-][0-9A-Za-z-]*)`;
+          assert.match(tag, new RegExp(`^v${numeric}\\.${numeric}\\.${numeric}(?:-${pre}(?:\\.${pre})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`));
+          const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          assert.equal(manifest.name, 'copilot-relay');
+          assert.equal(tag, `v${manifest.version}`, 'tag/version mismatch');
+          assert.equal(lock.version, manifest.version);
+          assert.equal(lock.packages[''].version, manifest.version);
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const commit = git('rev-parse', '--verify', '--end-of-options', `refs/tags/${tag}^{commit}`);
+          assert.equal(git('rev-parse', 'HEAD'), commit);
+          const owner = process.env.GITHUB_REPOSITORY_OWNER.toLowerCase();
+          assert.match(owner, /^[a-z0-9][a-z0-9-]*$/);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `commit=${commit}\nversion=${manifest.version}\nowner=${owner}\n`);
+          NODE
+
+  candidates:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: release-candidates-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Pack both candidates from the one build
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          OWNER: ${{ needs.validate.outputs.owner }}
+        run: |
+          mkdir -p candidates/npm candidates/github scoped
+          npm pack --ignore-scripts --pack-destination candidates/npm
+          tar -xzf "candidates/npm/copilot-relay-${VERSION}.tgz" -C scoped --strip-components=1
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const file = 'scoped/package.json';
+          const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+          manifest.name = `@${process.env.OWNER}/copilot-relay`;
+          fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          diff -r dist scoped/dist
+          (cd scoped && npm pack --ignore-scripts --pack-destination "$GITHUB_WORKSPACE/candidates/github")
+          (cd candidates/npm && sha256sum -- *.tgz > SHA256SUMS)
+          (cd candidates/github && sha256sum -- *.tgz > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidates/
+          if-no-files-found: error
+          retention-days: 14
+
+  test:
+    needs: [validate, candidates]
+    name: Gate on ${{ matrix.os }} (Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 26]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: npm install --no-audit --no-fund
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test:unit
+      - run: npm run test:integration
       - run: npm run build
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidates.outputs.artifact-name }}
+          path: candidates
+      - name: Smoke the exact unscoped candidate
+        run: node scripts/package-smoke.mjs candidates/npm copilot-relay "${{ needs.validate.outputs.version }}"
+      - name: Smoke the exact GitHub Packages candidate
+        run: node scripts/package-smoke.mjs candidates/github "@${{ needs.validate.outputs.owner }}/copilot-relay" "${{ needs.validate.outputs.version }}"
+
+  publish-npm:
+    needs: [validate, candidates, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Use npm 11 for trusted publishing
+        run: npm install --global npm@11 --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidates.outputs.artifact-name }}
+          path: candidates
+      - name: Verify candidate
+        run: node scripts/package-smoke.mjs --verify candidates/npm copilot-relay "${{ needs.validate.outputs.version }}"
+      - name: Publish immutable npm bytes with trusted publishing
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG
+          tarball="candidates/npm/copilot-relay-${VERSION}.tgz"
+          integrity="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); console.log("sha512-"+crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$tarball")"
+          if npm view "copilot-relay@${VERSION}" dist.integrity --json --registry=https://registry.npmjs.org > published.json 2> lookup.err; then
+            existing="$(node -p 'JSON.parse(require("node:fs").readFileSync("published.json","utf8"))')"
+            test "$existing" = "$integrity" || { printf '%s\n' 'Existing npm version has different integrity; refusing.' >&2; exit 1; }
+            printf '%s\n' 'npm already contains these exact bytes; skipping.'
+          else
+            node -e 'const e=JSON.parse(require("node:fs").readFileSync("published.json","utf8")); if(e.error?.code!=="E404") process.exit(1)' || { printf '%s\n' 'npm lookup failed; refusing publication.' >&2; exit 1; }
+            npm publish "$tarball" --ignore-scripts --access public --registry=https://registry.npmjs.org
+          fi
+
+  publish-github:
+    needs: [validate, candidates, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidates.outputs.artifact-name }}
+          path: candidates
+      - name: Verify candidate
+        run: node scripts/package-smoke.mjs --verify candidates/github "@${{ needs.validate.outputs.owner }}/copilot-relay" "${{ needs.validate.outputs.version }}"
+      - name: Publish immutable GitHub Packages bytes
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          OWNER: ${{ needs.validate.outputs.owner }}
+        run: |
+          tarball="candidates/github/${OWNER}-copilot-relay-${VERSION}.tgz"
+          integrity="$(node -e 'const fs=require("node:fs"),crypto=require("node:crypto"); console.log("sha512-"+crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$tarball")"
+          if npm view "@${OWNER}/copilot-relay@${VERSION}" dist.integrity --json --registry=https://npm.pkg.github.com > published.json 2> lookup.err; then
+            existing="$(node -p 'JSON.parse(require("node:fs").readFileSync("published.json","utf8"))')"
+            test "$existing" = "$integrity" || { printf '%s\n' 'Existing GitHub package has different integrity; refusing.' >&2; exit 1; }
+            printf '%s\n' 'GitHub Packages already contains these exact bytes; skipping.'
+          else
+            node -e 'const e=JSON.parse(require("node:fs").readFileSync("published.json","utf8")); if(e.error?.code!=="E404") process.exit(1)' || { printf '%s\n' 'GitHub Packages lookup failed; refusing publication.' >&2; exit 1; }
+            npm publish "$tarball" --ignore-scripts --access public --registry=https://npm.pkg.github.com
+          fi
 
   github-release:
-    needs: test
+    needs: [validate, candidates, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -42,7 +223,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -50,86 +231,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
-      - name: Build release assets
-        shell: bash
-        run: |
-          mkdir -p release
-          npm pack --pack-destination release
-          (cd release && sha256sum *.tgz > SHA256SUMS)
-      - name: Create or update GitHub Release
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidates.outputs.artifact-name }}
+          path: candidates
+      - name: Verify candidate
+        run: node scripts/package-smoke.mjs --verify candidates/npm copilot-relay "${{ needs.validate.outputs.version }}"
+      - name: Create release or compare immutable assets
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir release
+          cp candidates/npm/* release/
           tag="${RELEASE_TAG}"
           notes_file="$(mktemp)"
-          trap 'rm -f "$notes_file"' EXIT
+          comparison="$(mktemp -d)"
+          trap 'rm -f "$notes_file"; rm -rf "$comparison"' EXIT
           python3 scripts/release-notes.py "$tag" release > "$notes_file"
-
-          if gh release view "$tag" >/dev/null 2>&1; then
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "$comparison/state.json" 2> "$comparison/lookup.err"; then
+            for file in release/*; do
+              name="$(basename "$file")"
+              if jq -e --arg name "$name" '.assets[] | select(.name == $name)' "$comparison/state.json" > /dev/null; then
+                gh release download "$tag" --pattern "$name" --dir "$comparison"
+                cmp -- "$file" "$comparison/$name" || { printf '%s\n' 'Existing release asset differs; refusing replacement.' >&2; exit 1; }
+              fi
+            done
+            for file in release/*; do
+              name="$(basename "$file")"
+              if ! jq -e --arg name "$name" '.assets[] | select(.name == $name)' "$comparison/state.json" > /dev/null; then
+                gh release upload "$tag" "$file"
+              fi
+            done
             gh release edit "$tag" --title "$tag" --notes-file "$notes_file"
-            gh release upload "$tag" release/*.tgz release/SHA256SUMS --clobber
           else
-            gh release create "$tag" release/*.tgz release/SHA256SUMS \
-              --title "$tag" \
-              --notes-file "$notes_file"
+            grep -q '(HTTP 404)' "$comparison/lookup.err" || { printf '%s\n' 'GitHub release lookup failed; refusing publication.' >&2; exit 1; }
+            gh release create "$tag" release/*.tgz release/SHA256SUMS --verify-tag --title "$tag" --notes-file "$notes_file"
           fi
-
-  publish-npm:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Use npm 11 for trusted publishing
-        run: npm install --global npm@11
-      - run: npm install --no-audit --no-fund
-      - name: Publish to npm with trusted publishing
-        shell: bash
-        run: |
-          unset NODE_AUTH_TOKEN NPM_CONFIG_USERCONFIG
-          package_name="$(node -p "require('./package.json').name")"
-          package_version="$(node -p "require('./package.json').version")"
-          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
-            echo "${package_name}@${package_version} already exists on npm; skipping."
-          else
-            npm publish --access public
-          fi
-
-  publish-github:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://npm.pkg.github.com
-      - run: npm install --no-audit --no-fund
-      - name: Publish to GitHub Packages
-        shell: bash
-        run: |
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          package_version="$(node -p "require('./package.json').version")"
-          npm pkg set "name=@${owner}/copilot-relay"
-          package_name="@${owner}/copilot-relay"
-          if npm view "${package_name}@${package_version}" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
-            echo "${package_name}@${package_version} already exists on GitHub Packages; skipping."
-          else
-            npm publish --access public --registry=https://npm.pkg.github.com
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

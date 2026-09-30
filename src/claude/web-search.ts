@@ -65,6 +65,7 @@ export interface WebSearchResult {
 export interface WebSearchExecutionResult {
   id: string
   inputTokens: number
+  cachedInputTokens?: number
   model: string
   outputTokens: number
   query: string
@@ -177,13 +178,12 @@ export const getClaudeWebSearchToolCallFromChatResponse = (
   response: ChatCompletionResponse,
   toolNameMapper: ClaudeToolNameMapper,
 ): ClaudeWebSearchToolCall | undefined => {
-  const toolCall = response.choices
+  if (response.choices.some((choice) => choice.finish_reason !== "tool_calls" || choice.message.refusal)) return undefined
+  const searchCalls = response.choices
     .flatMap((choice) => choice.message.tool_calls ?? [])
-    .find((call) =>
-      isClaudeWebSearchToolName(
-        toolNameMapper.toClaude(call.function.name),
-      ),
-    )
+    .filter((call) => isClaudeWebSearchToolName(toolNameMapper.toClaude(call.function.name)))
+  if (searchCalls.length > 1) throw new Error("Multiple bridge-managed web searches in one turn are unsupported.")
+  const toolCall = searchCalls[0]
 
   if (!toolCall) {
     return undefined
@@ -370,6 +370,7 @@ const interpretSearchResponse = (
   const callStates = calls.map((item) => recognizedValue(item.status, searchStates))
   const usage = isRecord(upstream.usage) ? upstream.usage : {}
   const inputTokens = reportedTokens(usage.input_tokens)
+  const cachedInputTokens = reportedTokens(isRecord(usage.input_tokens_details) ? usage.input_tokens_details.cached_tokens : undefined)
   const outputTokens = reportedTokens(usage.output_tokens)
   const reasoningTokens = reportedTokens(isRecord(usage.output_tokens_details) ? usage.output_tokens_details.reasoning_tokens : undefined)
   const upstreamResponseId = safeResponseId(upstream.id, config.copilotToken)
@@ -417,7 +418,8 @@ const interpretSearchResponse = (
   ].join(" "))
   return {
     id: upstreamResponseId ?? `msg_${randomUUID().replaceAll("-", "")}`,
-    inputTokens: inputTokens ?? 0,
+    inputTokens: (inputTokens ?? 0) - (cachedInputTokens ?? 0),
+    ...(cachedInputTokens !== undefined && { cachedInputTokens }),
     model: request.model,
     outputTokens: outputTokens ?? 0,
     query: getSearchQuery(upstream, requestedQuery),
@@ -594,6 +596,7 @@ export const createClaudeWebSearchResponse = (
     usage: {
       input_tokens: search.inputTokens,
       output_tokens: search.outputTokens,
+      ...(search.cachedInputTokens !== undefined && { cache_read_input_tokens: search.cachedInputTokens }),
       server_tool_use: { web_search_requests: 1 },
     },
   }
@@ -731,6 +734,9 @@ export const mergeWebSearchAndFinalResponse = (
       searchResponse.usage.input_tokens + finalResponse.usage.input_tokens,
     output_tokens:
       searchResponse.usage.output_tokens + finalResponse.usage.output_tokens,
+    ...((searchResponse.usage.cache_read_input_tokens !== undefined || finalResponse.usage.cache_read_input_tokens !== undefined) && {
+      cache_read_input_tokens: (searchResponse.usage.cache_read_input_tokens ?? 0) + (finalResponse.usage.cache_read_input_tokens ?? 0),
+    }),
     server_tool_use: { web_search_requests: 1 },
   },
 })

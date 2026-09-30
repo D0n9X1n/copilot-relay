@@ -16,32 +16,70 @@ Claude Code thinks it is talking to the Anthropic Messages API. It is talking to
 a local Hono server that speaks the same protocol and answers using a GitHub
 Copilot subscription.
 
-```text
-Claude Code
-  |
-  |  Anthropic-style HTTP requests
-  v
-src/server.ts
-  |
-  |  Hono routes
-  v
-src/routes/claude.ts
-  |
-  |  Claude payload + tool name mapping
-  v
-src/claude/*
-  |
-  |  Copilot chat/responses payload
-  v
-src/copilot/*
-  |
-  |  GitHub Copilot authenticated requests
-  v
-GitHub Copilot API
+```mermaid
+flowchart TD
+    Client["Claude Code"] -->|"Claude Messages HTTP"| Server["Local admission and Hono server"]
+    Server --> Routes["Claude routes and request policy snapshot"]
+    Routes --> Translate["Chat / Responses translation"]
+    Routes --> Native["Native Claude Messages adapter"]
+    Translate --> Copilot["Copilot chat / Responses adapters"]
+    Copilot -->|"Authenticated HTTP"| Upstream["GitHub Copilot"]
+    Native -->|"POST /v1/messages"| Upstream
+    Config["Resolved config and catalog"] -.-> Routes
+    Auth["Live token refresh"] -.-> Copilot
+    Auth -.-> Native
+    Routes -->|"Claude JSON or SSE"| Client
+    Routes -.->|"Debug: observed bodies"| Capture["Private captures and completion metadata"]
 ```
 
-Everything above `src/copilot/*` speaks Claude. Everything below it speaks
-Copilot. The translation layer in between is the whole product.
+The public boundary speaks Claude; orchestration selects a translated or native
+upstream path. Source map: `src/server.ts` (`createServer`),
+`src/routes/claude.ts` (`claudeRoutes`, `handleClaudeMessageRequest`),
+`src/claude/translate.ts` (`translateToOpenAI`, `translateToClaude`),
+`src/copilot/chat.ts` (`createChatCompletions`), and `src/copilot/native.ts`
+(`shouldUseNativeMessages`, `handleNativeMessages`). `src/lib/request-trace.ts`
+observes the bodies consumed at those boundaries; `src/replay.ts` can run the
+current handler offline against the recorded transport instead of Copilot.
+
+## Request flow
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant R as Local Claude route
+    participant T as Translation
+    participant A as Copilot adapter
+    participant U as GitHub Copilot
+    participant D as Private debug capture
+    C->>R: POST /v1/messages
+    R->>R: Admit request and snapshot policy before body read
+    alt Native Claude selected
+        R->>A: Preserve Claude history and controls
+        A->>U: POST /v1/messages
+    else Translated path
+        R->>T: Map model, tools and message history
+        T-->>R: Internal chat payload
+        R->>A: Request with cancellation and timeout budget
+        A->>U: POST /responses or /chat/completions
+    end
+    U-->>A: JSON or SSE
+    A-->>R: Native events or translated result
+    R-->>C: Claude JSON or SSE
+    opt Debug capture enabled at admission
+        R-->>D: Observed bodies, ordered exchanges and outcomes
+    end
+```
+
+`handleClaudeMessageRequest` chooses native Claude before chat translation;
+`createChatCompletions` chooses chat versus Responses for the translated path.
+`src/claude/stream.ts` (`translateChunkToClaudeEvents`) owns translated SSE block
+transitions. A WebSearch turn can add retrieval and a final model pass; see
+[Internals](EN-Internals.md).
+
+`snapshotProxyConfig` and `snapshotRuntimeState` keep an active request on one
+policy/catalog view through retries and search passes. Its bearer token remains
+live, so a successful refresh is used by the next attempt. Capture records bytes
+as they are observed, not a second independent read of an unconsumed stream.
 
 ## Public API
 
@@ -53,10 +91,16 @@ Only Claude Code-facing endpoints are public:
 - `GET /healthz`
 - `GET|HEAD /api/hello`
 
-The proxy calls Copilot `/chat/completions` and `/responses` internally, but it
-does not expose public OpenAI-compatible routes. Unknown routes return `500` and
-log method, path, selected headers, and the request payload, so a future
-compatibility gap arrives with the evidence needed to close it.
+The relay calls Copilot `/chat/completions`, `/responses`, or native `/v1/messages`
+internally, but does not expose public OpenAI-compatible routes. Unknown routes
+that pass admission return `500` with bounded diagnostics for compatibility work.
+
+`src/server.ts` validates the request authority/Host against loopback or the
+configured hostname and actual listener port. A supplied Origin must match that
+origin; mismatches return `403`. Nonempty Messages/count-token POST bodies require
+`application/json` (`415` otherwise). These are **local admission controls, not
+network authentication**: the dummy Claude token does not protect a LAN listener.
+Keep the bind address on loopback.
 
 ### What the cheap endpoints do and do not prove
 
@@ -100,10 +144,14 @@ and also validates the allowed `thinkEffort` defaults: `low`, `medium`,
 `high`, `xhigh`, `max`.
 
 Which upstream *API* a model uses is a separate question from which model runs.
-`gpt-6-astra`, `gpt-5.6-sol`, and the rest of the `gpt-5.5`/`gpt-5.6` family go
-through Copilot `/responses`; Opus currently uses `/chat/completions`. Claude Code
-never sees the difference — both paths return Claude Messages-style responses.
-The consequences of that split are in [Internals](EN-Internals.md).
+`gpt-6-astra`, `gpt-5.6-sol`, and the rest of the `gpt-5.5`/`gpt-5.6` family use
+Copilot `/responses`. Claude models use `/chat/completions` by default;
+`claudeUpstreamApi: auto` opts into native `/v1/messages` when advertised in the
+current catalog, and `messages` forces it. Non-Claude routing is unaffected.
+All paths expose Claude Messages responses, but native signed history and old
+chat-bridge history are not transparently interchangeable. Native failures and
+refusals do not trigger a covert fallback. See [Configuration](EN-Configuration.md)
+for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 
 ## Main modules
 
@@ -120,6 +168,11 @@ The consequences of that split are in [Internals](EN-Internals.md).
 | `src/copilot/chat.ts` | Internal chat abstraction used by routes and startup preflight. Applies model routing and think effort. |
 | `src/copilot/models.ts` | Retains discovered context/input/output limits, scopes them to the upstream provider, and bounds output budgets. |
 | `src/copilot/responses.ts` | Translates between the Copilot Responses API and chat-completion-like results. |
+| `src/copilot/native.ts` | Native Claude Messages, signed history, terminal outcomes, and native WebSearch bridge continuation. |
+| `src/lib/request-trace.ts` | Request-scoped body capture, ordered upstream/refresh records, and completion metadata. |
+| `src/replay.ts` | Strictly validated offline captures replayed through the current in-process handler. |
+| `src/lib/atomic-file.ts` | Snapshot conflict checks and atomic target replacement for user-owned files. |
+| `src/lib/address.ts` | Safe listener/client URL formatting, including IPv6 and wildcard hosts. |
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
 | `src/lib/app-config.ts` | Loads and writes `~/.copilot-relay/config.yaml`. Hot-reloads while running. |
 | `src/lib/models.ts` | Config-driven model routing and `thinkEffort` validation. |
@@ -130,14 +183,22 @@ The consequences of that split are in [Internals](EN-Internals.md).
 
 ```mermaid
 flowchart TD
-    A[Start command] --> B[Read and materialize config]
+    A[Start command] --> B[Validate config and append only absent keys]
     B --> C[Apply runtime config]
     C --> D[Load or refresh GitHub and Copilot tokens]
     D --> E[Preflight both model IDs and thinking effort]
-    E --> F[Bind HTTP server and write PID record]
-    F --> G[Optionally update Claude Code settings]
-    G --> H[Watch config and serve requests]
+    E --> F[Bind HTTP server]
+    F --> G[Write PID record]
+    G --> H[Optionally update Claude Code settings]
+    H --> I[Watch config and serve requests]
 ```
+
+Source: `src/start.ts` (`startRelay`) orders `readAppConfig`, `setupProxyAuth`,
+`validateUpstream`, `startServer`, `writeRelayPidFile`, `applyClaudeConfig`, and
+`watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
+catalog and makes a small real request for each configured model. `startServer`
+resolves only once the listener is ready; managed-settings failures are logged
+without stopping the server.
 
 Preflight runs *before* the socket binds. A relay that cannot reach its
 configured models fails to start rather than accepting traffic it cannot serve.
@@ -149,6 +210,33 @@ Managed Claude setup uses those limits to seed absent client budget settings;
 local `/v1/models` reports the cached capacities without contacting upstream.
 See [Configuration](EN-Configuration.md) for full-context use and
 [Internals](EN-Internals.md) for output buffering and token-counting invariants.
+
+## Lifecycle boundaries
+
+```mermaid
+flowchart TD
+    Signal["SIGINT or SIGTERM"] --> Close["Stop accepting new connections"]
+    Close --> Idle["Close idle connections immediately"]
+    Idle --> Drain["Allow active requests to drain"]
+    Drain -->|"After 2 seconds if still active"| Force["Close remaining connections"]
+    Drain --> Done["Server closes"]
+    Force --> Done
+    Done --> Cleanup["Stop watcher and remove this process's PID record"]
+    Cleanup --> Flush["Flush captures and logs"]
+```
+
+`src/start.ts` (`startRelay`, its `shutdown` handler) calls `server.close()` and,
+for the HTTP/1.1 server, `closeIdleConnections()` immediately. Its 2-second grace
+period precedes `closeAllConnections()` and is shorter than the 5-second stop
+wait in `src/lib/lifecycle.ts` (`stopProcess`). PID cleanup runs in `finally`
+after the server closes; it does not delete another process's PID record. The
+watcher is stopped, then pending captures and logs are flushed. This is graceful
+shutdown behavior, not a guarantee against crash/SIGKILL or failed disk writes.
+
+Detection is deliberately separate: `findRelayOnPort` answers status for the
+configured port; `findRelayProcessIds` scans globally so stop can find strays.
+A changed host or port does not rebind an existing listener. See
+[Internals](EN-Internals.md) for status exit codes and detection invariants.
 
 ## Runtime files
 
@@ -162,6 +250,12 @@ See [Configuration](EN-Configuration.md) for full-context use and
     copilot-relay.2026-07-31.log   <- active, local date
     copilot-relay.2026-07-30.log
     copilot-relay.2026-07-29.log
+  captures/<local-date>/<request-id>/
+    meta.json
+    client-request.bin
+    client-response.bin
+    upstream-<order>-request.bin
+    upstream-<order>-response.bin
 ```
 
 `github_token` is the long-lived login/refresh source. `copilot_token.json`
@@ -189,20 +283,21 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
+claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
 
-`host`, `port`, and `claudeSetup` are read once at startup. The other eight
-hot-reload, applying to work that starts after the change. Empty
-`webSearchBackend` uses `gptModel`. `upstreamTimeoutSeconds` caps the total
-upstream wait budget for a single Claude request; `0` disables that relay deadline.
+`host`, `port`, and `claudeSetup` take effect at startup. The other keys hot-reload
+for newly admitted requests. Empty `webSearchBackend` uses `gptModel`.
+`upstreamTimeoutSeconds` caps one request's total upstream wait; `0` disables
+that relay deadline.
 
-`readAppConfig()` writes the resolved config back to disk, so an existing install
-has every key materialized and a `?? defaultConfig.x` fallback is never consulted
-again. A shipped default therefore reaches fresh installs only. That is
-deliberate: copilot-relay does not rewrite a value your config already holds, so
-a deliberate pin survives every upgrade.
+`readAppConfig()` preserves existing text and appends only absent defaults using
+snapshot-checked atomic replacement. Explicit invalid values fail without a
+rewrite. The read-only watcher rejects partial/empty documents until every key
+is present, retaining the last valid settings. Changed shipped defaults never
+migrate a saved value; a deliberate pin survives upgrades.
 
 Per-key meaning, validation rules, and the hot-reload/restart split live in
 [Configuration](EN-Configuration.md).
@@ -212,26 +307,34 @@ Per-key meaning, validation rules, and the hot-reload/restart split live in
 Logs go to both the console and
 `~/.copilot-relay/logs/copilot-relay.<local-date>.log`. The active file is
 resolved per write, so it rotates at local midnight without a timer, and
-retention deletes files older than `logRetentionDays` local calendar days.
+`logRetentionDays` keeps the chosen number of local calendar days including today.
+Debug captures share that retention window, with startup/reload and throttled
+request-time cleanup that preserves active or unknown-owner pending captures.
+Detailed safety/leftover rules are in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 Each entry is one physical line with bounded payload rendering. Both properties
 are load-bearing rather than cosmetic; the reasoning is in
 [Internals](EN-Internals.md), and the operational recipes are in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
-At `info`, every model request logs client, requested model, upstream model,
-requested think effort, requested thinking budget, and effective think effort.
-Missing effort is marked `unset`. Full normal Claude/upstream request diagnostics
-remain at `debug`.
+At `info`, translated requests report requested/upstream models and effort;
+native requests identify `upstream_api=messages` and effective effort. Completion
+metadata separates HTTP status from stop/finish reason, refusal, truncation and
+reported cache usage. HTTP 200 or a closed stream is not proof of a completed answer.
 
-The central logger passes every emitted value through `scrubSensitiveUrls`
-before either sink, so a secret-bearing upstream URL tail is redacted at every
-level, `debug` included. The central sanitizer rewrites URLs, not payload content.
-Model metadata summaries separately strip terminal control characters.
+The central logger passes emitted values through `scrubSensitiveUrls` before both
+sinks, redacting sensitive URL tails even at `debug`. This is not general payload
+redaction. Ordinary payload rendering remains bounded and one-line.
 
-Debug diagnostics still carry prompt text, tool definitions and arguments,
-request bodies, and headers, none of which a URL scrubber touches. **Do not
-share debug logs unreviewed.**
+`logLevel: debug` also enables **raw full observed body** capture for admitted
+Messages/count-token POSTs under `captures/<local-date>/<request-id>/`, with private
+0700 directories and 0600 files on POSIX. Metadata headers are allowlisted; auth
+headers are excluded. Body bytes bypass log rendering and redaction: prompts,
+tool payloads and upstream echoes can themselves contain secrets. **Never share
+captures wholesale.** Cancellation, queue overload or write failure cannot become
+a silently complete capture. Offline replay checks the current handler, not live
+upstream availability. Limits, exit codes and handling are in
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 ## Testing strategy
 

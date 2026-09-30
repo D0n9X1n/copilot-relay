@@ -9,6 +9,7 @@ import path from "node:path"
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-cfg-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
+process.env.CONSOLA_LEVEL = "0"
 
 const { readAppConfig, watchAppConfig } = await import("../../src/lib/app-config")
 const { paths } = await import("../../src/lib/paths")
@@ -117,8 +118,8 @@ test("invalid effort is rejected without rewriting the user's config", async () 
 })
 
 test("generated effort guidance lists only valid fallback choices", async () => {
-  await writeConfigFile("thinkEffort: minimal\n")
-  assert.equal((await readAppConfig()).thinkEffort, "low")
+  await writeConfigFile("port: 5000\n")
+  assert.equal((await readAppConfig()).thinkEffort, "max")
   const written = await readConfigFile()
   assert.match(written, /# Fallback effort when the request omits it: low, medium, high, xhigh, max\./)
   assert.doesNotMatch(written, /# Fallback effort[^\n]*none/)
@@ -127,60 +128,49 @@ test("generated effort guidance lists only valid fallback choices", async () => 
 test("invalid effort reload reports an error, keeps runtime settings, and can recover", async (t) => {
   await writeConfigFile("thinkEffort: high\n")
   let active = await readAppConfig()
-  let mtime = 1
-  const stats = await fs.stat(paths.configPath)
-  t.mock.method(fs, "stat", async () => Object.assign(stats, { mtimeMs: mtime }))
+  const complete = await readConfigFile()
   const errors: string[] = []
   t.mock.method(log, "error", (...values: unknown[]) => { errors.push(values.join(" ")) })
-  t.mock.timers.enable({ apis: ["setInterval"] })
-  const timer = watchAppConfig((next) => { active = next })
-  const waitFor = async (predicate: () => boolean) => {
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (predicate()) return
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    assert.ok(predicate(), "Config reload did not finish")
-  }
-  try {
-    await new Promise((resolve) => setImmediate(resolve))
-    const invalid = "thinkEffort: none\n"
-    await writeConfigFile(invalid)
-    mtime++
-    t.mock.timers.tick(1000)
-    await waitFor(() => errors.length > 0)
-    assert.match(errors[0], /Invalid thinkEffort.*Valid values: low, medium, high, xhigh, max/)
-    assert.equal(active.thinkEffort, "high")
-    assert.equal(await readConfigFile(), invalid)
+  let poll: (() => void | Promise<void>) | undefined
+  t.mock.method(globalThis, "setInterval", (callback: () => void | Promise<void>) => {
+    poll = callback
+    return { unref() {} } as unknown as ReturnType<typeof setInterval>
+  })
+  watchAppConfig((next) => { active = next })
+  assert.ok(poll)
+  await poll()
 
-    errors.length = 0
-    await writeConfigFile("malformed PRIVATE_CONFIG_SENTINEL\n")
-    mtime++
-    t.mock.timers.tick(1000)
-    await waitFor(() => errors.length > 0)
-    assert.match(errors[0], /Could not reload config/)
-    assert.doesNotMatch(errors[0], /PRIVATE_CONFIG_SENTINEL/)
-    assert.equal(active.thinkEffort, "high")
+  const invalid = complete.replace("thinkEffort: high", "thinkEffort: none")
+  await writeConfigFile(invalid)
+  await poll()
+  assert.match(errors[0], /Invalid thinkEffort.*Valid values: low, medium, high, xhigh, max/)
+  assert.equal(active.thinkEffort, "high")
+  assert.equal(await readConfigFile(), invalid)
 
-    await writeConfigFile("thinkEffort: low\n")
-    mtime++
-    t.mock.timers.tick(1000)
-    await waitFor(() => active.thinkEffort === "low")
-  } finally {
-    clearInterval(timer)
-  }
+  errors.length = 0
+  await writeConfigFile("malformed PRIVATE_CONFIG_SENTINEL\n")
+  await poll()
+  assert.match(errors[0], /Could not reload config/)
+  assert.doesNotMatch(errors[0], /PRIVATE_CONFIG_SENTINEL/)
+  assert.equal(active.thinkEffort, "high")
+
+  const recovered = complete.replace("thinkEffort: high", "thinkEffort: low")
+  await writeConfigFile(recovered)
+  await poll()
+  assert.equal(active.thinkEffort, "low")
+  assert.equal(await readConfigFile(), recovered)
 })
 
-// Why: v0.2.3 wrote configVersion into real user configs. Removing the parser
-// case makes it an unrecognized key, so this pins that it is inert rather than
-// a startup error, and that it drops out on the next write-back.
-test("ignores a leftover configVersion line from v0.2.3", async () => {
+// Why: v0.2.3 wrote configVersion into real user configs. It remains inert,
+// just like any other unknown key, and preservation must not resurrect migration.
+test("preserves but ignores a leftover configVersion line from v0.2.3", async () => {
   await writeConfigFile("configVersion: 2\nopusModel: claude-opus-4.8\n")
 
   const config = await readAppConfig()
 
   assert.equal(config.opusModel, "claude-opus-4.8")
   assert.ok(!("configVersion" in config))
-  assert.doesNotMatch(await readConfigFile(), /configVersion/)
+  assert.match(await readConfigFile(), /^configVersion: 2$/m)
 })
 
 test.after(async () => {

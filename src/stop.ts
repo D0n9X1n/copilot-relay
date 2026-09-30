@@ -12,11 +12,20 @@ export const stop = defineCommand({
     description: "Stop all detected copilot-relay server instances.",
   },
   async run() {
-    const appConfig = await readAppConfig()
-    setLogLevel(appConfig.logLevel)
-    await cleanupLogs(appConfig.logRetentionDays)
+    // A daemon can still be serving its last valid settings after a bad edit.
+    // Config is only a port hint for stop; never let it block verified discovery.
+    const appConfig = await readAppConfig().catch(() => {
+      log.error("Could not read config; stopping only verified relay processes without a port hint.")
+      return undefined
+    })
+    if (appConfig) {
+      setLogLevel(appConfig.logLevel)
+      await cleanupLogs(appConfig.logRetentionDays).catch(() => {
+        log.error("Could not clean up logs; continuing to stop verified relay processes.")
+      })
+    }
 
-    const stopped = await stopExistingRelay(readProxyConfig(appConfig))
+    const stopped = await stopExistingRelay(appConfig ? readProxyConfig(appConfig) : {})
     if (stopped.length > 0) {
       log.info(`Stopped copilot-relay pid(s): ${stopped.join(", ")}`)
     }

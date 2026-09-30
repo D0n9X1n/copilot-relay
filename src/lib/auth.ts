@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { log } from "~/lib/log"
+import { log, registerLogSecret } from "~/lib/log"
 import { paths, ensurePaths } from "~/lib/paths"
 
 const copilotVersion = "0.26.7"
@@ -68,10 +68,12 @@ const sleep = (ms: number) =>
 const readGitHubToken = async () => {
   await ensurePaths()
   const token = await fs.readFile(paths.githubTokenPath, "utf8")
+  registerLogSecret(token.trim())
   return token.trim()
 }
 
 const writeGitHubToken = async (token: string) => {
+  registerLogSecret(token.trim())
   await ensurePaths()
   await fs.writeFile(paths.githubTokenPath, `${token.trim()}\n`, {
     mode: 0o600,
@@ -89,6 +91,7 @@ const readStoredCopilotToken = async (): Promise<StoredCopilotToken | undefined>
       && typeof payload.refreshedAt === "number"
       && typeof payload.refreshIn === "number"
     ) {
+      registerLogSecret(payload.token)
       return payload as StoredCopilotToken
     }
   } catch (error) {
@@ -110,6 +113,7 @@ const readStoredCopilotToken = async (): Promise<StoredCopilotToken | undefined>
       ) {
         await fs.writeFile(paths.copilotTokenPath, content, { mode: 0o600 })
         await fs.chmod(paths.copilotTokenPath, 0o600)
+        registerLogSecret(payload.token)
         return payload as StoredCopilotToken
       }
     } catch (error) {
@@ -125,6 +129,7 @@ const readStoredCopilotToken = async (): Promise<StoredCopilotToken | undefined>
 const writeStoredCopilotToken = async (
   input: CopilotTokenResponse,
 ): Promise<void> => {
+  registerLogSecret(input.token)
   await ensurePaths()
   const payload: StoredCopilotToken = {
     refreshedAt: Date.now(),

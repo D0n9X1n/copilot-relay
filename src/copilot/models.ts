@@ -1,8 +1,8 @@
-import type { ProxyConfig } from "~/lib/config"
+import { publishCopilotModelCatalog, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import { normalizeCopilotModelId, type ModelTokenLimits } from "~/lib/models"
-import { runtimeState } from "~/lib/state"
+import { getRuntimeState, runtimeState } from "~/lib/state"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -109,12 +109,10 @@ export async function loadCopilotModelCatalog(
       })
     }
     const catalog = { baseUrl: provider.baseUrl, models }
-    if (config.copilotBaseUrl === provider.baseUrl) {
-      config.modelCatalog = catalog
-      if (runtimeState.upstreamBaseUrl === provider.baseUrl) {
-        runtimeState.modelCatalog = catalog
-      }
-    }
+    publishCopilotModelCatalog(config, catalog)
+    const state = getRuntimeState()
+    if (state.upstreamBaseUrl === provider.baseUrl) state.modelCatalog = catalog
+    if (runtimeState.upstreamBaseUrl === provider.baseUrl) runtimeState.modelCatalog = catalog
     return catalog
   })()
   pendingCatalogs.set(config, { baseUrl: provider.baseUrl, promise })
@@ -125,14 +123,12 @@ export async function loadCopilotModelCatalog(
   }
 }
 
-export async function boundModelOutputTokens(
+export async function ensureCopilotModelCatalog(
   config: ProxyConfig,
   model: string,
-  requested: number | null | undefined,
-): Promise<number | null | undefined> {
-  // Direct embedders may omit preflight. Keep their explicit budgets unchanged;
-  // the running CLI always loads a catalog before accepting requests.
-  if (!config.modelCatalog) return requested
+): Promise<void> {
+  // Direct embedders may omit preflight; only refresh an existing catalog.
+  if (!config.modelCatalog) return
   if (
     config.modelCatalog.baseUrl !== config.copilotBaseUrl
     || !config.modelCatalog.models.has(model)
@@ -142,6 +138,14 @@ export async function boundModelOutputTokens(
       throw new Error("Copilot base URL changed during model discovery; retry the request.")
     }
   }
+}
+
+export async function boundModelOutputTokens(
+  config: ProxyConfig,
+  model: string,
+  requested: number | null | undefined,
+): Promise<number | null | undefined> {
+  await ensureCopilotModelCatalog(config, model)
   const limits = getCachedCopilotModel(config, model)?.limits
   if (!limits || !isPositiveInteger(requested)) return requested
   const bounded = Math.min(requested, limits.max_output_tokens)

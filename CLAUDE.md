@@ -19,7 +19,7 @@ Nothing lands on `main` without an issue and a PR. (Some history predates this �
 
 **Pushing a tag is irreversible.** `.github/workflows/publish.yml` fires on any `v*` tag and publishes to **npm** and **GitHub Packages**. npm cannot be meaningfully unpublished. There is no dry run.
 
-The workflow's `test` job gates the three publish jobs, but run the full gate locally on the exact tree being tagged anyway — CI passing on the PR is not the same tree as the release commit.
+The workflow validates the tag against both package manifests, builds and packs candidates once, and gates all three publishers on source tests plus those exact tarballs. Publishers verify checksums and reuse the tested bytes; reruns refuse a different existing artifact. Run the full gate locally on the exact tree being tagged anyway — CI passing on the PR is not the same tree as the release commit.
 
 ```sh
 gh pr checks <N>                          # all legs green first
@@ -33,7 +33,7 @@ git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # ← point of no retu
 
 Then verify it actually shipped — `npm view copilot-relay version` and `gh release view vX.Y.Z` — and close the milestone.
 
-CI runs `ubuntu-latest`, `macos-latest`, **and `windows-latest`**. All three must be green.
+CI runs Node 22 and 26 on `ubuntu-latest`, `macos-latest`, **and `windows-latest`**. All six legs must be green. Use `npm ci`; keep `package.json` and `package-lock.json` versions synchronized.
 
 ## Milestones
 
@@ -63,7 +63,7 @@ Keep the split clean *within* the wiki: user-facing configuration stays in Confi
 
 Publishing constraints, all enforced by that same test:
 
-- **Flat only.** `.github/workflows/publish-wiki.yml` copies top-level `wiki/*.md`; a subdirectory is silently not published.
+- **Flat only.** `.github/workflows/publish-wiki.yml` runs `scripts/publish-wiki.py`; the shared, code-aware publisher and verifier reject subdirectories and symlinks rather than silently omitting them.
 - **Source links keep `.md`** — `](EN-Internals.md)` — so they resolve when browsing the folder. The workflow strips the extension for the tab and renames `README.md` to `Home.md`.
 - **No cross-page anchors.** `](EN-Internals.md#section)` is not rewritten by the transform and 404s on the tab. Same-page `#anchor` links are fine.
 - Preserve real external links (`https://docs.anthropic.com/...`); they are not internal references.
@@ -78,7 +78,7 @@ gh run view <run-id> --log                            # read it when it is not
 
 git clone https://github.com/D0n9X1n/copilot-relay.wiki.git /tmp/relay-wiki
 ls /tmp/relay-wiki                                    # Home.md present, tree flat
-grep -rn "](.*\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
+python3 scripts/publish-wiki.py verify /tmp/relay-wiki # checks actual links outside code
 ```
 
 Then open the tab and click through both the English and 中文 navigation from `Home`, including any page you added or renamed.
@@ -112,7 +112,7 @@ npm run test:integration
 npm run build
 ```
 
-Any suite that touches the log or config path **must redirect the home directory before importing** `src/` — `paths.ts` resolves from `os.homedir()` at import time, so use a dynamic `import()` after setting it.
+The package test commands preload `scripts/test-bootstrap.mjs` before `tsx`, isolating each process's home and temporary directory. Any suite that selects its own log/config fixture **must redirect the home directory before importing** `src/` — `paths.ts` resolves from `os.homedir()` at import time, so use a dynamic `import()` after setting it.
 
 Set **both `HOME` and `USERPROFILE`**. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
 

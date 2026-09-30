@@ -6,6 +6,7 @@ import { scrubSensitiveUrls } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
 import { createServer } from "~/server"
 import { shouldUseResponsesApiForModel } from "~/copilot/responses"
+import { shouldUseNativeMessages } from "~/copilot/native"
 
 export interface ModelProbeOptions {
   maxTokens: number
@@ -67,7 +68,8 @@ export async function probeModels(
       const maxTokens = Math.min(options.maxTokens, model.limits?.max_output_tokens ?? options.maxTokens,
         model.limits?.max_non_streaming_output_tokens ?? options.maxTokens)
       const timeoutMs = Math.min(options.timeoutMs, config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : Infinity)
-      const endpoint = shouldUseResponsesApiForModel(id) ? "/responses" : "/chat/completions"
+      const endpoint = shouldUseNativeMessages(config, id) ? "/v1/messages"
+        : shouldUseResponsesApiForModel(id) ? "/responses" : "/chat/completions"
       if (controller.signal.aborted || total.aborted) {
         row.detail = controller.signal.aborted ? "cancelled" : "total-deadline"
       } else if (!safeId(id, config.copilotToken) || normalizeCopilotModelId(id) !== id) {
@@ -84,7 +86,7 @@ export async function probeModels(
         const started = performance.now()
         row.sent = true
         try {
-          const response = await withoutLogging(() => app.fetch(new Request("http://relay-probe.local/v1/messages", {
+          const response = await withoutLogging(() => app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
             method: "POST", headers: { "content-type": "application/json" }, signal,
             body: JSON.stringify({ model: id, stream: false, max_tokens: maxTokens,
               output_config: { effort }, messages: [{ role: "user", content: "Reply with OK only." }],
@@ -105,7 +107,8 @@ export async function probeModels(
             row.detail = "malformed-response"
           } else {
             row.reported = safeId(body.model, config.copilotToken) ? body.model : "unreported"
-            if (normalizeCopilotModelId(row.reported) !== id) row.detail = "model-mismatch"
+            const nativeOpusSpelling = endpoint === "/v1/messages" && id === "claude-opus-5.5" && row.reported === "claude-opus-5-5"
+            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling) row.detail = "model-mismatch"
             else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"
               const tokens = record(body.usage) ? body.usage.output_tokens : undefined

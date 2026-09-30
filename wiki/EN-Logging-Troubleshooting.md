@@ -37,8 +37,8 @@ copilot-relay status --deep
 ```
 
 `--deep` sends a real request through Copilot. It is opt-in because it spends a
-few tokens. Exit codes: `0` running and reachable, `1` not running, `2` running
-but not usable.
+few tokens. Exit codes: `0` running and reachable, `1` not running, `2` unusable
+or status could not be established because config is invalid/unreadable.
 
 The diagnostic keeps a 16-token output budget, shared by reasoning and visible
 text. A successful assistant message with `stop_reason: max_tokens` and positive
@@ -66,14 +66,28 @@ local afternoon for anyone west of Greenwich.
 
 ### Retention
 
-Files are deleted according to `logRetentionDays` in
-`~/.copilot-relay/config.yaml`. The default is `3`.
+Normal relay logs and debug captures share `logRetentionDays` in
+`~/.copilot-relay/config.yaml` (default `3`). It is a calendar retention window,
+not a byte quota.
 
 Retention counts **local calendar days including today**, so `3` keeps today,
 yesterday, and the day before. Eligibility is decided by the date in the
 filename, falling back to mtime for files that carry no stamp. The filename is
 preferred because mtime is rewritten by backups, `cp`, and editors touching a
-file, any of which would silently extend or shorten the window.
+file, any of which would silently extend or shorten the window. Only the relay's
+dated/legacy log filenames are swept; service-manager stderr files and unrelated
+diagnostics are not owned by this cleanup.
+
+Capture age comes from the enclosing local-date directory. Cleanup runs at startup,
+on config reload and, throttled to hourly checks, when admitted POST requests
+arrive; offline replay never triggers it. Active captures are protected, including
+pending captures whose owner is live or cannot be established. Abandoned pending
+captures are eligible only when the recorded owner is known to have exited.
+Symlinks, unexpected files and unknown/changing records are retained, not recursively
+removed. Thus some unsafe/unknown leftovers can outlive the window; inspect them
+rather than treating retention as a guarantee that every directory is gone.
+Graceful shutdown waits for capture/log writes after closing the server; a crash,
+SIGKILL or disk failure can still leave an incomplete capture.
 
 If you upgraded from before v0.2.3, an undated `copilot-relay.log` may still be
 present. It is the old single log file; it carries no filename date, so it ages
@@ -87,17 +101,20 @@ configured the whole time.
 
 ### One entry, one line
 
-Every log entry — including error entries carrying full request/response
-context — is written as a single physical line, with object payloads rendered at
-bounded depth and no pretty-printing.
+Every normal log entry — including errors carrying request/response context —
+is one physical line, with object payloads rendered at bounded depth and no
+pretty-printing. Embedded line separators are escaped after URL redaction.
 
 This matters for searching as much as for size. Multi-line object dumps
 previously made the `grep` recipes below return the first fragment of a payload
 rather than the matching entry, and accounted for roughly two thirds of log
 volume by bytes.
 
-Payloads are bounded at depth 6, 100 array elements, and 4000 characters per
-string. A value past those limits is truncated in the log, not dropped.
+Object inspection is bounded at depth 6, 100 array elements and 4000 characters
+per contained string. Final rendered arguments are capped at 16 KiB and each file
+entry at 64 KiB, with `[truncated]` marking that cap. URL and known credential
+redaction happens before the final limits, in both sinks. These entries are not
+byte-exact captures; separate debug body files are not subject to these limits.
 
 ### Line format
 
@@ -116,15 +133,95 @@ Only three levels are valid:
 | Level | Logs |
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures. |
-| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, and local HTTP status codes. |
-| `debug` | Info plus detailed Copilot timings and request payloads. |
+| `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, HTTP codes, and completion/refusal/cache metadata. |
+| `debug` | Info plus detailed timing/capture-path logs and automatic raw full-body capture for admitted Messages/count-token POSTs; no routine full-payload log dumps. |
 
 Invalid values such as `warn`, `trace`, or `silent` stop startup. File logs
 follow the same `logLevel` filter as console logs.
 
-Start with `info`: model routing and requested/effective effort are visible there.
-Set `logLevel: debug` only for detailed timings or request payloads — it can log
-prompts and tool payloads. Existing error-context logging is unchanged.
+Start with `info`. Enable `logLevel: debug` only for a short, intentional capture
+window, then restore `info`. It captures **all admitted Messages/count-token POSTs
+during that window**, not just the request you are investigating. It does not
+retroactively recover prior traffic. GET/static probes and requests rejected by
+Host/Origin/content-type admission are not full-body captures.
+
+## Debug captures and offline replay
+
+### What is stored
+
+Debug automatically writes raw, full **observed** client request, upstream request/
+response, and downstream response bytes under:
+
+```text
+~/.copilot-relay/captures/<local-date>/<request-id>/
+  meta.json
+  client-request.bin
+  client-response.bin
+  upstream-<order>-request.bin
+  upstream-<order>-response.bin
+```
+
+Use the local `request_id` in logs (also returned as
+`x-copilot-relay-request-id`) to find a capture. `meta.json` carries HTTP status,
+body/chunk state, ordered transport attempts/refresh outcomes, policy/catalog
+snapshot and bounded completion metadata. `<order>` includes refresh steps, so
+upstream filenames need not have consecutive numbers. Empty bodies need not have
+a `.bin` file. Files are created with mode 0600 and directories with 0700; POSIX
+permissions are enforced, while Windows access still depends on account ACLs.
+
+The header allowlist is limited to `content-type`, `accept`, `anthropic-version`,
+`anthropic-beta`, `claude-beta`, `x-request-id`, `x-github-request-id`,
+`x-copilot-service-request-id`, and `retry-after`. Authentication headers and bearer
+state are excluded. **This is not payload redaction.** Body files contain exact
+observed prompt/tool/response data, including any secrets or private URLs in that
+data. Do not archive, paste or upload a capture wholesale; review selected
+metadata/excerpts locally before sharing anything.
+
+### Completeness and limits
+
+The writer has a maximum **8 MiB queued bytes per request** and **100,000 recorded
+chunks per body**. Disk writes are asynchronous; forwarding is not stalled to
+keep a capture complete. Overload, write/initialization/finalization failure,
+cancellation or a still-pending body leaves explicit incomplete/pending state,
+not a success claim. Replay reports `INCOMPLETE` for unfinished captures. Read the
+`captureState`, `captureError` and body states in `meta.json`; an initialization
+failure may leave only the normal error log and no usable capture directory.
+
+These are queue/metadata bounds, not a total disk quota. A sustained debug window
+can write large bodies. Raw streams contain only bytes the handler/client path
+actually consumed; a cancelled/discarded transport is not secretly drained for
+diagnostics. A complete byte recording may still contain a semantic refusal,
+truncated generation or error. Capture completeness does **not** mean answer success.
+
+### Replay locally
+
+```sh
+copilot-relay replay <request-id>
+copilot-relay replay /absolute/path/to/capture-directory
+```
+
+Both forms are `copilot-relay replay <request-id|directory>`. An ID searches the
+local date directories; an explicit directory can be outside the default home.
+Replay runs the **actual current in-process handler** using recorded ordered
+upstream/refresh transport, with no sockets, real authentication, token/config
+writes or new capture. It compares actual outgoing requests and final JSON/SSE,
+not just two saved files. Output includes each exchange's status, known completion
+reason and numeric token/cache usage, plus client block types and tool-call count;
+it does not print tool arguments or response text. Do not use `auth`, restart the
+daemon or make a new Copilot call merely to replay a capture.
+
+| Verdict | Exit | Meaning |
+| --- | ---: | --- |
+| `MATCH` | `0` | Current transformations and ordered operations agree with the recording. Not proof of live upstream health, answer correctness or cache efficiency. |
+| `DIFF` | `2` | Outgoing/downstream structure or transport sequence differs. Diff output contains paths and fixed reasons, **no payload text**. |
+| `INCOMPLETE` | `2` | Capture did not settle completely; no match is claimed. |
+| `MISSING` / `MALFORMED` | `1` | Capture absent, ambiguous, unsafe, invalid or beyond replay limits. |
+
+Replay accepts at most **16 MiB metadata** and **256 MiB combined body bytes**.
+It validates fixed filenames, directory/file safety, schema and chunk sizes;
+unsafe links are refused. A valid recording larger than the replay envelope is
+not replayable merely because disk capture succeeded. Interrupted recordings
+cannot be upgraded to `MATCH` by treating partial bytes as a full response.
 
 ## Useful searches
 
@@ -185,6 +282,14 @@ also logs end-to-end stream duration:
 info request_id=3b241101-e2bb-4255-8caf-4136c566a962 stream completed 1234ms
 ```
 
+`stream completed` means the handler ended, not that the model answered
+successfully. Separate `request outcome` and upstream `completion` entries report
+`http_status`, body state, `stop_reason`/`finish_reason`, response status, terminal
+evidence, refusal category, incomplete reason and reported cache/input/output
+usage. Missing terminal fields are `unknown`; do not infer zero cache usage from
+an absent field. An HTTP 200 may carry refusal, `max_tokens`, a tool-result error
+or a broken SSE stream. Inspect those outcomes, not just the transport status.
+
 For non-2xx responses the same line includes a short error message when one is
 available:
 
@@ -213,6 +318,9 @@ Use this line first when debugging "why did my request use this model/effort?"
 `unset` means the configured fallback was used. Explicit request `none` is logged
 as `none`, not confused with an omitted field. The summary contains metadata, not
 the normal prompt/tool payload dump, and strips terminal controls to stay on one line.
+The native route has a narrower summary with `upstream_api=messages`, the routed
+model and effective effort. The full original model/control fields remain in a
+debug capture, not in a guarantee that both summary formats are identical.
 
 ### Upstream Copilot calls
 
@@ -233,27 +341,34 @@ At `debug`, a compact timing summary is also emitted:
 debug request_id=3b241101-e2bb-4255-8caf-4136c566a962 Copilot POST /responses -> 200 9200ms (attempt 1) upstream_request_id=5a0f91b1-e0d3-4fd3-81a3-116238688754
 ```
 
-Transient 5xx retries are logged at `error` with retry context. When Copilot
-returns a non-2xx, the `error` entry keeps the full upstream context on one line:
+Transient 5xx retries are logged at `error` with retry context. On translated
+non-2xx failures, an `error` entry retains bounded upstream context on one line:
 
 ```text
 error Failed to create responses: route=/responses model=gpt-6-astra status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
 ```
 
-### Request payloads
+### Request captures
 
-At `debug` only:
+At `debug`, capture initialization reports the local request ID and directory
+(example path):
 
 ```text
-debug Full Claude request payload { payload: ... }
-debug Full request payload { payload: ... }
+debug request_id=<request-id> capture=/home/<user>/.copilot-relay/captures/<local-date>/<request-id> privacy=full-bodies
 ```
 
-Use this only when you need the exact request shape.
+Raw observed payloads live in `client-request.bin`, `client-response.bin`, and
+`upstream-<order>-request.bin` / `upstream-<order>-response.bin`, with completeness
+recorded in `meta.json`. Routine debug logs do not emit full payload objects;
+remaining request/response context in ordinary logs is bounded error diagnostics.
+Use the capture's completeness and privacy rules above, not a log excerpt, when
+checking exact observed bytes.
 
 ### Tokens
 
-Token values are never printed. Lifecycle logs carry paths and scheduling only:
+Authentication lifecycle logs do not print bearer values; they carry paths and
+scheduling only. Raw body captures may still contain secrets supplied in prompts
+or echoed by upstream, which is a separate privacy boundary:
 
 ```text
 info Using cached GitHub token at ~/.copilot-relay/github_token
@@ -270,8 +385,11 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 ```
 
 Hot reload updates `logLevel`, `logRetentionDays`, `thinkEffort`,
-`upstreamTimeoutSeconds`, `copilotBaseUrl`, `webSearchBackend`, `gptModel`, and
-`opusModel`. Changing `host`, `port`, or `claudeSetup` requires a restart.
+`upstreamTimeoutSeconds`, `copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`,
+`gptModel`, and `opusModel`. Changing `host`, `port`, or `claudeSetup` requires a
+restart. The watcher never rewrites the file: invalid, empty, or partial saves
+retain the last valid settings until every materialized key is present again.
+Active requests retain their admission-time policy while using refreshed credentials.
 
 ## Startup failed
 
@@ -293,6 +411,22 @@ Fix auth and retry:
 copilot-relay auth
 copilot-relay start
 ```
+
+## Broken config and stopping safely
+
+A bad edit need not stop a daemon already serving its last valid policy. `status`
+exits `2` with a safe config diagnostic rather than guessing health or rewriting
+invalid values. Fix the file and restore every key for hot reload; see
+[Configuration](EN-Configuration.md).
+
+If you need to stop it first, `copilot-relay stop` continues best-effort without a
+config port hint and can identify both `start` and long-running `restart`
+processes. It signals only verified relay identities, rechecks before escalation,
+and preserves unknown/live PID records. A failed process query is not proof that
+a process exited: unknown discovery retries for a bounded interval, then reports
+that stop was not confirmed. `status` reports unknown inspection with exit `2`.
+“No existing instance found” is not emitted to hide an unknown candidate. Do not
+blindly kill an unverified PID; inspect it or use the owning service manager.
 
 ## A new version did not take effect
 
@@ -340,16 +474,36 @@ At `info`, local failures look like:
 info POST /v1/messages -> 400 123ms error="Invalid request"
 ```
 
-The matching `error` line contains full upstream context in the same log file:
-route, model, request payload, response status, response headers, and response
-body.
+Translated upstream failures can include route/model and bounded request/response
+context in the matching `error` entry. Do not mistake that rendered excerpt for
+a full capture. Native failures retain their upstream error rather than silently
+switching APIs; correlate the request ID and completion metadata first.
 
 ```sh
 grep -n "Failed to create" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
-If the response body mentions request shape, check the surrounding `request`
-object in the `error` entry.
+If the response body mentions request shape, inspect a reviewed bounded excerpt
+or a complete local capture. The translated path permits an inline system
+`output_config` only when its sole key is `effort`, that value is one of the five
+configured effort levels, and it exactly matches the current resolved request
+effort. System text and order stay intact. Different historical efforts,
+additional/unknown keys, `clear_at`, unknown roles or malformed system text return
+HTTP 400 JSON before upstream work or SSE. Native forced bridge-search choices
+and unrecognized old bridge history do too. Do not silently rewrite controls or
+strip signed history to hide these errors; see [Internals](EN-Internals.md).
+
+Host/Origin rejection is `403`; a nonempty inference/token-count POST without
+`application/json` is `415`. These are local admission errors, not Copilot auth
+failures, and do not make a non-loopback listener authenticated.
+
+An upstream HTTP 400 can also be a client/provider capability mismatch. In the
+isolated 2026-09-30 Claude Code 2.1.285 native check, the first two requests were
+rejected for unsupported `safeguards`; the client subsequently downgraded its own
+request and completed the two-turn `Read`/tool-result exchange. The relay did not
+strip that field or bypass safety controls. That observation is not a recommendation
+to remove safeguards, nor validation of the production listener on port 4142.
+The scoped evidence and limitations are in [Internals](EN-Internals.md).
 
 If it mentions auth or model access, refresh the login and then verify with a
 check that actually reaches Copilot:
@@ -395,7 +549,14 @@ an invalid hot reload logs an error and leaves the previous runtime settings act
 ## WebSearch fails or returns no results
 
 Claude WebSearch is executed by the relay through Copilot `/responses` with
-`web_search_preview`. If search returns an error result:
+`web_search_preview`, even when the conversation uses native Claude Messages.
+Native bridge search requires automatic selection; forced `any` or an explicitly
+forced search is rejected before retrieval. Multiple/repeated search calls are
+not supported. Old chat-bridge search history is not transparently accepted on
+native; keep the original route or start a new conversation. See
+[Internals](EN-Internals.md) for signed-history reconstruction.
+
+If search returns an error result:
 
 ```sh
 grep -n "web_search_preview\|Failed to create responses\|Copilot web search" ~/.copilot-relay/logs/copilot-relay.*.log
@@ -582,18 +743,30 @@ socket cannot move during hot reload.
 
 ## Safe log sharing
 
-Do not share full `debug` logs publicly without review — they can include prompts
-and tool payloads.
+**Never share raw captures wholesale.** Prompts, tool arguments/results, signed
+thinking, responses and echoed URLs can contain private data or secrets even
+though auth headers were excluded. Do not upload an entire capture to an issue,
+chat or diagnostic service. Review a minimal excerpt locally first.
 
-Upstream URLs are redacted in logs: a `copilotBaseUrl` with a path, query string,
-or fragment is written as `https://gateway.example[redacted]`, because a gateway
-path can carry a token and the log file is the one thing users are asked to
-attach to a bug report.
+Normal log URL tails are redacted (for example
+`https://gateway.example[redacted]`), but this does not sanitize arbitrary payload
+secrets. Review even an `error` excerpt; bounded is not the same as safe to publish.
 
-For bug reports, include:
+For bug reports, include only reviewed, necessary information:
 
-- exact timestamp
-- the `info` request summary
-- the related `error` entry if present
-- whether `logLevel: debug` was enabled
-- relevant config with private endpoints removed
+- exact timestamp and local request ID
+- the `info` request/outcome summary, distinguishing HTTP status from completion
+- a sanitized related `error` excerpt if needed
+- replay verdict and structural diff paths, not body files
+- whether debug was enabled and whether the capture was complete
+- relevant config with private endpoints and values removed
+
+A captured refusal establishes that refusal was observed, not why the provider
+made it. Reasoning flattening is still not proven to have caused the historical
+refusal. The bounded 2026-09-30 native/chat cache trial and separate real-client
+check are recorded in [Internals](EN-Internals.md), including the interrupted
+counterbalanced trial's native cold refusal. They do not establish broad cache
+non-regression, billing-cost equivalence or current production readiness;
+`chat-completions` remains the default. Recorded success and refusal cases both
+replayed as `MATCH`: that verifies local reproduction, not approval of the answer
+or a new successful upstream call. Port 4142 was untouched by those isolated checks.

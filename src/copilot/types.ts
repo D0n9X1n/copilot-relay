@@ -29,6 +29,7 @@ interface ChatChunkChoice {
 
 interface ChatChunkDelta {
   content?: string | null
+  refusal?: string | null
   role?: "user" | "assistant" | "system" | "tool"
   reasoning_content?: string | null
   reasoning_opaque?: string | null

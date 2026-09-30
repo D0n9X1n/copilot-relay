@@ -13,32 +13,68 @@
 Claude Code 以为自己在和 Anthropic Messages API 通信。实际上它在和一个本地 Hono
 server 通信 —— 该 server 讲同样的协议，但用 GitHub Copilot 订阅来作答。
 
-```text
-Claude Code
-  |
-  |  Anthropic 风格 HTTP 请求
-  v
-src/server.ts
-  |
-  |  Hono routes
-  v
-src/routes/claude.ts
-  |
-  |  Claude payload + 工具名映射
-  v
-src/claude/*
-  |
-  |  Copilot chat/responses payload
-  v
-src/copilot/*
-  |
-  |  GitHub Copilot 认证请求
-  v
-GitHub Copilot API
+```mermaid
+flowchart TD
+    Client["Claude Code"] -->|"Claude Messages HTTP"| Server["本地接入检查与 Hono server"]
+    Server --> Routes["Claude 路由与请求策略快照"]
+    Routes --> Translate["Chat / Responses 翻译"]
+    Routes --> Native["原生 Claude Messages 适配器"]
+    Translate --> Copilot["Copilot chat / Responses 适配器"]
+    Copilot -->|"带认证的 HTTP"| Upstream["GitHub Copilot"]
+    Native -->|"POST /v1/messages"| Upstream
+    Config["解析后的配置与目录"] -.-> Routes
+    Auth["实时 token 刷新"] -.-> Copilot
+    Auth -.-> Native
+    Routes -->|"Claude JSON 或 SSE"| Client
+    Routes -.->|"Debug：已观察正文"| Capture["私有捕获与完成元数据"]
 ```
 
-`src/copilot/*` 以上的一切讲 Claude，以下的一切讲 Copilot。夹在中间的翻译层就是
-这个项目本身。
+公开边界讲 Claude，编排层选择翻译路径或原生上游路径。源码地图：
+`src/server.ts`（`createServer`）、`src/routes/claude.ts`
+（`claudeRoutes`、`handleClaudeMessageRequest`）、`src/claude/translate.ts`
+（`translateToOpenAI`、`translateToClaude`）、`src/copilot/chat.ts`
+（`createChatCompletions`）及 `src/copilot/native.ts`
+（`shouldUseNativeMessages`、`handleNativeMessages`）。`src/lib/request-trace.ts`
+观察这些边界上实际消费的正文；`src/replay.ts` 可用记录的传输代替 Copilot，让当前
+handler 离线执行。
+
+## 请求流程
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant R as 本地 Claude 路由
+    participant T as 翻译层
+    participant A as Copilot 适配器
+    participant U as GitHub Copilot
+    participant D as 私有 debug 捕获
+    C->>R: POST /v1/messages
+    R->>R: 接入检查，在读取正文前快照策略
+    alt 选择了原生 Claude
+        R->>A: 保留 Claude 历史及控制字段
+        A->>U: POST /v1/messages
+    else 翻译路径
+        R->>T: 映射模型、工具和消息历史
+        T-->>R: 内部 chat payload
+        R->>A: 带取消信号与超时预算的请求
+        A->>U: POST /responses 或 /chat/completions
+    end
+    U-->>A: JSON 或 SSE
+    A-->>R: 原生事件或翻译结果
+    R-->>C: Claude JSON 或 SSE
+    opt 接入时启用了 debug 捕获
+        R-->>D: 已观察正文、有序交换及完成结果
+    end
+```
+
+`handleClaudeMessageRequest` 在 chat 翻译之前选择原生 Claude；翻译路径由
+`createChatCompletions` 选择 chat 或 Responses。`src/claude/stream.ts`
+（`translateChunkToClaudeEvents`）负责翻译后的 SSE block 状态转换。WebSearch 回合
+可能增加检索和最终模型调用，见[内部实现](ZH-Internals.md)。
+
+`snapshotProxyConfig` 和 `snapshotRuntimeState` 让活动请求在重试与搜索调用间使用
+同一份策略/目录视图。Bearer token 仍实时读取，因此下一次尝试会使用成功刷新的凭据。
+捕获记录的是实际观察到的字节，不会另开一路去独立读取尚未消费的流。
 
 ## 公开 API
 
@@ -50,9 +86,13 @@ GitHub Copilot API
 - `GET /healthz`
 - `GET|HEAD /api/hello`
 
-内部会调用 Copilot `/chat/completions` 和 `/responses`，但不对外暴露 OpenAI 兼容
-路由。未知路由返回 `500`，并记录 method、path、部分 header 和请求 payload，这样
-将来要补兼容性时，证据已经在手上了。
+内部会调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`，但不公开
+OpenAI 兼容路由。通过接入检查的未知路由返回 `500`，并记录有界诊断供兼容性排查。
+
+`src/server.ts` 校验请求 authority/Host 是否为 loopback 或配置的主机名，以及是否匹配
+实际监听端口。若携带 Origin，必须与该 origin 一致；不匹配返回 `403`。Messages/token
+计数的非空 POST 正文必须使用 `application/json`，否则返回 `415`。这些是**本地接入
+控制，不是网络认证**：Claude 占位 token 不能保护 LAN 监听器。请保持 loopback 绑定。
 
 ### 廉价接口能证明什么，不能证明什么
 
@@ -92,9 +132,11 @@ opusModel: claude-opus-5.5
 `medium`、`high`、`xhigh`、`max`。
 
 模型走哪个上游 **API** 和跑哪个模型是两个问题。`gpt-6-astra`、`gpt-5.6-sol` 以及
-`gpt-5.5`/`gpt-5.6` 系列的其余成员走 Copilot `/responses`；Opus 目前走
-`/chat/completions`。Claude Code 看不到这个差别 —— 两条路径都返回 Claude
-Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Internals.md)。
+`gpt-5.5`/`gpt-5.6` 系列走 Copilot `/responses`。Claude 模型默认走 `/chat/completions`；
+设置 `claudeUpstreamApi: auto` 可在当前目录公布支持时选择原生 `/v1/messages`，
+`messages` 则强制选择原生路径。非 Claude 路由不受影响。所有路径都公开 Claude Messages
+响应，但原生签名历史与旧 chat bridge 历史不能透明互换。原生错误和拒答不会触发隐蔽
+回退。选择方法见[配置说明](ZH-Configuration.md)，历史与缓存边界见[内部实现](ZH-Internals.md)。
 
 ## 主要模块
 
@@ -111,6 +153,11 @@ Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Inter
 | `src/copilot/chat.ts` | 供 routes 和启动 preflight 共用的内部 chat 抽象。应用模型路由与 think effort。 |
 | `src/copilot/models.ts` | 保留发现的 context、输入和输出限制，按上游隔离，并约束输出预算。 |
 | `src/copilot/responses.ts` | 在 Copilot Responses API 与 chat-completion 风格结果之间翻译。 |
+| `src/copilot/native.ts` | 原生 Claude Messages、签名历史、终止结果及原生 WebSearch bridge 续接。 |
+| `src/lib/request-trace.ts` | 请求级正文捕获、有序上游/刷新记录及完成元数据。 |
+| `src/replay.ts` | 严格校验捕获，用当前进程内 handler 离线重放。 |
+| `src/lib/atomic-file.ts` | 用户文件的快照冲突检查与原子目标替换。 |
+| `src/lib/address.ts` | 安全格式化监听/客户端 URL，包括 IPv6 与通配监听地址。 |
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |
 | `src/lib/models.ts` | 配置驱动的模型路由与 `thinkEffort` 校验。 |
@@ -121,14 +168,21 @@ Messages 风格的响应。这个分叉带来的后果见[内部实现](ZH-Inter
 
 ```mermaid
 flowchart TD
-    A[启动命令] --> B[读取并写回完整配置]
+    A[启动命令] --> B[校验配置，只追加缺失键]
     B --> C[应用运行期配置]
     C --> D[读取或刷新 GitHub 与 Copilot token]
     D --> E[Preflight 校验两个模型 ID 和 thinking effort]
-    E --> F[绑定 HTTP 服务并写入 PID 记录]
-    F --> G[可选更新 Claude Code 设置]
-    G --> H[监听配置并处理请求]
+    E --> F[绑定 HTTP 服务]
+    F --> G[写入 PID 记录]
+    G --> H[可选更新 Claude Code 设置]
+    H --> I[监听配置并处理请求]
 ```
+
+源码：`src/start.ts`（`startRelay`）依次编排 `readAppConfig`、`setupProxyAuth`、
+`validateUpstream`、`startServer`、`writeRelayPidFile`、`applyClaudeConfig` 和
+`watchAppConfig`。`src/lib/preflight.ts`（`validateUpstream`）检查模型目录，并对每个
+配置模型发出一次小型真实请求。`startServer` 只在监听器就绪后才完成；自动管理设置失败
+会记录日志，不会让服务停止。
 
 Preflight 在 socket 绑定**之前**运行。一个连配置模型都够不着的中继会直接启动失败，
 而不是先接下它根本处理不了的流量。此时解析后的配置已经写入磁盘，因此可以直接修改
@@ -138,6 +192,30 @@ Preflight 还会保留模型的 token 限制和 tokenizer 元数据。Claude 自
 的客户端预算；本地 `/v1/models` 返回缓存的容量，不会调用上游。完整 context 的使用
 方法见[配置说明](ZH-Configuration.md)，输出缓冲和 token 计数的不变量见
 [内部实现](ZH-Internals.md)。
+
+## 生命周期边界
+
+```mermaid
+flowchart TD
+    Signal["SIGINT 或 SIGTERM"] --> Close["停止接受新连接"]
+    Close --> Idle["立即关闭空闲连接"]
+    Idle --> Drain["允许活动请求完成"]
+    Drain -->|"2 秒后仍有活动连接"| Force["关闭剩余连接"]
+    Drain --> Done["服务关闭"]
+    Force --> Done
+    Done --> Cleanup["停止 watcher，移除本进程的 PID 记录"]
+    Cleanup --> Flush["完成捕获和日志写入"]
+```
+
+`src/start.ts`（`startRelay` 内的 `shutdown` 处理器）调用 `server.close()`，并对
+HTTP/1.1 server 立即调用 `closeIdleConnections()`。2 秒宽限期结束后会调用
+`closeAllConnections()`，这比 `src/lib/lifecycle.ts`（`stopProcess`）的 5 秒停止等待
+更短。服务关闭后，`finally` 中清理 PID 记录，不会删除其他进程的记录。停止 watcher 后
+等待捕获与日志写入。这是优雅关停行为，不能保证崩溃/SIGKILL 或磁盘失败时的完整性。
+
+检测逻辑刻意分开：`findRelayOnPort` 回答配置端口上的状态，`findRelayProcessIds`
+全局扫描，以便 stop 找到遗留进程。修改 host 或 port 不会重新绑定现有监听器。
+状态退出码与检测不变量见[内部实现](ZH-Internals.md)。
 
 ## 运行期文件
 
@@ -151,6 +229,12 @@ Preflight 还会保留模型的 token 限制和 tokenizer 元数据。Claude 自
     copilot-relay.2026-07-31.log   <- 当前文件，本地日期
     copilot-relay.2026-07-30.log
     copilot-relay.2026-07-29.log
+  captures/<local-date>/<request-id>/
+    meta.json
+    client-request.bin
+    client-response.bin
+    upstream-<order>-request.bin
+    upstream-<order>-response.bin
 ```
 
 `github_token` 是长期登录/刷新来源。`copilot_token.json` 缓存短期 Copilot bearer
@@ -176,18 +260,18 @@ logRetentionDays: 3
 thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
+claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
 
-`host`、`port`、`claudeSetup` 只在启动时读取一次。其余八项热重载，对改动之后开始的
-工作生效。`webSearchBackend` 为空表示使用 `gptModel`。`upstreamTimeoutSeconds` 限制
-单个 Claude 请求在上游上的总等待预算；`0` 禁用 relay 的这项总超时。
+`host`、`port`、`claudeSetup` 在启动时生效，其余键对新接入的请求热重载。
+`webSearchBackend` 为空表示使用 `gptModel`。`upstreamTimeoutSeconds` 限制单个请求
+在上游上的总等待预算；`0` 禁用 relay 的这项总超时。
 
-`readAppConfig()` 会把解析后的配置写回磁盘，所以一个已有安装的每个键都已经落盘，
-`?? defaultConfig.x` 这类兜底在那条路径上再也不会被用到。因此**修改发布默认值只对
-全新安装生效**。这是刻意的：copilot-relay 不会改写你配置里已有的值，所以一次有意的
-固定能扛过每一次升级。
+`readAppConfig()` 保留已有文本，只通过快照检查后的原子替换追加缺失默认值。
+显式无效值报错，不改写文件。只读 watcher 在全部键齐备前拒绝片段或空文档，保留
+上一次有效设置。发布默认值变化不会迁移已有值；有意固定的配置会在升级后保留。
 
 每个键的含义、校验规则，以及热重载/重启的分界，见[配置说明](ZH-Configuration.md)。
 
@@ -195,24 +279,27 @@ opusModel: claude-opus-5.5
 
 日志同时写入控制台和
 `~/.copilot-relay/logs/copilot-relay.<本地日期>.log`。当前文件按写入逐次解析路径，
-因此无需定时器即可在本地零点轮转；保留策略删除超过 `logRetentionDays` 个本地日历日
-的文件。
+因此无需定时器即可在本地零点轮转；`logRetentionDays` 按包含今天的本地日历天数保留。
+Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留活动捕获及 owner 未知的 pending
+捕获。安全与残留规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 每条日志是一行物理行，payload 渲染有界。这两条性质都是承重的，不是美观问题；理由
 见[内部实现](ZH-Internals.md)，操作手册见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
-在 `info` 级别，每个模型请求都会记录 client、请求模型、上游模型、请求 think
-effort、请求 thinking budget、生效 think effort。缺失的 effort 标记为 `unset`。
-普通 Claude 与上游的完整请求诊断仍仅在 `debug` 级别记录。
+在 `info` 级别，翻译请求报告请求/上游模型与 effort，原生请求标明
+`upstream_api=messages` 及生效 effort。完成元数据把 HTTP 状态与 stop/finish 原因、
+拒答、截断及已报告缓存用量分开。HTTP 200 或流关闭不等于答案已完成。
 
-中央日志器在写入任何一个 sink 之前，都会把每一个输出值过一遍
-`scrubSensitiveUrls`，因此携带密钥的上游 URL 尾部在**每个级别**都会被脱敏，`debug`
-也不例外。中央净化器只重写 URL，不清理 payload 内容；模型元数据摘要还会单独移除
-终端控制字符。
+中央日志器在写入两个 sink 前都通过 `scrubSensitiveUrls` 处理输出值，在 `debug`
+级别也会脱敏敏感 URL 尾部；这不是通用 payload 脱敏。普通 payload 渲染仍有界且单行。
 
-debug 诊断里仍然包含提示词文本、工具定义与参数、请求体和 header，这些都不是 URL
-脱敏能覆盖的。**不要未经审查就分享 debug 日志。**
+`logLevel: debug` 还会为通过接入检查的 Messages/token 计数 POST 自动捕获**完整的
+已观察原始正文**，放在 `captures/<local-date>/<request-id>/`，POSIX 上目录权限 0700、
+文件权限 0600。元数据 header 使用允许列表，不包含认证 header。正文不经过日志渲染或
+脱敏：提示词、工具 payload 和上游回显本身都可能包含密钥。**绝不要整份分享捕获。**
+取消、队列过载或写入失败不会被悄悄当作完整捕获。离线重放检查的是当前 handler，不是
+实时上游可用性。限制、退出码及处理方法见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 ## 测试策略
 

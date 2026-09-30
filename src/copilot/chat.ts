@@ -8,10 +8,10 @@ import { sanitizeTerminalString } from "~/lib/redact"
 import {
   getRequestReasoningEffort,
   resolveReasoningEffort,
-  routeModelId,
+  normalizeCopilotModelId,
 } from "~/lib/models"
 import { boundModelOutputTokens, getCachedCopilotModel } from "~/copilot/models"
-import { collectChatCompletionStream } from "~/copilot/stream"
+import { collectChatCompletionStream, normalizeChatCompletionStream } from "~/copilot/stream"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -200,7 +200,7 @@ export const createChatCompletions = async (
   const reasoningEffort = getRequestedReasoningEffort(payload)
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
-  const upstreamModelId = routeModelId(payload.model)
+  const upstreamModelId = normalizeCopilotModelId(payload.model)
   const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens)
   const nonStreamingLimit =
     getCachedCopilotModel(config, upstreamModelId)?.limits?.max_non_streaming_output_tokens
@@ -242,9 +242,6 @@ export const createChatCompletions = async (
       `effective_think_effort=${requestPayload.reasoning_effort ?? "unset"}`,
     ].join(" ")),
   )
-  log.debug("Full request payload", {
-    payload: requestPayload,
-  })
   // Choose the Copilot API surface after model routing, because aliases can
   // resolve to a Responses-only upstream model even when the client asked for a
   // generic Claude model name.
@@ -303,7 +300,7 @@ export const createChatCompletions = async (
   }
 
   if (compatiblePayload.stream) {
-    return completeResponse(events(response))
+    return completeResponse(normalizeChatCompletionStream(events(response)))
   }
 
   return readCopilotJson<ChatCompletionResponse>(
@@ -364,7 +361,7 @@ async function createResponses(
   }
 
   if (payload.stream) {
-    return translateResponsesStreamToChatCompletionStream(events(response))
+    return normalizeChatCompletionStream(translateResponsesStreamToChatCompletionStream(events(response)))
   }
 
   return translateResponsesToChatCompletion(

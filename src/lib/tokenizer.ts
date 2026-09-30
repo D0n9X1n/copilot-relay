@@ -54,10 +54,9 @@ const calculateContentPartsTokens = (
   let tokens = 0
   for (const part of contentParts) {
     if (part.type === "image_url") {
-      // Claude Code needs a fast local estimate, not exact upstream billing.
-      // Use a fixed image overhead plus URL token count to avoid severe
-      // under-counting when screenshots are present.
-      tokens += encoder.encode(part.image_url.url).length + 85
+      // Bounded local advisory estimate, not actual provider billing.
+      // Never tokenize, fetch, or decode image data or URLs.
+      tokens += 4096
     } else if (part.text) {
       tokens += encoder.encode(part.text).length
     }

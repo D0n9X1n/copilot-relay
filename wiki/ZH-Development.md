@@ -14,22 +14,27 @@
 - `GET /healthz`
 - `GET|HEAD /api/hello`
 
-代理内部可以调用 Copilot `/chat/completions` 和 `/responses`，但这些路由不对外公开。
-没有明确的产品决策，不要在这个表面之外添加路由。未知路由返回 `500`，并记录 payload
-以便日后补兼容性。
+Relay 内部可调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`，
+不因此新增公开 OpenAI 路由。没有产品决策，不要扩展公开接口。通过接入检查的未知路由
+返回 `500` 并记录有界兼容性诊断。Host/Origin/JSON 接入检查不是网络认证，真实监听器
+应保持 loopback。见[架构](ZH-Architecture.md)。
 
 ## 搭建与检查
 
 ```sh
-npm install
+npm ci --no-audit --no-fund
 npm run typecheck
 npm run test:unit
 npm run test:integration
 npm run build
 ```
 
-`npm test` 会把单元和集成两个套件一起跑。测试通过 `tsx` 使用 Node 内置 test runner。
-发布说明测试还需要 Git 和 Python 3.12 或更新版本（POSIX 使用 `python3`，Windows 使用
+使用已提交的 `package-lock.json`，CI/发布安装用 `npm ci`，不做无锁依赖解析。
+根 package 与 lockfile 版本应保持一致。
+
+`npm test` 会把单元和集成两个套件一起跑。测试通过 `tsx` 使用 Node 内置 runner，先
+预载 `scripts/test-bootstrap.mjs`，在**任何源码 import 之前**隔离 `HOME`、`USERPROFILE`
+和临时路径。单独测试也须保留该预载，见[内部实现](ZH-Internals.md)。发布说明测试还需要 Git 和 Python 3.12 或更新版本（POSIX 使用 `python3`，Windows 使用
 `python`，也可通过 `PYTHON` 指定可执行文件）。测试使用临时 Git 仓库和模拟的 GitHub
 元数据，不调用真实 GitHub API。CI 的六条腿都安装 Python 3.12。Python 只是开发和发布
 依赖，运行中继本身不需要 Python。
@@ -46,7 +51,7 @@ npm run build
 **Node 22 和 26** 乘以 **`ubuntu-latest`、`macos-latest`、`windows-latest`** 的矩阵
 —— 六条腿，全部必须为绿：
 
-- 安装依赖
+- 用 `npm ci` 安装锁定依赖
 - typecheck
 - 单元测试
 - 集成测试
@@ -133,8 +138,9 @@ head 或补丁等价，就保留分支。不要仅凭 PR 已关闭就判断安�
 **推送 tag 是不可逆的。** `.github/workflows/publish.yml` 会在任何 `v*` tag 上触发，
 并发布到 **npm** 和 **GitHub Packages**。npm 无法有意义地撤回发布。没有 dry run。
 
-workflow 的 `test` job 会把关那三个发布 job，但仍然要在**即将打 tag 的那棵树**上本地
-跑完整关卡 —— PR 上通过的 CI 和 release commit 不是同一棵树。
+Workflow 先校验 tag 对应提交里的 package/lockfile 版本，构建一份锁定候选产物，再让
+六条**源码测试及打包产物冒烟**腿为三个发布 job 把关。仍须在**即将打 tag 的那棵树**上
+本地跑完整关卡；PR 上通过的 CI 和 release commit 不是同一棵树。
 
 ```sh
 gh pr checks <N>                          # 先确认所有腿都是绿的
@@ -146,8 +152,28 @@ git commit -am "Release vX.Y.Z" && git push origin main
 git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z   # ← 不可回头的点
 ```
 
-然后验证它确实发布了 —— `npm view copilot-relay version` 和
-`gh release view vX.Y.Z` —— 并关闭 milestone。
+`npm version ... --no-git-tag-version` 必须同时更新 `package.json` 和
+`package-lock.json`，两者都应进入 release commit。关闭 milestone 前，验证全部发布 job
+以及实际可用性（`npm view copilot-relay version`、`gh release view vX.Y.Z`）。
+
+### 不可变候选产物关卡
+
+`.github/workflows/publish.yml` 将 release tag 解析为一个提交，检查包版本与已提交
+lockfile 一致。`candidates` 只运行一次 `npm ci` 和 build，禁用脚本后打 npm tarball；
+仅改作用域包名派生 GitHub Packages tarball，`dist` 保持完全一致。两个 tarball 及各自
+`SHA256SUMS` 存入一份 workflow artifact。
+
+全部 **Node 22/26 × Linux/macOS/Windows** 腿执行源码 typecheck/unit/integration/build，
+并下载同一候选。`scripts/package-smoke.mjs` 检查校验和及包名/版本，然后在隔离 home
+中仅运行打包后的 JavaScript，生产依赖来自该腿的 lockfile 安装。它通过有网络守卫的
+本地 mock 验证 help、运行版本、动态 tokenizer 和两条翻译模型路由，不调用真实 Copilot
+或已安装 relay，只清理自己创建的子进程、socket 和临时文件。
+
+发布 job 验证并发布已经过关的 tarball 字节，禁用脚本，不在发布时重建或重写版本。
+重跑时，只有 registry 版本的 `dist.integrity` 与候选匹配才跳过。完整性不同，或除已
+确认版本不存在之外的查询失败，都会终止发布。已存在的 GitHub Release 附件会先下载
+并逐字节比较；缺失附件可补充，不同附件绝不覆盖。重跑不授权替换不可变产物，发布说明
+仍可单独更新。
 
 ### 发布说明生成
 
@@ -173,7 +199,7 @@ GitHub Packages job，因此必须验证所有发布 job，而不能只看包是
 
 ### 发布细节
 
-- `0.0.x` 版本用于打包发布的冒烟测试。
+- 曾用 `0.0.x` 版本进行 registry 发布冒烟，但它们仍是真实、不可逆的发布。开发时应使用离线候选冒烟测试。
 - 推送 `v*` tag 会创建或更新 GitHub Release，并上传 npm tarball 和 `SHA256SUMS`。
 - npm 发布使用 npm Trusted Publishing 加 GitHub Actions OIDC，因此 workflow 里需要
   `id-token: write`，而不是 `NPM_TOKEN`。
@@ -185,16 +211,19 @@ GitHub Packages job，因此必须验证所有发布 job，而不能只看包是
 ## 文档
 
 `wiki/` 是仓库内**唯一**的文档树，也是 GitHub Wiki 标签页的来源。
-`.github/workflows/publish-wiki.yml` 在每次合并到 `main` 时发布它，把 `README.md`
-重命名为 `Home.md`，并从简单的内部链接里去掉 `.md`。
+`.github/workflows/publish-wiki.yml` 在 `main` 上有相关变更时发布它，调用
+`scripts/publish-wiki.py build wiki wiki-repo`，把 `README.md` 重命名为 `Home.md`，
+并重写扁平内部 `.md` 链接的目标（包括返回 `README.md` 的链接）。行内代码、围栏代码块、
+外部 URL 和同页锚点保持原样。workflow 与测试运行同一个脚本，而不是各自维护一份正则替代品。
 
 保证发布正确的几条规则：
 
-- **只能扁平。** workflow 只拷贝顶层的 `wiki/*.md`；子目录会被静默地不发布。
+- **只能扁平。** 脚本只接受顶层 `.md` 页面，拒绝子目录和符号链接；保留目标目录中的
+  `.git` 元数据与非页面文件，仅删除已过期的顶层 `.md` 文件。
 - **源码里的链接保留 `.md`** —— `](ZH-Internals.md)` —— 这样在仓库里浏览目录时能正常
   跳转。workflow 会为标签页去掉扩展名。
-- **不要跨页锚点。** `](ZH-Internals.md#某节)` 不会被变换重写，在标签页上会 404。
-  同页 `#锚点` 链接没问题。
+- **不要跨页锚点。** 像 `](ZH-Internals.md#某节)` 这样的真实链接会在发布前被拒绝，
+  变换不会重写它。同页 `#锚点` 链接与代码中的示例没问题。
 - **English 与中文保持同步。** 每个 `EN-` 页面都有结构对应的 `ZH-` 页面。
 
 **单向发布。** 在 wiki 标签页的浏览器编辑器里做的修改，会在下次发布时被覆盖。请改
@@ -217,10 +246,25 @@ gh run view <run-id> --log
 
 git clone https://github.com/D0n9X1n/copilot-relay.wiki.git /tmp/relay-wiki
 ls /tmp/relay-wiki                       # Home.md 存在，目录扁平
-grep -rn "](.*\.md)" /tmp/relay-wiki || echo "没有残留的 .md 链接"
+python3 scripts/publish-wiki.py verify /tmp/relay-wiki
 ```
 
-然后打开标签页，从 `Home` 点一遍中英文导航。
+在代码仓库的 checkout 中运行校验器。它检查代码之外的链接目标、`Home.md`、目录扁平性
+以及目标是否存在；已发布正文若残留内部 `.md` 链接，就以非零状态退出。代码字面示例和
+文档里的校验命令本身不会误报。离线预览时，先构建到另一个空的临时目录，再对它运行
+`verify`。非空目标必须已经是 wiki checkout 或构建目录；不要把源目录当成目标目录。
+
+评审前先运行离线发布器与结构检查：
+
+```sh
+python3 scripts/publish-wiki_tests.py
+node --import ./scripts/test-bootstrap.mjs --import tsx --test tests/unit/wiki-docs.test.ts
+```
+
+流程图使用 Mermaid，每张图尽量不超过十二个节点。只有已安装渲染器时才做本地渲染，
+不要为了预览安装工具或上传私有源码。结构测试不能证明渲染正常。发布后再打开标签页，
+从 `Home` 点一遍中英文导航，检查两种语言的 Mermaid 图都能显示。离线检查不代表线上
+wiki 已发布或已验证。
 
 ## 文档的结构性测试
 
@@ -228,7 +272,11 @@ grep -rn "](.*\.md)" /tmp/relay-wiki || echo "没有残留的 .md 链接"
 `EN-`/`ZH-` 成对、每个相对链接都能解析、不存在跨页锚点链接、发布变换不留下坏链接、
 没有任何被跟踪的文件还引用已删除的 `docs/` 树。
 
-它跑在普通单元测试套件里。一个会破坏发布的文档改动，会让 CI 失败，而不是让 wiki
+它对真实 wiki 调用生产发布脚本，还会运行 `scripts/publish-wiki_tests.py`：覆盖导航、
+代码 span、反引号/波浪号围栏、外部 URL、校验和安全替换扁平目录的离线 fixture。测试使用
+临时目录，并隔离 `HOME` 和 `USERPROFILE`，不导入中继，也不访问 Copilot。
+
+这些测试跑在普通单元测试套件里。一个会破坏发布的文档改动，会让 CI 失败，而不是让 wiki
 标签页失败。
 
 ## 配置优先原则
@@ -237,27 +285,33 @@ grep -rn "](.*\.md)" /tmp/relay-wiki || echo "没有残留的 .md 链接"
 `config.default.yaml`，并在 README 和**两种语言**的[配置说明](ZH-Configuration.md)
 里体现这个新键。
 
-发布默认值只对全新安装生效，因为 `readAppConfig()` 会持久化解析后的配置。不要加迁移
-机制去把新默认值强推给已有安装 —— 用户配置里的值属于用户。见
-[内部实现](ZH-Internals.md)。
+`readAppConfig()` 保留原文档，只追加缺失键，发布默认值变化不会迁移已有值。
+快照/原子写入须保留符号链接并检测已观察到的并发编辑。Watcher 只读，拒绝部分文档，
+保留上一次有效设置。不要重新引入默认值迁移，见[内部实现](ZH-Internals.md)。
+
+`claudeUpstreamApi` 默认 `chat-completions`。原生协议正确性与签名历史测试不能解释
+历史拒答。2026-09-30 的有限缓存/客户端检查不能证明广泛无退化或计费等价，不足以支持
+提升为默认。应保留[内部实现](ZH-Internals.md)中的证据及边界。
 
 ## 日志规则
 
 | 级别 | 记录内容 |
 | --- | --- |
 | `error` | 启动、preflight、请求、token 刷新和上游失败 |
-| `info` | error 的内容，加上启动/preflight 状态、request ID、模型与 effort 摘要、上游生命周期和本地 HTTP 状态码 |
-| `debug` | info 的内容，加上详细 Copilot 耗时和请求 payload |
+| `info` | error 的内容，加上启动/preflight 状态、request ID、模型与 effort 摘要、上游生命周期、HTTP 状态及独立的完成/缓存结果 |
+| `debug` | info 的内容，加上耗时/捕获路径日志和私有原始已观察正文捕获；不做常规 payload 对象转储 |
 
 其他任何 `logLevel` 值都是非法的，必须让启动失败。
 
-在 `info` 级别，每个模型请求都必须记录 client 类型、请求模型、上游模型、请求 think
-effort、请求 thinking budget、生效 think effort。缺失的 effort 用 `unset` 表示，普通
-payload 转储保留在 `debug` 级别。在 `error` 级别，上游失败要连同完整
-的请求与响应上下文记录在同一个日志文件里。
+模型/effort 元数据保留在 `info`，原生请求还须标明 API。完成/拒答/截断和缓存用量应与
+HTTP 200 分开报告。不能把有界错误上下文当作逐字节记录。只有独立捕获通道存储原始
+已观察正文；常规 debug 日志报告耗时和捕获路径，剩余请求/响应上下文是有界错误日志，
+不是第二份完整 payload 转储。示例及隐私规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
-永远不要记录 token 值。[内部实现](ZH-Internals.md)里的单行与轮转不变量不是风格问题
-—— 不要把它们简化掉。
+捕获元数据排除认证 header/token 状态。原始提示词/工具结果仍可能包含密钥，**绝不整份
+分享**。捕获过载或失败必须明确为不完整，离线重放不得创建 socket 或触碰凭据/配置。
+遵循[内部实现](ZH-Internals.md)及[日志与问题排查](ZH-Logging-Troubleshooting.md)
+的安全与诊断契约。单行与轮转不变量不是风格问题，不要简化掉。
 
 ## 刻意移除的功能
 
@@ -267,7 +321,7 @@ payload 转储保留在 `debug` 级别。在 `error` 级别，上游失败要连
 - 公开的 `/v1/embeddings`
 - `/usage`
 - Codex 支持
-- Auto 模式
+- 自动模型选择模式（不是可选的 `claudeUpstreamApi: auto` 协议选择器）
 - 限流
 - 仅 Bun 可用的脚本
 - `configVersion` 迁移机制（在 #26 中移除）

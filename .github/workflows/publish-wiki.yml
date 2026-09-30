@@ -12,6 +12,8 @@ on:
     branches: [main]
     paths:
       - "wiki/**"
+      - "scripts/publish-wiki.py"
+      - "scripts/publish-wiki_tests.py"
       - ".github/workflows/publish-wiki.yml"
   workflow_dispatch:
 
@@ -27,6 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test wiki publishing
+        run: python3 scripts/publish-wiki_tests.py
 
       - name: Clone the wiki repo
         env:
@@ -41,24 +49,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Replace wholesale rather than merge: wiki/ is the source of truth, so
-          # a page deleted there must disappear from the tab. Keep .git.
-          find wiki-repo -maxdepth 1 -name '*.md' -delete
-
-          cp wiki/*.md wiki-repo/
+          # One implementation for CI and publishing: validate flat navigation,
+          # preserve code examples, rename README and remove only stale page files.
+          python3 scripts/publish-wiki.py build wiki wiki-repo
+          python3 scripts/publish-wiki.py verify wiki-repo
 
           cd wiki-repo
-
-          # The tab's landing page must be Home.md; a repo folder wants README.md
-          # so GitHub renders it when you open wiki/. Same file, renamed here.
-          if [ -f README.md ]; then
-            mv README.md Home.md
-          fi
-
-          # Wiki links omit the extension - ](EN-Configuration) resolves on the
-          # tab, ](EN-Configuration.md) does not. In the repo folder it is the
-          # reverse. Source keeps .md; strip it for the tab.
-          sed -i -E 's/\]\(([A-Za-z0-9-]+)\.md\)/](\1)/g' ./*.md
 
           git add -A
           if git diff --cached --quiet; then

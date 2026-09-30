@@ -9,13 +9,14 @@
 
 ```text
 src/
-  main.ts                     CLI 入口（citty）：auth、start、stop、restart、status
+  main.ts                     CLI 入口（citty）：auth、start、stop、restart、status、models、replay
   server.ts                   Hono app、请求日志、health/root 接口
   start.ts                    启动序列与热重载接线
   stop.ts                     进程发现与关停升级
   restart.ts                  stop + start
   status.ts                   检测、健康探测、--deep、--json、退出码
   auth.ts                     GitHub device login 命令
+  replay.ts                   replayCapture：校验捕获，用当前 handler 离线重放
 
   routes/claude.ts            POST /v1/messages、count_tokens、GET /v1/models
 
@@ -33,13 +34,17 @@ src/
     chat.ts                   chat 抽象、路由、think effort
     models.ts                 按上游地址隔离的模型目录和 token 限制
     responses.ts              Responses API 翻译、prompt_cache_key
+    native.ts                 原生 Claude 传输及签名 WebSearch 历史
     stream.ts                 共用聚合逻辑与完整流校验
     tool-schema.ts            仅用于 Responses 的工具 schema 兼容处理
     types.ts                  上游 payload 类型
 
   lib/
     app-config.ts             readAppConfig()、写回、热重载
-    config.ts                 配置文件管道
+    config.ts                 运行期代理配置与请求策略快照
+    atomic-file.ts            文件快照检查与原子替换
+    address.ts                监听/客户端 URL 规范化
+    request-trace.ts          RequestTrace、有序传输捕获及完成结果
     defaults.ts               发布默认值
     paths.ts                  ~/.copilot-relay 布局，import 时解析
     auth.ts                   token 存储与刷新调度
@@ -58,22 +63,29 @@ src/
 
 ## 配置解析、写回与重载
 
-`src/lib/app-config.ts` 里的 `readAppConfig()` 解析配置，并把结果**写回**
-`~/.copilot-relay/config.yaml`。由此产生了本代码库中最容易被误解的一点：
+`src/lib/app-config.ts` 中的 `readAppConfig()` 校验扁平标量文档并解析运行值，随后
+`materializeMissingKeys` 仅向原始文本追加**缺失键**。注释、未知标量键、顺序、引号
+写法及已有换行风格都会保留。重复的规范键/别名、不受支持的 YAML 和无效已知值会在
+写回前报错；必填键为空不等于键缺失。新建/缺失文件使用包内模板（或旧配置）。
 
-> 一个已有安装的每个键都已经落盘。那条路径上的 `?? defaultConfig.x` 兜底再也不会
-> 被用到。
+`src/lib/atomic-file.ts` 的 `readFileSnapshot` / `writeFileSnapshot` 解析符号链接，
+但不替换链接本身；保留文件权限，先写私有临时文件，再原子发布完整字节。身份、目标
+及内容检查拒绝已观察到的并发编辑；最初不存在的文件以排他方式发布。进程内协作写入
+会串行化。这**不是操作系统级 compare-and-swap rename**：外部写入仍可能在最后一次
+检查与替换之间竞争。`applyClaudeConfig` 共用这个边界，保留无关设置，并拒绝覆盖
+格式错误或已经存在的空 JSON 文件。
 
-所以**修改发布默认值只对全新安装生效**。这是刻意的。用户配置里的值属于用户；不要
-加迁移机制去把新默认值推给已有安装。曾经短暂存在过一个 `configVersion` 机制正是为
-了这件事，后来在 #26 里作为不必要的复杂度被移除。
+> 键一旦落盘，保存的值就优先于新的发布默认值。
+
+不新增默认值迁移。用户固定的值属于用户；旧的 `configVersion` 迁移机制正是因此在
+#26 中移除。
 
 ### 热重载与需要重启
 
 热重载 —— 对改动之后开始的工作生效：
 
 `logLevel`、`logRetentionDays`、`thinkEffort`、`upstreamTimeoutSeconds`、
-`copilotBaseUrl`、`webSearchBackend`、`gptModel`、`opusModel`
+`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、`gptModel`、`opusModel`
 
 需要重启：
 
@@ -95,14 +107,43 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 使用发布默认值。无效重载会记录错误并保留当前设置；一般文件或语法错误不会回显可能
 含有敏感信息的配置内容。
 
+`watchAppConfig` 只读：全部已知落盘键都必须存在，包括可选但留空的搜索后端。
+空文件/部分保存不会恢复默认值。应用前还会校验第二次快照，读取或应用失败不会被标为
+已接受，因此修正后可以重试。
+
 新增一个键意味着同时更新 `config.default.yaml`、README，以及**两种语言**的
 [配置说明](ZH-Configuration.md)。
 
 ## 请求翻译
 
+### 接入检查与请求策略
+
+`src/server.ts` 在推理前检查 Host/authority、显式 Origin 及 JSON content type。
+这是浏览器来源/本地请求检查，**不是认证**；可从网络访问的非 loopback 监听器不受
+Claude 占位 token 保护。
+
+读取 POST 正文之前，`src/lib/config.ts` 的 `snapshotProxyConfig` 及
+`src/lib/state.ts` 的 `snapshotRuntimeState` / `withRuntimeState` 为该请求固定路由、
+base URL、超时、协议模式、搜索后端、effort 和目录视图。后续异步调用使用该请求作用域，
+而非可变的全局状态。Token 和 generation getter 刻意保持实时，让重试使用刷新后的
+凭据。该快照所选上游需要重新发现时，可更新自己的目录，不会切换到重载后的新策略。
+
+### 翻译后的历史
+
 `src/claude/translate.ts` 处理双向非流式 payload：Claude 请求 -> Copilot chat 请求，
 以及 Copilot 响应 -> Claude 响应。它在两种协议形状之间映射 tool call 和
-thinking/text block。
+thinking/text block。消息内的 system 文本保留原位置的 `role: system`，包括工具结果
+之后；不能变成 assistant 发言，也不能附加 assistant 续写提示。`validateClaudeMessages`
+在翻译路径上只允许一种狭窄的冗余内联控制：system 消息的 `output_config` 必须为对象，
+且唯一键 `effort` 的值为 `low`、`medium`、`high`、`xhigh`、`max` 之一，并与当前请求
+解析后的 effort 完全相同。翻译保留 system 文本和顺序，在请求级表达同一 effort；
+不会从历史推断新的覆盖值，也不修改输入对象。
+
+不同的历史 effort、额外/未知键、null/数组控制、内联 `none` 或任何 `clear_at` 都会
+被拒绝，未知角色和格式错误的 system 文本也一样。接入时先解析 effort，再于任何
+上游操作或打开 SSE 之前校验，即使 `stream: true` 也返回 HTTP 400 JSON。
+`translateToOpenAI` 对直接调用和 token 计数重复校验。原生消息保留逐消息控制字段，
+由上游判断支持情况。
 
 `src/claude/tool-names.ts` 在出站时把 Claude 工具名规范化成 Copilot 可接受的名字，
 入站时再映射回来。Claude Code 的工具名不总是合法的上游标识符，而一个带着规范化后
@@ -118,18 +159,37 @@ token-count 请求也一样。面向用户的优先级规则见[配置说明](ZH
 `src/claude/types.ts` 只定义代理需要的那部分 Claude Messages API 类型。它刻意不是
 完整的 Claude SDK —— 一个用不到的类型就是没有测试覆盖的维护成本。
 
-## chat 与 Responses
+## 原生 Messages、chat 与 Responses
 
 `src/copilot/chat.ts` 是 routes 和启动 preflight 共用的内部 chat 抽象。它应用模型
 路由、think effort 和请求日志，并为配置的 GPT 系模型选择 Copilot `/responses`。
 
 `src/copilot/responses.ts` 在 Copilot Responses API 与 chat-completion 风格结果之间
 翻译。它之所以存在，是因为默认模型 `gpt-6-astra`、此前默认的 `gpt-5.6-sol` 以及
-`gpt-5.5`/`gpt-5.6` 系列的其余成员在上游走 `/responses`，而 Opus 走
-`/chat/completions`。
+`gpt-5.5`/`gpt-5.6` 系列的其余成员在上游走 `/responses`。Claude 默认走经翻译的
+`/chat/completions` 路径。
 
-两个上游 API，一个面向 Claude 的协议。Claude Code 永远不会知道是哪一个服务了它的
-请求。
+### 原生 Claude 边界
+
+`src/copilot/native.ts` 的 `shouldUseNativeMessages` 仅作用于路由后以 `claude-` 开头
+的 ID。`auto` 要求当前上游目录公布 `/v1/messages` 支持，`messages` 强制原生，
+`chat-completions` 保留翻译。最后一项仍是默认值，非 Claude 模型的选择规则不变。
+
+`createNativeMessages` 保留消息/block 结构、签名 thinking 与 redacted-thinking block、
+缓存标记、原位置的 system 角色/控制字段及原生响应元数据，不经过 chat 扁平化。
+它仍会路由模型、约束输出、解析 effort 并适配 relay 的 WebSearch 声明。协议 header
+明确传递 `anthropic-version` 和可选 `anthropic-beta`；上游认证由共用 Copilot 客户端
+负责，不使用客户端认证 header。超过原生非流式上限时请求 SSE，再聚合为 JSON。
+`nativeEvents` / `collectNative` 保留签名和尾部 usage，SSE 必须有 stop reason 及
+`message_stop`。错误或提前 EOF 不会被当作成功；也不会改走其他 API 来绕过原生
+错误/拒答。
+
+`src/lib/model-probe.ts` 的 `runDeepModelProbes` 将返回模型与准确的目录选择比较。
+除原有的 GPT context 后缀规范化之外，只有一项已观察到的原生拼写例外：接口为
+`/v1/messages`，所选 ID 为 `claude-opus-5.5`，返回 `claude-opus-5-5`。这不是通用
+标点规范化，也不是新增目录别名；`claude-opus-5-5-preview`、`claude-opus-5` 及其他
+不匹配仍失败。配置和发现保留目录 ID，`SENT/REPORTED` 保留两种实际拼写。接受该 ID
+仍需通过正常的完整文本/终止检查；不能只因为模型匹配就把拒答当作 `PASS`。
 
 ### 工具 schema 兼容性
 
@@ -168,6 +228,11 @@ pattern 后，上游的下一层校验仍会拒绝前瞻断言。
 跳过旧的 Claude 系列 15% 余量，避免已有 tokenizer 数据时仍因模型名称启发式而过早
 压缩。本地模型发现返回缓存的限制，不会调用上游。
 
+`src/lib/tokenizer.ts` 在任何文本编码调用之前，为**每张图片分配 4096 个估算 token**。
+不会把 base64/URL 文本送入 tokenizer，不解码图片，也不拉取 URL。文本继续使用所选
+tokenizer，消息/工具启发式及适用的旧余量仍保留。这是客户端预算估算，**不是上游计费**，
+也不能证明多模态 prompt 一定符合容量限制。
+
 某些模型公布的 `max_non_streaming_output_tokens` 小于流式上限。超过该阈值时，
 `createChatCompletions` 会向上游请求 SSE，再由 `collectChatCompletionStream` 为
 JSON 调用方及 WebSearch 最终模型调用返回完整 chat 响应。它复用 WebSearch 的聚合器，
@@ -184,6 +249,11 @@ Claude 自动预算、模型选择器处理，以及可选的无总超时设置�
 `src/claude/stream.ts` 把流式 Copilot chat chunk 转换成 Claude SSE 事件。它是一个
 状态机，因为 Claude 要求 text、thinking、tool use 的 content block 按正确顺序显式
 start/delta/stop —— 而 Copilot 的 chunk 流里没有这种分帧信息。
+
+终止状态与 usage 是两回事：输出耗尽映射为 `max_tokens`，过滤/拒答保留为拒答，
+failed/cancelled 的 Responses 终止事件作为错误报告，尾部 usage 不得抹掉终止原因。
+交错的工具参数片段绝不能指向已关闭的 Claude content block。回归覆盖在
+`tests/unit/stream-terminals.test.ts` 和 `tests/unit/native-messages.test.ts`。
 
 ### 声明 WebSearch 不再需要放弃流式
 
@@ -213,11 +283,30 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 起一条，从而得到原生顺序 `text` → `server_tool_use` → `web_search_tool_result` →
 `text`。
 
+### 原生 WebSearch 历史
+
+`handleNativeMessages` 仍通过 Copilot Responses 检索，会话本身保持原生 Claude。
+原生 bridge 搜索只支持自动选择：`validateNativeMessages` 对声明 WebSearch 时强制
+`any`、显式强制搜索或无法识别的 bridge 历史，在上游操作/SSE 之前返回 HTTP 400 JSON，
+流式调用也一样。每回合最多执行一次搜索；多次或重复搜索调用直接失败，不循环。
+决策前 text/thinking 可以流出，工具 block 则暂存，直到 relay 判断是否需要执行服务端搜索。
+
+发往上游的续接保留决策中的签名 block 及原始 provider 工具 ID/名称。对客户端，仅把
+搜索调用替换为 `server_tool_use`，后接 `web_search_tool_result`。确定性的
+`srvtoolu_relay_` 标记编码原始工具 ID/名称及 block/回合边界。`normalizeNativeHistory`
+在下一请求中解码校验，重建原始决策、user 工具结果回合和可能存在的最终 assistant block。
+该标记**不是 provider 签名**，不会伪造或改写 thinking 签名。搜索数据明确视为不可信。
+同批客户端工具调用保留 ID，交给客户端处理，而不是由 relay 执行。
+
+无法识别的旧 chat bridge 搜索历史在原生路径被拒绝，不会静默扁平化。切换协议不等于
+透明迁移已有搜索会话。测试固定的是重建行为，不是实时缓存性能，也不能证明历史拒答原因。
+
 ## Prompt 缓存
 
 长时间的 Claude Code 会话每次请求都会重发一大段基本不变的前缀（system prompt、工具
 定义、之前的回合）。这段前缀上的 prompt 缓存命中，是输入 token 成本和延迟的主要杠杆。
-这里有两个承重的中继行为，都在真实 Copilot 上游上验证过。
+应将较早的 chat/Responses 翻译路径测量，与下文 2026-09-30 的有限原生对照分开看待；
+两者都不能证明所有账号或工作负载的表现。
 
 ### 用 `prompt_cache_key` 提示 `/responses` 缓存路由
 
@@ -280,7 +369,64 @@ Claude Code 发来的那个标识符会原样出现在同一个请求的 `user` 
 后掉到约 88%、约 1066 个全价 token。
 
 所以 `thinking` 是被**刻意**保留在上游历史里的。它是让前缀保持稳定的一部分，不是可
-以顺手削掉的开销。
+以顺手削掉的开销。翻译路径保留的是扁平化 assistant 内容，不是 provider 签名原生 block。
+
+### Opus 5.5 匹配缓存试验（2026-09-30）
+
+一次有限的实时对照使用 `low` effort、相同的合成 720 条参考记录格式、每条路由独立的
+前缀标记，并在每条路由执行三个只追加历史的会话回合。完成的那次试验报告：
+
+| Chat 回合 | 总输入 tokens | 缓存读取 tokens | 输出 tokens |
+| --- | ---: | ---: | ---: |
+| 1（冷缓存） | 25,960 | 0 | 4 |
+| 2 | 25,981 | 25,939 | 4 |
+| 3 | 26,002 | 25,960 | 4 |
+
+| Native 回合 | 非缓存 `input_tokens` | 缓存写入 tokens | 缓存读取 tokens | 输出 tokens |
+| --- | ---: | ---: | ---: | ---: |
+| 1（冷缓存） | 21 | 25,936 | 0 | 4 |
+| 2 | 42 | 0 | 25,936 | 4 |
+| 3 | 63 | 0 | 25,936 | 4 |
+
+原生输入计数应相加：非缓存 `input_tokens` 加 `cache_creation_input_tokens`，再加
+`cache_read_input_tokens`。Chat 总输入已包含缓存输入。不要拿原生缓存读取除以其
+非缓存 `input_tokens`，也不要只比较不同 API 的这个字段。
+
+对热回合 2–3，按 token 加权的缓存读取占比为：
+
+- Chat：`(25,939 + 25,960) / (25,981 + 26,002)` = **99.8384%**。
+- Native：`(25,936 + 25,936) / ((42 + 0 + 25,936) + (63 + 0 + 25,936))` = **99.7980%**。
+
+在这次已完成试验中，原生占比约**低 0.04 个百分点**。第二次试验为平衡执行顺序，先跑
+native；其首次冷请求返回拒答，试验随后停止。中断也是结果的一部分，不能隐去或声称
+完成了重复对照。
+
+这些小规模 `low` effort 观察只说明被测序列存在热缓存复用，不能证明跨 effort、并发、
+缓存到期、长会话或接近容量上限时广泛无退化。**无法确定计费成本等价**：native 明确
+报告冷缓存写入，chat 没有暴露对应类别。默认值继续保持
+`claudeUpstreamApi: chat-completions`，现有证据不足以提升原生为默认。保留签名历史是
+正确性要求，但仍未证明历史拒答是推理内容扁平化导致的。
+
+### 隔离 Claude Code 检查（2026-09-30）
+
+真实 Claude Code **2.1.285** 在原生路径上完成了两个模型回合的 `Read` → 工具结果 →
+`OK`。最初两次请求因不支持 `safeguards` 字段收到 HTTP 400，随后是**客户端**自行
+降低了请求能力。Relay 没有剥离 `safeguards`、新增拒答回退或绕过 provider 安全控制。
+这只证明观察到的客户端/工具续接，不代表被拒字段或全部 Claude Code 功能都受支持。
+
+预热后的第二回合以全部已报告输入类别为分母，缓存读取占比为
+`3029 / (3029 + 146 + 2)` = **95.34%**。这是与合成对照不同的工作负载，不能并入其
+热缓存率。
+
+冗余内联 effort 修复后，另一次独立的真实 CLI chat 路由检查也完成了两个工具回合并
+返回 `OK`。两次独立客户端运行因此分别验证了两种协议在该流程中可用，但**不是匹配的
+缓存对照**。验证会话使用了计划中 20 次请求预算的 18 次，HOME 状态哈希未变化；这些
+操作检查不能证明通用客户端兼容性或生产就绪。
+
+完整的已观察原始正文已私有捕获，记录的成功及拒答案例经当前 handler 离线重放都返回
+`MATCH`。匹配的拒答仍是拒答，重放也不是新的上游验证。这些均为隔离检查，**不是对
+当前生产 relay 的验证**，生产端口 4142 未受影响。这里只记录汇总证据，不放私有
+捕获正文或凭据。
 
 ## Token
 
@@ -316,7 +462,8 @@ Claude Code 发来的那个标识符会原样出现在同一个请求的 `user` 
 不会重放成功响应或已开始的流。刷新失败直接报告，不触发设备登录，也不会被当作网络
 故障反复重试。
 
-token 值永远不会被记录。恢复日志只包含状态码、路由和结果，不包含凭据或响应正文。
+Token 恢复日志只包含状态码、路由和结果，不含 bearer 凭据或响应正文。这不是对原始
+捕获的保证：用户提示词或上游回显本身仍可能包含密钥。
 
 ## 生命周期：status 和 stop 问的是不同的问题
 
@@ -333,13 +480,24 @@ token 值永远不会被记录。恢复日志只包含状态码、路由和结�
 无论 `status` 报告什么，**pid 和地址必须来自同一条记录**。把用一种方式找到的 pid 和
 用另一种方式取到的地址配在一起，正是 #33 里"活的 pid 旁边打印出一个死端口"的成因。
 
+`isRelayStartProcess` 同时识别 `start` 和长期运行的 `restart` 进程，严格检查可执行
+文件/入口，而不是任意命令子串。发送信号及升级强制终止前，生命周期代码检查一致的
+命令、工作目录和创建时间身份。身份无法取得不是退出证明，PID 被复用也不能授权终止
+替代进程。未知/存活 PID 的记录会保留，不会当作清理成功而删除。有歧义的 POSIX 扁平
+路径必须通过文件系统验证精确入口，并排除更早的可执行文件/脚本解释；这是保守证据，
+不是操作系统级原子身份保证。初次发现状态未知会在有限宽限期内重试，之后失败而不发送
+信号。`status` 对进程检查不确定性输出诊断并以 `2` 退出，不声称进程不存在。
+
+配置损坏时，`status` 在探测前输出不回显敏感内容的诊断并以 `2` 退出，不表示 daemon
+已停止。`stop` 可不依赖配置端口提示，继续只处理身份已验证的进程。重启前应修复配置。
+
 ### 退出码是一份契约
 
 | 退出码 | 含义 |
 | --- | --- |
 | `0` | 进程活着**并且**健康探测通过 |
 | `1` | 没有中继在运行 |
-| `2` | 在运行但不可用 —— 健康探测失败，或请求了 `--deep` 且失败 |
+| `2` | 不可用或无法建立状态 —— 健康/deep 探测失败，或配置不可读 |
 
 一边打印 `FAILED` 一边以 `0` 退出，会让每一个脚本调用方把坏掉的中继当成正常
 （#34）。
@@ -357,10 +515,49 @@ Code 的检查，因为 `/healthz` 和 `/v1/models` 都不访问上游。它是�
 处理函数必须立即调用 `closeIdleConnections()`，并在一个**短于 `stopProcess` 的 5 秒
 超时**的宽限期之后调用 `closeAllConnections()`。宽限期等于或超过那个超时，就等于把
 这个 bug 放回去。
+服务关闭后，`startRelay` 停止配置 watcher，清理自己的 PID 记录，再等待
+`flushCaptures` 与 `flushLogs`；强制终止进程不能保证同样的落盘结果。
+
+## 捕获与离线重放
+
+`src/lib/request-trace.ts` 的 `RequestTrace` 包装已接入的客户端正文和实际消费的
+上游/下游流，不另开独立 tee。`recordedFetch` 与 `recordedRefresh` 保留有序尝试、
+为重试丢弃的响应及刷新结果。Manifest 记录请求的策略/目录快照、chunk 长度、观察到的
+字节数、正文状态和 handler 是否结束；等正文写入队列完成后，原子替换 `meta.json`。
+私有文件 handle 保持追加目标；目录/文件身份与单链接检查拒绝已观察到的路径替换。
+这不能防御同一用户下所有可能的文件系统竞争。传输/正文失败与语义上的拒答不是同一件事。
+
+`OutcomeObserver` 在正文存储之外提取有界元数据：HTTP 状态、stop/finish/response
+终止状态、拒答类别、未完成原因，以及已报告的输入/输出/缓存用量。缺失或过大的元数据
+是未知，不代表成功完成或零缓存用量。普通 `info` 结果行只包含这些元数据，不含提示词
+或响应文本。
+
+只有 debug 才生成正文文件。`safeHeaders` 使用不含认证 header 的允许列表，策略快照
+省略 bearer token 和私有上游 URL 尾部。**原始正文字节刻意不脱敏**，可能包含提示词、
+工具结果或上游回显中的凭据。有界异步写入队列不会让磁盘吞吐阻塞转发；过载/写入失败
+会将捕获标为不完整，而不是静默截断后仍声称可以重放。操作限制、权限和安全处理见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+
+`cleanupCaptures` 与日志共用 `logRetentionDays`，按本地日历日期目录计龄，在启动/
+重载时运行。`cleanupCapturesIfDue` 在非重放请求中增加每小时一次的检查。活动捕获和
+owner 存活/未知的 pending 记录保留，只有 `ESRCH` 才证明 pending owner 已退出。
+清理要求目录/manifest 身份有效，且只含已知的普通单链接文件；未知或变化中的内容
+不动。`flushCaptures` 在优雅关停时等待清理与 pending 捕获，不能挽救崩溃或 SIGKILL。
+
+`src/replay.ts` 的 `replayCapture` 在进程内调用 `createServer(config).fetch` 前校验
+元数据/schema、固定正文文件名、chunk 总长、路径与大小限制。`withRecordedTransport`
+只按原顺序提供记录的上游响应、错误和刷新结果。不创建监听器/socket，不执行设备认证、
+token 交换，不写配置或新捕获。它比较当前 handler 实际生成的出站 JSON 与最终 JSON/SSE；
+未消费或意外的操作被标为差异，不回退到网络。
+
+比较忽略传输 chunk 分界，仅规范化已知的新生成 bridge ID，并保护 provider ID 和字面
+内容。Diff 只输出结构路径和固定原因，不输出值或来自 payload 的属性名。`MATCH` 表示
+本地转换一致，不是新的模型执行、缓存基准，也不能证明历史拒答的原因。未完成/中止
+捕获不能得到匹配；CLI 结果表见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 ## 日志不变量
 
-两条都是从一个涨到 9.3 GB 的日志里学来的。
+单行与轮转规则来自一个涨到 9.3 GB 的日志。原始捕获文件是独立诊断通道，不是更大的普通日志条目。
 
 ### 一条日志，一行物理行
 
@@ -381,8 +578,10 @@ Node 文档读起来像是默认的 `compact: 3` 就够了 —— 并不够。�
 [日志与问题排查](ZH-Logging-Troubleshooting.md)里的每一条 `grep` 配方 —— 因为搜索
 返回的会是某个 payload 的第一个片段，而不是匹配的那条日志。
 
-payload 的边界是深度 6、100 个数组元素、每个字符串 4000 字符。超出这些限制的值会在
-日志里被截断，而不是丢弃。
+对象检查的边界是深度 6、100 个数组元素、对象内每个字符串 4000 字符。URL 和已登记
+凭据脱敏后，再转义换行并按 UTF-8 边界限制最终大小：每个渲染参数 16 KiB、每条文件
+日志（含时间戳等格式）64 KiB。两端收到相同的有界 payload，最终大小截断用
+`[truncated]` 标明。这些限制不截断独立的原始捕获。
 
 ### 保留策略需要轮转
 
@@ -404,10 +603,12 @@ UTC 戳会让格林尼治以西的人在本地下午的正中间发生文件切�
 ### 脱敏
 
 `src/lib/redact.ts` 是纯函数，覆盖那些可能在 path、query string 或 fragment 里携带
-凭据的 URL。日志文件是用户唯一被要求粘贴到 issue 里的文件（#47），所以一个携带 token
-的网关路径绝不能活着进到日志里。`copilotBaseUrl` 校验拒绝原始引号、尖括号、空白和
-控制字符也是同一个理由：这些字符在日志行里标记着一个 URL 的结束，因此含有它们的值
-之后无法被识别为一个完整 URL，其尾部就会不经脱敏地打印出来。
+凭据的 URL。含密钥的网关尾部不能原样进入普通日志。`copilotBaseUrl` 校验拒绝原始引号、
+尖括号、空白和控制字符，因为它们会让整条 URL 的识别出现歧义。`src/lib/log.ts` 的
+`registerLogSecret` 在内存中保存已知认证凭据（包括轮换前的值），从普通日志中移除原始或
+转义形式的回显。即使对象检查转义了分隔符，相邻的嵌套 URL 也会分别脱敏。这不保证移除
+任意提示词/工具中的密钥；分享前仍需审查有界摘录，绝不整份上传原始捕获。见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 ## 测试
 
@@ -420,9 +621,12 @@ npm run build
 
 ### 重定向 home 目录
 
-任何触碰日志或配置路径的测试套件，**必须在 import `src/` 之前重定向 home 目录**。
-`src/lib/paths.ts` 在 import 时就从 `os.homedir()` 解析，所以只有在设置好环境变量
-之后再用动态 `import()`，重定向才会生效：
+npm 测试脚本在 **`tsx` 及任何源码 import 之前**预载 `scripts/test-bootstrap.mjs`。
+它给每个测试进程分配私有 `HOME`、`USERPROFILE` 和临时根目录，退出时只清理自己拥有
+的目录。静态 import 也因此受保护；单独跑某个测试时同样使用该预载。
+
+需要独立日志/配置 fixture 的套件仍须在模块首次 import 前重定向，因为
+`src/lib/paths.ts` 只解析一次 `os.homedir()`。例如：
 
 ```ts
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-"))
@@ -444,6 +648,7 @@ const { readAppConfig } = await import("../../src/lib/app-config")
 ### 文档的结构性测试
 
 `tests/unit/wiki-docs.test.ts` 用机器强制文档契约本身：`wiki/` 是扁平的、每个 `EN-`
-页面都有对应的 `ZH-` 页面、每个相对链接都能解析、
-`.github/workflows/publish-wiki.yml` 的发布变换不会留下坏链接。它从磁盘读文件，不从
-`src/` import 任何东西，因此不需要 home 重定向。
+页面都有对应的 `ZH-` 页面、每个相对链接都能解析，以及真正的代码感知
+`scripts/publish-wiki.py` 变换不留下坏导航。它调用与 workflow 相同的脚本及 Python
+fixture，不另写一份正则替代变换。套件不导入 relay 源码，Python 子进程仍隔离两个 home
+变量。离线及发布后校验见[开发指南](ZH-Development.md)。

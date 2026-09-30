@@ -13,6 +13,7 @@ import {
   translateModelName,
   translateToClaude,
   translateToOpenAI,
+  validateClaudeMessages,
 } from "~/claude/translate"
 import {
   translateChunkToClaudeEvents,
@@ -36,12 +37,13 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getExposedModelIds, getRequestReasoningEffort } from "~/lib/models"
+import { getExposedModelIds, getRequestReasoningEffort, resolveReasoningEffort } from "~/lib/models"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
 import { createCopilotRequestSignal } from "~/copilot/client"
-import { getCachedCopilotModel } from "~/copilot/models"
+import { ensureCopilotModelCatalog, getCachedCopilotModel } from "~/copilot/models"
+import { handleNativeMessages, shouldUseNativeMessages, validateNativeMessages } from "~/copilot/native"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
@@ -74,6 +76,13 @@ const getClaudeRequestedThinking = (
   ].join(",")
 }
 
+const emptyStreamBlock = (block: ClaudeAssistantContentBlock): ClaudeAssistantContentBlock => {
+  if (block.type === "text") return { ...block, text: "" }
+  if (block.type === "thinking") return { ...block, thinking: "" }
+  if (block.type === "tool_use" || block.type === "server_tool_use") return { ...block, input: {} }
+  return block
+}
+
 const eventsFromClaudeResponse = (
   response: ClaudeResponse,
 ): Array<ClaudeStreamEventData> => {
@@ -100,7 +109,7 @@ const eventsFromClaudeResponse = (
     events.push({
       type: "content_block_start",
       index,
-      content_block: block,
+      content_block: emptyStreamBlock(block),
     })
 
     if (block.type === "text") {
@@ -135,7 +144,7 @@ const eventsFromClaudeResponse = (
       stop_reason: response.stop_reason,
       stop_sequence: response.stop_sequence,
     },
-    usage: { output_tokens: response.usage.output_tokens },
+    usage: response.usage,
   })
   events.push({ type: "message_stop" })
   return events
@@ -165,7 +174,7 @@ const continuationEventsFromClaudeResponse = (
 
   for (const block of response.content) {
     const index = state.contentBlockIndex
-    events.push({ type: "content_block_start", index, content_block: block })
+    events.push({ type: "content_block_start", index, content_block: emptyStreamBlock(block) })
 
     if (block.type === "text") {
       events.push({
@@ -200,7 +209,7 @@ const continuationEventsFromClaudeResponse = (
       stop_reason: response.stop_reason,
       stop_sequence: response.stop_sequence,
     },
-    usage: { output_tokens: response.usage.output_tokens },
+    usage: response.usage,
   })
   events.push({ type: "message_stop" })
   return events
@@ -236,8 +245,14 @@ const handleClaudeMessageRequest = async (
   requestSignal: AbortSignal | undefined,
   requestId: string,
   writeEvent?: ClaudeStreamEventWriter,
+  requestHeaders?: Headers,
 ): Promise<ClaudeResponse | undefined> => {
   const upstreamModel = translateModelName(claudePayload.model)
+  if (shouldUseNativeMessages(config, upstreamModel)) {
+    return handleNativeMessages(config, { ...claudePayload, model: upstreamModel }, {
+      requestId, signal: requestSignal, headers: requestHeaders,
+    }, writeEvent)
+  }
   const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
   const decisionPayload =
     shouldLetModelDecideWebSearch ?
@@ -287,9 +302,11 @@ const handleClaudeMessageRequest = async (
     toolCalls: {},
   }
   let streamedBeforeDecision = false
+  let preambleText = ""
+  let preambleThinking = ""
 
   if (canStreamWebSearchDecision && !isNonStreamingResponse(response)) {
-    const { decision, rest, alreadyStreamed } =
+    const { decision, rest, alreadyStreamed, streamedText, streamedThinking } =
       await resolveWebSearchStreamDecision(
         response,
         toolNameMapper,
@@ -305,6 +322,8 @@ const handleClaudeMessageRequest = async (
         },
       )
     streamedBeforeDecision = alreadyStreamed
+    preambleText = streamedText
+    preambleThinking = streamedThinking
     if (decision.kind === "webSearch") {
       decidedResponse = decision.response
     } else {
@@ -329,8 +348,31 @@ const handleClaudeMessageRequest = async (
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
       const searchResponse = createClaudeWebSearchResponse(search)
+      const decisionUsage = translateToClaude(effectiveResponse, toolNameMapper).usage
+      searchResponse.usage.input_tokens += decisionUsage.input_tokens
+      searchResponse.usage.output_tokens += decisionUsage.output_tokens
+      if (decisionUsage.cache_read_input_tokens !== undefined) searchResponse.usage.cache_read_input_tokens = (searchResponse.usage.cache_read_input_tokens ?? 0) + decisionUsage.cache_read_input_tokens
+      const siblingResponse = translateToClaude({
+        ...effectiveResponse,
+        choices: effectiveResponse.choices.map((choice) => ({
+          ...choice,
+          message: { ...choice.message, tool_calls: choice.message.tool_calls?.filter((call) => call.id !== webSearchToolCall.toolCall.id) },
+        })),
+      }, toolNameMapper)
+      const siblingTools = siblingResponse.content.filter((block) => block.type === "tool_use")
 
-      if (search.results.length === 0) {
+      if (siblingTools.length > 0) {
+        claudeResponse = {
+          ...siblingResponse,
+          content: [
+            ...(streamedBeforeDecision ? [] : siblingResponse.content.filter((block) => block.type !== "tool_use")),
+            ...searchResponse.content,
+            ...siblingTools,
+          ],
+          stop_reason: "tool_use",
+          usage: searchResponse.usage,
+        }
+      } else if (search.results.length === 0) {
         claudeResponse = searchResponse
       } else {
         const finalResponse = await createChatCompletions(
@@ -364,6 +406,19 @@ const handleClaudeMessageRequest = async (
       }
     } else {
       claudeResponse = translateToClaude(effectiveResponse, toolNameMapper)
+      if (streamedBeforeDecision) claudeResponse.content = claudeResponse.content.flatMap((block): ClaudeAssistantContentBlock[] => {
+        if (block.type === "text") {
+          const text = block.text.slice(preambleText.length)
+          preambleText = ""
+          return text ? [{ ...block, text }] : []
+        }
+        if (block.type === "thinking") {
+          const thinking = block.thinking.slice(preambleThinking.length)
+          preambleThinking = ""
+          return thinking ? [{ ...block, thinking }] : []
+        }
+        return [block]
+      })
     }
 
     if (writeEvent) {
@@ -431,12 +486,7 @@ const handleClaudeMessageRequest = async (
       continue
     }
 
-    let chunk: ChatCompletionChunk
-    try {
-      chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
-    } catch {
-      continue
-    }
+    const chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
 
     await writeClaudeStreamEvents(
       translateChunkToClaudeEvents(
@@ -475,21 +525,28 @@ claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const requestId = c.get("requestId")
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+  const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {
-    getRequestReasoningEffort(claudePayload)
+    const effort = resolveReasoningEffort(getRequestReasoningEffort(claudePayload))
+    const upstreamModel = translateModelName(claudePayload.model)
+    const validate = () => {
+      if (shouldUseNativeMessages(config, upstreamModel)) validateNativeMessages(claudePayload)
+      else validateClaudeMessages(claudePayload.messages, false, effort)
+    }
+    validateClaudeMessages(claudePayload.messages, true)
+    if (config.claudeUpstreamApi !== "auto") validate()
+    await ensureCopilotModelCatalog(config, upstreamModel)
+    requestSignal?.throwIfAborted()
+    validate()
   } catch (error) {
     if (!(error instanceof HTTPError)) throw error
     c.set("requestErrorMessage", error.message)
     log.error(`request_id=${requestId} ${error.message}`)
     return error.response
   }
-  const requestSignal = createCopilotRequestSignal(
-    c.req.raw.signal,
-    config.upstreamTimeoutMs,
-  )
-  log.debug("Full Claude request payload", { payload: claudePayload })
-
   if (claudePayload.stream) {
+    const trace = c.get("requestTrace")
+    trace?.deferHandler()
     return streamSSE(c, async (stream) => {
       const streamStarted = performance.now()
       const writeEvent = createQueuedClaudeStreamWriter((event) =>
@@ -506,12 +563,14 @@ claudeRoutes.post("/messages", async (c) => {
           requestSignal,
           requestId,
           writeEvent,
+          c.req.raw.headers,
         )
       } catch (error) {
-        log.error("Error during Claude stream request:", error)
+        log.error(`request_id=${requestId} Error during Claude stream request:`, error)
         const errorEvent = translateErrorToClaudeErrorEvent()
         await writeEvent(errorEvent)
       } finally {
+        trace?.handlerSettled()
         log.info(
           `request_id=${requestId} stream completed ${Math.round(performance.now() - streamStarted)}ms`,
         )
@@ -525,6 +584,8 @@ claudeRoutes.post("/messages", async (c) => {
       claudePayload,
       requestSignal,
       requestId,
+      undefined,
+      c.req.raw.headers,
     ))
   } catch (error) {
     if (error instanceof ProxyNotImplementedError) {
@@ -555,7 +616,17 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
   try {
     const claudeBeta = c.req.header("claude-beta")
     const claudePayload = await c.req.json<ClaudeMessagesPayload>()
-    const openAIPayload = translateToOpenAI(claudePayload)
+    const countPayload = shouldUseNativeMessages(c.get("config"), translateModelName(claudePayload.model)) ? {
+      ...claudePayload,
+      // Controls affect native execution, not local advisory token counting.
+      // Copy only system messages; real Messages requests retain their controls.
+      messages: claudePayload.messages.map((message) => {
+        if (message.role !== "system") return message
+        const { output_config: _outputConfig, clear_at: _clearAt, ...textMessage } = message
+        return textMessage
+      }),
+    } : claudePayload
+    const openAIPayload = translateToOpenAI(countPayload)
     const exposedModels = getExposedModelIds()
     const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
     const hasDiscoveredTokenizer =

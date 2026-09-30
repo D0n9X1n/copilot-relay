@@ -4,13 +4,22 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
-import { applyClaudeConfig } from "../../src/lib/claude-settings"
 import { astraLimits, solLimits } from "../fixtures/model-limits"
+
+// Keep transitive paths/log imports away from the user's real profile.
+const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-settings-"))
+process.env.HOME = tempHome
+process.env.USERPROFILE = tempHome
+const { applyClaudeConfig } = await import("../../src/lib/claude-settings")
+
+test.after(async () => {
+  await fs.rm(tempHome, { recursive: true, force: true })
+})
 
 const withTemporarySettings = async (
   run: (configPath: string) => Promise<void>,
 ): Promise<void> => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-claude-"))
+  const directory = await fs.mkdtemp(path.join(tempHome, "case-"))
   try {
     await run(path.join(directory, ".claude", "settings.json"))
   } finally {
@@ -338,6 +347,97 @@ test("leaves malformed Claude settings shapes untouched", async () => {
       })
     })
   }
+})
+
+for (const symlinked of [false, true]) {
+  test(`atomically publishes ${symlinked ? "symlinked" : "regular"} settings without corrupting open readers`, {
+    skip: symlinked && process.platform === "win32",
+  }, async () => {
+    await withTemporarySettings(async (configPath) => {
+      await fs.mkdir(path.dirname(configPath), { recursive: true })
+      const target = symlinked ? path.join(path.dirname(configPath), "managed.json") : configPath
+      const original = `${JSON.stringify({ theme: "dark", permissions: { allow: ["Read"] } })}\n`
+      await fs.writeFile(target, original, { mode: 0o640 })
+      if (symlinked) await fs.symlink("managed.json", configPath)
+      const input = { baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra" }
+      const reader = await fs.open(target, "r")
+      try {
+        if (process.platform === "win32") {
+          await assert.rejects(applyClaudeConfig(input), { code: "EPERM", syscall: "rename" })
+          assert.equal(await fs.readFile(target, "utf8"), original)
+          assert.deepEqual(await fs.readdir(path.dirname(configPath)), ["settings.json"])
+        } else {
+          assert.equal((await applyClaudeConfig(input)).changed, true)
+        }
+        assert.equal(await reader.readFile("utf8"), original, "an open reader must never see a truncated/replaced payload")
+      } finally {
+        await reader.close()
+      }
+      if (process.platform === "win32") assert.equal((await applyClaudeConfig(input)).changed, true)
+      const settings = await readSettings(configPath)
+      assert.equal(settings.theme, "dark")
+      assert.deepEqual(settings.permissions, { allow: ["Read"] })
+      assert.equal((settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "http://relay.test.invalid")
+      if (symlinked) {
+        assert.equal((await fs.lstat(configPath)).isSymbolicLink(), true)
+        assert.equal(await fs.readlink(configPath), "managed.json")
+        assert.deepEqual(await readSettings(target), settings)
+      }
+      if (process.platform !== "win32") {
+        assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
+      }
+      assert.deepEqual((await fs.readdir(path.dirname(configPath))).sort(),
+        symlinked ? ["managed.json", "settings.json"] : ["settings.json"])
+    })
+  })
+}
+
+test("does not overwrite a concurrent settings edit made after its snapshot read", async (t) => {
+  await withTemporarySettings(async (configPath) => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true })
+    await fs.writeFile(configPath, '{"theme":"dark"}\n')
+    const replacement = '{"theme":"light","concurrent":"keep me"}\n'
+    const realRead = fs.readFile.bind(fs)
+    const realWrite = fs.writeFile.bind(fs)
+    const resolvedPath = await fs.realpath(configPath)
+    let edited = false
+    t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+      const bytes = await realRead(...args)
+      if ((args[0] === configPath || args[0] === resolvedPath) && !edited) {
+        edited = true
+        await realWrite(configPath, replacement)
+      }
+      return bytes
+    })
+
+    await assert.rejects(applyClaudeConfig({
+      baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra",
+    }), /changed|conflict/i)
+    assert.equal(edited, true, "fixture must actually race the snapshot read")
+    assert.equal(await realRead(configPath, "utf8"), replacement)
+    assert.deepEqual(await fs.readdir(path.dirname(configPath)), ["settings.json"])
+  })
+})
+
+test("preserves settings when publication fails and removes its temporary file", async (t) => {
+  await withTemporarySettings(async (configPath) => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true })
+    const original = '{"theme":"dark"}\n'
+    await fs.writeFile(configPath, original)
+    const realRename = fs.rename.bind(fs)
+    const resolvedPath = await fs.realpath(configPath)
+    const failure = Object.assign(new Error("synthetic rename failure"), { code: "EIO" })
+    t.mock.method(fs, "rename", async (source: string, destination: string) => {
+      if (destination === configPath || destination === resolvedPath) throw failure
+      return realRename(source, destination)
+    })
+
+    await assert.rejects(applyClaudeConfig({
+      baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra",
+    }), (error) => error === failure)
+    assert.equal(await fs.readFile(configPath, "utf8"), original)
+    assert.deepEqual(await fs.readdir(path.dirname(configPath)), ["settings.json"])
+  })
 })
 
 // Why: startup runs repeatedly. Once settings are normalized, another managed

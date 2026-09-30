@@ -1,6 +1,7 @@
 // Central logger: writes to console and ~/.copilot-relay/logs with daily
 // rotation and retention cleanup.
 import fs from "node:fs/promises"
+import type { Stats } from "node:fs"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { inspect } from "node:util"
 
@@ -11,7 +12,6 @@ import { getLogPath, paths } from "~/lib/paths"
 import { scrubSensitiveUrls } from "~/lib/redact"
 
 const logCleanupCheckIntervalMs = 60 * 60 * 1000
-const millisecondsPerDay = 24 * 60 * 60 * 1000
 let logRetentionDays = 3
 let nextLogCleanupCheckAt = 0
 
@@ -39,6 +39,78 @@ const loggingSuppressed = new AsyncLocalStorage<boolean>()
 export const withoutLogging = <T>(run: () => T): T => loggingSuppressed.run(true, run)
 
 let currentLogLevel = consolaLevelByName.info
+const pendingLogWrites = new Set<Promise<void>>()
+const registeredLogSecrets = new Set<string>()
+const logSecretForms = new Set<string>()
+let logSecretPattern: RegExp | undefined
+const redactedSecret = "[redacted]"
+const truncatedMarker = "[truncated]"
+const maxLogArgumentBytes = 16 * 1024
+// Leave room for the timestamp, level, separating spaces, and final newline.
+const maxLogPayloadBytes = 64 * 1024 - 64
+
+const escapedSecretForms = (value: string): Array<string> => {
+  const inspected = inspect(value, { compact: true, breakLength: Infinity, maxStringLength: Infinity })
+  const quote = inspected[0]
+  const body = inspected.slice(1, -1).replaceAll(`\\${quote}`, quote)
+  return [
+    value,
+    JSON.stringify(value).slice(1, -1),
+    ...["'", '"', "`"].map((delimiter) => body.replaceAll(delimiter, `\\${delimiter}`)),
+  ]
+}
+
+// Secrets stay in memory for this process's lifetime, just like URL-origin
+// policies: a response can echo a token after rotation replaced the active one.
+export const registerLogSecret = (value: string | undefined): void => {
+  if (!value || registeredLogSecrets.has(value)) return
+  registeredLogSecrets.add(value)
+  for (const form of escapedSecretForms(value)) {
+    for (const nested of escapedSecretForms(form)) logSecretForms.add(nested)
+  }
+  const alternatives = [...logSecretForms].sort((left, right) => right.length - left.length)
+    .map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  logSecretPattern = new RegExp(alternatives.join("|"), "g")
+}
+
+const scrubLogSecrets = (value: string): string => {
+  if (!logSecretPattern) return value
+  // inspect keeps its 4000-character string limit. A registered token can cross
+  // that boundary, so redact its visible prefix only at inspect's explicit
+  // truncation marker, before exact matches can replace a shorter token prefix.
+  const truncatedStrings = value.replace(
+    /(['"`])((?:\\[\s\S]|(?!\1)[^\\])*)\1(\.\.\. \d+ more characters)/g,
+    (_match, quote: string, body: string, suffix: string) => {
+      let hiddenLength = 0
+      for (const form of logSecretForms) {
+        for (let length = Math.min(form.length - 1, body.length); length > hiddenLength; length -= 1) {
+          if (body.endsWith(form.slice(0, length))) {
+            hiddenLength = length
+            break
+          }
+        }
+      }
+      return quote + (hiddenLength ? body.slice(0, -hiddenLength) + redactedSecret : body) + quote + suffix
+    },
+  )
+  return truncatedStrings.replace(logSecretPattern, () => redactedSecret)
+}
+
+const boundLogText = (value: string, maxBytes: number): string => {
+  if (Buffer.byteLength(value) <= maxBytes) return value
+  const bytes = Buffer.from(value)
+  let end = maxBytes - Buffer.byteLength(truncatedMarker)
+  while ((bytes[end] & 0xc0) === 0x80) end -= 1
+  return bytes.subarray(0, end).toString("utf8") + truncatedMarker
+}
+
+export const isDebugLogging = (): boolean => currentLogLevel >= consolaLevelByName.debug
+
+// Logging stays fire-and-forget on the request path; teardown can explicitly
+// wait for in-flight writes before removing a temporary home or exiting.
+export const flushLogs = async (): Promise<void> => {
+  while (pendingLogWrites.size > 0) await Promise.all([...pendingLogWrites])
+}
 
 export const setLogLevel = (level: LogLevelName): void => {
   currentLogLevel = consolaLevelByName[level]
@@ -46,17 +118,17 @@ export const setLogLevel = (level: LogLevelName): void => {
 }
 
 /**
- * Render one logged value as a single physical line.
+ * Render one logged value with bounded, compact object inspection.
  *
  * `breakLength: Infinity` matters as much as the depth cap. The previous
  * `inspect(value, { depth: null })` pretty-printed each payload across
  * thousands of physical lines, which was both the dominant source of log volume
  * and the reason the `grep` recipes in wiki/EN-Logging-Troubleshooting.md
- * returned a fragment of an object instead of the matching entry. One entry is
- * now one line.
+ * returned a fragment of an object instead of the matching entry. Raw line
+ * separators must survive until redaction; wrapFileLog then escapes them.
  */
 const formatLogValue = (value: unknown): string =>
-  typeof value === "string" ? value : (
+  (typeof value === "string" ? value :
     inspect(value, {
       breakLength: Infinity,
       // compact: true is load-bearing next to breakLength, not redundant with
@@ -82,6 +154,72 @@ const formatLogValue = (value: unknown): string =>
     })
   )
 
+const escapeLogLineSeparators = (value: string): string =>
+  value.replaceAll("\r", "\\r").replaceAll("\n", "\\n")
+    .replaceAll(String.fromCodePoint(0x2028), "\\u2028")
+    .replaceAll(String.fromCodePoint(0x2029), "\\u2029")
+
+const isMissing = (error: unknown): boolean =>
+  (error as NodeJS.ErrnoException).code === "ENOENT"
+
+const sameFile = (left: Stats, right: Stats): boolean =>
+  left.dev === right.dev && left.ino === right.ino
+
+// Do not chmod through an arbitrary symlink. Open the already checked directory
+// without following its final component, and operate on the handle on POSIX.
+const ensurePrivateDirectory = async (directory: string): Promise<void> => {
+  await fs.mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+  })
+  const observed = await fs.lstat(directory)
+  if (!observed.isDirectory() || observed.isSymbolicLink()) {
+    throw new Error("Refusing an unsafe log directory")
+  }
+  if (process.platform === "win32") return
+
+  const handle = await fs.open(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat()
+    if (!opened.isDirectory() || !sameFile(observed, opened)) {
+      throw new Error("Log directory changed while opening")
+    }
+    await handle.chmod(0o700)
+  } finally {
+    await handle.close()
+  }
+}
+
+const ensureLogDirectory = async (): Promise<void> => {
+  await ensurePrivateDirectory(paths.appDir)
+  await ensurePrivateDirectory(paths.logsDir)
+}
+
+const appendPrivateLog = async (filePath: string, content: string): Promise<void> => {
+  const observed = await fs.lstat(filePath).catch((error: unknown) => {
+    if (!isMissing(error)) throw error
+    return undefined
+  })
+  if (observed && (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1)) {
+    throw new Error("Refusing an unsafe log file")
+  }
+
+  const flags = fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT
+    | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW)
+  const handle = await fs.open(filePath, flags, 0o600)
+  try {
+    const opened = await handle.stat()
+    const current = await fs.lstat(filePath)
+    if (!opened.isFile() || opened.nlink !== 1 || current.isSymbolicLink()
+      || !sameFile(opened, current) || (observed && !sameFile(observed, opened))) {
+      throw new Error("Log file changed while opening")
+    }
+    if (process.platform !== "win32") await handle.chmod(0o600)
+    await handle.appendFile(content)
+  } finally {
+    await handle.close()
+  }
+}
+
 /**
  * Appends one already-rendered entry.
  *
@@ -94,12 +232,12 @@ const writeLogFile = async (
   level: string,
   values: Array<string>,
 ): Promise<void> => {
-  await fs.mkdir(paths.logsDir, { recursive: true })
+  await ensureLogDirectory()
   await cleanupLogsIfDue()
   const line = [new Date().toISOString(), level, values.join(" ")].join(" ")
   // Resolved per write, so a relay running across local midnight starts the next
   // dated file on its own; there is no rotation timer to drift or miss.
-  await fs.appendFile(getLogPath(), `${line}\n`)
+  await appendPrivateLog(getLogPath(), `${line}\n`)
 }
 
 const cleanupLogsIfDue = async (): Promise<void> => {
@@ -139,14 +277,21 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
       return fn(...args)
     }
 
-    const rendered = args.map((value) =>
-      scrubSensitiveUrls(formatLogValue(value)),
-    )
+    // Redact before escaping or bounding: raw separators delimit URLs, and a
+    // size cap must never turn a complete registered secret into a leaked prefix.
+    const rendered = [boundLogText(args.map((value) =>
+      boundLogText(
+        escapeLogLineSeparators(scrubLogSecrets(scrubSensitiveUrls(formatLogValue(value)))),
+        maxLogArgumentBytes,
+      ),
+    ).join(" "), maxLogPayloadBytes)]
 
     if (writesToFile) {
       // File logging must never block the console path or fail a request. If
       // the disk write fails, the original consola call still runs.
-      void writeLogFile(level, rendered).catch(() => undefined)
+      const pending = writeLogFile(level, rendered).catch(() => undefined)
+      pendingLogWrites.add(pending)
+      void pending.then(() => pendingLogWrites.delete(pending))
     }
     return fn(...rendered)
   }) as T
@@ -184,29 +329,32 @@ const parseLogFileDate = (fileName: string): Date | undefined => {
 
 export const cleanupLogs = async (retentionDays: number): Promise<void> => {
   logRetentionDays = retentionDays
-  await fs.mkdir(paths.logsDir, { recursive: true })
+  await ensureLogDirectory()
 
-  // retentionDays counts today plus the preceding retentionDays - 1 days, so the
-  // default of 3 keeps today, yesterday, and the day before.
-  const startOfToday = new Date()
-  startOfToday.setHours(0, 0, 0, 0)
-  const cutoff =
-    startOfToday.getTime() - (retentionDays - 1) * millisecondsPerDay
+  // Calendar arithmetic, not 24-hour intervals: the oldest retained local day
+  // may begin 23 or 25 hours before the next midnight at a DST boundary.
+  const oldestDay = new Date()
+  oldestDay.setHours(0, 0, 0, 0)
+  oldestDay.setDate(oldestDay.getDate() - (retentionDays - 1))
+  const cutoff = oldestDay.getTime()
 
   const entries = await fs.readdir(paths.logsDir, { withFileTypes: true })
   await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".log"))
+      .filter((entry) => entry.isFile()
+        && (entry.name === `${paths.logFileBaseName}.log` || datedLogFilePattern.test(entry.name)))
       .map(async (entry) => {
         const filePath = `${paths.logsDir}/${entry.name}`
+        const current = await fs.lstat(filePath).catch((error: unknown) => {
+          if (!isMissing(error)) throw error
+          return undefined
+        })
+        if (!current?.isFile() || current.nlink !== 1) return
         const fileDate = parseLogFileDate(entry.name)
-        // Undated files - notably the pre-rotation copilot-relay.log - keep the
-        // original mtime rule, so upgrading installs drain without manual steps.
-        const timestamp =
-          fileDate?.getTime() ?? (await fs.stat(filePath)).mtimeMs
+        // Only the relay's legacy/dated names are ours. Service-manager stderr
+        // files and saved diagnostics may share this directory but are not swept.
+        const timestamp = fileDate?.getTime() ?? current.mtimeMs
         if (timestamp < cutoff) {
-          // Two relay processes can sweep the same directory; losing that race
-          // is not a failure worth surfacing.
           await fs.rm(filePath, { force: true })
         }
       }),

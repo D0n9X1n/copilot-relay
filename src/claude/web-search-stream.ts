@@ -23,7 +23,7 @@ import type {
   ChatCompletionResponse,
 } from "~/copilot/types"
 import type { ClaudeToolNameMapper } from "~/claude/tool-names"
-import { accumulateChunks } from "~/copilot/stream"
+import { accumulateChunks, normalizeChatCompletionStream } from "~/copilot/stream"
 
 export { accumulateChunks } from "~/copilot/stream"
 
@@ -36,26 +36,14 @@ const isWebSearchName = (
   isWebSearchToolName: (name: string) => boolean,
 ): boolean => !!name && isWebSearchToolName(toolNameMapper.toClaude(name))
 
-// Only a named tool call or a finish_reason settles the question.
-//
-// Text does NOT settle it. Copilot routinely emits a preamble — "I'll search
-// for that now." — before the tool call, so treating content as proof that no
-// search is coming lets the later web_search call escape unintercepted and
-// reach the client as a client tool_use named WebSearch. That is a malformed
-// turn: Claude Code would try to run a tool it expects the server to execute.
-//
-// Text is still streamed live while the question is open (see onChunk), so
-// waiting costs no perceived latency.
+// A later tool index may still request search after an ordinary tool call.
 const chunkSettlesDecision = (chunk: ChatCompletionChunk): boolean => {
   const choice = chunk.choices[0]
   if (!choice) {
     return false
   }
 
-  return (
-    choice.delta?.tool_calls?.some((call) => call.function?.name) === true
-    || !!choice.finish_reason
-  )
+  return !!choice.finish_reason
 }
 
 const chunkHasWebSearchCall = (
@@ -86,13 +74,17 @@ export const resolveWebSearchStreamDecision = async (
   decision: WebSearchStreamDecision
   rest: AsyncIterable<{ data?: string }>
   alreadyStreamed: boolean
+  streamedText: string
+  streamedThinking: string
 }> => {
   const buffered: Array<ChatCompletionChunk> = []
-  const iterator = stream[Symbol.asyncIterator]()
+  const iterator = normalizeChatCompletionStream(stream)[Symbol.asyncIterator]()
   let sawWebSearch = false
   let settled = false
   let done = false
   let alreadyStreamed = false
+  let streamedText = ""
+  let streamedThinking = ""
 
   while (!settled) {
     const next = await iterator.next()
@@ -110,12 +102,8 @@ export const resolveWebSearchStreamDecision = async (
       continue
     }
 
-    let chunk: ChatCompletionChunk
-    try {
-      chunk = JSON.parse(raw.data) as ChatCompletionChunk
-    } catch {
-      continue
-    }
+    const chunk = JSON.parse(raw.data) as ChatCompletionChunk
+    if (!chunk || !Array.isArray(chunk.choices)) throw new Error("Invalid upstream chat stream chunk.")
 
     buffered.push(chunk)
 
@@ -129,6 +117,9 @@ export const resolveWebSearchStreamDecision = async (
     // Emitting it now is what keeps non-search turns streaming in real time.
     if (onChunk) {
       await onChunk(chunk)
+      const delta = chunk.choices[0]?.delta
+      streamedText += delta?.content ?? ""
+      streamedThinking += delta?.reasoning_text ?? delta?.reasoning_content ?? ""
       alreadyStreamed = true
     }
 
@@ -160,7 +151,7 @@ export const resolveWebSearchStreamDecision = async (
     return {
       decision: { kind: "streamed", buffered: onChunk ? [] : buffered },
       rest,
-      alreadyStreamed,
+      alreadyStreamed, streamedText, streamedThinking,
     }
   }
 
@@ -172,16 +163,14 @@ export const resolveWebSearchStreamDecision = async (
     if (!raw.data) {
       continue
     }
-    try {
-      buffered.push(JSON.parse(raw.data) as ChatCompletionChunk)
-    } catch {
-      continue
-    }
+    const chunk = JSON.parse(raw.data) as ChatCompletionChunk
+    if (!chunk || !Array.isArray(chunk.choices)) throw new Error("Invalid upstream chat stream chunk.")
+    buffered.push(chunk)
   }
 
   return {
     decision: { kind: "webSearch", response: accumulateChunks(buffered) },
     rest: { async *[Symbol.asyncIterator]() {} },
-    alreadyStreamed,
+    alreadyStreamed, streamedText, streamedThinking,
   }
 }
