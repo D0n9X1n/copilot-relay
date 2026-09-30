@@ -6,6 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { isMainThread } from "node:worker_threads"
 
+// tsx's unawaited disk-cache writes can race exit cleanup in loader workers.
+process.env.TSX_DISABLE_CACHE = "1"
+
 if (isMainThread) {
   const owned = mkdtempSync(join(tmpdir(), "copilot-relay-test-"))
   const home = join(owned, "home")

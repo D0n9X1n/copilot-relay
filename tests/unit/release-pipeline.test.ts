@@ -32,6 +32,7 @@ test("test preload isolates static imports per child and cleans only owned tempo
       home: process.env.HOME, userprofile: process.env.USERPROFILE,
       appDir: paths.appDir, level: String(log.level),
       temporary: os.tmpdir(), suiteHome,
+      diskCaches: (await fs.readdir(os.tmpdir())).filter(name => /^tsx(?:-|$)/.test(name)),
     }
     // A suite can still select its own home. Cleanup must not follow env.HOME.
     process.env.HOME = process.env.INHERITED_HOME
@@ -43,7 +44,7 @@ test("test preload isolates static imports per child and cleans only owned tempo
       cwd: root,
       env: {
         ...process.env, HOME: inheritedHome, USERPROFILE: inheritedHome,
-        INHERITED_HOME: inheritedHome, CONSOLA_LEVEL: "5",
+        INHERITED_HOME: inheritedHome, CONSOLA_LEVEL: "5", TSX_DISABLE_CACHE: "",
       },
     })
     const results = await Promise.all([run(), run()])
@@ -51,12 +52,13 @@ test("test preload isolates static imports per child and cleans only owned tempo
     for (const { stdout } of results) {
       const result = JSON.parse(stdout) as {
         home: string; userprofile: string; appDir: string; level: string
-        temporary: string; suiteHome: string
+        temporary: string; suiteHome: string; diskCaches: string[]
       }
       assert.notEqual(result.home, inheritedHome)
       assert.equal(result.userprofile, result.home, "Windows must use the isolated home too")
       assert.equal(result.appDir, path.join(result.home, ".copilot-relay"))
       assert.equal(result.level, "0")
+      assert.deepEqual(result.diskCaches, [], "tsx must not leave asynchronous disk-cache writes racing exit cleanup")
       assert.equal(path.dirname(result.temporary), path.dirname(result.home))
       homes.add(result.home)
       for (const owned of [result.home, result.temporary, result.suiteHome]) {
