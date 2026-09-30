@@ -13,13 +13,10 @@
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
 - **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; existing selections survive upgrades.
 - **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.
-- **Know what works** — model discovery and opt-in per-model deep checks with clear results.*
-- **Choose Claude's upstream protocol** — `claudeUpstreamApi: chat-completions` stays the default; opt into `auto` or `messages` for native Claude transport (v0.4.0).
-- **Diagnose offline** — debug mode captures full observed bodies for `copilot-relay replay`; captures contain unredacted prompts and must never be shared wholesale (v0.4.0).
+- **Know what works** — model discovery and opt-in per-model deep checks with clear results.
+- **Choose Claude's upstream protocol** — `claudeUpstreamApi: chat-completions` stays the default; opt into `auto` or `messages` for native Claude transport.
+- **Diagnose offline** — debug mode captures full observed bodies for `copilot-relay replay`; captures contain unredacted prompts and must never be shared wholesale.
 - **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux.
-
-\* Model discovery, deep checks, and the Opus 5.5 fresh-install default require
-**v0.3.10 or later**.
 
 ## Quick start
 
@@ -44,7 +41,7 @@ Configuration lives in `~/.copilot-relay/config.yaml`. Model access depends on y
 account and organization policy; if startup rejects a model, choose an available
 one using the [configuration guide](wiki/EN-Configuration.md).
 
-Discover models and optionally test one (v0.3.10+):
+Discover models and optionally test one:
 
 ```sh
 copilot-relay models

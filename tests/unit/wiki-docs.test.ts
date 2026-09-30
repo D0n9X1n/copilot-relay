@@ -286,6 +286,7 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
 test("README stays a concise feature overview and quick start with valid Wiki links", () => {
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
   assert(body.split("\n").length <= 80)
+  assert.doesNotMatch(body, /\bv\d+\.\d+\.\d+\b/, "README describes current features, not release-version requirements")
   for (const required of ["## Features", "## Quick start", "copilot-relay auth", "copilot-relay start", "models --deep", "Wiki"]) assert(body.includes(required))
   for (const match of body.matchAll(/\]\((wiki\/[^)#]+)\)/g)) assert(fs.existsSync(path.join(repoRoot, match[1]!)))
 })
