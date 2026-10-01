@@ -509,6 +509,14 @@ Token 恢复日志只包含状态码、路由和结果，不含 bearer 凭据或
 不是操作系统级原子身份保证。初次发现状态未知会在有限宽限期内重试，之后失败而不发送
 信号。`status` 对进程检查不确定性输出诊断并以 `2` 退出，不声称进程不存在。
 
+对于入口不在 `copilot-relay` 或 `copilot-relay-*` 目录下的 `node <entry> start|restart`
+进程，例如位于 `~/.copilot-relay/runtime/0.4.1/dist/main.js` 的发布版运行时，改由包
+清单识别（#113）：`src/lib/lifecycle.ts` 的 `packagedEntryCandidate` 接受绝对路径或按
+cwd 解析的 `dist/main.js` 或 `src/main.ts`，`packageEntryProof` 要求该路径是普通文件，
+且其规范路径对应的 `../package.json` 中 `name` 为 `"copilot-relay"`。任何无法证明的
+情况都判定为 `nonrelay`，与这些命令此前的判定相同，因此无关的
+`node app/dist/main.js start` 不会收到信号，也不会阻塞 `stop`。
+
 配置损坏时，`status` 在探测前输出不回显敏感内容的诊断并以 `2` 退出，不表示 daemon
 已停止。`stop` 可不依赖配置端口提示，继续只处理身份已验证的进程。重启前应修复配置。
 
