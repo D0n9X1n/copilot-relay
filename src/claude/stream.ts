@@ -7,7 +7,7 @@ import {
   createClaudeToolNameMapper,
   type ClaudeToolNameMapper,
 } from "~/claude/tool-names"
-import { mapOpenAIStopReasonToClaude } from "~/claude/utils"
+import { mapOpenAIStopReasonToClaude, parseUpstreamToolInput, UpstreamToolInputError } from "~/claude/utils"
 import type { ChatCompletionChunk } from "~/copilot/types"
 import { normalizeClaudeModelId } from "~/lib/models"
 
@@ -154,13 +154,15 @@ export function translateChunkToClaudeEvents(
     if (choice.finish_reason === "tool_calls") {
       for (const toolCall of Object.values(state.toolCalls)) {
         const argumentsText = toolCall.arguments ?? ""
-        const input: unknown = JSON.parse(argumentsText)
-        if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Upstream tool input must be a JSON object.")
+        parseUpstreamToolInput(toolCall.name, argumentsText)
+        // A zero-parameter tool streams no argument text; clients parse the
+        // accumulated partial_json, and "" is not a JSON object (#114).
+        const partialJson = argumentsText.trim() ? argumentsText : "{}"
         const index = state.contentBlockIndex++
         toolCall.claudeBlockIndex = index
         events.push(
           { type: "content_block_start", index, content_block: { type: "tool_use", id: toolCall.id, name: toolCall.name, input: {} } },
-          { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: argumentsText } },
+          { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: partialJson } },
           { type: "content_block_stop", index },
         )
       }
@@ -192,12 +194,13 @@ export function translateChunkToClaudeEvents(
   return events
 }
 
-export function translateErrorToClaudeErrorEvent(): ClaudeStreamEventData {
+export function translateErrorToClaudeErrorEvent(error?: unknown): ClaudeStreamEventData {
   return {
     type: "error",
     error: {
       type: "api_error",
-      message: "An unexpected error occurred during streaming.",
+      // Only this mapped error is known to be client-safe; anything else stays generic.
+      message: error instanceof UpstreamToolInputError ? error.message : "An unexpected error occurred during streaming.",
     },
   }
 }

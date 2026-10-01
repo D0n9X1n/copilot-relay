@@ -154,6 +154,17 @@ only when `output_config` has exactly one key, `effort`, with a value of `low`,
 `isEffortOnlyControl` in `src/claude/utils.ts` is shared by validation and effort
 selection so accepted switches cannot silently disappear.
 
+Upstream tool-call `arguments` become Claude `tool_use.input` through
+`parseUpstreamToolInput` in `src/claude/utils.ts`, shared by `translateToClaude`
+and the streaming `translateChunkToClaudeEvents`. Copilot sends an empty string,
+not `{}`, for tools that take no parameters, so blank or whitespace-only text is
+the empty object; the stream then emits `partial_json: "{}"`, because clients
+parse the accumulated text and `""` is not a JSON object. Non-empty text that is
+not a JSON object raises `UpstreamToolInputError`: HTTP 502 `api_error` on the
+non-streaming path, and the same message in the SSE `error` event when streaming.
+The message names the tool and never echoes the argument text, which can carry
+user data. Other streaming failures keep the generic error message.
+
 `getClaudeTurnEffort` first validates the initial top-level request effort, then
 walks messages without mutation. A valid system effort marker is pending until a
 subsequent `role: user` message, including a tool-result-only message, activates

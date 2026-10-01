@@ -568,7 +568,7 @@ claudeRoutes.post("/messages", async (c) => {
         )
       } catch (error) {
         log.error(`request_id=${requestId} Error during Claude stream request:`, error)
-        const errorEvent = translateErrorToClaudeErrorEvent()
+        const errorEvent = translateErrorToClaudeErrorEvent(error)
         await writeEvent(errorEvent)
       } finally {
         trace?.handlerSettled()

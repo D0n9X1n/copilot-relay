@@ -139,6 +139,15 @@ thinking/text block。消息内的 system 文本保留原位置的 `role: system
 校验和 effort 选择共用 `src/claude/utils.ts` 的 `isEffortOnlyControl`，避免已被接受的
 切换被静默忽略。
 
+上游 tool call 的 `arguments` 通过 `src/claude/utils.ts` 的 `parseUpstreamToolInput`
+转换为 Claude 的 `tool_use.input`，`translateToClaude` 与流式的
+`translateChunkToClaudeEvents` 共用该函数。对于不接受参数的工具，Copilot 发送空字符串
+而不是 `{}`，因此空白或仅含空白字符的文本视为空对象；流式路径随后输出
+`partial_json: "{}"`，因为客户端会解析累积文本，而 `""` 不是 JSON 对象。非空但不是
+JSON 对象的文本会抛出 `UpstreamToolInputError`：非流式路径返回 HTTP 502
+`api_error`，流式路径在 SSE `error` 事件中给出同一消息。该消息只写明工具名，从不回显
+参数文本，因为其中可能包含用户数据。其他流式失败仍使用通用错误消息。
+
 `getClaudeTurnEffort` 先校验初始顶层 effort，再只读遍历消息。合法的 system effort
 标记先处于待生效状态，直到后续 `role: user` 消息将它激活；仅包含工具结果的 user
 消息也算。最后激活的值生效；最新 user 之后的标记仍待生效。翻译保留 system 文本
