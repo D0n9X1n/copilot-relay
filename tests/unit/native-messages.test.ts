@@ -54,6 +54,101 @@ const message = (content: unknown[], stop_reason = "end_turn") => ({
 })
 const streamResponse = (values: unknown[]) => new Response(values.map((value) => `data: ${JSON.stringify(value)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } })
 
+for (const stream of [false, true]) {
+  test(`native effort switches preserve initial config and controls (stream=${stream})`, async () => {
+    const messages = [
+      { role: "user" as const, content: "First turn." },
+      { role: "assistant" as const, content: [{ type: "thinking", thinking: "", signature: "fixture-signature" }, { type: "text", text: "OK" }] },
+      { role: "system" as const, content: [], output_config: { effort: "high" as const } },
+      { role: "user" as const, content: [{ type: "text", text: "Continue.", cache_control: { type: "ephemeral" } }] },
+    ]
+    const payload = { model: "claude-opus-5.5", max_tokens: 32, stream, output_config: { effort: "low" as const }, messages }
+    const original = structuredClone(payload)
+    const emitted: import("../../src/claude/types").ClaudeStreamEventData[] = []
+    await withRecordedTransport({ fetch: async (request) => {
+      assert.equal(request.path, "/v1/messages")
+      const sent = JSON.parse(request.body!)
+      assert.deepEqual(sent.output_config, { effort: "low" })
+      assert.deepEqual(sent.messages, original.messages)
+      assert.equal(new Headers(request.headers).get("anthropic-beta"), "mid-conversation-output-config-2026-07-01")
+      return stream ? streamResponse([
+        { type: "message_start", message: message([], null as never) },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ]) : Response.json(message([{ type: "text", text: "OK" }]))
+    }, refresh: async () => { throw new Error("Unexpected refresh") } }, () => handleNativeMessages(config, payload as never, {
+      requestId: "native-effort-switch", headers: new Headers({ "anthropic-beta": "mid-conversation-output-config-2026-07-01" }),
+    }, stream ? async (event) => { emitted.push(event) } : undefined))
+    if (stream) assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
+    assert.deepEqual(payload, original)
+  })
+}
+
+test("native search retrieval honors an active inline effort without flattening history", async () => {
+  const messages = [
+    { role: "user" as const, content: "First turn." },
+    { role: "assistant" as const, content: "OK" },
+    { role: "system" as const, content: [{ type: "text" as const, text: "" }, { type: "text" as const, text: "" }], output_config: { effort: "high" as const } },
+    { role: "user" as const, content: "Look up a reference." },
+  ]
+  const payload = { model: "claude-opus-5.5", max_tokens: 32, output_config: { effort: "low" as const }, messages,
+    tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
+  }
+  const original = structuredClone(payload)
+  const paths: string[] = []
+  await withRecordedTransport({ fetch: async (request) => {
+    paths.push(request.path)
+    const sent = JSON.parse(request.body!)
+    if (request.path === "/responses") {
+      assert.equal(sent.reasoning.effort, "high")
+      assert.doesNotMatch(sent.input, /^system:/m)
+      return Response.json({ id: "resp_search", model: sent.model, status: "completed", output: [
+        { type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] },
+      ], usage: { input_tokens: 1, output_tokens: 1 } })
+    }
+    assert.equal(request.path, "/v1/messages")
+    assert.deepEqual(sent.output_config, { effort: "low" })
+    assert.deepEqual(sent.messages.slice(0, messages.length), messages)
+    return Response.json(message(paths.length === 1 ? [
+      { type: "tool_use", id: "toolu_search", name: "WebSearch", input: { query: "reference" } },
+    ] : [{ type: "text", text: "Answer" }], paths.length === 1 ? "tool_use" : "end_turn"))
+  }, refresh: async () => { throw new Error("Unexpected refresh") } }, () => handleNativeMessages(config, payload, { requestId: "native-search-effort" }))
+  assert.deepEqual(paths, ["/v1/messages", "/responses", "/v1/messages"])
+  assert.deepEqual(payload, original)
+})
+
+test("native search resolves effort against restored tool-result user turns", async () => {
+  const id = "srvtoolu_relay_" + Buffer.from(JSON.stringify(["toolu_prior", "WebSearch", 1, 0])).toString("base64url")
+  const payload = {
+    model: "claude-opus-5.5", max_tokens: 32, output_config: { effort: "low" },
+    tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
+    messages: [
+      { role: "user", content: "Earlier lookup." },
+      { role: "system", content: [], output_config: { effort: "high" } },
+      { role: "assistant", content: [
+        { type: "server_tool_use", id, name: "web_search", input: { query: "earlier" } },
+        { type: "web_search_tool_result", tool_use_id: id, content: [] },
+      ] },
+    ],
+  }
+  const original = structuredClone(payload)
+  const calls: Array<{ path: string; body: any }> = []
+  await withRecordedTransport({ fetch: async (request) => {
+    const body = JSON.parse(request.body!)
+    calls.push({ path: request.path, body })
+    if (request.path === "/responses") return Response.json({ id: "resp_empty", model: body.model, status: "completed", output: [] })
+    assert.deepEqual(body.messages.map((message: { role: string }) => message.role), ["user", "system", "assistant", "user"])
+    assert.deepEqual(body.output_config, { effort: "low" })
+    return Response.json(message([{ type: "tool_use", id: "toolu_next", name: "WebSearch", input: { query: "next" } }], "tool_use"))
+  }, refresh: async () => {} }, () => handleNativeMessages(config, payload as never, { requestId: "native-restored-effort" }))
+  assert.deepEqual(calls.map((call) => call.path), ["/v1/messages", "/responses"])
+  assert.equal(calls[1].body.reasoning.effort, "high")
+  assert.deepEqual(payload, original)
+})
+
 test("native output limit uses SSE and preserves signed blocks for JSON callers", async () => {
   const limited = { ...config, modelCatalog: { baseUrl: base, models: new Map([["claude-opus-5.5", { limits: { max_context_window_tokens: 1000000, max_prompt_tokens: 900000, max_output_tokens: 128000, max_non_streaming_output_tokens: 8192 } }]]) } }
   let streaming = false

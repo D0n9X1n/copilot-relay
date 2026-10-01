@@ -195,7 +195,7 @@ authentication, or discovery failure; `2` any other non-pass result or no models
 
 ### Choose a compatible effort
 
-`thinkEffort` is the default, not an override. The first non-null value wins:
+`thinkEffort` is the default, not an override. The initial effort is the first non-null value:
 
 1. Claude Code's native `output_config.effort`.
 2. The legacy request field `reasoning_effort`.
@@ -208,17 +208,28 @@ Malformed explicit effort returns `400` rather than silently choosing the defaul
 An effort unsupported by the selected upstream model remains an upstream error;
 the relay does not substitute another level.
 
-On the translated path, an in-message system `output_config` is accepted only
-when its sole key is `effort`, its value is one of the five configured effort
-levels, and it exactly matches the current request's resolved effort. System
-text and message order are preserved; this redundant marker cannot change effort.
-Different historical levels, extra/unknown keys, or `clear_at` return HTTP 400
-JSON before upstream work or SSE. See [Internals](EN-Internals.md).
+You can change effort during a Claude Code conversation without clearing its
+history. An in-message system `output_config` whose sole key is `effort` may use
+`low`, `medium`, `high`, `xhigh`, or `max`. The latest marker before the latest
+user turn selects the current effort; a user turn containing tool results counts
+too. A marker after that user turn remains pending until the next user turn.
+Older markers may have different levels and stay in the original history.
 
-The selected effort stays the same through chat/Responses, streaming/JSON, and
-WebSearch decision, retrieval, and final-answer passes. A config reload affects
-later requests, not the remaining passes of one already in progress.
-Startup preflight still checks the configured default for both models.
+On translated chat/Responses routes, the relay maps the current effort to the
+upstream request field, retaining system text and order and omitting empty
+control-only messages. Extra/unknown control keys, malformed values, inline
+`none`, and `clear_at` still return HTTP 400 JSON before inference or SSE.
+Native Messages retains the initial setting and inline controls for upstream to
+interpret. See [Internals](EN-Internals.md).
+
+The selected effort is used for translated JSON/SSE and all WebSearch passes;
+config reload cannot change it within an admitted request. Native follow-ups
+retain control history, so a pending marker can activate when a later user/tool-result
+turn is appended. Startup preflight still checks the configured default for both models.
+Preserving translated message prefixes avoids unnecessary history changes, but
+request-level effort changes may still invalidate upstream caches. Native
+per-message effort is the protocol mechanism for preserving that cache; see the
+[official effort guide](https://platform.claude.com/docs/en/build-with-claude/effort).
 
 Choose a default supported by **both** `gptModel` and `opusModel` (and by
 `webSearchBackend` when set). Configured defaults accept only `low`, `medium`,
@@ -491,6 +502,61 @@ The local dummy token is **not network authentication**. Host/Origin checks and
 JSON content-type validation reduce browser-origin misuse, not access by an
 arbitrary network client. Keep the listener on loopback; see
 [Architecture](EN-Architecture.md).
+
+### Keep the picker focused on Opus and GPT-6 Astra
+
+For Claude Code **2.1.242 or newer**, merge this example into your user
+`~/.claude/settings.json`, keeping the existing relay connection, budgets,
+permissions, hooks, and other settings:
+
+```json
+{
+  "model": "gpt-6-astra[1m]",
+  "availableModels": ["opus", "gpt-6-astra[1m]"],
+  "modelPicker": {
+    "options": [
+      { "model": "opus", "label": "Opus" },
+      { "model": "gpt-6-astra[1m]", "label": "GPT-6 Astra" }
+    ],
+    "replaceBuiltInOptions": true
+  },
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5.5"
+  }
+}
+```
+
+This uses the default relay pair, `opusModel: claude-opus-5.5` and
+`gptModel: gpt-6-astra`. Keep the Opus override aligned with your configured
+upstream ID. The Astra client ID carries `[1m]` for a discovered one-million-token
+window; if your gateway reports a different window, use the relay's exposed plain
+ID consistently in `model`, `availableModels`, and `modelPicker.options` instead.
+The suffix is client context accounting, not a way to enlarge upstream capacity.
+
+`modelPicker` replaces the built-in lineup with these two named choices instead
+of suggesting unrelated Sonnet, Haiku, or Fable routes. Claude Code may still show
+**Default** and a row for the current session's model; it does not guarantee exactly
+two visible rows. `availableModels` is the selection allowlist and also filters
+picker entries. `model` only selects the startup default. Use `/model` to select
+Opus or GPT-6 Astra, or `/model gpt-6-astra[1m]` to select Astra explicitly.
+
+This picker setting belongs in user or managed settings (or `--settings`), not
+project/local settings. Managed allowlists cannot be expanded by this example;
+without a managed list, user/project/local `availableModels` arrays can merge.
+For an exact effective pair, remove stale entries in settings you control and
+check any managed restrictions. With normal prefix matching, **Default** is not
+constrained by the allowlist alone; organizational enforcement additionally uses
+`enforceAvailableModels` in managed settings. See the official
+[model configuration](https://code.claude.com/docs/en/model-config) and
+[modelPicker reference](https://code.claude.com/docs/en/settings-reference#modelpicker).
+
+An explicit `--model`, an exported `ANTHROPIC_MODEL`, or a saved resumed-session
+model can override the startup selection; inspect shell wrappers and higher-priority
+settings if the chosen model does not change. `claudeSetup` preserves existing
+`model`, `availableModels`, and `modelPicker` choices; it does not install or reset
+this lineup. Claude Code can substitute an allowed model for an excluded alias,
+so verify the selected identity instead of assuming a disallowed alias must error.
+This example is opt-in and does not change your running relay.
 
 ## Runtime files
 

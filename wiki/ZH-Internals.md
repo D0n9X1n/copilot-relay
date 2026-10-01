@@ -134,27 +134,39 @@ base URL、超时、协议模式、搜索后端、effort 和目录视图。后�
 以及 Copilot 响应 -> Claude 响应。它在两种协议形状之间映射 tool call 和
 thinking/text block。消息内的 system 文本保留原位置的 `role: system`，包括工具结果
 之后；不能变成 assistant 发言，也不能附加 assistant 续写提示。`validateClaudeMessages`
-在翻译路径上只允许一种狭窄的冗余内联控制：system 消息的 `output_config` 必须为对象，
-且唯一键 `effort` 的值为 `low`、`medium`、`high`、`xhigh`、`max` 之一，并与当前请求
-解析后的 effort 完全相同。翻译保留 system 文本和顺序，在请求级表达同一 effort；
-不会从历史推断新的覆盖值，也不修改输入对象。
+在翻译路径上只接受唯一键为 `effort` 的 system `output_config`，其值必须为
+`low`、`medium`、`high`、`xhigh`、`max` 之一。历史标记具有不同档位是合法的。
+校验和 effort 选择共用 `src/claude/utils.ts` 的 `isEffortOnlyControl`，避免已被接受的
+切换被静默忽略。
 
-不同的历史 effort、额外/未知键、null/数组控制、内联 `none` 或任何 `clear_at` 都会
-被拒绝，未知角色和格式错误的 system 文本也一样。接入时先解析 effort，再于任何
-上游操作或打开 SSE 之前校验，即使 `stream: true` 也返回 HTTP 400 JSON。
-`translateToOpenAI` 对直接调用和 token 计数重复校验。原生消息保留逐消息控制字段，
-由上游判断支持情况。
+`getClaudeTurnEffort` 先校验初始顶层 effort，再只读遍历消息。合法的 system effort
+标记先处于待生效状态，直到后续 `role: user` 消息将它激活；仅包含工具结果的 user
+消息也算。最后激活的值生效；最新 user 之后的标记仍待生效。翻译保留 system 文本
+和顺序，消化空的 effort-only 消息而不插入空 system 提示，并将当前档位映射到上游
+请求字段。追加切换不会改写既有翻译前缀，也不会在工具调用与结果之间插入控制消息。
+
+额外/未知键、null/数组控制、内联 `none` 和任何 `clear_at` 仍在翻译路径被拒绝。
+未知角色、格式错误的 system 文本也会被拒绝。接入校验发生在推理请求或 SSE 之前，
+即使 `stream: true` 也返回 HTTP 400 JSON；`translateToOpenAI` 对直接调用和 token
+计数重复校验。原生消息保留初始设置与逐消息控制字段，由上游解释。辅助函数在原生
+路径遇到无法解释的控制时跳过它，不会为了诊断而改写请求。
 
 `src/claude/tool-names.ts` 在出站时把 Claude 工具名规范化成 Copilot 可接受的名字，
 入站时再映射回来。Claude Code 的工具名不总是合法的上游标识符，而一个带着规范化后
 名字的响应，与客户端注册的那个工具对不上。
 
 `src/lib/models.ts` 中的 `getRequestReasoningEffort` 和 `resolveReasoningEffort`
-负责校验、选择请求 effort，并应用配置默认值。翻译层会在任何上游等待之前，将有效
-档位固定到 chat payload。Chat 包装层必须在模型目录查询、重试以及 Responses 回退
-期间保留该值。WebSearch 检索接收同一个值，最终回答 payload 也会保留它，因此配置
-热重载不会让一个回合中途改变 effort。显式 effort 无效时会在打开 SSE 前拒绝请求，
-token-count 请求也一样。面向用户的优先级规则见[配置说明](ZH-Configuration.md)。
+保留初始字段优先级与配置回退规则。Claude 专用辅助函数解析已激活的内联控制后，
+翻译层将当前档位固定到 chat payload。Chat/Responses、requested/effective 日志及
+WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直接继承它。请求级运行时
+快照保证配置热重载不会改变某阶段的回退值。
+原生请求保留原控制字段；诊断和搜索检索使用规范化后的出站历史，包括恢复出的 user
+工具结果回合。原生后续调用追加 user 工具结果时，可能激活待生效标记。即使后续标记合法，错误的
+初始 effort 仍会被拒绝。见[配置说明](ZH-Configuration.md)。
+
+稳定的翻译文本前缀和 Responses 缓存键是回归约束，不是缓存命中率不变的保证：翻译
+协议在请求级表达 effort，切换可能使上游缓存失效。原生逐消息控制保留原样，交由
+提供方实现缓存保持语义。
 
 `src/claude/types.ts` 只定义代理需要的那部分 Claude Messages API 类型。它刻意不是
 完整的 Claude SDK —— 一个用不到的类型就是没有测试覆盖的维护成本。

@@ -148,19 +148,28 @@ Claude request -> Copilot chat request, and Copilot response -> Claude response.
 It maps tool calls and thinking/text blocks between the two protocol shapes.
 In-message system text remains `role: system` in its original position, including
 after tool results; it must not become assistant speech or acquire an assistant
-continuation prompt. `validateClaudeMessages` allows one narrow translated-path
-exception for a redundant inline control: a system message's `output_config` must
-be an object with exactly one key, `effort`, set to one of `low`, `medium`, `high`,
-`xhigh`, `max` and exactly equal to the current request's resolved effort. The
-translator retains the system text and order and represents that same effort at
-request level; it does not infer a new override from history or mutate the input.
+continuation prompt. `validateClaudeMessages` accepts translated system controls
+only when `output_config` has exactly one key, `effort`, with a value of `low`,
+`medium`, `high`, `xhigh`, or `max`. Different historical values are valid.
+`isEffortOnlyControl` in `src/claude/utils.ts` is shared by validation and effort
+selection so accepted switches cannot silently disappear.
 
-A different historical effort, additional/unknown keys, null/array controls,
-inline `none`, or any `clear_at` is rejected. Unknown roles and malformed system
-text are rejected too. Admission resolves effort and validates before any upstream
-work or SSE opening, returning HTTP 400 JSON even with `stream: true`.
-`translateToOpenAI` repeats the validation for direct callers and token counting.
-Native messages retain their per-message controls for upstream to evaluate.
+`getClaudeTurnEffort` first validates the initial top-level request effort, then
+walks messages without mutation. A valid system effort marker is pending until a
+subsequent `role: user` message, including a tool-result-only message, activates
+it. The last active value wins; a marker after the latest user stays pending.
+Translation retains system text and order, consumes empty effort-only messages
+without inserting empty system prompts, and maps the current effort into the
+upstream request field. Appending a switch does not rewrite the translated prefix
+or insert a control between a tool call and its result.
+
+Additional/unknown keys, null/array controls, inline `none`, and any `clear_at`
+remain rejected on translated paths. Unknown roles and malformed system text
+are rejected too. Admission validates before inference or SSE, returning HTTP 400
+JSON even with `stream: true`; `translateToOpenAI` repeats validation for direct
+callers and token counting. Native messages retain their initial setting and
+per-message controls for upstream to evaluate. The helper ignores controls it
+cannot interpret on that path rather than rewriting them for diagnostics.
 
 `src/claude/tool-names.ts` normalizes Claude tool names into Copilot-compatible
 names on the way out and maps them back on the way in. Claude Code's tool names
@@ -168,13 +177,20 @@ are not always valid upstream identifiers, and a response carrying the normalize
 name would not match the tool the client registered.
 
 `getRequestReasoningEffort` and `resolveReasoningEffort` in `src/lib/models.ts`
-validate/select request effort and apply the configured fallback. Translation
-freezes the effective level in the chat payload before any upstream wait.
-The chat wrapper must retain it during catalog lookup, retries, and Responses
-fallback. WebSearch retrieval receives that same value, and its final-answer
-payload already preserves it, so a config reload cannot change effort mid-turn.
-Invalid explicit effort is rejected before opening SSE, including on token-count
-requests. User-facing precedence is documented in [Configuration](EN-Configuration.md).
+retain their initial-field precedence and configured fallback. The Claude-specific
+helper resolves active inline controls before translation freezes effort in the
+chat payload. Chat/Responses, requested/effective logs, and WebSearch retrieval use
+that current value; the translated final-answer payload inherits it. Request-scoped
+runtime snapshots prevent config reload from changing a pass's fallback.
+Native requests keep their original controls; diagnostics and search retrieval use
+normalized outgoing history, including restored user tool-result turns. A native
+follow-up can activate a pending marker by appending a user tool result. Invalid initial effort
+still fails even when a later marker is valid. See [Configuration](EN-Configuration.md).
+
+Stable translated text prefixes and Responses cache keys are regression invariants,
+not a guarantee of unchanged cache hit rates: translated APIs express effort at
+request level, which can reset upstream caching. Native per-message controls are
+left intact for the provider's cache-preserving semantics.
 
 `src/claude/types.ts` defines only the subset of Claude Messages API types the
 proxy needs. It is intentionally not a full Claude SDK — an unused type is a

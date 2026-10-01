@@ -168,7 +168,7 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 
 ### 选择兼容的 effort
 
-`thinkEffort` 是默认值，不再覆盖请求。按以下顺序使用第一个非 null 的值：
+`thinkEffort` 是默认值，不再覆盖请求。初始 effort 按以下顺序使用第一个非 null 的值：
 
 1. Claude Code 原生字段 `output_config.effort`。
 2. 兼容旧客户端的请求字段 `reasoning_effort`。
@@ -180,14 +180,23 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 effort 返回 `400`，不会静默改用默认值。若所选上游模型不支持该 effort，仍会返回上游
 错误；relay 不会替换成其他档位。
 
-翻译路径仅在逐消息 system `output_config` 的唯一键为 `effort`、取值属于五种配置档位，
-且与当前请求解析后的 effort 完全相同时接受它。System 文本和消息顺序保留；这个冗余
-标记不能改变 effort。不同的历史档位、额外/未知键或 `clear_at` 都在上游操作/SSE 之前
-返回 HTTP 400 JSON。见[内部实现](ZH-Internals.md)。
+可以在 Claude Code 会话中途切换 effort，无需清空历史。消息级 system `output_config`
+的唯一键为 `effort` 时，可使用 `low`、`medium`、`high`、`xhigh` 或 `max`。
+最新 user 回合之前的最后一个标记决定当前档位；仅包含工具结果的 user 回合也算。
+位于该 user 回合之后的标记要等下一个 user 回合才生效。旧标记可以保留不同档位，
+不必改写原始历史。
 
-选定的 effort 在 chat/Responses、流式/JSON，以及 WebSearch 的决策、检索和最终回答
-调用中保持一致。配置热重载只影响之后的请求，不会改变进行中请求的后续调用。
-启动 preflight 仍会为两个模型验证配置的默认档位。
+在翻译为 chat/Responses 的路径上，relay 把当前档位映射到上游请求字段，保留 system
+文本与顺序，省略没有文本、只有控制信息的消息。额外/未知控制键、格式错误的值、
+消息级 `none` 或 `clear_at` 仍会在推理请求/SSE 之前返回 HTTP 400 JSON。
+原生 Messages 保留初始设置和逐消息控制字段，由上游解释。见[内部实现](ZH-Internals.md)。
+
+翻译路径的 JSON/SSE 及 WebSearch 各阶段均使用选定档位；请求接入后的配置热重载
+不会改变它。原生后续调用保留控制历史，因此追加 user/工具结果回合时，待生效标记
+可能开始生效。启动 preflight 仍会为两个模型验证配置的默认档位。
+保持翻译后的消息前缀不变可避免不必要的历史变动，但请求级 effort 变化仍可能使上游
+缓存失效。原生逐消息 effort 才是协议提供的缓存保持机制，见
+[官方 effort 指南](https://platform.claude.com/docs/en/build-with-claude/effort)。
 
 选择 `gptModel` 和 `opusModel` **都支持**的默认值；如果设置了 `webSearchBackend`，
 它也必须支持该值。配置默认值只接受 `low`、`medium`、`high`、`xhigh`、`max`。
@@ -429,6 +438,54 @@ CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预�
 
 本地占位 token **不是网络认证**。Host/Origin 与 JSON content-type 检查减少的是浏览器
 来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，见[架构](ZH-Architecture.md)。
+
+### 模型选择器只保留 Opus 和 GPT-6 Astra
+
+使用 Claude Code **2.1.242 或更新版本**时，将以下示例合并到用户级
+`~/.claude/settings.json`，保留已有 relay 连接、预算、权限、hooks 及其他设置：
+
+```json
+{
+  "model": "gpt-6-astra[1m]",
+  "availableModels": ["opus", "gpt-6-astra[1m]"],
+  "modelPicker": {
+    "options": [
+      { "model": "opus", "label": "Opus" },
+      { "model": "gpt-6-astra[1m]", "label": "GPT-6 Astra" }
+    ],
+    "replaceBuiltInOptions": true
+  },
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5.5"
+  }
+}
+```
+
+示例使用 relay 默认模型对：`opusModel: claude-opus-5.5` 与 `gptModel: gpt-6-astra`。
+请让 Opus 覆盖值与实际配置的上游 ID 保持一致。Astra 的客户端 ID 使用 `[1m]` 表示
+发现的一百万 token 窗口；如果网关公布其他窗口，应在 `model`、`availableModels`
+和 `modelPicker.options` 中统一使用 relay 暴露的不带后缀 ID。后缀只影响客户端
+上下文计算，不能扩大上游容量。
+
+`modelPicker` 用这两个具名选项替换内置列表，避免继续推荐实际没有独立路由的 Sonnet、
+Haiku 或 Fable。Claude Code 仍可能显示 **Default** 和当前会话模型，因此不能保证界面
+恰好只有两行。`availableModels` 是选择允许列表，也会过滤 picker 项；`model` 只决定
+启动默认值。使用 `/model` 选择 Opus 或 GPT-6 Astra，也可用 `/model gpt-6-astra[1m]`
+明确选择 Astra。
+
+Picker 设置应放在用户级、托管设置或 `--settings` 中，不能放在项目/本地设置中。
+此示例不能扩展托管允许列表；没有托管列表时，用户/项目/本地的 `availableModels`
+数组可能合并。若希望有效模型对保持精确，应清理你有权修改的设置中的旧条目，并检查
+托管限制。普通前缀匹配下，仅设置允许列表不会限制 **Default**；组织级强制限制还需
+在托管设置中使用 `enforceAvailableModels`。见官方
+[模型配置](https://code.claude.com/docs/en/model-config)与
+[modelPicker 参考](https://code.claude.com/docs/en/settings-reference#modelpicker)。
+
+显式 `--model`、导出的 `ANTHROPIC_MODEL` 或恢复会话中保存的模型都可能覆盖启动选择；
+若模型没有变化，请检查 shell wrapper 和更高优先级的设置。`claudeSetup` 保留已有
+`model`、`availableModels` 和 `modelPicker`，不会安装或重置这个列表。Claude Code 可能
+将被排除的别名替换为允许的模型，因此应核对实际选择的模型，而不能假定被排除的别名
+一定报错。示例为手动选择，不会改变正在运行的 relay。
 
 ## 运行时文件
 

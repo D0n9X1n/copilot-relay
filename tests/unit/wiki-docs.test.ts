@@ -283,6 +283,28 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
 // Why: Copilot availability and effort tiers are account-specific. The local
 // relay endpoint only echoes config, so both language guides must preserve the
 // live picker workflow and a direct, token-safe way to update all model knobs.
+test("Claude Code picker examples expose the same Opus and Astra choices in both languages", () => {
+  const examples = ["EN-Configuration.md", "ZH-Configuration.md"].map((name) => {
+    const page = readPage(name)
+    const snippets = [...page.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)]
+      .map((match) => JSON.parse(match[1]) as Record<string, any>)
+    const settings = snippets.find((value) => value.modelPicker)
+    assert(settings, `${name} needs a complete model-picker settings example`)
+    assert.equal(settings.model, "gpt-6-astra[1m]")
+    assert.deepEqual(settings.availableModels, ["opus", "gpt-6-astra[1m]"])
+    assert.equal(settings.modelPicker.replaceBuiltInOptions, true)
+    assert.deepEqual(settings.modelPicker.options, [
+      { model: "opus", label: "Opus" },
+      { model: "gpt-6-astra[1m]", label: "GPT-6 Astra" },
+    ])
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "claude-opus-5.5")
+    assert.match(page, /2\.1\.242/)
+    assert.match(page, /https:\/\/code\.claude\.com\/docs\/en\/settings-reference#modelpicker/)
+    return settings
+  })
+  assert.deepEqual(examples[0], examples[1])
+})
+
 test("README stays a concise feature overview and quick start with valid Wiki links", () => {
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
   assert(body.split("\n").length <= 80)

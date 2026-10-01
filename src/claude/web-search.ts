@@ -10,6 +10,7 @@ import type {
   ClaudeWebSearchResultBlock,
 } from "~/claude/types"
 import type { ClaudeToolNameMapper } from "~/claude/tool-names"
+import { getClaudeTurnEffort } from "~/claude/utils"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -29,10 +30,8 @@ import { log } from "~/lib/log"
 import { sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
 import {
   getModelRouting,
-  getRequestReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
-  resolveReasoningEffort,
 } from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
@@ -203,7 +202,11 @@ const buildSearchInput = (
       payload.system.map((block: ClaudeTextBlock) => block.text).join("\n\n")
     : ""
   const messages = payload.messages
-    .map((message) => `${message.role}: ${textFromMessageContent(message.content)}`)
+    .flatMap((message) => {
+      const text = textFromMessageContent(message.content)
+      if (message.role === "system" && message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) return []
+      return [`${message.role}: ${text}`]
+    })
     .join("\n\n")
 
   return [
@@ -228,7 +231,7 @@ const buildWebSearchRequestPayload = (
   model,
   input: buildSearchInput(payload, requestedQuery),
   tools: [{ type: "web_search_preview" }],
-  reasoning: { effort: resolveReasoningEffort(getRequestReasoningEffort(payload)) },
+  reasoning: { effort: getClaudeTurnEffort(payload).effective },
   max_output_tokens: Math.max(256, Math.min(payload.max_tokens ?? 1024, 1200)),
   temperature: payload.temperature,
   top_p: payload.top_p,
@@ -540,7 +543,7 @@ export const createClaudeWebSearchExecution = async (
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error
   }
-  return interpretSearchResponse(upstream, config, requestedQuery, request, getRequestReasoningEffort(payload) ?? "unset", options.requestId)
+  return interpretSearchResponse(upstream, config, requestedQuery, request, getClaudeTurnEffort(payload).requested ?? "unset", options.requestId)
 }
 
 const buildSearchResultBlock = (
