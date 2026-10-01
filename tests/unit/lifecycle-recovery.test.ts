@@ -658,3 +658,68 @@ for (const command of ["status", "restart", "stop"] as const) {
     if (command === "status") assert.doesNotMatch(result.output, /process\s+not running/)
   })
 }
+
+// #113: a release runtime extracted under a version-named directory, e.g.
+// ~/.copilot-relay/runtime/0.4.1/dist/main.js. Identity comes from the package
+// manifest beside the entrypoint, not from the directory name.
+const versionRuntimes = [
+  ["Windows", "C:/Users/u/.copilot-relay/runtime/0.4.1",
+    String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\.copilot-relay\runtime\0.4.1\dist\main.js start`],
+  ["POSIX", "/home/u/.copilot-relay/runtime/0.4.1", "node /home/u/.copilot-relay/runtime/0.4.1/dist/main.js start"],
+] as const
+const runtimeFiles = (root: string, name = "copilot-relay") => new Map<string, ProcessFile>([
+  [`${root}/dist/main.js`, { kind: "file" }],
+  [`${root}/package.json`, { kind: "file", content: JSON.stringify({ name }) }],
+])
+
+for (const [platform, root, command] of versionRuntimes) {
+  test(`status recognizes a ${platform} relay runtime under a version directory`, async (t) => {
+    await mockProcessFiles(t, runtimeFiles(root))
+    const p = { ...relay(), command, cwd: "/" }
+    await savePid(p)
+    const fixture = inventory(t, [p])
+    assert.equal((await findRelayOnPort({ host: "127.0.0.2", port: 45001 }))?.pid, p.pid)
+    // Port fallback reaches the same verdict without a pid file.
+    await fs.rm(paths.pidPath, { force: true })
+    fixture.hooks.listeners = [p.pid]
+    assert.equal((await findRelayOnPort({ host: "127.0.0.2", port: 45001 }))?.pid, p.pid)
+    assert.deepEqual(fixture.signals, [])
+  })
+
+  test(`stop finds a ${platform} version-directory runtime without a port hint`, async (t) => {
+    await mockProcessFiles(t, runtimeFiles(root))
+    const p = { ...relay(), command, cwd: "/" }
+    const fixture = inventory(t, [p])
+    fastStopClock(t)
+    assert.deepEqual(await stopExistingRelay({}), [p.pid])
+    assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
+  })
+
+  for (const reason of ["foreign package", "missing package.json", "missing entrypoint", "unreadable package.json"] as const) {
+    test(`a ${platform} version-directory runtime with ${reason} is not a relay`, async (t) => {
+      const files = runtimeFiles(root, reason === "foreign package" ? "some-other-app" : "copilot-relay")
+      if (reason === "missing package.json") files.delete(`${root}/package.json`)
+      if (reason === "missing entrypoint") files.delete(`${root}/dist/main.js`)
+      if (reason === "unreadable package.json") files.set(`${root}/package.json`, { kind: "file", denied: true })
+      await mockProcessFiles(t, files)
+      const p = { ...relay(), command, cwd: "/" }
+      await savePid(p)
+      const fixture = inventory(t, [p])
+      fixture.hooks.listeners = [p.pid]
+      assert.equal(await findRelayOnPort({ host: "127.0.0.2", port: 45001 }), undefined)
+      assert.deepEqual(await stopExistingRelay({}), [])
+      assert.deepEqual(fixture.signals, [])
+    })
+  }
+}
+
+test("a relative dist entrypoint resolves against the process cwd before the manifest check", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  await mockProcessFiles(t, runtimeFiles("/home/u/.copilot-relay/runtime/0.4.1"))
+  const p = { ...relay(), command: "node dist/main.js start", cwd: "/home/u/.copilot-relay/runtime/0.4.1" }
+  await savePid(p)
+  const fixture = inventory(t, [p])
+  assert.equal((await findRelayOnPort({ host: "127.0.0.2", port: 45001 }))?.pid, p.pid)
+  assert.deepEqual(fixture.signals, [])
+})

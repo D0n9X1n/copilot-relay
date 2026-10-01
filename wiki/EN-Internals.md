@@ -589,6 +589,16 @@ this is conservative, not an OS-atomic identity guarantee. Unknown initial disco
 retries within a bounded grace period, then fails without signalling. `status`
 reports inspection uncertainty as a diagnostic exit `2`, not absence.
 
+A `node <entry> start|restart` process whose entrypoint is not under a
+`copilot-relay` or `copilot-relay-*` directory, such as a release runtime at
+`~/.copilot-relay/runtime/0.4.1/dist/main.js`, is identified by the package
+manifest instead (#113): `packagedEntryCandidate` in `src/lib/lifecycle.ts`
+accepts an absolute or cwd-resolved `dist/main.js` or `src/main.ts`, and
+`packageEntryProof` requires that path to be a regular file whose canonical
+`../package.json` has `name: "copilot-relay"`. Any failure to prove that is
+`nonrelay`, the verdict these commands had before, so an unrelated
+`node app/dist/main.js start` is never signalled and never blocks `stop`.
+
 Broken config makes `status` emit a safe diagnostic and exit `2` before probing;
 it is not a claim the daemon stopped. `stop` can continue without a config port
 hint, using only verified identities. Repair config before restarting.

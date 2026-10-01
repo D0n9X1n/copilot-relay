@@ -81,30 +81,70 @@ const commandArgs = (command: string): Array<string> => {
   return tokens.map((token) => token.replace(/^(["'])(.*)\1$/, "$2").replaceAll("\\", "/"))
 }
 
-export const isRelayStartProcess = (command: string, cwd?: string): boolean => {
-  const args = commandArgs(command)
-  const executable = posix.basename(args[0] ?? "")
-  const isDaemonCommand = (value: string | undefined) => value === "start" || value === "restart"
-  if (/^copilot-relay(?:\.cmd|\.exe)?$/i.test(executable)) {
-    return isDaemonCommand(args[1])
-  }
-  if (!/^node(?:\.exe)?$/i.test(executable)) return false
+type CommandProof = "relay" | "nonrelay" | "unknown"
 
+const isDaemonCommand = (value: string | undefined) => value === "start" || value === "restart"
+
+// The Node script argument of `node [--import tsx] <entry> start|restart`, or
+// undefined for any other argv shape.
+const nodeDaemonEntry = (args: Array<string>): string | undefined => {
+  if (!/^node(?:\.exe)?$/i.test(posix.basename(args[0] ?? ""))) return undefined
   let index = 1
   // These documented loader forms are used for source checkouts. Do not skip
   // arbitrary Node switches: --eval/--print can merely quote a relay command.
   if (args[index] === "--import" && args[index + 1] === "tsx") index += 2
   else if (args[index] === "--import=tsx") index++
   const entry = args[index]
-  if (!entry || !isDaemonCommand(args[index + 1])) return false
-  if (posix.basename(entry) === "copilot-relay") return true
+  return entry && isDaemonCommand(args[index + 1]) ? entry : undefined
+}
 
+const resolveEntry = (entry: string, cwd: string | undefined): string | undefined => {
   const normalizedCwd = cwd?.replaceAll("\\", "/")
   const absolute = posix.isAbsolute(entry) || /^[A-Za-z]:\//.test(entry)
-  if (!absolute && !normalizedCwd) return false
-  const resolved = posix.normalize(absolute ? entry : `${normalizedCwd}/${entry}`)
+  if (!absolute && !normalizedCwd) return undefined
+  return posix.normalize(absolute ? entry : `${normalizedCwd}/${entry}`)
+}
+
+export const isRelayStartProcess = (command: string, cwd?: string): boolean => {
+  const args = commandArgs(command)
+  if (/^copilot-relay(?:\.cmd|\.exe)?$/i.test(posix.basename(args[0] ?? ""))) {
+    return isDaemonCommand(args[1])
+  }
+  const entry = nodeDaemonEntry(args)
+  if (!entry) return false
+  if (posix.basename(entry) === "copilot-relay") return true
+
+  const resolved = resolveEntry(entry, cwd)
   // Exact package/check-out directory, not a substring in a parent directory.
-  return /(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(resolved)
+  return resolved !== undefined
+    && /(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(resolved)
+}
+
+// A relay entrypoint installed under a directory with any name, e.g. a release
+// runtime at ~/.copilot-relay/runtime/0.4.1/dist/main.js (#113). The argv shape
+// is only a candidate; packageEntryProof decides from the filesystem.
+const packagedEntryCandidate = (command: string, cwd?: string): string | undefined => {
+  const entry = nodeDaemonEntry(commandArgs(command))
+  const resolved = entry === undefined ? undefined : resolveEntry(entry, cwd)
+  return resolved && /\/(?:dist\/main\.js|src\/main\.ts)$/.test(resolved) ? resolved : undefined
+}
+
+// Identity comes from the package manifest beside the entrypoint, not from the
+// install directory's name. Any failure to prove it is "nonrelay", exactly what
+// these commands were before, so an unrelated `node app/dist/main.js start`
+// can never become a relay or block `stop` on an unreadable directory.
+const packageEntryProof = async (entry: string): Promise<CommandProof> => {
+  try {
+    if (!(await fs.stat(entry)).isFile()) return "nonrelay"
+    const canonical = (await fs.realpath(entry)).replaceAll("\\", "/")
+    if (!/\/(?:dist\/main\.js|src\/main\.ts)$/.test(canonical)) return "nonrelay"
+    const manifest: unknown = JSON.parse(await fs.readFile(
+      posix.join(posix.dirname(posix.dirname(canonical)), "package.json"), "utf8"))
+    return typeof manifest === "object" && manifest !== null && "name" in manifest
+      && manifest.name === "copilot-relay" ? "relay" : "nonrelay"
+  } catch {
+    return "nonrelay"
+  }
 }
 
 export class RelayInspectionError extends Error {
@@ -149,9 +189,10 @@ const flatInvocation = (command: string): FlatInvocation | undefined => {
   }
 }
 
-type CommandProof = "relay" | "nonrelay" | "unknown"
 const verifyCommand = async (command: string, cwd: string | undefined): Promise<CommandProof> => {
   if (isRelayStartProcess(command, cwd)) return "relay"
+  const packaged = packagedEntryCandidate(command, cwd)
+  if (packaged && (await packageEntryProof(packaged)) === "relay") return "relay"
   const flat = flatInvocation(command)
   if (!flat) return "nonrelay"
   if (!cwd) return "unknown"
@@ -542,7 +583,7 @@ const findRelayProcesses = async (
     // A recognizable inventory row is only a candidate; do not discard it when
     // its subsequent cwd/command/creation query is unavailable.
     if (isRelayStartProcess(command) || flatInvocation(command)
-      || isRelayStartProcess(command, "/copilot-relay")) candidates.add(pid)
+      || isRelayStartProcess(command, "/copilot-relay") || packagedEntryCandidate(command)) candidates.add(pid)
   }
 
   const relays: Array<RelayProcessIdentity> = []
