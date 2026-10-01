@@ -17,16 +17,16 @@ const secretPath = "/private-gateway-sentinel"
 async function fixture(
   t: TestContext,
   handle: (request: IncomingMessage, response: ServerResponse, attempt: number) => void,
-  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean; deep?: boolean; interrupt?: boolean } = {},
+  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean; deep?: boolean; interrupt?: boolean; controlledProbeTimeout?: boolean } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-models-"))
   const requests: Array<{ method: string | undefined; url: string | undefined; authorization: string | undefined }> = []
-  let interruptProbe: (() => void) | undefined
+  let notifyFirstProbe: (() => void) | undefined
   const server = createServer((request, response) => {
     requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization })
     if (request.method === "POST") {
-      interruptProbe?.()
-      interruptProbe = undefined
+      notifyFirstProbe?.()
+      notifyFirstProbe = undefined
     }
     handle(request, response, requests.length)
   })
@@ -76,8 +76,34 @@ async function fixture(
           process.stdin.pause();
         });
       ` : ''}
+      ${options.controlledProbeTimeout ? `
+        const timeout = AbortSignal.timeout;
+        const probes = [];
+        AbortSignal.timeout = (ms) => {
+          if (ms !== 10000) return timeout(ms);
+          const controller = new AbortController();
+          probes.push(controller);
+          return controller.signal;
+        };
+        process.stdin.once("data", () => {
+          if (probes.length !== 1) throw new Error("PROBE_DEADLINE_NOT_READY");
+          probes[0].abort(new DOMException("Controlled probe deadline", "TimeoutError"));
+          console.log("PROBE_DEADLINE_DELIVERED");
+          process.stdin.pause();
+        });
+      ` : ''}
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ...${JSON.stringify(args)}];
-      await import(${JSON.stringify(entry.href)});
+      try {
+        await import(${JSON.stringify(entry.href)});
+        ${options.controlledProbeTimeout ? `
+          if (probes.length !== 2 || !probes[0].signal.aborted || probes[1].signal.aborted) {
+            throw new Error("PROBE_DEADLINES_NOT_INDEPENDENT");
+          }
+          console.log("PROBE_DEADLINES_INDEPENDENT");
+        ` : ''}
+      } finally {
+        ${options.controlledProbeTimeout ? 'AbortSignal.timeout = timeout;' : ''}
+      }
     `
     const result = await new Promise<{ code: number; rawStdout: string; stdout: string; output: string }>((resolve, reject) => {
       const child = execFile(process.execPath, [
@@ -93,7 +119,7 @@ async function fixture(
         }
         resolve({ code, rawStdout: stdout, stdout: stripVTControlCharacters(stdout), output: stripVTControlCharacters(stdout + stderr) })
       })
-      if (options.interrupt) interruptProbe = () => child.stdin!.end("interrupt\n")
+      if (options.interrupt || options.controlledProbeTimeout) notifyFirstProbe = () => child.stdin!.end("probe-started\n")
       else child.stdin?.end()
     })
     const logFiles = await fs.readdir(path.join(appDir, "logs")).catch(() => [])
@@ -365,11 +391,15 @@ test("models deep continues after a per-model timeout", async (t) => {
     if (req.method === "GET") return respond(res, deepCatalog)
     const body = await requestBody(req)
     if (body.model === "gpt-6-astra") respond(res, probeReply(body))
-  }, { deep: true })
-  const result = await f.run(["models", "--deep", "--timeout", "1"])
+  }, { deep: true, timeout: 0, controlledProbeTimeout: true })
+  const result = await f.run(["models", "--deep", "--timeout", "10"])
   assert.equal(result.code, 2)
-  assert.match(result.stdout, /probe-timeout/)
-  assert.match(result.stdout, /Summary: 1 passed, 1 failed/)
+  assert.match(result.stdout, /PROBE_DEADLINE_DELIVERED/)
+  assert.match(result.stdout, /PROBE_DEADLINES_INDEPENDENT/)
+  assert.match(result.stdout, /claude-opus-5\.5\s+FAIL[^\n]+probe-timeout/)
+  assert.match(result.stdout, /gpt-6-astra\s+PASS[^\n]+completed-text/)
+  assert.match(result.stdout, /Summary: 1 passed, 1 failed, 0 incomplete, 0 skipped, 0 not tested/)
+  assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
 })
 
 test("models deep recovers a rejected inference token without printing response bodies", async (t) => {
