@@ -1,11 +1,7 @@
 // Non-streaming protocol translation between Claude Messages and Copilot chat completions.
 import {
-  getRequestReasoningEffort,
   normalizeClaudeModelId,
-  resolveReasoningEffort,
   routeModelId,
-  isConfiguredReasoningEffort,
-  type ReasoningEffort,
 } from "~/lib/models"
 import type {
   ChatCompletionResponse,
@@ -31,7 +27,7 @@ import {
   type ClaudeUserContentBlock,
   type ClaudeUserMessage,
 } from "~/claude/types"
-import { mapOpenAIStopReasonToClaude } from "~/claude/utils"
+import { getClaudeTurnEffort, isEffortOnlyControl, mapOpenAIStopReasonToClaude } from "~/claude/utils"
 import { HTTPError } from "~/lib/error"
 import {
   createClaudeToolNameMapper,
@@ -53,8 +49,8 @@ export function translateToOpenAI(
     ...getToolNameMapperOptionsForModel(model),
   })
   const tools = translateClaudeToolsToOpenAI(payload.tools, mapper)
-  const effort = resolveReasoningEffort(getRequestReasoningEffort(payload))
-  validateClaudeMessages(payload.messages, false, effort)
+  const { effective: effort } = getClaudeTurnEffort(payload)
+  validateClaudeMessages(payload.messages)
   const messages = translateClaudeMessagesToOpenAI(
     payload.messages,
     payload.system,
@@ -79,16 +75,14 @@ export function translateToOpenAI(
   }
 }
 
-export function validateClaudeMessages(messages: ClaudeMessage[], native = false, effort?: ReasoningEffort): void {
+export function validateClaudeMessages(messages: ClaudeMessage[], native = false): void {
   if (!Array.isArray(messages)) throw invalidMessage("Messages must be an array.")
   for (const message of messages) {
     if (!message || !["user", "assistant", "system"].includes(message.role)) throw invalidMessage("Unsupported message role.")
     if (message.role !== "system") continue
     const control = message.output_config
-    const redundantEffort = control !== null && typeof control === "object" && !Array.isArray(control)
-      && Object.keys(control).length === 1 && isConfiguredReasoningEffort(control.effort) && control.effort === effort
-    if (!native && (message.clear_at !== undefined || control !== undefined && !redundantEffort)) {
-      throw invalidMessage("Per-message system controls require the native Messages route unless effort exactly matches the request.")
+    if (!native && (message.clear_at !== undefined || control !== undefined && !isEffortOnlyControl(control))) {
+      throw invalidMessage("Translated system controls support only output_config.effort with low, medium, high, xhigh, or max; other controls require the native Messages route.")
     }
     if (typeof message.content !== "string" && (!Array.isArray(message.content)
       || message.content.some((block) => !block || block.type !== "text" || typeof block.text !== "string"))) {
@@ -110,6 +104,7 @@ function translateClaudeMessagesToOpenAI(
       case "assistant":
         return handleAssistantMessage(message, toolNameMapper)
       case "system":
+        if (message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) return []
         return handleSystemPrompt(message.content)
       default:
         throw invalidMessage("Unsupported message role.")

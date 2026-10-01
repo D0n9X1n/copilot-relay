@@ -594,12 +594,67 @@ for (const model of ["default", "opus"]) {
       })
     }
 
-    for (const fields of [{ output_config: { effort: "medium" } }, {}]) {
-      test(`WebSearch request effort survives all passes: model=${model} stream=${stream} explicit=${"output_config" in fields}`, async () => {
+    test(`mid-conversation effort switches reach upstream: model=${model} stream=${stream}`, async () => {
+      const mock = await startMockCopilot()
+      try {
+        const app = createTestProxy(mock.baseUrl)
+        const messages: import("../../src/claude/types").ClaudeMessage[] = [{ role: "user", content: "Reply OK only." }]
+        let previousInput: unknown[] = []
+        let cacheKey: unknown
+        for (const effort of ["low", "high", "max", "medium", "low"] as const) {
+          if (mock.requests.length > 0) messages.push(
+            { role: "assistant", content: "OK" },
+            { role: "system", content: [], output_config: { effort } },
+            { role: "user", content: "Reply OK again." },
+          )
+          const payload = { model, stream, max_tokens: 16, system: "Stable fixture instructions.", metadata: { user_id: "session-effort-switch" }, output_config: { effort: "low" }, messages }
+          const original = structuredClone(payload)
+          const count = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+          }))
+          assert.equal(count.status, 200)
+          assert((await count.json() as { input_tokens: number }).input_tokens > 0)
+          const requestCount = mock.requests.length
+          const response = await app.fetch(new Request("http://localhost/v1/messages", {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+          }))
+          assert.equal(response.status, 200)
+          const text = await response.text()
+          if (stream) {
+            assert.match(text, /event: message_stop/)
+            assert.doesNotMatch(text, /event: error/)
+          }
+          assert.equal(mock.requests.length, requestCount + 1)
+          const sent = mock.requests.at(-1)!.body as {
+            reasoning_effort?: string; reasoning?: { effort?: string }; messages?: unknown[]; input?: unknown[]; prompt_cache_key?: string
+          }
+          assert.equal(sent.reasoning_effort ?? sent.reasoning?.effort, effort)
+          const input = sent.messages ?? sent.input!
+          assert.deepEqual(input.slice(0, previousInput.length), previousInput)
+          previousInput = input
+          if (model !== "opus") {
+            assert(sent.prompt_cache_key)
+            if (cacheKey !== undefined) assert.equal(sent.prompt_cache_key, cacheKey)
+            cacheKey = sent.prompt_cache_key
+          }
+          assert.deepEqual(payload, original)
+          assert.equal(runtimeState.thinkEffort, "xhigh")
+        }
+      } finally {
+        await mock.close()
+      }
+    })
+
+    for (const { name, fields, markerEffort } of [
+      { name: "explicit", fields: { output_config: { effort: "medium" } }, markerEffort: undefined },
+      { name: "fallback", fields: {}, markerEffort: undefined },
+      { name: "inline switch", fields: { output_config: { effort: "low" } }, markerEffort: "high" },
+    ]) {
+      test(`WebSearch request effort survives all passes: model=${model} stream=${stream} ${name}`, async () => {
         const mock = await startMockCopilot(undefined, () => {
           runtimeState.thinkEffort = "low"
         })
-        const expected = "output_config" in fields ? "medium" : "xhigh"
+        const expected = markerEffort ?? ("output_config" in fields ? "medium" : "xhigh")
         try {
           const app = createTestProxy(mock.baseUrl)
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
@@ -607,7 +662,14 @@ for (const model of ["default", "opus"]) {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               model, stream, max_tokens: 16,
-              messages: [{ role: "user", content: "Search for Copilot documentation." }],
+              messages: [
+                ...(markerEffort ? [
+                  { role: "user", content: "Earlier task." },
+                  { role: "assistant", content: "Done." },
+                  { role: "system", content: [], output_config: { effort: markerEffort } },
+                ] : []),
+                { role: "user", content: "Search for Copilot documentation." },
+              ],
               tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
               ...fields,
             }),
@@ -641,6 +703,39 @@ for (const model of ["default", "opus"]) {
     }
   }
 }
+
+test("malformed inline controls still reject before SSE, counting or upstream calls", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    for (const control of [
+      { output_config: null }, { output_config: [] }, { output_config: {} },
+      { output_config: { effort: "none" } }, { output_config: { effort: "ultra" } },
+      { output_config: { effort: "high", format: {} } },
+      { output_config: { effort: "high" }, clear_at: "next_user_message" },
+    ]) {
+      for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
+        for (const stream of [false, true]) {
+          const response = await app.fetch(new Request(`http://localhost${route}`, {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+              model: "opus", stream, max_tokens: 16, output_config: { effort: "low" },
+              messages: [
+                { role: "system", content: [], ...control },
+                { role: "user", content: "Continue." },
+              ],
+            }),
+          }))
+          assert.equal(response.status, 400)
+          assert.match(response.headers.get("content-type") ?? "", /application\/json/)
+          assert.equal((await response.json() as { error: { type: string } }).error.type, "invalid_request_error")
+        }
+      }
+    }
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
 
 test("rejects invalid request effort before SSE or upstream calls", async () => {
   const mock = await startMockCopilot()

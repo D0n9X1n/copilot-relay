@@ -2,6 +2,7 @@ import { events } from "fetch-event-stream"
 
 import type { ClaudeMessage, ClaudeMessagesPayload, ClaudeResponse, ClaudeStreamEventData } from "~/claude/types"
 import { validateClaudeMessages } from "~/claude/translate"
+import { getClaudeTurnEffort } from "~/claude/utils"
 import { createClaudeWebSearchExecution, createClaudeWebSearchResponse, hasClaudeWebSearch, isClaudeWebSearchTool, isClaudeWebSearchToolName } from "~/claude/web-search"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
@@ -103,7 +104,7 @@ export async function createNativeMessages(config: ProxyConfig, payload: ClaudeM
   }
   const beta = options.headers?.get("anthropic-beta")
   if (beta) headers["anthropic-beta"] = beta
-  log.info(sanitizeTerminalString(`request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${body.output_config.effort}`))
+  log.info(sanitizeTerminalString(`request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${getClaudeTurnEffort(body).effective}`))
   const response = await fetchCopilot(getCopilotProviderContext(config), "/v1/messages", {
     method: "POST", headers, body: JSON.stringify(body),
   }, { requestId: options.requestId, signal: options.signal, timeoutMs: config.upstreamTimeoutMs, initiator: payload.messages.some((message) => message.role === "assistant") ? "agent" : "user" })
@@ -235,7 +236,7 @@ export async function handleNativeMessages(
   }
   const searchCall = searches[0]
   if (!searchCall.id || !searchCall.name || typeof searchCall.input?.query !== "string" || !searchCall.input.query.trim()) throw new Error("Invalid native search call.")
-  const search = await createClaudeWebSearchExecution(config, payload, searchCall.input.query, { ...options, signal })
+  const search = await createClaudeWebSearchExecution(config, { ...payload, messages: normalizeNativeHistory(payload.messages) }, searchCall.input.query, { ...options, signal })
   const searchMessage = createClaudeWebSearchResponse(search)
   const searchPosition = message.content.indexOf(searchCall)
   const marker = bridgePrefix + Buffer.from(JSON.stringify([searchCall.id, searchCall.name, message.content.length, searchPosition])).toString("base64url")

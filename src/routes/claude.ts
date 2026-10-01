@@ -37,7 +37,8 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getExposedModelIds, getRequestReasoningEffort, resolveReasoningEffort } from "~/lib/models"
+import { getExposedModelIds, getRequestReasoningEffort } from "~/lib/models"
+import { getClaudeTurnEffort } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
@@ -61,7 +62,7 @@ const isNonStreamingResponse = (
 
 const getClaudeRequestedThinkEffort = (
   payload: ClaudeMessagesPayload,
-): string => getRequestReasoningEffort(payload) ?? "unset"
+): string => getClaudeTurnEffort(payload).requested ?? "unset"
 
 const getClaudeRequestedThinking = (
   payload: ClaudeMessagesPayload,
@@ -343,7 +344,7 @@ const handleClaudeMessageRequest = async (
     if (webSearchToolCall) {
       const search = await createClaudeWebSearchExecution(
         config,
-        { ...claudePayload, reasoning_effort: openAIPayload.reasoning_effort },
+        claudePayload,
         webSearchToolCall.query,
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
@@ -527,11 +528,11 @@ claudeRoutes.post("/messages", async (c) => {
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {
-    const effort = resolveReasoningEffort(getRequestReasoningEffort(claudePayload))
+    getRequestReasoningEffort(claudePayload)
     const upstreamModel = translateModelName(claudePayload.model)
     const validate = () => {
       if (shouldUseNativeMessages(config, upstreamModel)) validateNativeMessages(claudePayload)
-      else validateClaudeMessages(claudePayload.messages, false, effort)
+      else validateClaudeMessages(claudePayload.messages)
     }
     validateClaudeMessages(claudePayload.messages, true)
     if (config.claudeUpstreamApi !== "auto") validate()

@@ -16,6 +16,8 @@ const { runtimeState } = await import("../../src/lib/state")
 const { createServer: createRelay } = await import("../../src/server")
 const { withRecordedTransport } = await import("../../src/lib/request-trace")
 const { flushLogs } = await import("../../src/lib/log")
+type ClaudeMessage = import("../../src/claude/types").ClaudeMessage
+type ClaudeMessagesPayload = import("../../src/claude/types").ClaudeMessagesPayload
 
 test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
 test.afterEach(() => { delete runtimeState.modelRouting })
@@ -55,7 +57,7 @@ test("operator text after a tool result never becomes model speech", () => {
 
 test("unsupported message-level controls and unknown roles fail explicitly", () => {
   for (const message of [
-    { role: "system", content: [], output_config: { effort: "low" } },
+    { role: "system", content: [], output_config: { effort: "ultra" } },
     { role: "system", content: "Temporary notice", clear_at: "next_user_message" },
     { role: "unexpected", content: "Untrusted text" },
   ]) {
@@ -95,9 +97,53 @@ test("redundant inline effort preserves system text and effective effort", async
     })
     assert.equal(called, true)
   }
-  for (const output_config of [{ effort: "high" }, { effort: "low", format: {} }, { effort: "none" }, null, []]) {
+  const pending = translateToOpenAI({ ...payload, messages: [{ role: "system", content: "Use the next effort.", output_config: { effort: "high" } }] })
+  assert.equal(pending.reasoning_effort, "low")
+  for (const output_config of [{ effort: "low", format: {} }, { effort: "none" }, { effort: "ultra" }, {}, null, []]) {
     assert.throws(() => translateToOpenAI({ ...payload, messages: [{ ...messages[1], output_config } as never] }))
   }
+})
+
+test("effort-only controls preserve tool adjacency and translated prefixes", () => {
+  const prefix: ClaudeMessage[] = [
+    { role: "user", content: "Read the fixture." },
+    { role: "assistant", content: [{ type: "tool_use", id: "tool_1", name: "Read", input: { file_path: "/fixture" } }] },
+  ]
+  const result: ClaudeMessage = { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "Fixture." }] }
+  const before: ClaudeMessagesPayload = { model: "opus", max_tokens: 32, output_config: { effort: "low" }, messages: [...prefix, result] }
+  for (const content of [[], "", [{ type: "text" as const, text: "" }]]) {
+    const switched: ClaudeMessagesPayload = { ...before, messages: [...prefix, { role: "system", content, output_config: { effort: "high" } }, result] }
+    const original: ClaudeMessagesPayload = structuredClone(switched)
+    const translated = translateToOpenAI(switched)
+    assert.equal(translated.reasoning_effort, "high")
+    assert.deepEqual(translated.messages, translateToOpenAI(before).messages)
+    assert.deepEqual(translated.messages.map((message) => message.role), ["user", "assistant", "tool"])
+    assert.deepEqual(switched, original)
+    const next = translateToOpenAI({ ...switched, messages: [
+      ...switched.messages, { role: "assistant", content: "Done." },
+      { role: "system", content: [], output_config: { effort: "max" } },
+      { role: "user", content: "Next task." },
+    ] })
+    assert.equal(next.reasoning_effort, "max")
+    assert.deepEqual(next.messages.slice(0, translated.messages.length), translated.messages)
+    assert.equal(buildResponsesRequestPayload({ ...translated, user: "session-effort" }, "high").prompt_cache_key,
+      buildResponsesRequestPayload({ ...next, user: "session-effort" }, "max").prompt_cache_key)
+  }
+})
+
+test("text-bearing effort switches preserve operator roles and message order", () => {
+  const payload = { model: "opus", max_tokens: 32, output_config: { effort: "low" as const }, messages: [
+    { role: "user" as const, content: "Hi" },
+    { role: "assistant" as const, content: "Hello" },
+    { role: "system" as const, content: [{ type: "text" as const, text: "Review carefully." }], output_config: { effort: "high" as const } },
+    { role: "user" as const, content: "Continue" },
+  ] }
+  const translated = translateToOpenAI(payload)
+  assert.equal(translated.reasoning_effort, "high")
+  assert.deepEqual(translated.messages, [
+    { role: "user", content: "Hi" }, { role: "assistant", content: "Hello" },
+    { role: "system", content: "Review carefully." }, { role: "user", content: "Continue" },
+  ])
 })
 
 test("appending an operator turn keeps earlier request messages unchanged", () => {
@@ -150,7 +196,7 @@ for (const stream of [false, true]) {
         { role: "unexpected", content: "Hi" },
         { role: "assistant", content: [{ type: "server_tool_use", id: "srvtoolu_unknown", name: "web_search", input: { query: "Hi" } }] },
       ] : [
-        { role: "system", content: "Hi", output_config: { effort: "low" } },
+        { role: "system", content: "Hi", output_config: { effort: "low", format: {} } },
         { role: "system", content: "Hi", clear_at: "next_user_message" },
         { role: "unexpected", content: "Hi" },
         { role: "system", content: [{ type: "image" }] },

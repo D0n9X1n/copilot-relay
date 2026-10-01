@@ -49,6 +49,67 @@ test("a null native effort allows a legacy override and explicit none is not abs
   assert.equal(resolveReasoningEffort(getRequestReasoningEffort({ output_config: { effort: "none" } })), "none")
 })
 
+test("inline effort changes activate at the next user turn without mutating history", () => {
+  const user = { role: "user" as const, content: "Continue." }
+  const assistant = { role: "assistant" as const, content: "OK" }
+  const low = { role: "system" as const, content: [], output_config: { effort: "low" as const } }
+  const high = { role: "system" as const, content: [], output_config: { effort: "high" as const } }
+  const max = { role: "system" as const, content: [], output_config: { effort: "max" as const } }
+  const cases = [
+    { messages: [low, user], expected: "low" },
+    { messages: [user, assistant, high, user], expected: "high" },
+    { messages: [low, user, assistant, high, user], expected: "high" },
+    { messages: [low, user, assistant, high, user, assistant, max, user], expected: "max" },
+    { messages: [high, user, assistant, low, user], expected: "low" },
+    { messages: [low, high, user], expected: "high" },
+    { messages: [user, assistant, high], expected: "medium" },
+    { messages: [high, user, assistant, low], expected: "high" },
+    { messages: [high], expected: "medium" },
+    { messages: [user, assistant, high, assistant], expected: "medium" },
+    { messages: [high, user, assistant, low, assistant], expected: "high" },
+  ]
+  for (const { messages, expected } of cases) {
+    const payload = { model: "opus", max_tokens: 16, output_config: { effort: "medium" as const }, messages }
+    const original = structuredClone(payload)
+    assert.equal(translateToOpenAI(payload).reasoning_effort, expected)
+    assert.deepEqual(payload, original)
+  }
+})
+
+test("an active inline effort overrides initial request fields and defaults", () => {
+  runtimeState.thinkEffort = "max"
+  for (const fields of [
+    {}, { output_config: null }, { output_config: { effort: null } },
+    { reasoning_effort: "low" as const },
+    { output_config: { effort: "none" as const } },
+    { output_config: { effort: "medium" as const }, reasoning_effort: "low" as const },
+  ]) {
+    for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
+      const payload = {
+        model: "opus", max_tokens: 16, ...fields,
+        messages: [
+          { role: "user" as const, content: "First turn." },
+          { role: "assistant" as const, content: "OK" },
+          { role: "system" as const, content: [], output_config: { effort } },
+          { role: "user" as const, content: "Next turn." },
+        ],
+      }
+      assert.equal(translateToOpenAI(payload).reasoning_effort, effort)
+      assert.equal(runtimeState.thinkEffort, "max")
+    }
+  }
+})
+
+test("a valid inline switch does not conceal malformed initial effort", () => {
+  assert.throws(() => translateToOpenAI({
+    model: "opus", max_tokens: 16, output_config: { effort: "invalid" },
+    messages: [
+      { role: "system", content: [], output_config: { effort: "high" } },
+      { role: "user", content: "Continue." },
+    ],
+  } as never), (error: unknown) => error instanceof HTTPError && error.response.status === 400)
+})
+
 test("malformed selected effort does not silently fall back", () => {
   for (const fields of [
     { output_config: [] }, { output_config: 42 },
