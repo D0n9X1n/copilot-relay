@@ -27,7 +27,7 @@ import {
   type ClaudeUserContentBlock,
   type ClaudeUserMessage,
 } from "~/claude/types"
-import { getClaudeTurnEffort, isEffortOnlyControl, mapOpenAIStopReasonToClaude } from "~/claude/utils"
+import { getClaudeTurnEffort, isEffortOnlyControl, mapOpenAIStopReasonToClaude, parseUpstreamToolInput } from "~/claude/utils"
 import { HTTPError } from "~/lib/error"
 import {
   createClaudeToolNameMapper,
@@ -452,16 +452,13 @@ function getClaudeToolUseBlocks(
     return []
   }
 
-  return toolCalls.map((toolCall) => ({
-    type: "tool_use",
-    id: toolCall.id,
-    name: toolNameMapper.toClaude(toolCall.function.name),
-    input: safeJsonParse(toolCall.function.arguments),
-  }))
-}
-
-function safeJsonParse(input: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(input)
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Upstream tool input must be a JSON object.")
-  return parsed as Record<string, unknown>
+  return toolCalls.map((toolCall) => {
+    const name = toolNameMapper.toClaude(toolCall.function.name)
+    return {
+      type: "tool_use",
+      id: toolCall.id,
+      name,
+      input: parseUpstreamToolInput(name, toolCall.function.arguments),
+    }
+  })
 }

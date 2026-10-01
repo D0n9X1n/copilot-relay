@@ -1628,3 +1628,90 @@ test("POST /v1/messages streams turns that advertise WebSearch but do not use it
     await mock.close()
   }
 })
+
+// #114: Copilot sends `arguments: ""` for zero-parameter tools such as
+// mcp__playwright__browser_close. Both paths must return `input: {}`; text that
+// is non-empty but invalid must map to an error naming the tool, not a bare 500.
+const startToolArgumentsCopilot = async (argumentsText: string) => {
+  const server = createHttpServer(async (request, response) => {
+    const body = await readJsonBody(request) as { model?: string; stream?: boolean } | undefined
+    response.setHeader("content-type", "application/json")
+    if (request.url === "/models") {
+      response.end(JSON.stringify({ object: "list", data: [{ id: "gpt-5.5" }, { id: "claude-opus-4.8" }] }))
+      return
+    }
+    const toolCall = { id: "call_noop", type: "function", function: { name: "noop", arguments: argumentsText } }
+    if (body?.stream) {
+      response.setHeader("content-type", "text/event-stream")
+      const chunk = (delta: object, finish_reason: string | null) => ({
+        id: "chat_tool", object: "chat.completion.chunk", created: 1, model: body.model,
+        choices: [{ index: 0, delta, finish_reason }],
+        ...(finish_reason && { usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
+      })
+      for (const payload of [
+        chunk({ role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }, null),
+        chunk({}, "tool_calls"),
+      ]) response.write(`data: ${JSON.stringify(payload)}\n\n`)
+      response.end("data: [DONE]\n\n")
+      return
+    }
+    response.end(JSON.stringify({
+      id: "chat_tool", created: 1, model: body?.model,
+      choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [toolCall] }, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }))
+  })
+  await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve) })
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()) }),
+  }
+}
+
+const postNoopToolTurn = (app: ReturnType<typeof createTestProxy>, stream: boolean) => app.fetch(new Request("http://localhost/v1/messages", {
+  body: JSON.stringify({
+    max_tokens: 256, model: "opus", stream,
+    messages: [{ role: "user", content: "Call the noop tool." }],
+    tools: [{ name: "noop", description: "Takes no arguments.", input_schema: { type: "object", properties: {} } }],
+  }),
+  headers: { "content-type": "application/json" },
+  method: "POST",
+}))
+
+test("POST /v1/messages returns empty input for a zero-argument tool call", async () => {
+  const mock = await startToolArgumentsCopilot("")
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await postNoopToolTurn(app, false)
+    assert.equal(response.status, 200)
+    const body = await response.json() as { stop_reason: string; content: Array<{ type: string; name?: string; input?: unknown }> }
+    assert.equal(body.stop_reason, "tool_use")
+    assert.deepEqual(body.content.filter((block) => block.type === "tool_use").map(({ name, input }) => ({ name, input })),
+      [{ name: "noop", input: {} }])
+
+    const streamed = await (await postNoopToolTurn(app, true)).text()
+    assert.match(streamed, /"partial_json":"\{\}"/)
+    assert.match(streamed, /event: message_stop/)
+    assert.doesNotMatch(streamed, /event: error/)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("POST /v1/messages maps invalid tool arguments to an error naming the tool", async () => {
+  const mock = await startToolArgumentsCopilot('{"path":')
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await postNoopToolTurn(app, false)
+    assert.equal(response.status, 502)
+    const body = await response.json() as { error: { type: string; message: string } }
+    assert.deepEqual(body.error, { type: "api_error", message: 'Upstream returned tool input for "noop" that is not valid JSON.' })
+
+    const streamed = await (await postNoopToolTurn(app, true)).text()
+    assert.match(streamed, /Upstream returned tool input for \\"noop\\" that is not valid JSON\./)
+  } finally {
+    await mock.close()
+  }
+})

@@ -150,3 +150,49 @@ test("drops synthesized web-search blocks from replayed assistant history", () =
   assert.equal(serialized.includes("encrypted_content"), false)
   assert.equal(payload.messages.at(-2)?.content, "Tokio is the most widely used.")
 })
+
+// #114: upstream sends `arguments: ""` for zero-parameter tools (e.g.
+// mcp__playwright__browser_close). That is `{}`, not a 500.
+const toolCallResponse = (argumentsText: string): ChatCompletionResponse => {
+  const response = createChatResponse("test-model")
+  response.choices[0] = {
+    index: 0,
+    message: {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "noop", arguments: argumentsText } }],
+    },
+    finish_reason: "tool_calls",
+  }
+  return response
+}
+
+for (const argumentsText of ["", "   ", "\n"]) {
+  test(`blank tool arguments ${JSON.stringify(argumentsText)} translate to an empty input object`, () => {
+    const result = translateToClaude(toolCallResponse(argumentsText))
+    assert.equal(result.stop_reason, "tool_use")
+    assert.deepEqual(result.content.filter((block) => block.type === "tool_use"),
+      [{ type: "tool_use", id: "call_1", name: "noop", input: {} }])
+  })
+}
+
+test("tool arguments with content still parse as before", () => {
+  const result = translateToClaude(toolCallResponse('{"text":"hi"}'))
+  assert.deepEqual(result.content.find((block) => block.type === "tool_use"),
+    { type: "tool_use", id: "call_1", name: "noop", input: { text: "hi" } })
+})
+
+for (const [argumentsText, reason] of [["{\"text\":", "is not valid JSON"], ["[1]", "is not a JSON object"], ["null", "is not a JSON object"]] as const) {
+  test(`invalid tool arguments ${argumentsText} map to a 502 naming the tool`, async () => {
+    const { UpstreamToolInputError } = await import("../../src/claude/utils")
+    let caught: unknown
+    try { translateToClaude(toolCallResponse(argumentsText)) } catch (error) { caught = error }
+    assert.ok(caught instanceof UpstreamToolInputError)
+    assert.equal(caught.message, `Upstream returned tool input for "noop" that ${reason}.`)
+    assert.equal(caught.response.status, 502)
+    const body = await caught.response.json() as { error: { type: string; message: string } }
+    assert.equal(body.error.type, "api_error")
+    assert.equal(body.error.message, caught.message)
+    assert.ok(!caught.message.includes(argumentsText), "argument text must not be echoed")
+  })
+}

@@ -1,5 +1,6 @@
 // Small Claude protocol helpers shared by streaming and non-streaming translators.
 import type { ClaudeMessagesPayload, ClaudeResponse } from "~/claude/types"
+import { HTTPError } from "~/lib/error"
 import { getRequestReasoningEffort, isConfiguredReasoningEffort, resolveReasoningEffort, type ConfiguredReasoningEffort } from "~/lib/models"
 
 export const isEffortOnlyControl = (control: unknown): control is { effort: ConfiguredReasoningEffort } =>
@@ -35,4 +36,44 @@ export function mapOpenAIStopReasonToClaude(
   } as const
 
   return stopReasonMap[finishReason]
+}
+
+/**
+ * Upstream sends an empty `arguments` string for tools that take no
+ * parameters (#114). Blank text is the empty object; anything else must be a
+ * JSON object, and a failure names the tool rather than surfacing a bare
+ * SyntaxError. Argument text is never echoed: it can carry user data.
+ */
+export function parseUpstreamToolInput(toolName: string, argumentsText: string | undefined): Record<string, unknown> {
+  const text = argumentsText ?? ""
+  if (!text.trim()) return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw invalidUpstreamToolInput(toolName, "is not valid JSON")
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw invalidUpstreamToolInput(toolName, "is not a JSON object")
+  }
+  return parsed as Record<string, unknown>
+}
+
+export function invalidUpstreamToolInputMessage(toolName: string, reason: string): string {
+  return `Upstream returned tool input for "${toolName}" that ${reason}.`
+}
+
+/** Mapped 502 whose message is client-safe: it names the tool, never the arguments. */
+export class UpstreamToolInputError extends HTTPError {
+  constructor(message: string) {
+    super(message, Response.json(
+      { type: "error", error: { type: "api_error", message } },
+      { status: 502 },
+    ), message)
+    this.name = "UpstreamToolInputError"
+  }
+}
+
+function invalidUpstreamToolInput(toolName: string, reason: string): UpstreamToolInputError {
+  return new UpstreamToolInputError(invalidUpstreamToolInputMessage(toolName, reason))
 }
