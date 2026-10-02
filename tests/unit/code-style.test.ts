@@ -186,6 +186,17 @@ const collectViolations = (file: string, text: string): Violation[] => {
       }
     }
 
+    // Statements are compared within one clause above, so `case 1: a(); case 2: b()` is caught here.
+    if (ts.isCaseBlock(node)) {
+      for (let index = 1; index < node.clauses.length; index++) {
+        const clause = node.clauses[index]
+
+        if (lineOf(startOf(clause)) === lineOf(node.clauses[index - 1].getEnd())) {
+          record("oneStatementPerLine", startOf(clause))
+        }
+      }
+    }
+
     if (ts.isBinaryExpression(node)) {
       const operator = node.operatorToken.kind
       const isLoose = operator === ts.SyntaxKind.EqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsToken
@@ -219,7 +230,8 @@ const repoViolations = scriptFiles.flatMap((file) => {
 })
 
 // PEP 8 discourages compound statements and semicolon-separated statements. Tokens, unlike a
-// line grep, tell a block-opening colon from one inside brackets, slices or annotations.
+// line grep, tell a block-opening colon from a lambda's colon or one inside brackets, slices
+// or annotations.
 const pythonChecker = `
 import io
 import sys
@@ -233,6 +245,7 @@ for path in sys.argv[1:]:
         source = handle.read()
 
     depth = 0
+    lambda_depths = []
     first_word = None
     last_value = None
     is_header = False
@@ -256,6 +269,7 @@ for path in sys.argv[1:]:
 
         if kind == tokenize.NEWLINE:
             opens_match_body = first_word == "match" and last_value == ":"
+            lambda_depths = []
             first_word = None
             last_value = None
             is_header = False
@@ -277,6 +291,11 @@ for path in sys.argv[1:]:
             print(f"{path}:{header_colon_row} compound statement on one line")
             reported = True
 
+        # A lambda's colon ends its parameters rather than opening a suite.
+        if kind == tokenize.NAME and value == "lambda":
+            lambda_depths.append(depth)
+            continue
+
         if kind != tokenize.OP:
             continue
 
@@ -284,6 +303,8 @@ for path in sys.argv[1:]:
             depth += 1
         elif value in (")", "]", "}"):
             depth -= 1
+        elif value == ":" and lambda_depths and lambda_depths[-1] == depth:
+            lambda_depths.pop()
         elif value == ":" and depth == 0 and is_header and header_colon_row is None:
             header_colon_row = row
         elif value == ";" and depth == 0:
@@ -358,6 +379,10 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "class Empty {}",
     "interface Options { id: string }",
     "enum Kind { A }",
+    "",
+    "switch (kind) {",
+    "  case 1: first(); case 2: second()",
+    "}",
   ].join("\n")
 
   const found = collectViolations("sample.ts", sample)
@@ -380,6 +405,7 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "35 multilineBlocks",
     "37 multilineBlocks",
     "38 multilineBlocks",
+    "41 oneStatementPerLine",
   ])
 })
 
@@ -415,7 +441,8 @@ test("the Python checker reports compound one-liners, continued ones and case cl
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
-  // `case` and `match` are soft keywords: the last two lines are ordinary statements.
+  // `case` and `match` are soft keywords, so `case: int = 1` and `match = 2` are ordinary
+  // statements. A lambda's colon opens no suite, so the `for` header on line 15 is valid.
   const sample = path.join(directory, "sample.py")
   const source = [
     "if ready: start()",
@@ -432,6 +459,9 @@ test("the Python checker reports compound one-liners, continued ones and case cl
     "        pause()",
     "case: int = 1",
     "match = 2",
+    "for callback in lambda: 1, lambda: 2:",
+    "    register(callback)",
+    "if ready: run(lambda: 1)",
   ].join("\n")
 
   fs.writeFileSync(sample, `${source}\n`)
@@ -442,6 +472,7 @@ test("the Python checker reports compound one-liners, continued ones and case cl
     `${sample}:5 compound statement on one line`,
     `${sample}:8 compound statement on one line`,
     `${sample}:11 compound statement on one line`,
+    `${sample}:17 compound statement on one line`,
   ])
 })
 
