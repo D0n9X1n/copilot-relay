@@ -14,7 +14,10 @@ const tsx = new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url).h
 
 test("version lookup supports scoped package manifests in both source and bundled layouts", async () => {
   const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "relay-version-"))
+
   try {
+    // GitHub Packages publishes under an owner scope, and the bundle sits one
+    // directory shallower than the source, so the lookup must find either manifest.
     for (const name of ["@owner/copilot-relay", "copilot-relay"]) {
       for (const layout of ["src/lib/version.ts", "dist/main.ts"]) {
         const directory = await fs.mkdtemp(path.join(fixture, "package-"))
@@ -24,10 +27,12 @@ test("version lookup supports scoped package manifests in both source and bundle
         await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({
           name, version: "4.5.6-rc.1", type: "module",
         }))
+
         const { stdout } = await execute(process.execPath, [
           "--import", bootstrap, "--import", tsx, "--input-type=module", "--eval",
           `import { appVersion } from ${JSON.stringify(pathToFileURL(entry).href)}; console.log(appVersion)`,
         ])
+
         assert.equal(stdout.trim(), "4.5.6-rc.1", `${name} at ${layout}`)
       }
     }

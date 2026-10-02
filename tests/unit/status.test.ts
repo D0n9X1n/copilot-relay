@@ -87,8 +87,8 @@ const runningStatus: RelayStatus = {
 
 const render = (status: RelayStatus): string => renderStatus(status).join("\n")
 
-// Why: "not running" is an answer, not an error. It must say so plainly and
-// point at the fix rather than making the user infer it.
+// Why: scripts parse `status --json`, so forced color must never put escape
+// codes into it.
 test("status JSON command stays uncolored even when color is forced", async (t) => {
   const { status: command } = await import("../../src/status")
   await fs.mkdir(paths.appDir, { recursive: true })
@@ -100,9 +100,11 @@ test("status JSON command stays uncolored even when color is forced", async (t) 
   const originalForce = process.env.FORCE_COLOR
   const originalExit = process.exitCode
   process.env.FORCE_COLOR = "1"
+
   try {
     const run = command.run as (context: { args: Record<string, unknown> }) => Promise<void>
     await run({ args: { json: true } })
+
     assert.equal(output.length, 1)
     assert.doesNotMatch(output[0], /\u001b/)
     const report = JSON.parse(output[0])
@@ -124,6 +126,7 @@ test("status JSON command stays uncolored even when color is forced", async (t) 
 test("status colors retain identical text and health semantics", () => {
   const plain = renderStatus({ ...runningStatus, daemonVersion: "0.1.0", deep: { ok: false, detail: "timed out" } }, false).join("\n")
   const colored = renderStatus({ ...runningStatus, daemonVersion: "0.1.0", deep: { ok: false, detail: "timed out" } }, true).join("\n")
+
   assert.equal(colored.replace(/\u001b\[[0-9;]*m/g, ""), plain)
   assert.match(colored, /\u001b\[32mrunning\u001b\[0m/)
   assert.match(colored, /\u001b\[32mok\u001b\[0m/)
@@ -134,6 +137,8 @@ test("status colors retain identical text and health semantics", () => {
   assert.match(renderStatus(baseStatus, true).join("\n"), /\u001b\[33mnot running\u001b\[0m/)
 })
 
+// Why: "not running" is an answer, not an error. It must say so plainly and
+// point at the fix rather than making the user infer it.
 test("reports not running with a next step", () => {
   const out = render(baseStatus)
 
@@ -204,12 +209,14 @@ for (const [name, body, detail] of [
     })
 
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+
     assert.equal(captured?.url, "http://127.0.0.1:4142/v1/messages")
     assert.equal(captured?.init?.method, "POST")
     assert.deepEqual(captured?.init?.headers, {
       "anthropic-version": "2023-06-01",
       "content-type": "application/json",
     })
+    // The probe sends no effort, so the relay applies the effort it is configured with.
     assert.deepEqual(JSON.parse(String(captured?.init?.body)), {
       max_tokens: 16,
       messages: [{ content: "Reply with the single word: ok", role: "user" }],
@@ -243,6 +250,7 @@ for (const [name, body] of [
   test(`deep probe rejects ${name}`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => Response.json(body))
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+
     assert.equal(result.ok, false)
     assert.equal(result.detail, "empty response")
     assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
@@ -256,6 +264,7 @@ for (const [status, body, detail] of [
   test(`deep probe rejects HTTP ${status} regardless of response content`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => Response.json(body, { status }))
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+
     assert.equal(result.ok, false)
     assert.equal(result.detail, detail)
     assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
@@ -274,6 +283,7 @@ for (const [name, response, detail] of [
   test(`deep probe rejects ${name}`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => response())
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+
     assert.equal(result.ok, false)
     assert.equal(result.detail, detail)
     assert.equal(resolveExitCode({ ...runningStatus, deep: result }), 2)
@@ -357,6 +367,7 @@ test("exits non-zero when the health probe fails", () => {
 test("treats absent health as not usable", () => {
   const status = { ...runningStatus }
   delete status.health
+
   assert.equal(resolveExitCode(status), 2)
 })
 
@@ -728,6 +739,7 @@ test("keeps key order and exit codes unchanged under redaction", () => {
     "opusModel",
   ]
   const positions = order.map((key) => out.indexOf(`    ${key.padEnd(24)}`))
+
   assert.ok(
     positions.every((position, index) =>
       index === 0 ? position > -1 : position > positions[index - 1],
@@ -749,6 +761,8 @@ test.after(async () => {
   syncBuiltinESMExports()
   await fs.rm(tempHome, { force: true, recursive: true })
   assert.deepEqual(signalCalls, [])
+
+  // Each port lookup asked about 4199 only and never scanned every process (#33).
   assert.equal(discoveryCalls.length, 3)
   for (const { file, args } of discoveryCalls) {
     if (process.platform === "win32") {
