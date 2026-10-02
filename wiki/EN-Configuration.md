@@ -221,7 +221,7 @@ Use `status --deep` to check the running daemon's configured route.
 | `--model` | All advertised IDs; supplied ID must match the catalog exactly. Requires `--deep`. |
 | `--details` | Include safe per-probe evidence and capture/replay availability. Requires `--deep`; does not add probes or retries. |
 | `--max-tokens` | 4096 per probe, clamped to catalog output and native non-streaming ceilings. |
-| `--effort` | Lowest advertised recognized value (`none`, `low`, `medium`, `high`, `xhigh`, `max`); missing metadata uses `low` marked unverified. Explicit no-effort support omits the field (`effort=omitted`). An override unsupported by advertised metadata is skipped. |
+| `--effort` | Lowest advertised recognized value above `none` (`low`, `medium`, `high`, `xhigh`, `max`); `none` only when it is the sole advertised tier, because the relay never sends it on its own and some models advertise it yet reject it. Missing metadata uses `low` marked unverified. Explicit no-effort support omits the field (`effort=omitted`). An override unsupported by advertised metadata is skipped. |
 | `--timeout` | 30 seconds per probe, capped by a positive `upstreamTimeoutSeconds`. |
 | `--total-timeout` | 300 seconds for the probe phase. Discovery/auth precede this budget. |
 
@@ -231,7 +231,10 @@ have their own deadlines. Missing endpoint metadata is marked unverified rather
 than treated as proof of support. Model matching removes the relay's known GPT
 context suffix. Only for a native `/v1/messages` probe of catalog ID
 `claude-opus-5.5`, it also accepts the observed provider spelling `claude-opus-5-5`.
-Keep the catalog spelling in config and `--model`; other mismatches still fail.
+Only for a `/responses` probe of catalog ID `gpt-5.6-sol-fast`, it also accepts
+`gpt-5.6-sol`: that catalog entry is the priority service tier of `gpt-5.6-sol`,
+and its replies report the base model. Keep the catalog spelling in config and
+`--model`; other mismatches, including other `-fast` IDs, still fail.
 Authentication can refresh tokens; the existing bounded retries may consume additional calls, but
 there is no new per-model retry loop. Ctrl+C aborts the active probe and marks
 remaining models not tested. Raw shared-pipeline logging is suppressed only for

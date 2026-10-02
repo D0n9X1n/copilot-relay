@@ -267,15 +267,28 @@ Above a native non-streaming ceiling it requests SSE and collects a JSON result.
 a stop reason plus `message_stop` for SSE. An error or premature EOF cannot become
 success. Native errors/refusals are not retried on another API to bypass them.
 
-`runDeepModelProbes` in `src/lib/model-probe.ts` compares the returned model with
+`probeModels` in `src/lib/model-probe.ts` compares the returned model with
 the exact catalog selection. Beyond existing GPT context-suffix normalization,
-there is one observed native spelling exception: endpoint `/v1/messages`, selected
-`claude-opus-5.5`, reported `claude-opus-5-5`. This is not general punctuation
-normalization or a new catalog alias; `claude-opus-5-5-preview`, `claude-opus-5`
-and other mismatches still fail. Config and discovery keep the catalog ID, while
-`SENT/REPORTED` retains both actual spellings. Acceptance of that ID still requires
+there are two observed exceptions, each an exact pair:
+
+- Native spelling: endpoint `/v1/messages`, selected `claude-opus-5.5`, reported
+  `claude-opus-5-5`.
+- Priority tier (`solFastPriorityTier`): endpoint `/responses`, selected
+  `gpt-5.6-sol-fast`, reported `gpt-5.6-sol`. The catalog names that entry
+  "GPT-5.6 Sol Fast", and a live reply reported `model: gpt-5.6-sol` with
+  `service_tier: priority`.
+
+Neither is general punctuation normalization, `-fast` stripping, or a new catalog
+alias; `claude-opus-5-5-preview`, `claude-opus-5`, `gpt-6-sol-fast` reported as
+`gpt-6-sol`, and other mismatches still fail. Config and discovery keep the catalog
+ID, while `SENT/REPORTED` retains both actual spellings. Acceptance still requires
 the usual completed-text/terminal checks; a refusal cannot become `PASS` merely
 because the model matches.
+
+The implicit probe effort is the lowest advertised tier above `none`. `none` is
+probed only when it is the sole advertised tier: the relay never sends it on its
+own, and `gpt-6.1-sol` advertises it yet rejects it with HTTP 400
+`invalid_request_body`. An explicit `--effort none` is still sent as asked.
 
 ### Tool-schema compatibility
 

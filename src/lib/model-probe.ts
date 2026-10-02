@@ -168,9 +168,13 @@ export async function probeModels(
       )
       // Probe the lowest advertised tier, send no effort to a model that advertises no
       // effort support, and fall back to "low" (marked unverified) when metadata is missing.
+      // "none" is probed only when it is the sole tier: the relay never sends it on its own,
+      // and gpt-6.1-sol advertises it yet rejects it with HTTP 400 (#126).
+      const lowestRealEffort = recognizedEfforts.find((effort) => effort !== "none")
+      const lowestEffort = lowestRealEffort ?? recognizedEfforts.find(isReasoningEffort)
       const defaultProbeEffort = advertisesNoReasoningEffort(model)
         ? undefined
-        : recognizedEfforts.find(isReasoningEffort) ?? "low"
+        : lowestEffort ?? "low"
       const effort = options.effort ?? defaultProbeEffort
 
       const maxTokens = Math.min(
@@ -295,7 +299,13 @@ export async function probeModels(
               && id === "claude-opus-5.5"
               && row.reported === "claude-opus-5-5"
 
-            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling) {
+            // The catalog's gpt-5.6-sol-fast is the priority service tier of gpt-5.6-sol; its
+            // Responses reply reports the base model (#126). Only this exact pair is accepted.
+            const solFastPriorityTier = endpoint === "/responses"
+              && id === "gpt-5.6-sol-fast"
+              && normalizeCopilotModelId(row.reported) === "gpt-5.6-sol"
+
+            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling && !solFastPriorityTier) {
               row.detail = "model-mismatch"
             } else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"
