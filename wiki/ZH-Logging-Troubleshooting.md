@@ -45,6 +45,55 @@ copilot-relay status --deep
 空的已完成响应、缺少预算耗尽证据的响应和 HTTP 错误仍然会失败。如果需要可见答案，请
 用更大的输出预算手动发请求，不要仅因为推理用完探针预算就重新认证。
 
+## 排查 Opus API 错误
+
+先看**失败回合本身的证据**，不要把每个 API 错误都当成认证问题。拒绝、无效请求、
+传输中断和 relay 翻译失败，需要不同的下一步。
+
+1. 保存简短报错、本地时间、模型和 effort。Relay 生成的流式/内部错误带有
+   `(request_id=<uuid>)`，HTTP 响应也带 `x-copilot-relay-request-id`。ID 由 relay
+   生成，不采用客户端提供的值。用它关联该请求日志，避免混入另一会话的失败。
+2. 要重新检查准确模型的可用性，可运行：
+
+   ```sh
+   copilot-relay models --deep --model claude-opus-5.5 --details
+   ```
+
+   这会消耗真实 Copilot 用量，只测试隔离的短请求，不是运行中的 daemon，也不是历史
+   长会话。PASS 不能复现长上下文、流式、工具或特定提示引发的失败。`status --deep`
+   则测试 daemon 配置的 GPT 路由；廉价 health/models 检查完全不访问上游。
+3. 分别阅读 `client_http`、`upstream_http`、实际 `route`、响应状态和语义 `outcome`。
+   HTTP 200 加 `content_filter`/`refusal` 是拒绝，不是成功。完整正文/捕获仍可能包含
+   错误。`terminal=observed` 只说明观察到结束标记，不代表成功回答。未报告的证据保持
+   `unknown`，不能据此断言网络或提供方有问题。
+4. 用本地/上游请求 ID 和已知 provider/message ID 关联各次尝试。已丢弃的失败尝试后
+   成功，与最终失败不同。刷新结果会显示，但不会输出 token 值。
+5. 完整 debug 捕获存在时，详情显示 `capture=complete` 和**离线**命令
+   `copilot-relay replay <request-id>`。`capture=off` 表示当时未启用 debug；
+   `capture=incomplete`、`pending` 或 `failed` 表示没有完整记录。Replay 不会重新
+   发送到 Copilot。`MATCH` 说明当前 handler 可复现记录行为，包括拒绝/错误，不代表
+   模型健康或已知提供方拒绝原因。新 handler 给错误消息加上请求 ID 后，旧捕获可能
+   返回 DIFF。
+
+| 观察结果 | 下一步 |
+| --- | --- |
+| 401 或 token 刷新失败 | 检查认证，再次探测前使用 `copilot-relay auth`。 |
+| 403 | 检查账号/模型权限和网关策略，不要直接认定 token 过期。 |
+| 429 | 等待后再请求；重试/探测会消耗用量。 |
+| 超时或正文中断 | 检查连接与有效期限，不要把部分文本当作完成。 |
+| 无效工具输入 / 本地校验 | 检查准确接口和请求 ID，保留私有捕获供离线诊断。 |
+| 拒绝或未完成生成 | 检查 stop/finish 原因与输出预算，不绕过安全控制或静默切换接口。 |
+| 未知 API 错误 | 在关联日志或完整记录提供新证据前，保持未知。 |
+
+长会话可先参考[配置说明](ZH-Configuration.md)中的 **800K** 自动压缩建议及余量约束；
+上下文超限只是一种可能，不能据此诊断笼统 API 错误。复制终端输出时可用 `NO_COLOR=1`。
+彩色 `status` 仍保留文字状态与原退出码，`status --json` 始终无颜色。
+
+重复失败时，按下文使用短暂、明确的 debug 窗口，或另开端口与隔离目录的诊断实例。
+不要为了复现而重启活跃 relay，不要忽视并发请求直接全局开启 debug，也不要上传整个
+捕获。原始提示/工具结果可能含敏感数据，只分享人工核对后的状态/ID 和结构性 replay
+结果。
+
 ## 日志文件
 
 当前文件带**本地**日历日期，每天本地零点轮转：

@@ -8,7 +8,7 @@ const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-capture-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
-const { RequestTrace, withRequestTrace, recordedFetch, recordedRefresh, cleanupCaptures, flushCaptures } = await import("../../src/lib/request-trace")
+const { RequestTrace, withRequestTrace, withTraceObserver, recordedFetch, recordedRefresh, cleanupCaptures, flushCaptures } = await import("../../src/lib/request-trace")
 const { flushLogs, log } = await import("../../src/lib/log")
 const { paths, formatLogDate } = await import("../../src/lib/paths")
 const config = { host: "127.0.0.1", port: 0, copilotBaseUrl: "https://fixture.invalid", copilotToken: "PRIVATE_CREDENTIAL", upstreamTimeoutMs: 1000, vsCodeVersion: "test" }
@@ -35,6 +35,62 @@ test("full captures preserve large bodies but exclude credential headers", async
   assert.equal((await fs.readFile(path.join(dir, "upstream-1-request.bin"), "utf8")), requestBody)
   assert.doesNotMatch(JSON.stringify(meta), /CLIENT_SECRET|UPSTREAM_SECRET|PRIVATE_CREDENTIAL|authorization/i)
   if (process.platform !== "win32") assert.equal((await fs.stat(path.join(dir, "meta.json"))).mode & 0o777, 0o600)
+})
+
+test("diagnostic snapshots expose safe settled outcomes without bodies or capture files", async () => {
+  const observed: Array<Awaited<ReturnType<typeof RequestTrace.create>>> = []
+  const trace = await withTraceObserver((value) => { observed.push(value) }, () => RequestTrace.create(
+    "10000000-0000-4000-8000-000000000017", new Request("http://localhost/v1/messages"), config, {}, false,
+  ))
+  trace.protectCredential("ROTATED_PRIVATE_CREDENTIAL")
+  await withRequestTrace(trace, async () => {
+    const response = await recordedFetch({ method: "POST", path: "/chat/completions", body: "PRIVATE_PROMPT", headers: {}, upstreamRequestId: "10000000-0000-4000-8000-000000000018" }, async () => Response.json({
+      id: "msg_safe", model: "claude-opus-5.5", choices: [{ finish_reason: "content_filter" }],
+      error: { code: "PRIVATE_ERROR", message: "PRIVATE_BODY" },
+    }, { headers: { "x-request-id": "ROTATED_PRIVATE_CREDENTIAL", "x-github-request-id": "provider-safe-42" } }))
+    await response.text()
+  })
+  trace.handlerSettled()
+  await trace.captureResponse(Response.json({ stop_reason: "refusal" })).text()
+  await trace.finished
+  assert.deepEqual(observed, [trace])
+  const result = trace.diagnosticSnapshot()
+  assert.equal(result.requestId, trace.requestId)
+  assert.equal(result.capture.state, "off")
+  assert.equal(result.exchanges[0].path, "/chat/completions")
+  assert.equal(result.exchanges[0].status, 200)
+  assert.equal(result.exchanges[0].finishReason, "content_filter")
+  assert.equal(result.exchanges[0].providerRequestId, "provider-safe-42")
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|ROTATED_|requestHeaders|responseHeaders|authorization/)
+  assert.equal(trace.captureDirectory, undefined)
+})
+
+test("trace observers are request-scoped and cannot consume a response", async () => {
+  const seen: string[][] = [[], []]
+  await Promise.all(seen.map((ids, index) => withTraceObserver((trace) => { ids.push(trace.requestId) }, async () => {
+    await Promise.resolve()
+    const trace = await RequestTrace.create(`10000000-0000-4000-8000-00000000002${index}`, new Request("http://localhost/v1/messages"), config, {}, false)
+    trace.handlerSettled()
+    await trace.captureResponse(Response.json({ stop_reason: "end_turn" })).text()
+    await trace.finished
+  })))
+  assert.deepEqual(seen, [["10000000-0000-4000-8000-000000000020"], ["10000000-0000-4000-8000-000000000021"]])
+})
+
+test("diagnostics distinguish pending, complete and incomplete private captures", async () => {
+  const complete = await RequestTrace.create("10000000-0000-4000-8000-000000000022", new Request("http://localhost/v1/messages"), config, {}, true)
+  assert.equal(complete.diagnosticSnapshot().capture.state, "pending")
+  complete.handlerSettled()
+  await complete.captureResponse(Response.json({ stop_reason: "end_turn" })).text()
+  await complete.finished
+  assert.equal(complete.diagnosticSnapshot().capture.state, "complete")
+
+  const incomplete = await RequestTrace.create("10000000-0000-4000-8000-000000000023", new Request("http://localhost/v1/messages"), config, {}, true)
+  const response = incomplete.captureResponse(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("partial")) } })))
+  incomplete.handlerSettled()
+  await response.body!.cancel()
+  await incomplete.finished
+  assert.equal(incomplete.diagnosticSnapshot().capture.state, "incomplete")
 })
 
 test("nondebug observations create no capture directory", async () => {

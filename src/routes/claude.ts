@@ -38,7 +38,7 @@ import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
 import { getExposedModelIds, getRequestReasoningEffort } from "~/lib/models"
-import { getClaudeTurnEffort } from "~/claude/utils"
+import { getClaudeTurnEffort, UpstreamToolInputError } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
@@ -267,12 +267,7 @@ const handleClaudeMessageRequest = async (
     undefined,
     toolNameMapper,
   )
-  // A streaming client that advertises WebSearch used to be forced into a full
-  // non-streaming completion, because the relay had to know whether the model
-  // selected web_search before it could decide how to answer. Claude Code
-  // advertises WebSearch by default, so that penalised most turns for a branch
-  // few of them took. The decision pass now streams, and resolveWebSearchStreamDecision
-  // buffers only as far as it takes to rule a search call in or out.
+  // Stream the preamble while waiting for a search call or terminal; an earlier ordinary tool does not rule search out.
   const canStreamWebSearchDecision = shouldLetModelDecideWebSearch && !!writeEvent
   if (shouldLetModelDecideWebSearch && !canStreamWebSearchDecision) {
     openAIPayload.stream = false
@@ -542,8 +537,22 @@ claudeRoutes.post("/messages", async (c) => {
   } catch (error) {
     if (!(error instanceof HTTPError)) throw error
     c.set("requestErrorMessage", error.message)
+    const trace = c.get("requestTrace")
+    if (error.response.status === 400 && trace?.manifest.exchanges.length === 0) {
+      trace.recordFailure("local-validation")
+    }
     log.error(`request_id=${requestId} ${error.message}`)
-    return error.response
+    // Decoded error bytes need fresh framing and must survive upstream-body cleanup.
+    const headers = new Headers()
+    for (const name of ["content-type", "retry-after", "x-request-id", "x-github-request-id", "x-copilot-service-request-id"]) {
+      const value = error.response.headers.get(name)
+      if (value !== null) headers.set(name, value)
+    }
+    return new Response(await error.response.arrayBuffer(), {
+      status: error.response.status,
+      statusText: error.response.statusText,
+      headers,
+    })
   }
   if (claudePayload.stream) {
     const trace = c.get("requestTrace")
@@ -568,7 +577,9 @@ claudeRoutes.post("/messages", async (c) => {
         )
       } catch (error) {
         log.error(`request_id=${requestId} Error during Claude stream request:`, error)
+        if (error instanceof UpstreamToolInputError) trace?.recordFailure("invalid-tool-input")
         const errorEvent = translateErrorToClaudeErrorEvent(error)
+        if (errorEvent.type === "error") errorEvent.error.message += ` (request_id=${requestId})`
         await writeEvent(errorEvent)
       } finally {
         trace?.handlerSettled()
@@ -598,6 +609,7 @@ claudeRoutes.post("/messages", async (c) => {
     }
 
     if (error instanceof HTTPError) {
+      if (error instanceof UpstreamToolInputError) c.get("requestTrace")?.recordFailure("invalid-tool-input")
       const text = await error.response.text().catch(() => "")
       c.set("requestErrorMessage", error.detail ?? text.slice(0, 240))
       return new Response(text, {

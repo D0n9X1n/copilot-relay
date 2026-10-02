@@ -14,6 +14,7 @@ const maxQueuedBytes = 8 * 1024 * 1024
 const activeCaptures = new Set<string>()
 const traceContext = new AsyncLocalStorage<RequestTrace>()
 const transportContext = new AsyncLocalStorage<RecordedTransport>()
+const traceObserver = new AsyncLocalStorage<(trace: RequestTrace) => void>()
 const responseExchanges = new WeakMap<Response, CapturedExchange>()
 const pendingCaptures = new Set<Promise<void>>()
 let captureRetentionDays = 3
@@ -91,9 +92,46 @@ export interface RecordedRequest {
   upstreamRequestId: string
   signal?: AbortSignal
 }
+export interface RequestDiagnostic {
+  requestId: string
+  status?: number
+  responseState?: BodyState
+  stopReason?: string
+  reportedModel?: string
+  terminal: boolean
+  failure?: "local-validation" | "invalid-tool-input" | "internal-error"
+  capture: { state: "off" | "pending" | "complete" | "incomplete" | "failed" }
+  exchanges: Array<{
+    order: number
+    path: string
+    upstreamRequestId?: string
+    providerRequestId?: string
+    messageId?: string
+    model?: string
+    status?: number
+    responseState?: BodyState
+    finishReason?: string
+    stopReason?: string
+    responseStatus?: string
+    refusalCategory?: string
+    incompleteReason?: string
+    error?: string
+    discarded: boolean
+  }>
+  refreshes: Array<"success" | "failure" | "cancelled">
+}
+
 export interface RecordedTransport {
   fetch: (request: RecordedRequest) => Promise<Response>
   refresh: () => Promise<void>
+  requestId?: string
+}
+
+export const withTraceObserver = <T>(observe: (trace: RequestTrace) => void, run: () => T): T => traceObserver.run(observe, run)
+export const getReplayRequestId = (): string | undefined => {
+  // Reuse only the validated internal replay identity; never trust a client's request-ID header.
+  const id = transportContext.getStore()?.requestId
+  return id && uuid.test(id) ? id : undefined
 }
 
 export const withRecordedTransport = <T>(transport: RecordedTransport, run: () => T): T => transportContext.run(transport, run)
@@ -219,6 +257,69 @@ export class RequestTrace {
   private deferredHandler = false
   private removeAbort?: () => void
   private readonly credentials = new Set<string>()
+  private captureRequested = false
+  private finishedSettling = false
+  private failure?: RequestDiagnostic["failure"]
+
+  recordFailure(failure: NonNullable<RequestDiagnostic["failure"]>): void {
+    this.failure = failure
+  }
+
+  private diagnosticCaptureState(): RequestDiagnostic["capture"]["state"] {
+    if (!this.captureRequested) return "off"
+    if (!this.captureDirectory) return "failed"
+    if (!this.finishedSettling) return "pending"
+    return this.manifest.captureState === "complete" ? "complete" : "incomplete"
+  }
+
+  diagnosticSnapshot(): RequestDiagnostic {
+    // The in-memory manifest is replay data, not a disclosure-safe CLI object.
+    const known = (value: unknown, choices: string[]): string | undefined =>
+      typeof value === "string" && choices.includes(value) ? value : undefined
+    const id = (value: unknown): string | undefined => {
+      const text = this.metadataValue(value)
+      return text && /^[A-Za-z0-9_.:-]{1,160}$/.test(text) ? text : undefined
+    }
+    const modelId = (value: unknown): string | undefined => {
+      const text = this.metadataValue(value)
+      return text && /^[A-Za-z0-9_.\[\]-]{1,128}$/.test(text) ? text : undefined
+    }
+    const bodyState = (value: unknown): BodyState | undefined =>
+      known(value, ["pending", "complete", "cancelled", "error", "absent"]) as BodyState | undefined
+    const status = (value: unknown): number | undefined =>
+      typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined
+    const reasons = ["end_turn", "stop_sequence", "tool_use", "pause_turn", "refusal", "max_tokens"]
+    return {
+      requestId: this.requestId,
+      status: status(this.manifest.status),
+      responseState: bodyState(this.manifest.response?.state),
+      stopReason: known(this.manifest.outcome?.stop_reason, reasons),
+      reportedModel: modelId(this.manifest.outcome?.model),
+      terminal: this.manifest.outcome?.terminal === true,
+      failure: this.failure,
+      capture: { state: this.diagnosticCaptureState() },
+      exchanges: this.manifest.exchanges.map((exchange) => ({
+        order: exchange.order,
+        path: known(exchange.path, ["/models", "/chat/completions", "/responses", "/v1/messages"]) ?? "unknown",
+        upstreamRequestId: id(exchange.upstreamRequestId),
+        providerRequestId: ["x-copilot-service-request-id", "x-github-request-id", "x-request-id"]
+          .map((key) => id(exchange.responseHeaders?.[key])).find(Boolean),
+        messageId: id(exchange.outcome?.message_id),
+        model: modelId(exchange.outcome?.model),
+        status: status(exchange.status),
+        responseState: bodyState(exchange.response?.state),
+        finishReason: known(exchange.outcome?.finish_reason, ["stop", "length", "tool_calls", "content_filter"]),
+        stopReason: known(exchange.outcome?.stop_reason, reasons),
+        responseStatus: known(exchange.outcome?.response_status, ["completed", "failed", "cancelled", "incomplete"]),
+        refusalCategory: known(exchange.outcome?.refusal_category, ["cyber", "bio", "reasoning_extraction", "general_harms", "frontier_llm", "unknown"]),
+        incompleteReason: known(exchange.outcome?.incomplete_reason, ["max_output_tokens", "content_filter", "unknown"]),
+        error: known(exchange.error ?? exchange.response?.error, ["AbortError", "TimeoutError", "TypeError", "SyntaxError", "Error"]),
+        discarded: exchange.discarded === true,
+      })),
+      refreshes: this.manifest.refreshes.map((refresh) => refresh.outcome),
+    }
+  }
+
   protectCredential(value: string | undefined): void {
     if (value) this.credentials.add(value)
     registerLogSecret(value)
@@ -294,6 +395,9 @@ export class RequestTrace {
 
   static async create(id: string, request: Request, config: ProxyConfig, runtime: RuntimeState, capture: boolean): Promise<RequestTrace> {
     const trace = new RequestTrace(id, request, config, runtime)
+    trace.captureRequested = capture
+    // Observers retain a handle; awaiting settlement here would deadlock response consumption.
+    traceObserver.getStore()?.(trace)
     if (!capture) return trace
     try {
       if (!uuid.test(id)) throw new Error("Invalid capture identifier.")
@@ -526,6 +630,7 @@ export class RequestTrace {
       await Promise.all([...this.openFiles.values()].map((handle) => handle.close().catch(() => {})))
       this.openFiles.clear()
       if (this.captureDirectory) activeCaptures.delete(this.captureDirectory)
+      this.finishedSettling = true
       this.resolveFinished()
     })
   }

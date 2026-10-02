@@ -177,23 +177,23 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         model: id, max_tokens: 12, stream: false, output_config: { effort: "high" },
         messages: [{ role: "user", content: "Reply with OK only." }],
       } }])
-      assert.match(lines.join("\n"), /1 passed, 0 failed, 0 incomplete, 0 skipped/)
+      assert.match(lines.join("\n"), /Summary: 1 passed/)
 
       for (const mode of [undefined, "chat-completions"] as const) {
         assert.equal(await probeModels({ ...config, claudeUpstreamApi: mode }, [[id, model]], options), 2)
         assert.equal(requests.length, 1)
       }
-      assert.match(lines.join("\n"), /SKIPPED\s+.*unsupported-relay-endpoint/)
+      assert.match(lines.join("\n"), /SKIPPED.*Unsupported route/)
 
       assert.equal(await probeModels(config, [[id, model]], { ...options, effort: "max" }), 2)
       assert.equal(requests.length, 1)
-      assert.match(lines.join("\n"), /SKIPPED\s+.*unsupported-effort/)
+      assert.match(lines.join("\n"), /SKIPPED.*Unsupported effort/)
 
       reportedModel = "claude-other-model"
       assert.equal(await probeModels(config, [[id, model]], { ...options, maxTokens: 8 }), 2)
       assert.equal(requests[1]?.body.max_tokens, 8)
       assert.equal(requests[1]?.body.model, id)
-      assert.match(lines.join("\n"), /FAIL\s+.*model-mismatch/)
+      assert.match(lines.join("\n"), /FAIL.*Model mismatch/)
     } finally {
       upstream.closeAllConnections()
       await new Promise<void>((resolve) => upstream.close(() => resolve()))

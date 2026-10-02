@@ -49,6 +49,65 @@ completed responses, missing exhaustion evidence, and HTTP errors still fail.
 For a visible answer, send a manual request with a larger output budget rather
 than re-authenticating solely because reasoning used the probe's budget.
 
+## Triage an Opus API error
+
+Start with the **failing turn's evidence**, not a guess that every API error is an
+authentication problem. A refusal, bad request, transport interruption and relay
+translation failure require different next steps.
+
+1. Copy the short error, local time, model and effort. Relay-generated stream and
+   internal errors include `(request_id=<uuid>)`; HTTP responses also carry
+   `x-copilot-relay-request-id`. The relay generates this ID, ignoring client-supplied
+   values. Correlate it with that request's local logs, not another session's failure.
+2. For a fresh availability check of that exact model, run:
+
+   ```sh
+   copilot-relay models --deep --model claude-opus-5.5 --details
+   ```
+
+   This consumes real Copilot usage. It probes an isolated short request, not your
+   running daemon or the historical long conversation. A PASS does not reproduce
+   a long-context, streaming, tool or prompt-specific error. `status --deep` tests
+   the daemon's configured GPT route instead; cheap health/models probes do not
+   reach upstream at all.
+3. Review `client_http`, `upstream_http`, actual `route`, response state and semantic
+   `outcome` separately. HTTP 200 plus `content_filter`/`refusal` is a refusal, not
+   success. A complete body/capture can still contain an error. `terminal=observed`
+   only reports a terminal marker, not a successful answer. Unreported evidence
+   remains `unknown`; it is not proof of a network or provider failure.
+4. Use the generated local/upstream request IDs and known provider/message IDs to
+   correlate attempts. A discarded failed attempt followed by success is different
+   from a final failure. Refresh results are shown without token values.
+5. If a complete debug capture exists, details show `capture=complete` and an
+   **offline** `copilot-relay replay <request-id>` command. `capture=off` means debug
+   was off; `capture=incomplete`, `pending` or `failed` means no complete recording
+   is available. Replay never resends to Copilot. `MATCH` means the current handler
+   reproduces the recorded behavior, including a refusal/error—not that the model
+   is healthy or the provider's refusal reason is known. Older captures may give
+   DIFF when a newer handler adds request-ID text to an error message.
+
+| Observation | Next step |
+| --- | --- |
+| 401 or token refresh failure | Check authentication; use `copilot-relay auth` before another probe. |
+| 403 | Check account/model entitlement and gateway policy; do not assume token expiry. |
+| 429 | Wait before another request; retries/probes consume usage. |
+| Timeout or interrupted body | Check connectivity and the effective deadline; do not treat partial text as completion. |
+| Invalid tool input / local validation | Inspect the exact route and request ID; retain a private capture for offline diagnosis. |
+| Refusal or incomplete generation | Inspect stop/finish reason and output budget; do not bypass safety controls or silently switch APIs. |
+| Unknown API error | Keep it unknown until correlated logs or a complete recording establish more. |
+
+For long sessions, start with the **800K** auto-compact recommendation and its
+headroom caveats in [Configuration](EN-Configuration.md); a context-limit failure
+is only one possible cause, not a diagnosis of a generic API error. Use `NO_COLOR=1`
+when copying console output. The colored `status` view keeps textual labels and
+unchanged exit codes; `status --json` stays uncolored.
+
+If the error repeats, use a short intentional debug window or a separate-port,
+isolated diagnostic instance as described below. Do not restart an active relay
+just to reproduce it, enable debug globally without considering concurrent
+requests, or upload an entire capture. Raw prompts/tool results can contain
+sensitive data; share only reviewed status/ID fields and structural replay results.
+
 ## The log file
 
 The active file carries the **local** calendar date and rotates at local

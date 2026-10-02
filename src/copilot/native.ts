@@ -210,6 +210,7 @@ export async function handleNativeMessages(
   const signal = createCopilotRequestSignal(options.signal, config.upstreamTimeoutMs)
   const canSearch = hasClaudeWebSearch(payload)
   const request = { ...payload, stream: Boolean(write) }
+  // Withhold tool blocks until the terminal confirms their inputs are executable.
   let heldFrom: number | undefined
   let decisionDelta: NativeEvent | undefined
   const first = await createNativeMessages(config, request, { ...options, signal })
@@ -263,6 +264,7 @@ export async function handleNativeMessages(
     ...request, messages: [...request.messages, { role: "assistant", content: message.content } as ClaudeMessage, { role: "user", content: [result] }],
   }, { ...options, signal })
   const offset = combined.length
+  // Replay only withheld tool blocks; earlier text has already reached the client.
   let finalHeldFrom: number | undefined
   const final = await collectNative(follow, write ? async (event) => {
     if (event.type === "message_start" || event.type === "message_delta" || event.type === "message_stop") return

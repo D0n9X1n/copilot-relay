@@ -17,7 +17,7 @@ const secretPath = "/private-gateway-sentinel"
 async function fixture(
   t: TestContext,
   handle: (request: IncomingMessage, response: ServerResponse, attempt: number) => void,
-  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean; deep?: boolean; interrupt?: boolean; controlledProbeTimeout?: boolean } = {},
+  options: { timeout?: number; failRefresh?: boolean; expiredToken?: boolean; deep?: boolean; interrupt?: boolean; controlledProbeTimeout?: boolean; logLevel?: "info" | "debug"; deviceAuth?: boolean } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-models-"))
   const requests: Array<{ method: string | undefined; url: string | undefined; authorization: string | undefined }> = []
@@ -49,12 +49,12 @@ async function fixture(
     "gptModel: missing-gpt-model",
     "opusModel: missing-opus-model",
     "claudeSetup: true",
-    "logLevel: debug",
+    `logLevel: ${options.logLevel ?? "debug"}`,
     `port: ${address.port}`,
     `upstreamTimeoutSeconds: ${options.timeout ?? 3}`,
     "",
   ].join("\n"))
-  await fs.writeFile(path.join(appDir, "github_token"), "github-private-token-sentinel\n")
+  await fs.writeFile(path.join(appDir, "github_token"), options.deviceAuth ? "\n" : "github-private-token-sentinel\n")
   await fs.writeFile(path.join(appDir, "copilot_token.json"), JSON.stringify({
     token: oldToken, refreshedAt: options.expiredToken ? 0 : Date.now(), refreshIn: 86400,
   }))
@@ -64,6 +64,10 @@ async function fixture(
       globalThis.fetch = async (input) => {
         const url = String(input);
         if (url === "https://api.github.com/user") return Response.json({ login: "test" });
+        ${options.deviceAuth ? `
+          if (url === "https://github.com/login/device/code") return Response.json({ device_code: "DEVICE_PRIVATE", expires_in: 600, interval: 0, user_code: "FIXTURE-CODE", verification_uri: "https://github.com/login/device" });
+          if (url === "https://github.com/login/oauth/access_token") return Response.json({ access_token: "github-private-token-sentinel" });
+        ` : ''}
         if (url === "https://api.github.com/copilot_internal/v2/token") {
           ${options.failRefresh ? 'throw new Error("auth-private-error-sentinel");' : `return Response.json({ token: ${JSON.stringify(newToken)}, refresh_in: 86400 });`}
         }
@@ -110,7 +114,7 @@ async function fixture(
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
         cwd, timeout: 15_000,
-        env: { ...process.env, ...env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
+        env: { ...process.env, NO_COLOR: "1", ...env, HOME: home, USERPROFILE: home },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
         if (error?.killed || typeof code !== "number") {
@@ -140,9 +144,9 @@ async function fixture(
         assert.ok([`${secretPath}/responses`, `${secretPath}/chat/completions`].includes(request.url!))
       }
     }
-    return result
+    return { ...result, logs }
   }
-  return { run, requests, server }
+  return { run, requests, server, home }
 }
 
 const respond = (response: ServerResponse, payload: unknown, status = 200) => {
@@ -296,9 +300,14 @@ test("models deep tests exact IDs through the isolated pipeline and prints a str
   assert.equal(result.code, 0)
   assert.match(result.stdout, /isolated relay pipeline/i)
   assert.match(result.stdout, /not running-daemon health/i)
-  assert.match(result.stdout, /MODEL\s+STATUS\s+SENT\/REPORTED\s+LATENCY/)
-  assert.match(result.stdout, /Summary: 2 passed, 0 failed, 0 incomplete, 0 skipped, 0 not tested/)
+  assert.match(result.stdout, /MODEL\s+STATUS\s+TIME\s+RESULT/)
+  assert.match(result.stdout, /Summary: 2 passed/)
+  assert.doesNotMatch(result.stdout, /0 failed|SENT\/REPORTED|Using cached|Next Copilot token refresh|send upstream|return from upstream/)
+  assert.doesNotMatch(result.rawStdout, /\u001b/)
+  for (const model of ["claude-opus-5.5", "gpt-6-astra"]) assert.equal(result.stdout.split(model).length - 1, 1)
   assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
+  assert.match(result.logs, /Using cached/)
+  assert.match(result.logs, /GET \/models/)
   assert.deepEqual(sent.map((body) => body.model), ["claude-opus-5.5", "gpt-6-astra"])
   assert.equal(sent[0]?.reasoning_effort, "low")
   assert.equal(sent[1]?.reasoning.effort, "low")
@@ -306,16 +315,114 @@ test("models deep tests exact IDs through the isolated pipeline and prints a str
   assert(sent.every((body) => !body.tools))
 })
 
+test("quiet deep setup still presents device login instructions once", async (t) => {
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, deepCatalog)
+    respond(res, probeReply(await requestBody(req)))
+  }, { deep: true, deviceAuth: true })
+  const result = await f.run(["models", "--deep"])
+  assert.equal(result.code, 0)
+  assert.equal(result.output.split("FIXTURE-CODE").length - 1, 1)
+  assert.match(result.output, /Sign in: open https:\/\/github.com\/login\/device/)
+  assert.doesNotMatch(result.output, /DEVICE_PRIVATE|Using cached|token synced|Next Copilot token refresh/)
+})
+
+for (const logLevel of ["info", "debug"] as const) {
+  test(`deep details report safe refusal evidence with capture ${logLevel}`, async (t) => {
+    const f = await fixture(t, async (req, res) => {
+      if (req.method === "GET") return respond(res, deepCatalog)
+      const body = await requestBody(req)
+      res.setHeader("x-github-request-id", "provider-fixture-123")
+      res.setHeader("x-request-id", oldToken)
+      respond(res, probeReply(body, { id: "msg_refusal_fixture", choices: [{ index: 0, message: { role: "assistant", content: "PRIVATE_REFUSAL" }, finish_reason: "content_filter" }] }))
+    }, { deep: true, logLevel })
+    const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+    assert.equal(result.code, 2)
+    assert.match(result.stdout, /Refused/)
+    assert.match(result.stdout, /upstream_http=200/)
+    assert.match(result.stdout, /outcome=content_filter/)
+    assert.match(result.stdout, /provider_request_id=provider-fixture-123/)
+    assert.match(result.stdout, /message_id=msg_refusal_fixture/)
+    const id = result.stdout.match(/request_id=([a-f0-9-]{36})/)?.[1]
+    assert(id)
+    assert.match(result.logs, new RegExp(`request_id=${id} model_probe`))
+    assert.doesNotMatch(result.output + result.logs, /PRIVATE_REFUSAL|old-private-token-sentinel/)
+    if (logLevel === "debug") assert.match(result.stdout, new RegExp(`Offline replay: copilot-relay replay ${id}`))
+    else {
+      assert.match(result.stdout, /capture=off/)
+      assert.doesNotMatch(result.stdout, /Offline replay:/)
+      await assert.rejects(fs.access(path.join(f.home, ".copilot-relay", "captures")), { code: "ENOENT" })
+    }
+  })
+}
+
+test("deep details retain upstream HTTP failures instead of relabeling them as local", async (t) => {
+  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, { error: { message: "PRIVATE_HTTP_BODY" } }, 500), { deep: true })
+  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /HTTP 500/)
+  assert.match(result.stdout, /upstream_http=500/)
+  assert.doesNotMatch(result.stdout, /Unknown API error|PRIVATE_HTTP_BODY/)
+  assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
+})
+
+test("a model ID matching a refreshed token is never printed", async (t) => {
+  let attempts = 0
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, { data: [{ id: newToken }] })
+    const body = await requestBody(req)
+    if (++attempts === 1) return respond(res, {}, 401)
+    respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--details"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /\[unsupported ID\]/)
+  assert.doesNotMatch(result.output, /new-private-token-sentinel/)
+})
+
+test("deep details distinguish failed token refresh from generic internal errors", async (t) => {
+  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, {}, 401), { deep: true, failRefresh: true })
+  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /Token refresh failed/)
+  assert.match(result.stdout, /refresh=failure/)
+  assert.match(result.stdout, /upstream_http=401/)
+  assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+})
+
+for (const [name, env, colored] of [
+  ["forced", { FORCE_COLOR: "1", NO_COLOR: undefined }, true],
+  ["disabled", { FORCE_COLOR: "0", NO_COLOR: undefined }, false],
+  ["NO_COLOR wins", { FORCE_COLOR: "1", NO_COLOR: "1" }, false],
+  ["pipe in CI", { FORCE_COLOR: undefined, NO_COLOR: undefined, CI: "true" }, false],
+] as const) {
+  test(`models deep color policy: ${name}`, async (t) => {
+    const f = await fixture(t, async (req, res) => {
+      if (req.method === "GET") return respond(res, deepCatalog)
+      respond(res, probeReply(await requestBody(req)))
+    }, { deep: true })
+    const result = await f.run(["models", "--deep"], env)
+    assert.equal(result.code, 0)
+    assert.equal(/\u001b\[32mPASS\u001b\[0m/.test(result.rawStdout), colored)
+    if (!colored) assert.doesNotMatch(result.rawStdout, /\u001b/)
+    assert.match(result.stdout, /MODEL\s+STATUS\s+TIME\s+RESULT/)
+    assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
+  })
+}
+
 test("models deep selection sends only the selected exact model", async (t) => {
   const sent: string[] = []
   const f = await fixture(t, async (req, res) => {
     if (req.method === "GET") return respond(res, deepCatalog)
     const body = await requestBody(req); sent.push(body.model); respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra", "--effort", "max", "--max-tokens", "64"])
+  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra", "--effort", "max", "--max-tokens", "64", "--details"])
   assert.equal(result.code, 0)
   assert.deepEqual(sent, ["gpt-6-astra"])
-  assert.match(result.stdout, /tokens=64 effort=max/)
+  assert.match(result.stdout, /effort=max/)
+  assert.match(result.stdout, /max_tokens=64/)
+  assert.match(result.stdout, /route=\/responses/)
+  assert.match(result.stdout, /request_id=[a-f0-9-]{36}/)
 })
 
 for (const [name, overrides, status] of [
@@ -335,7 +442,8 @@ for (const [name, overrides, status] of [
     const result = await f.run(["models", "--deep", "--model", "gpt-6-astra"])
     assert.equal(result.code, 2)
     assert.match(result.stdout, new RegExp(status))
-    assert.match(result.stdout, /Summary: 0 passed/)
+    assert.match(result.stdout, status === "INCOMPLETE" ? /Summary: 1 incomplete/ : /Summary: 1 failed/)
+    assert.doesNotMatch(result.stdout, /\bPASS\b/)
     assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
   })
 }
@@ -352,7 +460,7 @@ test("models deep skips explicit unsupported capabilities without inference", as
   assert.equal(f.requests.length, 1)
 })
 
-for (const args of [["--model", "gpt-6-astra"], ["--deep", "--timeout", "0"], ["--deep", "--max-tokens", "NaN"], ["--deep", "--effort", "invalid"], ["--deep", "--model", "missing"]]) {
+for (const args of [["--details"], ["--model", "gpt-6-astra"], ["--deep", "--timeout", "0"], ["--deep", "--max-tokens", "NaN"], ["--deep", "--effort", "invalid"], ["--deep", "--model", "missing"]]) {
   test(`models rejects invalid selection/options ${args.join(" ")}`, async (t) => {
     const f = await fixture(t, (_req, res) => respond(res, deepCatalog), { deep: true })
     const result = await f.run(["models", ...args])
@@ -366,8 +474,10 @@ test("models deep handles HTTP errors without leaking shared pipeline logs", asy
     : respond(res, { error: { message: "payload-private-sentinel" } }, 429), { deep: true })
   const result = await f.run(["models", "--deep"])
   assert.equal(result.code, 2)
-  assert.match(result.stdout, /rate-limited/)
+  assert.match(result.stdout, /Rate limited \(429\)/)
   assert.match(result.stdout, /2 failed/)
+  assert.equal((result.stdout.match(/Rate limit: wait/g) ?? []).length, 1)
+  assert.equal((result.stdout.match(/request_id=[a-f0-9-]{36}/g) ?? []).length, 2)
 })
 
 for (const interrupt of [false, true]) {
@@ -377,11 +487,12 @@ for (const interrupt of [false, true]) {
     assert.equal(result.code, interrupt ? 130 : 2)
     if (interrupt) {
       assert.match(result.stdout, /PROBE_INTERRUPT_DELIVERED/)
-      assert.match(result.stdout, /cancelled/)
+      assert.match(result.stdout, /Cancelled/)
       assert.doesNotMatch(result.output, /PROBE_INTERRUPT_HANDLER_NOT_READY/)
     }
     assert.match(result.stdout, /claude-opus-5\.5\s+NOT_TESTED/)
-    assert.match(result.stdout, /Summary: 0 passed, 0 failed, 0 incomplete, 0 skipped, 2 not tested/)
+    assert.match(result.stdout, /Summary: 2 not tested/)
+    assert.doesNotMatch(result.stdout, /\bFAIL\b|\bPASS\b/)
     assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
   })
 }
@@ -396,9 +507,9 @@ test("models deep continues after a per-model timeout", async (t) => {
   assert.equal(result.code, 2)
   assert.match(result.stdout, /PROBE_DEADLINE_DELIVERED/)
   assert.match(result.stdout, /PROBE_DEADLINES_INDEPENDENT/)
-  assert.match(result.stdout, /claude-opus-5\.5\s+FAIL[^\n]+probe-timeout/)
-  assert.match(result.stdout, /gpt-6-astra\s+PASS[^\n]+completed-text/)
-  assert.match(result.stdout, /Summary: 1 passed, 1 failed, 0 incomplete, 0 skipped, 0 not tested/)
+  assert.match(result.stdout, /claude-opus-5\.5\s+FAIL[^\n]+Timed out/)
+  assert.match(result.stdout, /gpt-6-astra\s+PASS[^\n]+Ready/)
+  assert.match(result.stdout, /Summary: 1 passed · 1 failed/)
   assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
 })
 
@@ -421,7 +532,7 @@ test("models deep empty catalog has no successful checks", async (t) => {
   const f = await fixture(t, (_req, res) => respond(res, { data: [] }), { deep: true })
   const result = await f.run(["models", "--deep"])
   assert.equal(result.code, 2)
-  assert.match(result.stdout, /Summary: 0 passed/)
+  assert.match(result.stdout, /Summary: no models to test/)
   assert.equal(f.requests.length, 1)
 })
 
@@ -435,7 +546,7 @@ test("models deep rejects explicit chat refusals even alongside text", async (t)
   }, { deep: true })
   const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5"])
   assert.equal(result.code, 2)
-  assert.match(result.stdout, /refusal-or-unexpected-completion/)
+  assert.match(result.stdout, /Refused/)
   assert.doesNotMatch(result.output, /PRIVATE_REFUSAL/)
 })
 
@@ -448,7 +559,8 @@ test("models deep missing metadata is explicitly unverified", async (t) => {
   }, { deep: true })
   const result = await f.run(["models", "--deep"])
   assert.equal(result.code, 0)
-  assert.match(result.stdout, /effort=low\(unverified\) endpoints=unverified/)
+  assert.match(result.stdout, /Ready \*/)
+  assert.match(result.stdout, /Effort or endpoint metadata is unverified/)
 })
 
 test("models fails safely during initial authentication", async (t) => {

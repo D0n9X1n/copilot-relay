@@ -1,23 +1,4 @@
-// Streaming support for turns that advertise Claude's WebSearch tool.
-//
-// The relay has to know whether the model selected web_search before it can
-// decide how to answer: a search turn needs a bridge-managed search plus a
-// second recompose pass, while every other turn is an ordinary completion. That
-// used to be resolved by forcing `stream: false` on any request that merely
-// *advertised* WebSearch. Claude Code advertises it by default, so most turns
-// paid a full non-streaming completion and then replayed it as synthetic SSE.
-//
-// The decision does not actually need the whole response — only enough of it to
-// rule a web-search call in or out. A chat completion emits tool call names in
-// the first delta that opens each tool call, so the question is settled the
-// moment the first tool call appears, or as soon as content arrives without one.
-// This module streams the decision pass and buffers only up to that point:
-//
-//   no search  -> replay the buffered chunks, then stream the rest live
-//   search     -> accumulate the full response and hand it to the bridge path
-//
-// A search turn therefore behaves exactly as it did before, and every other turn
-// gets real streaming back.
+// Stream preambles immediately; only a search call or terminal settles the decision, since later tools may still search.
 import type {
   ChatCompletionChunk,
   ChatCompletionResponse,

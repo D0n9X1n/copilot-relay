@@ -75,6 +75,7 @@ const incompleteStreamError = (): HTTPError => {
 export async function* normalizeChatCompletionStream(
   stream: AsyncIterable<{ data?: string; event?: string }>,
 ): AsyncGenerator<{ data: string }> {
+  // Hold the terminal until EOF so trailing usage and observed-body recording can finish.
   let terminal: ChatCompletionChunk | undefined
   let refusal = false
   let usage: ChatCompletionChunk["usage"]

@@ -378,6 +378,7 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
       return operation
     }
     await withoutLogging(() => withRuntimeState(runtime, () => withRecordedTransport({
+      requestId: manifest.requestId,
       fetch: async (request) => {
         const operation = take("fetch")
         if (operation.kind !== "fetch") throw new Error("Unrecorded replay attempt")

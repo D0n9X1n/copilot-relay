@@ -5,7 +5,8 @@ import { readAppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
 import { readProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { log, setLogLevel } from "~/lib/log"
+import { flushLogs, log, setLogLevel, withoutConsoleLogging } from "~/lib/log"
+import { terminalText } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { isReasoningEffort } from "~/lib/models"
 import { registerSensitiveOrigin, sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
@@ -17,6 +18,7 @@ export const models = defineCommand({
   },
   args: {
     deep: { type: "boolean", description: "Send real inference probes through an isolated relay pipeline; consumes Copilot usage." },
+    details: { type: "boolean", description: "Show safe request, route and replay evidence for each probe (requires --deep)." },
     model: { type: "string", description: "Test only this exact upstream ID (requires --deep)." },
     effort: { type: "string", description: "Probe effort override; otherwise use the lowest advertised effort, or unverified low." },
     "max-tokens": { type: "string", description: "Output budget per probe (default 4096; bounded by catalog limits)." },
@@ -32,24 +34,31 @@ export const models = defineCommand({
         if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number <= 0 || number > 2_147_483) throw new Error("invalid option")
         return number
       }
-      if (!args.deep && [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]].some((value) => value !== undefined)) throw new Error("deep required")
+      if (!args.deep && (args.details || [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]].some((value) => value !== undefined))) throw new Error("deep required")
       if (args.effort !== undefined && !isReasoningEffort(args.effort)) throw new Error("invalid effort")
       const probeOptions = {
         maxTokens: positive(args["max-tokens"], 4096),
         timeoutMs: positive(args.timeout, 30) * 1000,
         totalTimeoutMs: positive(args["total-timeout"], 300) * 1000,
         effort: args.effort,
+        details: Boolean(args.details),
       }
-      failure = "Could not load relay configuration"
-      const appConfig = await readAppConfig()
-      setLogLevel(appConfig.logLevel)
-      registerSensitiveOrigin(appConfig.copilotBaseUrl)
-      const config = readProxyConfig(appConfig)
+      const prepare = async () => {
+        failure = "Could not load relay configuration"
+        const appConfig = await readAppConfig()
+        setLogLevel(appConfig.logLevel)
+        registerSensitiveOrigin(appConfig.copilotBaseUrl)
+        const config = readProxyConfig(appConfig)
 
-      failure = "Could not authenticate with GitHub Copilot"
-      await setupProxyAuth(config)
-      failure = "Could not fetch upstream model catalog"
-      const catalog = await loadCopilotModelCatalog(config)
+        failure = "Could not authenticate with GitHub Copilot"
+        await setupProxyAuth(config, args.deep ? {
+          onDeviceCode: (url, code) => console.error(`Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`),
+        } : undefined)
+        failure = "Could not fetch upstream model catalog"
+        const catalog = await loadCopilotModelCatalog(config)
+        return { config, catalog }
+      }
+      const { config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
         if (args.model !== undefined && !catalog.models.has(args.model)) throw new Error("unknown model")
@@ -75,6 +84,8 @@ export const models = defineCommand({
       }
       log.error(`${failure}: ${detail}`)
       process.exitCode = 1
+    } finally {
+      await flushLogs()
     }
   },
 })

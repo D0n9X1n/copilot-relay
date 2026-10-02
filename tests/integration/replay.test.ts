@@ -95,6 +95,7 @@ const fixture = async (options: {
   }, async () => {
     const response = await createServer(config).fetch(new Request("http://localhost/v1/messages", { method: "POST", headers: manifest.headers, body: payload }))
     const bytes = new Uint8Array(await response.arrayBuffer())
+    manifest.requestId = response.headers.get("x-copilot-relay-request-id")!
     manifest.status = response.status
     manifest.responseHeaders = { "content-type": response.headers.get("content-type")! }
     manifest.response = await writeBody("client-response.bin", bytes)
@@ -458,7 +459,21 @@ const captureWithHttpCopilot = async (options: {
   }
 }
 
-const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<ReturnType<typeof captureWithHttpCopilot>>) => {
+test("captured relay stream errors keep their request ID during offline replay", async (t) => {
+  const capture = await captureWithHttpCopilot({
+    payload: { model: "opus", stream: true, max_tokens: 32, messages: [{ role: "user", content: "Fixture" }] },
+    respond: (request, response) => {
+      const body = JSON.parse(request.body)
+      response.setHeader("content-type", "text/event-stream")
+      response.end(`data: ${JSON.stringify({ id: "msg_error_fixture", model: body.model, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: "call_fixture", type: "function", function: { name: "Read", arguments: '{"private":' } }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`)
+    },
+  })
+  assert.match(capture.response, new RegExp(`request_id=${capture.requestId}`))
+  assert.match(capture.response, /event: error/)
+  await assertRealCaptureReplaysOffline(t, capture, "unreported")
+})
+
+const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<ReturnType<typeof captureWithHttpCopilot>>, outcome = "end_turn") => {
   let forbiddenCalls = 0
   const forbidden = () => { forbiddenCalls++; throw new Error("NETWORK_OR_AUTH_FORBIDDEN") }
   t.mock.method(globalThis, "fetch", forbidden)
@@ -476,7 +491,7 @@ const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<
     })
     assert.equal(forbiddenCalls, 0)
     assert.deepEqual(result.summary?.routes, capture.manifest.exchanges.map((exchange) => exchange.path))
-    assert.equal(result.summary?.outcome, "end_turn")
+    assert.equal(result.summary?.outcome, outcome)
     assert.ok(!/PRIVATE_|fake-capture-token/.test(JSON.stringify(result)), "Replay exposed capture content")
   } finally {
     t.mock.restoreAll()
@@ -485,7 +500,7 @@ const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<
   assert.ok(!/PRIVATE_|fake-capture-token|NETWORK_OR_AUTH_FORBIDDEN/.test(result.output), "CLI exposed capture content or attempted network/auth")
   assert.equal(result.code, 0, result.output)
   assert.match(result.output, /^MATCH\r?\n/)
-  assert.match(result.output, /POST \/v1\/messages status=200 outcome=end_turn/)
+  assert.ok(result.output.includes(`POST /v1/messages status=200 outcome=${outcome}`))
   assert.ok(result.output.includes(`upstream=${capture.manifest.exchanges.map((exchange) => exchange.path).join(" -> ")}`), "CLI must report recorded upstream routes")
 }
 
