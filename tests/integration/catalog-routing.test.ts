@@ -378,6 +378,50 @@ test("an admitted missing-model snapshot is not rediscovered after SSE opens", a
   assert.deepEqual(paths, ["/models", "/chat/completions"])
 })
 
+// Token recovery retries inside the transport after admission has chosen the route, so
+// a refresh must replay the identical request. grok-4.6 sits outside the legacy Responses
+// family: re-deriving its route from the name would send the Responses case to Chat.
+for (const endpoint of ["/chat/completions", "/responses"] as const) {
+  for (const stream of [false, true]) {
+    test(`token refresh replays the catalog-selected ${endpoint} request for ${stream ? "SSE" : "JSON"}`, async () => {
+      const id = "grok-4.6"
+      runtimeState.modelRouting = { gptModel: id, opusModel: "claude-unused" }
+
+      // Recovery only runs when a refresher is configured; the recorded transport
+      // then performs the refresh in its place, so this one must never be called.
+      const config: ProxyConfig = {
+        ...configFor(id, { type: "chat", supportedEndpoints: [endpoint], reasoningEfforts: ["low"] }),
+        refreshCopilotToken: async () => { throw new Error("Recorded refresh was bypassed") },
+      }
+      const sent: RecordedRequest[] = []
+      let refreshes = 0
+
+      await withRecordedTransport({
+        fetch: async (request) => {
+          sent.push(request)
+
+          // Reject the first attempt as an expired token and accept the replay.
+          if (sent.length === 1) {
+            return new Response("unauthorized", { status: 401 })
+          }
+
+          return reply(request)
+        },
+        refresh: async () => { refreshes++ },
+      }, async () => {
+        const response = await post(config, { stream, output_config: { effort: "low" } })
+        await assertReply(response, id, stream)
+      })
+
+      // One refresh, then the same endpoint with a byte-identical body: no catalog
+      // rediscovery, no route re-selection and the same resolved effort.
+      assert.equal(refreshes, 1)
+      assert.deepEqual(sent.map((request) => request.path), [endpoint, endpoint])
+      assert.equal(sent[1]?.body, sent[0]?.body)
+    })
+  }
+}
+
 test("provider reload cannot change an admitted Responses search final pass", async () => {
   const id = "future-chat-model"
   const root = configFor(id, {
