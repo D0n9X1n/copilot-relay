@@ -50,7 +50,9 @@ export function translateToOpenAI(
   })
   const tools = translateClaudeToolsToOpenAI(payload.tools, mapper)
   const { requested: effort } = getClaudeTurnEffort(payload)
+
   validateClaudeMessages(payload.messages)
+
   const messages = translateClaudeMessagesToOpenAI(
     payload.messages,
     payload.system,
@@ -114,7 +116,13 @@ function translateClaudeMessagesToOpenAI(
       case "assistant":
         return handleAssistantMessage(message, toolNameMapper)
       case "system":
-        if (message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) {
+        // An empty control message carries only effort, which getClaudeTurnEffort reads.
+        if (
+          message.output_config !== undefined
+          && (typeof message.content === "string"
+            ? message.content.length === 0
+            : message.content.every((block) => block.text.length === 0))
+        ) {
           return []
         }
 
@@ -123,14 +131,18 @@ function translateClaudeMessagesToOpenAI(
         throw invalidMessage("Unsupported message role.")
     }
   })
+
   return [...systemMessages, ...otherMessages]
 }
 
-const invalidMessage = (message: string): HTTPError => new HTTPError(message,
+const invalidMessage = (message: string): HTTPError => new HTTPError(
+  message,
   new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message } }), {
-    status: 400, headers: { "content-type": "application/json" },
-  }), message)
-
+    status: 400,
+    headers: { "content-type": "application/json" },
+  }),
+  message,
+)
 
 function handleSystemPrompt(
   system: string | Array<ClaudeTextBlock> | undefined,
@@ -254,10 +266,10 @@ const normalizeFinalAssistantPrefill = (
     return messages.slice(0, -1)
   }
 
-  const trimmedContent = lastAssistant.content.trimEnd()
   // Claude Messages allows a final assistant message as a prefill prefix.
   // Copilot rejects that shape, so keep the prefix as context and append a
   // minimal user turn that asks upstream to continue from it.
+  const trimmedContent = lastAssistant.content.trimEnd()
   const nextMessages = [...messages]
   if (trimmedContent) {
     nextMessages[lastAssistantIndex] = {
@@ -386,9 +398,7 @@ function translateClaudeToolChoiceToOpenAI(
 
 export function translateToClaude(
   response: ChatCompletionResponse,
-  toolNameMapper: ClaudeToolNameMapper = createClaudeToolNameMapper(
-    undefined,
-  ),
+  toolNameMapper: ClaudeToolNameMapper = createClaudeToolNameMapper(undefined),
 ): ClaudeResponse {
   const allThinkingBlocks: Array<ClaudeThinkingBlock> = []
   const allTextBlocks: Array<ClaudeTextBlock> = []

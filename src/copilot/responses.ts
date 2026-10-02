@@ -273,11 +273,20 @@ export function translateResponsesToChatCompletion(
   response: ResponsesApiResponse,
 ): ChatCompletionResponse {
   if (response.status !== undefined && response.status !== "completed" && response.status !== "incomplete") {
-    throw new HTTPError("Upstream response did not complete", new Response(JSON.stringify({ error: { code: "upstream_response_failed" } }), { status: 502 }))
+    throw new HTTPError(
+      "Upstream response did not complete",
+      new Response(JSON.stringify({ error: { code: "upstream_response_failed" } }), { status: 502 }),
+    )
   }
 
-  if (response.status === "incomplete" && !["max_output_tokens", "content_filter"].includes(response.incomplete_details?.reason ?? "")) {
-    throw new HTTPError("Upstream response incomplete", new Response(JSON.stringify({ error: { code: "upstream_response_incomplete" } }), { status: 502 }))
+  if (
+    response.status === "incomplete"
+    && !["max_output_tokens", "content_filter"].includes(response.incomplete_details?.reason ?? "")
+  ) {
+    throw new HTTPError(
+      "Upstream response incomplete",
+      new Response(JSON.stringify({ error: { code: "upstream_response_incomplete" } }), { status: 502 }),
+    )
   }
 
   const assistantMessages = response.output.filter(
@@ -358,9 +367,12 @@ export async function* translateResponsesStreamToChatCompletionStream(
     const event = JSON.parse(rawEvent.data) as ResponsesStreamEnvelope
     if (!event || typeof event.type !== "string" || event.type === "error"
       || event.type === "response.failed" || event.type === "response.cancelled") {
-      throw new HTTPError("Upstream response failed", new Response(JSON.stringify({
-        error: { type: "api_error", code: "upstream_response_failed", message: "Upstream response failed." },
-      }), { status: 502, headers: { "content-type": "application/json" } }))
+      throw new HTTPError(
+        "Upstream response failed",
+        new Response(JSON.stringify({
+          error: { type: "api_error", code: "upstream_response_failed", message: "Upstream response failed." },
+        }), { status: 502, headers: { "content-type": "application/json" } }),
+      )
     }
 
     if (event.response) {
@@ -480,6 +492,9 @@ export async function* translateResponsesStreamToChatCompletionStream(
         status: event.type === "response.incomplete" ? "incomplete" : event.response.status ?? "completed",
         output: event.response.output ?? [],
       })
+
+      // The terminal snapshot can hold output whose deltas never arrived; replay emits
+      // only what the stream has not sent yet.
       for (const [output_index, item] of (event.response.output ?? []).entries()) {
         if (item.type === "reasoning") {
           continue

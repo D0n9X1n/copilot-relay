@@ -14,8 +14,7 @@ export const accumulateChunks = (
   let content = ""
   let reasoning = ""
   let refusal = ""
-  let finishReason: ChatCompletionResponse["choices"][number]["finish_reason"] =
-    null
+  let finishReason: ChatCompletionResponse["choices"][number]["finish_reason"] = null
   let usage: ChatCompletionResponse["usage"]
 
   for (const chunk of chunks) {
@@ -64,7 +63,9 @@ export const accumulateChunks = (
     }
   }
 
+  // Calls are stored by stream index, which can leave holes in the array.
   const collectedToolCalls = toolCalls.filter(Boolean)
+
   return {
     id: first?.id ?? "chat_stream_accumulated",
     object: "chat.completion",
@@ -142,7 +143,12 @@ export async function* normalizeChatCompletionStream(
         throw incompleteStreamError()
       }
 
-      terminal = { ...chunk, choices: [{ ...choice, finish_reason: refusal ? "content_filter" : choice.finish_reason, delta: {} }] }
+      terminal = {
+        ...chunk,
+        choices: [{ ...choice, finish_reason: refusal ? "content_filter" : choice.finish_reason, delta: {} }],
+      }
+
+      // The terminal chunk's own content goes out now; only its finish_reason waits for EOF.
       if (Object.keys(choice.delta).length > 0) {
         yield { data: JSON.stringify({ ...chunk, choices: [{ ...choice, finish_reason: null }] }) }
       }

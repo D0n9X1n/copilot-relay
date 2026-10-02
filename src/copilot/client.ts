@@ -1,4 +1,5 @@
-// Low-level GitHub Copilot HTTP client: adds required headers, retries transient failures, and logs timing.
+// Low-level GitHub Copilot HTTP client: adds required headers, retries transient failures,
+// refreshes a rejected token once, and logs timing.
 import { randomUUID } from "node:crypto"
 
 import { Agent, fetch as undiciFetch } from "undici"
@@ -217,6 +218,7 @@ const waitWithSignal = <T>(pending: Promise<T>, signal: AbortSignal | undefined)
   }
 
   if (signal.aborted) {
+    // Nothing awaits pending any more; observe its rejection so it is not reported as unhandled.
     void pending.catch(() => {})
     return Promise.reject(signal.reason)
   }
@@ -237,6 +239,8 @@ const isAuthRejection = async (response: Response, signal: AbortSignal | undefin
     return false
   }
 
+  // A 403 is an auth rejection only when its whole body is plain "forbidden";
+  // structured model, policy and quota denials reach the caller unchanged.
   const reader = response.clone().body?.getReader()
   if (!reader) {
     return false
@@ -289,12 +293,16 @@ export const fetchCopilot = async (
   let transientRetries = 0
   let authRecoveryUsed = false
 
+  // One attempt beyond the transient-retry allowance leaves room for a single token refresh.
   for (let attempt = 1; attempt <= maxFetchAttempts + 1; attempt++) {
     const upstreamRequestId = randomUUID()
+    // A refresh is keyed to what this attempt sent, so a token another request
+    // already replaced is not refreshed twice.
     const attemptedToken = provider.token!
     registerLogSecret(attemptedToken)
     getRequestTrace()?.protectCredential(attemptedToken)
     const attemptedGeneration = provider.tokenGeneration ?? 0
+
     let response: Response
     try {
       const started = performance.now()
@@ -303,14 +311,32 @@ export const fetchCopilot = async (
         `send upstream method=${init.method ?? "GET"} path=${path} attempt=${attempt} upstream_request_id=${upstreamRequestId}`,
       )
       const headers = buildHeaders({ ...provider, token: attemptedToken }, init, options, upstreamRequestId)
-      response = await recordedFetch({
-        method: init.method ?? "GET", path, body: init.body, headers, upstreamRequestId, signal,
-      }, async () => {
-        const undiciResponse = await undiciFetch(`${provider.baseUrl}${path}`, { ...init, headers, dispatcher: copilotDispatcher, signal })
-        const wrappedResponse = new Response(undiciResponse.body as ReadableStream<Uint8Array> | null, { status: undiciResponse.status, statusText: undiciResponse.statusText, headers: undiciResponse.headers })
-        Object.defineProperty(wrappedResponse, "url", { value: undiciResponse.url })
-        return wrappedResponse
-      })
+      response = await recordedFetch(
+        {
+          method: init.method ?? "GET",
+          path,
+          body: init.body,
+          headers,
+          upstreamRequestId,
+          signal,
+        },
+        async () => {
+          const undiciResponse = await undiciFetch(`${provider.baseUrl}${path}`, {
+            ...init,
+            headers,
+            dispatcher: copilotDispatcher,
+            signal,
+          })
+          const wrappedResponse = new Response(undiciResponse.body as ReadableStream<Uint8Array> | null, {
+            status: undiciResponse.status,
+            statusText: undiciResponse.statusText,
+            headers: undiciResponse.headers,
+          })
+          // The Response constructor cannot set url; upstream error logs report it.
+          Object.defineProperty(wrappedResponse, "url", { value: undiciResponse.url })
+          return wrappedResponse
+        },
+      )
       const ms = Math.round(performance.now() - started)
       logUpstreamLifecycle(
         options.requestId,

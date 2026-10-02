@@ -31,9 +31,7 @@ const closeOpenContentBlock = (
 export function translateChunkToClaudeEvents(
   chunk: ChatCompletionChunk,
   state: ClaudeStreamState,
-  toolNameMapper: ClaudeToolNameMapper = createClaudeToolNameMapper(
-    undefined,
-  ),
+  toolNameMapper: ClaudeToolNameMapper = createClaudeToolNameMapper(undefined),
 ): Array<ClaudeStreamEventData> {
   // This is a stateful adapter from Copilot's OpenAI-style deltas to Claude's
   // stricter SSE protocol. Claude requires every thinking/text/tool block to
@@ -143,8 +141,12 @@ export function translateChunkToClaudeEvents(
     }
 
     const current = previous ?? {
-      id: toolCall.id!, name: toolNameMapper.toClaude(toolCall.function!.name!), claudeBlockIndex: -1, arguments: "",
+      id: toolCall.id!,
+      name: toolNameMapper.toClaude(toolCall.function!.name!),
+      claudeBlockIndex: -1,
+      arguments: "",
     }
+
     if (previous && ((toolCall.id && toolCall.id !== current.id)
       || (toolCall.function?.name && toolNameMapper.toClaude(toolCall.function.name) !== current.name))) {
       throw new Error("Upstream tool identity changed during streaming.")
@@ -156,9 +158,12 @@ export function translateChunkToClaudeEvents(
 
   if (choice.finish_reason) {
     closeOpenContentBlock(events, state)
+
     if (choice.finish_reason === "tool_calls") {
       for (const toolCall of Object.values(state.toolCalls)) {
         const argumentsText = toolCall.arguments ?? ""
+        // Tool blocks are emitted only now, once the arguments are complete, so invalid
+        // input fails the stream instead of reaching the client as a tool call.
         parseUpstreamToolInput(toolCall.name, argumentsText)
         // A zero-parameter tool streams no argument text; clients parse the
         // accumulated partial_json, and "" is not a JSON object (#114).
@@ -166,8 +171,16 @@ export function translateChunkToClaudeEvents(
         const index = state.contentBlockIndex++
         toolCall.claudeBlockIndex = index
         events.push(
-          { type: "content_block_start", index, content_block: { type: "tool_use", id: toolCall.id, name: toolCall.name, input: {} } },
-          { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: partialJson } },
+          {
+            type: "content_block_start",
+            index,
+            content_block: { type: "tool_use", id: toolCall.id, name: toolCall.name, input: {} },
+          },
+          {
+            type: "content_block_delta",
+            index,
+            delta: { type: "input_json_delta", partial_json: partialJson },
+          },
           { type: "content_block_stop", index },
         )
       }

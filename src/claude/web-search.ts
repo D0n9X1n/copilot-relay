@@ -227,7 +227,15 @@ const buildSearchInput = (
   const messages = payload.messages
     .flatMap((message) => {
       const text = textFromMessageContent(message.content)
-      if (message.role === "system" && message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) {
+
+      // Skip an empty control message, as the chat translation does.
+      if (
+        message.role === "system"
+        && message.output_config !== undefined
+        && (typeof message.content === "string"
+          ? message.content.length === 0
+          : message.content.every((block) => block.text.length === 0))
+      ) {
         return []
       }
 
@@ -382,7 +390,11 @@ const getStructuredSearchResults = (response: ResponsesWebSearchResponse): Array
       }
 
       seen.add(url.href)
-      results.push({ url: url.href, title: typeof source.title === "string" && source.title.trim() ? source.title.trim() : url.hostname })
+      results.push({
+        url: url.href,
+        title: typeof source.title === "string" && source.title.trim() ? source.title.trim() : url.hostname,
+      })
+
       if (results.length === searchResultLimit) {
         break
       }
@@ -410,10 +422,14 @@ const recognizedValue = (value: unknown, allowed: readonly string[]): string => 
 const reportedTokens = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 
+// The id is logged and can become the client's message id, so it must not echo a credential.
 const safeResponseId = (value: unknown, token: string | undefined): string | undefined =>
-  typeof value === "string" && /^(?:resp|msg)_[A-Za-z0-9_-]{1,120}$/.test(value)
+  typeof value === "string"
+  && /^(?:resp|msg)_[A-Za-z0-9_-]{1,120}$/.test(value)
   && !(token && value.includes(token))
-  && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(value) ? value : undefined
+  && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(value) ?
+    value
+  : undefined
 
 const summarizeCounts = (values: string[]): string => {
   const counts = new Map<string, number>()
@@ -421,7 +437,10 @@ const summarizeCounts = (values: string[]): string => {
     counts.set(value, (counts.get(value) ?? 0) + 1)
   }
 
-  return [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([key, count]) => `${key}:${count}`).join(",") || "none"
+  return [...counts]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, count]) => `${key}:${count}`)
+    .join(",") || "none"
 }
 
 const getSearchProvenance = (
@@ -455,24 +474,40 @@ const interpretSearchResponse = (
   requestedEffort: string,
   requestId: string | undefined,
 ): WebSearchExecutionResult => {
-  const malformed = !isRecord(raw) || (raw.output !== undefined && (!Array.isArray(raw.output) || !raw.output.every(isRecord)))
-  const upstream: ResponsesWebSearchResponse = isRecord(raw) ? { ...raw, output: Array.isArray(raw.output) ? raw.output.filter(isRecord) : [] } : {}
+  const malformed = !isRecord(raw)
+    || (raw.output !== undefined && (!Array.isArray(raw.output) || !raw.output.every(isRecord)))
+  const upstream: ResponsesWebSearchResponse =
+    isRecord(raw) ?
+      { ...raw, output: Array.isArray(raw.output) ? raw.output.filter(isRecord) : [] }
+    : {}
+
   const status = recognizedValue(upstream.status, responseStates)
-  const reason = recognizedValue(isRecord(upstream.incomplete_details) ? upstream.incomplete_details.reason : undefined, incompleteReasons)
+  const reason = recognizedValue(
+    isRecord(upstream.incomplete_details) ? upstream.incomplete_details.reason : undefined,
+    incompleteReasons,
+  )
   const items = upstream.output ?? []
   const calls = items.filter((item) => item.type === "web_search_call")
   const callStates = calls.map((item) => recognizedValue(item.status, searchStates))
+
   const usage = isRecord(upstream.usage) ? upstream.usage : {}
   const inputTokens = reportedTokens(usage.input_tokens)
-  const cachedInputTokens = reportedTokens(isRecord(usage.input_tokens_details) ? usage.input_tokens_details.cached_tokens : undefined)
+  const cachedInputTokens = reportedTokens(
+    isRecord(usage.input_tokens_details) ? usage.input_tokens_details.cached_tokens : undefined,
+  )
   const outputTokens = reportedTokens(usage.output_tokens)
-  const reasoningTokens = reportedTokens(isRecord(usage.output_tokens_details) ? usage.output_tokens_details.reasoning_tokens : undefined)
+  const reasoningTokens = reportedTokens(
+    isRecord(usage.output_tokens_details) ? usage.output_tokens_details.reasoning_tokens : undefined,
+  )
+
   const upstreamResponseId = safeResponseId(upstream.id, config.copilotToken)
   const safeRequestId = typeof requestId === "string" && /^[a-f0-9-]{36}$/i.test(requestId) ? requestId : "unreported"
+
   const text = getResponseText(upstream)
   const structured = getStructuredSearchResults(upstream)
   let results = structured.length ? structured : parseSearchResults(text)
   const provenance: SearchProvenance = getSearchProvenance(calls, callStates, structured)
+
   let failure = ""
   let outcome = "results"
   if (malformed) {
@@ -503,12 +538,18 @@ const interpretSearchResponse = (
     }
   }
 
+  // Sources from a search that did not finish cleanly are not trusted.
   if (failure) {
     results = []
   }
 
   const modelLabel = sanitizeTerminalString(scrubSensitiveUrls(request.model))
-  const safeModel = /^[a-z0-9._-]{1,100}$/i.test(modelLabel) && !(config.copilotToken && modelLabel.includes(config.copilotToken)) ? modelLabel : "redacted"
+  const safeModel =
+    /^[a-z0-9._-]{1,100}$/i.test(modelLabel)
+    && !(config.copilotToken && modelLabel.includes(config.copilotToken)) ?
+      modelLabel
+    : "redacted"
+
   log.info([
     `request_id=${safeRequestId} Copilot web search completion upstream_response_id=${upstreamResponseId ?? "unreported"} model=${safeModel}`,
     `requested_effort=${requestedEffort} effective_effort=${request.reasoning?.effort ?? "omitted"} output_cap=${request.max_output_tokens}`,
@@ -518,6 +559,7 @@ const interpretSearchResponse = (
     `input_tokens=${inputTokens ?? "unknown"} output_tokens=${outputTokens ?? "unknown"} reasoning_tokens=${reasoningTokens ?? "unknown"}`,
     `source=${getResultSource(structured, results)} provenance=${provenance} outcome=${outcome}`,
   ].join(" "))
+
   return {
     id: upstreamResponseId ?? `msg_${randomUUID().replaceAll("-", "")}`,
     inputTokens: (inputTokens ?? 0) - (cachedInputTokens ?? 0),
@@ -590,21 +632,25 @@ const getSearchFailureDetail = (body: string, token: string | undefined): string
     const error = isRecord(parsed) && isRecord(parsed.error) ? parsed.error : undefined
     detail = getErrorMessageOrCode(error)
   } catch {
+    // JSON or markup that does not parse is noise, not a readable message.
     if (/^[{[<]/.test(detail)) {
       return ""
     }
   }
 
   detail = scrubSensitiveUrls(sanitizeTerminalString(detail))
+  // Userinfo, query strings and fragments can carry secrets, so such a URL keeps only its origin.
   detail = detail.replace(/https?:\/\/[^\s'"`<>]+/gi, (raw) => {
     try {
       const url = new URL(raw)
       return url.username || url.password || url.search || url.hash ?
-          `${url.origin}/[redacted]` : raw
+          `${url.origin}/[redacted]`
+        : raw
     } catch {
       return "[redacted]"
     }
   })
+
   if (token) {
     detail = detail.replaceAll(token, "[redacted]")
   }
@@ -684,6 +730,7 @@ export const createClaudeWebSearchExecution = async (
       options.timeoutMs,
     ).catch(() => "")
     const detail = getSearchFailureDetail(body, config.copilotToken)
+
     return createFailedSearchExecution(
       payload,
       requestedQuery,
@@ -697,6 +744,7 @@ export const createClaudeWebSearchExecution = async (
     )
   }
 
+  // A body that is not JSON leaves upstream undefined, which is reported as malformed.
   let upstream: unknown
   try {
     upstream = await readCopilotJson<unknown>(response, signal, options.timeoutMs)
@@ -706,7 +754,14 @@ export const createClaudeWebSearchExecution = async (
     }
   }
 
-  return interpretSearchResponse(upstream, config, requestedQuery, request, getClaudeTurnEffort(payload).requested ?? "unset", options.requestId)
+  return interpretSearchResponse(
+    upstream,
+    config,
+    requestedQuery,
+    request,
+    getClaudeTurnEffort(payload).requested ?? "unset",
+    options.requestId,
+  )
 }
 
 const buildSearchResultBlock = (
@@ -795,11 +850,11 @@ const describeSearchProvenance = (provenance: SearchProvenance | undefined): str
   return "Bridge retrieval context: Search execution is unverified; upstream supplied sources or generated URL text without a reported search call."
 }
 
-// Delivered as a user turn, not a system turn, for two reasons. Copilot's
-// Claude-family models reject a conversation that does not end with a user
-// message ("This model does not support assistant message prefill"), and this
-// message is appended last. Anthropic removed prefill support in Opus 4.7+ /
-// Sonnet 4.6+, so this is an upstream constraint rather than a Copilot quirk.
+// Delivered as a user turn, not a system turn, because this message is appended
+// last and Copilot's Claude-family models reject a conversation that does not
+// end with a user message ("This model does not support assistant message
+// prefill"). Anthropic removed prefill support in Opus 4.7+ / Sonnet 4.6+, so
+// this is an upstream constraint rather than a Copilot quirk.
 const createWebSearchResultContextMessage = (
   search: WebSearchExecutionResult,
 ): Message => ({
@@ -902,6 +957,7 @@ export const mergeWebSearchAndFinalResponse = (
   finalResponse: ClaudeResponse,
 ): ClaudeResponse => ({
   ...finalResponse,
+  // Keep the search call and its result; the final answer replaces the search's own text.
   content: [...searchResponse.content.slice(0, 2), ...finalResponse.content],
   usage: {
     ...finalResponse.usage,

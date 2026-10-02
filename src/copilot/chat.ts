@@ -179,6 +179,7 @@ export const createChatCompletions = async (
     options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "unset"
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
+
   const upstreamModelId = normalizeCopilotModelId(payload.model)
   const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens)
   const selection = requireCopilotEndpoint(config, upstreamModelId)
@@ -192,10 +193,11 @@ export const createChatCompletions = async (
     upstreamModelId,
     getRequestReasoningEffort(payload),
   )
-  const nonStreamingLimit =
-    getCachedCopilotModel(config, upstreamModelId)?.limits?.max_non_streaming_output_tokens
+
   // Some models allow their largest output only over SSE. Buffer that upstream
   // stream for JSON clients and WebSearch final passes instead of shortening it.
+  const nonStreamingLimit =
+    getCachedCopilotModel(config, upstreamModelId)?.limits?.max_non_streaming_output_tokens
   const bufferResponse =
     !payload.stream
     && typeof maxTokens === "number"
@@ -206,6 +208,7 @@ export const createChatCompletions = async (
   ) => bufferResponse && !("choices" in response) ?
       collectChatCompletionStream(response, signal, options.timeoutMs)
     : response
+
   const upstreamPayload = {
     ...payload,
     model: upstreamModelId,
@@ -216,6 +219,7 @@ export const createChatCompletions = async (
   const useResponsesApi = selection.endpoint === "/responses"
   const compatiblePayload =
     useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(upstreamPayload)
+
   const provider = getCopilotProviderContext(config)
   const enableVision = messagesIncludeImage(compatiblePayload.messages)
   const initiator = isAgentInitiator(compatiblePayload.messages)
@@ -236,6 +240,7 @@ export const createChatCompletions = async (
       `effective_think_effort=${effectiveEffortLabel}`,
     ].join(" ")),
   )
+
   // Choose the Copilot API surface after model routing, because aliases can
   // resolve to a Responses-only upstream model even when the client asked for a
   // generic Claude model name.
@@ -284,12 +289,18 @@ export const createChatCompletions = async (
       }))
     }
 
-    const detail = await logUpstreamError("Failed to create chat completions", response, {
-      model: payload.model,
-      request: requestPayload,
-      route: "/chat/completions",
-      requestId: options.requestId,
-    }, signal, options.timeoutMs)
+    const detail = await logUpstreamError(
+      "Failed to create chat completions",
+      response,
+      {
+        model: payload.model,
+        request: requestPayload,
+        route: "/chat/completions",
+        requestId: options.requestId,
+      },
+      signal,
+      options.timeoutMs,
+    )
     throw new HTTPError(
       "Failed to create chat completions",
       response,
@@ -343,12 +354,18 @@ async function createResponses(
   )
 
   if (!response.ok) {
-    const detail = await logUpstreamError("Failed to create responses", response, {
-      model: payload.model,
-      request: requestPayload,
-      route: "/responses",
-      requestId: options.requestId,
-    }, options.signal, options.timeoutMs)
+    const detail = await logUpstreamError(
+      "Failed to create responses",
+      response,
+      {
+        model: payload.model,
+        request: requestPayload,
+        route: "/responses",
+        requestId: options.requestId,
+      },
+      options.signal,
+      options.timeoutMs,
+    )
     throw new HTTPError(
       "Failed to create responses",
       response,
