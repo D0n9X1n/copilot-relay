@@ -15,14 +15,20 @@ if (isMainThread) {
   const temporary = join(owned, "tmp")
   mkdirSync(home)
   mkdirSync(temporary)
+
+  // os.homedir() reads USERPROFILE on Windows and HOME elsewhere, and os.tmpdir()
+  // reads TMPDIR, TMP or TEMP depending on the platform, so every variant is set.
   process.env.HOME = home
   process.env.USERPROFILE = home
   process.env.TMPDIR = temporary
   process.env.TMP = temporary
   process.env.TEMP = temporary
+
+  // rmSync, not rm: Node abandons queued async work once "exit" listeners return.
   process.once("exit", () => {
     rmSync(owned, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
   })
+
   // Latch the in-process logger before any source import, then restore the
   // environment so CLI subprocesses retain their normal --help output.
   const inheritedLevel = process.env.CONSOLA_LEVEL

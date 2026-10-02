@@ -3,6 +3,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+// Resolved once, at import time: a test that redirects HOME (and USERPROFILE, which Node reads on
+// Windows) must do so before importing this module.
 const homeDir = os.homedir()
 
 const appDir = path.join(homeDir, ".copilot-relay")
@@ -74,6 +76,7 @@ export const paths = {
 
 export async function ensurePaths(): Promise<void> {
   await fs.mkdir(paths.appDir, { recursive: true })
+
   // GitHub tokens are plain text and safe to migrate here. Copilot token
   // migration is handled in auth.ts because that cache has a JSON schema.
   await ensureFile(paths.githubTokenPath, {
@@ -96,6 +99,8 @@ async function ensureFile(
       try {
         const content = await fs.readFile(legacyPath, "utf8")
         if (content.trim()) {
+          // writeFile applies `mode` only when it creates the file, and the umask still narrows
+          // it, so chmod pins 0600 either way.
           await fs.writeFile(filePath, content, { mode: 0o600 })
           await fs.chmod(filePath, 0o600)
           return

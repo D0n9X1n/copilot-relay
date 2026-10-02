@@ -7,14 +7,16 @@ import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
 
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-preflight-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
 const { validateUpstream } = await import("../../src/lib/preflight")
 const { runtimeState } = await import("../../src/lib/state")
-
 const { flushLogs } = await import("../../src/lib/log")
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })
@@ -153,11 +155,13 @@ test("preflight uses canonical upstream model ids", async () => {
       "/responses",
       "/chat/completions",
     ])
+
     const upstreamModels = mock.requests.flatMap((request) =>
       request.path === "/models" ? [] : [(request.body as { model?: string }).model]
     )
     assert.deepEqual(upstreamModels, ["gpt-6-astra", "claude-opus-4.8"])
     assert.equal(upstreamModels.some((model) => model?.includes("[1m]")), false)
+
     const responsesRequest = mock.requests.find((request) => request.path === "/responses")
     assert.equal(
       (responsesRequest?.body as { reasoning?: { effort?: string } }).reasoning?.effort,
@@ -171,11 +175,13 @@ test("preflight uses canonical upstream model ids", async () => {
 test("fresh default preflight probes Opus 5.5 without a context alias", async () => {
   const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"])
   runtimeState.thinkEffort = "max"
+
   try {
     await validateUpstream({
       copilotBaseUrl: mock.baseUrl, copilotToken: "test-token", host: "127.0.0.1",
       port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3",
     }, "max")
+
     assert.deepEqual(mock.requests.map((request) => request.path), ["/models", "/responses", "/chat/completions"])
     const opus = mock.requests[2]?.body as { model: string; reasoning_effort: string }
     assert.equal(opus.model, "claude-opus-5.5")
@@ -187,15 +193,19 @@ test("fresh default preflight probes Opus 5.5 without a context alias", async ()
 
 for (const claudeUpstreamApi of ["auto", "messages"] as const) {
   test(`preflight probes native Claude with configured effort and 16 tokens in ${claudeUpstreamApi} mode`, async () => {
+    // Auto mode needs the catalog to advertise /v1/messages; messages mode goes
+    // native without it.
     const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"], {
       supportedEndpoints: claudeUpstreamApi === "auto" ? ["/v1/messages"] : ["/chat/completions"],
     })
     runtimeState.thinkEffort = "max"
+
     try {
       await validateUpstream({
         copilotBaseUrl: mock.baseUrl, copilotToken: "test-token", host: "127.0.0.1",
         port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3", claudeUpstreamApi,
       }, "high")
+
       assert.deepEqual(mock.requests.map((request) => request.path), ["/models", "/responses", "/v1/messages"])
       assert.deepEqual(mock.requests[2]?.body, {
         model: "claude-opus-5.5", max_tokens: 16, stream: false,
@@ -216,6 +226,7 @@ for (const failure of [
     const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"], {
       ...failure, supportedEndpoints: ["/v1/messages"],
     })
+
     try {
       await assert.rejects(validateUpstream({
         copilotBaseUrl: mock.baseUrl, copilotToken: "test-token", host: "127.0.0.1",

@@ -20,6 +20,8 @@ class PublishWikiTests(unittest.TestCase):
         self.home = self.root / "home"
         for directory in (self.source, self.destination, self.home):
             directory.mkdir()
+
+        # A private home for the child; Windows reads USERPROFILE rather than HOME.
         self.environment = dict(os.environ, HOME=str(self.home), USERPROFILE=str(self.home),
                                 PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8",
                                 PYTHONUTF8="1")
@@ -148,6 +150,7 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                         else:
                             self.write("Home.md", body, self.destination)
                             result = self.cli("verify", self.destination)
+
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn(target, result.stderr)
                         self.assertEqual(result.stdout, "")
@@ -211,10 +214,12 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                 self.assertEqual((self.destination / "Home.md").read_bytes(),
                                  example.replace("README.md", "Home").encode("utf-8"))
                 self.success("verify", self.destination)
+
                 self.write("README.md", example.replace("README.md", "Missing.md"))
                 result = self.cli("build", self.source, self.destination)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Missing.md", result.stderr)
+
                 self.write("Home.md", example.replace("README.md", "Missing"), self.destination)
                 result = self.cli("verify", self.destination)
                 self.assertNotEqual(result.returncode, 0)
@@ -236,6 +241,7 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                     else:
                         self.write("Home.md", body.replace("README.md", "Home"), self.destination)
                         result = self.cli("verify", self.destination)
+
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(diagnostic, result.stderr)
 
@@ -266,10 +272,12 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Missing.md", result.stderr)
                 self.assertEqual(list(self.destination.iterdir()), [])
+
                 self.write("Home.md", f"[{label}](Missing)\n", self.destination)
                 result = self.cli("verify", self.destination)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Missing", result.stderr)
+                # The next label's failed build must again leave the destination empty.
                 (self.destination / "Home.md").unlink()
 
     def test_code_spans_do_not_cross_paragraph_or_fence_boundaries(self):
@@ -302,6 +310,7 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Missing.md", result.stderr)
                 self.assertEqual(list(self.destination.iterdir()), [])
+
                 self.write("Home.md", definition + '\n[broken](Missing)\n`code`\n', self.destination)
                 result = self.cli("verify", self.destination)
                 self.assertNotEqual(result.returncode, 0)
@@ -341,7 +350,9 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
         git = self.destination / ".git"
         git.mkdir()
         (git / "config").write_text("repository metadata", encoding="utf-8")
+
         self.success("build", self.source, self.destination)
+
         self.assertFalse((self.destination / "Old.md").exists())
         self.assertEqual((self.destination / "keep.txt").read_text(), "not a wiki page")
         self.assertEqual((git / "config").read_text(), "repository metadata")
@@ -349,7 +360,9 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
     def test_unrelated_destination_is_not_treated_as_disposable(self):
         self.write("README.md", "# Home\n")
         self.write("Personal.md", "unrelated notes", self.destination)
+
         result = self.cli("build", self.source, self.destination)
+
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("destination", result.stderr)
         self.assertEqual((self.destination / "Personal.md").read_text(), "unrelated notes")
@@ -361,7 +374,9 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
         nested.mkdir()
         (nested / "Guide.md").write_text("not flat", encoding="utf-8")
         self.write("Home.md", "keep previous version", self.destination)
+
         result = self.cli("build", self.source, self.destination)
+
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("flat", result.stderr)
         self.assertEqual((self.destination / "Home.md").read_text(), "keep previous version")
@@ -372,7 +387,9 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
         nested = self.destination / "keep"
         nested.mkdir()
         (nested / "Guide.md").write_text("not disposable", encoding="utf-8")
+
         result = self.cli("build", self.source, self.destination)
+
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("flat", result.stderr)
         self.assertEqual((nested / "Guide.md").read_text(), "not disposable")
@@ -380,7 +397,9 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
 
     def test_source_and_destination_must_not_overlap(self):
         self.write("README.md", "# Home\n")
+
         result = self.cli("build", self.source, self.source)
+
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("overlap", result.stderr)
         self.assertEqual((self.source / "README.md").read_text(), "# Home\n")
@@ -393,6 +412,7 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(".md", result.stderr)
         self.assertEqual(list(self.destination.iterdir()), [])
+
         self.write("README.md", "# Home\n")
         self.write("Home.md", "# Colliding page\n")
         result = self.cli("build", self.source, self.destination)

@@ -28,8 +28,11 @@ export interface ProxyEnv {
   }
 }
 
+// Each snapshot's live config, so a model catalog fetched during a request also reaches later ones.
 const snapshotRoots = new WeakMap<ProxyConfig, ProxyConfig>()
 
+// Fields are frozen when the request arrives, except the token: auth refreshes it on the live
+// config, and a request that started before the refresh must still send the new one.
 export const snapshotProxyConfig = (config: ProxyConfig): ProxyConfig => {
   const snapshot = {
     ...config,
@@ -40,6 +43,7 @@ export const snapshotProxyConfig = (config: ProxyConfig): ProxyConfig => {
       return config.copilotTokenGeneration
     },
   }
+
   snapshotRoots.set(snapshot, snapshotRoots.get(config) ?? config)
   return snapshot
 }

@@ -16,12 +16,15 @@ test.afterEach(() => {
 
 test("native and legacy request efforts are honored without mutating the default", () => {
   runtimeState.thinkEffort = "high"
+
   for (const effort of ["none", "low", "medium", "high", "xhigh", "max"] as const) {
+    // The native output_config.effort wins over the legacy reasoning_effort field.
     for (const fields of [
       { output_config: { effort }, reasoning_effort: "low" as const },
       { reasoning_effort: effort },
     ]) {
       assert.equal(getRequestReasoningEffort(fields), effort)
+
       const translated = translateToOpenAI({
         model: "opus", max_tokens: 16, messages: [{ role: "user", content: "hello" }],
         ...fields,
@@ -38,8 +41,10 @@ test("missing or null request effort uses the configured then shipped default", 
     { output_config: { effort: null }, reasoning_effort: null },
   ]) {
     assert.equal(getRequestReasoningEffort(fields), undefined)
+
     runtimeState.thinkEffort = "medium"
     assert.equal(resolveReasoningEffort(getRequestReasoningEffort(fields)), "medium")
+
     delete runtimeState.thinkEffort
     assert.equal(resolveReasoningEffort(getRequestReasoningEffort(fields)), defaultReasoningEffort)
   }
@@ -47,6 +52,7 @@ test("missing or null request effort uses the configured then shipped default", 
 
 test("a null native effort allows a legacy override and explicit none is not absence", () => {
   runtimeState.thinkEffort = "max"
+
   assert.equal(getRequestReasoningEffort({ output_config: { effort: null }, reasoning_effort: "low" }), "low")
   assert.equal(resolveReasoningEffort(getRequestReasoningEffort({ output_config: { effort: "none" } })), "none")
 })
@@ -57,6 +63,9 @@ test("inline effort changes activate at the next user turn without mutating hist
   const low = { role: "system" as const, content: [], output_config: { effort: "low" as const } }
   const high = { role: "system" as const, content: [], output_config: { effort: "high" as const } }
   const max = { role: "system" as const, content: [], output_config: { effort: "max" as const } }
+
+  // A switch takes effect only at the next user turn. Until then the effort already
+  // in effect stays: the request's own (medium) until a first switch activates.
   const cases = [
     { messages: [low, user], expected: "low" },
     { messages: [user, assistant, high, user], expected: "high" },
@@ -70,9 +79,11 @@ test("inline effort changes activate at the next user turn without mutating hist
     { messages: [user, assistant, high, assistant], expected: "medium" },
     { messages: [high, user, assistant, low, assistant], expected: "high" },
   ]
+
   for (const { messages, expected } of cases) {
     const payload = { model: "opus", max_tokens: 16, output_config: { effort: "medium" as const }, messages }
     const original = structuredClone(payload)
+
     assert.equal(translateToOpenAI(payload).reasoning_effort, expected)
     assert.deepEqual(payload, original)
   }
@@ -80,6 +91,7 @@ test("inline effort changes activate at the next user turn without mutating hist
 
 test("an active inline effort overrides initial request fields and defaults", () => {
   runtimeState.thinkEffort = "max"
+
   for (const fields of [
     {}, { output_config: null }, { output_config: { effort: null } },
     { reasoning_effort: "low" as const },
@@ -96,6 +108,7 @@ test("an active inline effort overrides initial request fields and defaults", ()
           { role: "user" as const, content: "Next turn." },
         ],
       }
+
       assert.equal(translateToOpenAI(payload).reasoning_effort, effort)
       assert.equal(runtimeState.thinkEffort, "max")
     }

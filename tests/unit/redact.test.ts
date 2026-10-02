@@ -84,6 +84,7 @@ test("does not throw on a value that is not a url", () => {
 test("strips ansi escapes and control bytes from terminal output", () => {
   const injected = "\u001B[2K\rhealth     ok\u0007"
   const cleaned = sanitizeTerminalString(injected)
+
   assert.ok(!cleaned.includes("\u001B"))
   assert.ok(!cleaned.includes("\r"))
   assert.ok(!cleaned.includes("\u0007"))
@@ -123,6 +124,7 @@ test("redacts everything after the origin for a registered origin", () => {
     scrubSensitiveUrls(`base https://${host}/tenant/token-ABC`),
     `base https://${host}[redacted]`,
   )
+
   // The appended endpoint case: chat.ts fetches `${base}/chat/completions`.
   assert.equal(
     scrubSensitiveUrls(`GET https://${host}/tenant/token-ABC/models -> 500`),
@@ -140,6 +142,7 @@ test("matches canonicalized host and default-port variants", () => {
   const scrubbed = scrubSensitiveUrls(
     `url: https://${host}/tenant/SECRET/chat/completions`,
   )
+
   assert.ok(!scrubbed.includes("SECRET"))
   assert.ok(scrubbed.includes("[redacted]"))
 })
@@ -151,6 +154,7 @@ test("redacts a url whose fragment fetch already dropped", () => {
   registerSensitiveOrigin(`https://${host}/base#FRAGSECRET`)
 
   const scrubbed = scrubSensitiveUrls(`url: https://${host}/base/models`)
+
   assert.ok(!scrubbed.includes("FRAGSECRET"))
   assert.equal(scrubbed, `url: https://${host}[redacted]`)
 })
@@ -168,6 +172,7 @@ test("keeps old policies after registering a new one, idempotently", () => {
   const scrubbed = scrubSensitiveUrls(
     `old=https://${oldHost}/tenant/OLD_SECRET new=https://${newHost}/tenant/NEW_SECRET`,
   )
+
   assert.ok(!scrubbed.includes("OLD_SECRET"))
   assert.ok(!scrubbed.includes("NEW_SECRET"))
   assert.equal(
@@ -225,16 +230,21 @@ for (const [name, separator] of [
     const origin = `https://${uniqueHost("escaped-adjacent")}`
     const publicUrl = "https://public.fixture.invalid/a"
     registerSensitiveOrigin(`${origin}/ESCAPED_SECRET`)
+
     const input = `${publicUrl}${separator}${origin}/ESCAPED_SECRET`
     const expected = `${publicUrl}${separator}${origin}[redacted]`
 
     assert.equal(scrubSensitiveUrls(input), expected)
     assert.equal(scrubSensitiveUrls(expected), expected)
+
     const unregistered = `${publicUrl}${separator}https://other.fixture.invalid/KEEP_ME`
     assert.equal(scrubSensitiveUrls(unregistered), unregistered)
   })
 }
 
+// Why: a registered URL can arrive as a redirect target inside a public URL's
+// query and must still be found there. Once a registered URL matches, its whole
+// tail goes, including any URL nested inside it.
 test("redacts an inner query URL while a registered outer URL hides its whole tail", () => {
   const inner = `https://${uniqueHost("query-inner")}`
   const outer = `https://${uniqueHost("query-outer")}`
@@ -244,8 +254,10 @@ test("redacts an inner query URL while a registered outer URL hides its whole ta
   const prefix = "http://public.fixture.invalid/?next=https://middle.fixture.invalid/?target="
   const input = `${prefix}${inner.toUpperCase()}/INNER_SECRET?token=!!!`
   const expected = `${prefix}${inner}[redacted]`
+
   assert.equal(scrubSensitiveUrls(input), expected)
   assert.equal(scrubSensitiveUrls(expected), expected)
+
   assert.equal(
     scrubSensitiveUrls(`${outer}/OUTER_SECRET?next=${inner}/INNER_SECRET`),
     `${outer}[redacted]`,
@@ -271,7 +283,6 @@ test("is pure: repeated calls agree and inputs are unchanged", () => {
   // Already-scrubbed text is stable under a second pass.
   assert.equal(scrubSensitiveUrls(first), first)
 })
-
 
 // Why: normalizeCopilotBaseUrl accepts `https://host\tenant\TOKEN` - WHATWG
 // folds the backslashes into the path, so there is no userinfo and the scheme

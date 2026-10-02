@@ -9,6 +9,7 @@ import type { CopilotModel } from "../../src/copilot/models"
 import type { ProxyConfig } from "../../src/lib/config"
 import type { RecordedRequest } from "../../src/lib/request-trace"
 
+// src/ resolves its paths from the home directory at import time, so redirect it before importing.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-catalog-routing-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
@@ -33,7 +34,9 @@ test.afterEach(() => {
   delete runtimeState.upstreamBaseUrl
 })
 
-// The endpoint combinations are synthetic capabilities, not a live catalog snapshot.
+// Chat models that routing by name once skipped as "Unsupported route"; each must now follow the
+// endpoints its catalog entry advertises. The endpoint combinations are synthetic capabilities,
+// not a live catalog snapshot.
 const skippedModels = [
   "gpt-5.3-codex",
   "gpt-5.4-mini",
@@ -46,6 +49,7 @@ const skippedModels = [
   "mai-code-1.1-flash",
   "future-chat-model",
 ]
+
 const baseUrl = "https://catalog-routing.invalid"
 
 const configFor = (id: string, capabilities: CopilotModel): ProxyConfig => ({
@@ -161,24 +165,31 @@ for (const id of skippedModels) {
         })
         const sent: RecordedRequest[] = []
 
-        await withRecordedTransport({
-          fetch: async (request) => {
-            sent.push(request)
-            assert.equal(request.path, endpoint)
+        await withRecordedTransport(
+          {
+            fetch: async (request) => {
+              sent.push(request)
+              assert.equal(request.path, endpoint)
 
-            const body = JSON.parse(request.body!)
-            assert.equal(body.model, id)
-            assert.equal(endpoint === "/responses" ? body.reasoning?.effort : body.reasoning_effort, "low")
+              const body = JSON.parse(request.body!)
+              assert.equal(body.model, id)
+              // Responses nests the effort under `reasoning`; Chat Completions sends it top-level.
+              assert.equal(
+                endpoint === "/responses" ? body.reasoning?.effort : body.reasoning_effort,
+                "low",
+              )
 
-            return reply(request)
+              return reply(request)
+            },
+            refresh: async () => {
+              throw new Error("Unexpected refresh")
+            },
           },
-          refresh: async () => {
-            throw new Error("Unexpected refresh")
+          async () => {
+            const response = await post(config, { stream, output_config: { effort: "low" } })
+            await assertReply(response, id, stream)
           },
-        }, async () => {
-          const response = await post(config, { stream, output_config: { effort: "low" } })
-          await assertReply(response, id, stream)
-        })
+        )
 
         assert.equal(sent.length, 1)
       })
@@ -193,26 +204,29 @@ for (const id of skippedModels) {
       const config = configFor(id, {})
       const sent: RecordedRequest[] = []
 
-      await withRecordedTransport({
-        fetch: async (request) => {
-          if (request.path === "/models") {
-            return Response.json({ data: [
-              {
-                id,
-                supported_endpoints: [endpoint],
-                capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } },
-              },
-              { id: "claude-fixture", supported_endpoints: ["/chat/completions"] },
-            ] })
-          }
+      await withRecordedTransport(
+        {
+          fetch: async (request) => {
+            if (request.path === "/models") {
+              return Response.json({ data: [
+                {
+                  id,
+                  supported_endpoints: [endpoint],
+                  capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } },
+                },
+                { id: "claude-fixture", supported_endpoints: ["/chat/completions"] },
+              ] })
+            }
 
-          sent.push(request)
-          return reply(request)
+            sent.push(request)
+            return reply(request)
+          },
+          refresh: async () => {
+            throw new Error("Unexpected refresh")
+          },
         },
-        refresh: async () => {
-          throw new Error("Unexpected refresh")
-        },
-      }, () => validateUpstream(config, "low"))
+        () => validateUpstream(config, "low"),
+      )
 
       const sentSummary = sent.map((request) => {
         const body = JSON.parse(request.body!)
@@ -239,22 +253,25 @@ for (const endpoint of ["/chat/completions", "/responses", "/v1/messages"] as co
     runtimeState.modelRouting = { gptModel: id, opusModel: id }
     runtimeState.thinkEffort = "max"
 
-    await withRecordedTransport({
-      fetch: async (request) => {
-        requestCount++
-        assert.equal(request.path, endpoint)
+    await withRecordedTransport(
+      {
+        fetch: async (request) => {
+          requestCount++
+          assert.equal(request.path, endpoint)
 
-        const body = JSON.parse(request.body!)
-        assert.equal(body.reasoning_effort, undefined)
-        assert.equal(body.reasoning, undefined)
-        assert.equal(body.output_config?.effort, undefined)
+          const body = JSON.parse(request.body!)
+          assert.equal(body.reasoning_effort, undefined)
+          assert.equal(body.reasoning, undefined)
+          assert.equal(body.output_config?.effort, undefined)
 
-        return reply(request)
+          return reply(request)
+        },
+        refresh: async () => {},
       },
-      refresh: async () => {},
-    }, async () => {
-      await assertReply(await post(config), id, false)
-    })
+      async () => {
+        await assertReply(await post(config), id, false)
+      },
+    )
 
     assert.equal(requestCount, 1)
   })
@@ -271,19 +288,23 @@ for (const endpoint of ["/chat/completions", "/responses", "/v1/messages"] as co
 
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-        await withRecordedTransport({
-          fetch: async (request) => {
-            requestCount++
-            return reply(request)
+        await withRecordedTransport(
+          {
+            fetch: async (request) => {
+              requestCount++
+              return reply(request)
+            },
+            refresh: async () => {},
           },
-          refresh: async () => {},
-        }, async () => {
-          const response = await post(config, { stream, output_config: { effort } })
+          async () => {
+            const response = await post(config, { stream, output_config: { effort } })
 
-          assert.equal(response.status, 400)
-          assert.match(response.headers.get("content-type") ?? "", /application\/json/)
-          assert.match(await response.text(), /relay_unsupported_effort/)
-        })
+            assert.equal(response.status, 400)
+            // A JSON body, not an SSE error event: the rejection comes before any stream opens.
+            assert.match(response.headers.get("content-type") ?? "", /application\/json/)
+            assert.match(await response.text(), /relay_unsupported_effort/)
+          },
+        )
 
         assert.equal(requestCount, 0)
       })
@@ -309,50 +330,55 @@ for (const { id, endpoint, claudeUpstreamApi } of noEffortPreflightCases) {
       infoLines.push(String(message))
     })
 
-    await withRecordedTransport({
-      fetch: async (request) => {
-        if (request.path === "/models") {
-          return Response.json({ data: [
-            {
-              id,
-              supported_endpoints: [endpoint],
-              capabilities: { type: "chat", supports: { reasoning_effort: false } },
-            },
-            { id: "claude-fixture", supported_endpoints: ["/chat/completions"] },
-          ] })
-        }
-
-        const body = JSON.parse(request.body!)
-
-        if (body.model === id) {
-          // Neither protocol may carry an effort field the model does not accept.
-          assert.equal(request.path, endpoint)
-          assert.equal(body.reasoning_effort, undefined)
-          assert.equal(body.reasoning, undefined)
-          assert.equal(body.output_config, undefined)
-
-          if (rejectTarget) {
-            return Response.json({ error: { message: "fixture rejection" } }, { status: 400 })
+    await withRecordedTransport(
+      {
+        fetch: async (request) => {
+          if (request.path === "/models") {
+            return Response.json({ data: [
+              {
+                id,
+                supported_endpoints: [endpoint],
+                capabilities: { type: "chat", supports: { reasoning_effort: false } },
+              },
+              { id: "claude-fixture", supported_endpoints: ["/chat/completions"] },
+            ] })
           }
-        }
 
-        return reply(request)
+          const body = JSON.parse(request.body!)
+
+          if (body.model === id) {
+            // Neither protocol may carry an effort field the model does not accept.
+            assert.equal(request.path, endpoint)
+            assert.equal(body.reasoning_effort, undefined)
+            assert.equal(body.reasoning, undefined)
+            assert.equal(body.output_config, undefined)
+
+            if (rejectTarget) {
+              return Response.json({ error: { message: "fixture rejection" } }, { status: 400 })
+            }
+          }
+
+          return reply(request)
+        },
+        refresh: async () => {},
       },
-      refresh: async () => {},
-    }, async () => {
-      await validateUpstream(config, "low")
+      async () => {
+        await validateUpstream(config, "low")
 
-      // A failure must name the effort actually sent, not the configured default.
-      rejectTarget = true
-      await assert.rejects(
-        validateUpstream(config, "low"),
-        new RegExp(`Preflight failed for model=${id} think_effort=omitted: 400`),
-      )
-    })
+        // A failure must name the effort actually sent, not the configured default.
+        rejectTarget = true
+        await assert.rejects(
+          validateUpstream(config, "low"),
+          new RegExp(`Preflight failed for model=${id} think_effort=omitted: 400`),
+        )
+      },
+    )
 
     // Both the preflight summary and the per-request model line report the omission.
     assert(infoLines.some((line) => line.includes(`Preflight OK: model=${id} think_effort=omitted`)))
-    assert(infoLines.some((line) => line.includes(`upstream_model=${id}`) && line.includes("effective_think_effort=omitted")))
+    assert(infoLines.some(
+      (line) => line.includes(`upstream_model=${id}`) && line.includes("effective_think_effort=omitted"),
+    ))
     assert(!infoLines.some((line) => line.includes("effective_think_effort=unset")))
   })
 }
@@ -364,20 +390,23 @@ test("an admitted missing-model snapshot is not rediscovered after SSE opens", a
 
   runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-  await withRecordedTransport({
-    fetch: async (request) => {
-      paths.push(request.path)
+  await withRecordedTransport(
+    {
+      fetch: async (request) => {
+        paths.push(request.path)
 
-      if (request.path === "/models") {
-        return Response.json({ data: [{ id: "previous-model" }] })
-      }
+        if (request.path === "/models") {
+          return Response.json({ data: [{ id: "previous-model" }] })
+        }
 
-      return reply(request)
+        return reply(request)
+      },
+      refresh: async () => {},
     },
-    refresh: async () => {},
-  }, async () => {
-    await assertReply(await post(config, { stream: true }), id, true)
-  })
+    async () => {
+      await assertReply(await post(config, { stream: true }), id, true)
+    },
+  )
 
   assert.deepEqual(paths, ["/models", "/chat/completions"])
 })
@@ -402,24 +431,27 @@ for (const endpoint of ["/chat/completions", "/responses"] as const) {
       const sent: RecordedRequest[] = []
       let refreshes = 0
 
-      await withRecordedTransport({
-        fetch: async (request) => {
-          sent.push(request)
+      await withRecordedTransport(
+        {
+          fetch: async (request) => {
+            sent.push(request)
 
-          // Reject the first attempt as an expired token and accept the replay.
-          if (sent.length === 1) {
-            return new Response("unauthorized", { status: 401 })
-          }
+            // Reject the first attempt as an expired token and accept the replay.
+            if (sent.length === 1) {
+              return new Response("unauthorized", { status: 401 })
+            }
 
-          return reply(request)
+            return reply(request)
+          },
+          refresh: async () => {
+            refreshes++
+          },
         },
-        refresh: async () => {
-          refreshes++
+        async () => {
+          const response = await post(config, { stream, output_config: { effort: "low" } })
+          await assertReply(response, id, stream)
         },
-      }, async () => {
-        const response = await post(config, { stream, output_config: { effort: "low" } })
-        await assertReply(response, id, stream)
-      })
+      )
 
       // One refresh, then the same endpoint with a byte-identical body: no catalog
       // rediscovery, no route re-selection and the same resolved effort.
@@ -432,7 +464,7 @@ for (const endpoint of ["/chat/completions", "/responses"] as const) {
 
 test("provider reload cannot change an admitted Responses search final pass", async () => {
   const id = "future-chat-model"
-  const root = configFor(id, {
+  const config = configFor(id, {
     supportedEndpoints: ["/responses"],
     reasoningEfforts: ["low"],
     limits: {
@@ -441,85 +473,90 @@ test("provider reload cannot change an admitted Responses search final pass", as
       max_output_tokens: 64,
     },
   })
-  root.webSearchBackend = id
+  config.webSearchBackend = id
+
   runtimeState.modelRouting = { gptModel: id, opusModel: id }
   runtimeState.thinkEffort = "low"
 
-  const app = createServer(root)
+  const app = createServer(config)
   const sent: Array<{ path: string; body: Record<string, any> }> = []
 
-  await withRecordedTransport({
-    fetch: async (request) => {
-      const body = JSON.parse(request.body!)
-      sent.push({ path: request.path, body })
+  await withRecordedTransport(
+    {
+      fetch: async (request) => {
+        const body = JSON.parse(request.body!)
+        sent.push({ path: request.path, body })
 
-      if (sent.length === 1) {
-        // Reload after admission, while the decision stream still owns the old snapshot.
-        root.copilotBaseUrl = "https://new-provider.invalid"
-        root.modelCatalog = {
-          baseUrl: root.copilotBaseUrl,
-          models: new Map([[id, {
-            supportedEndpoints: ["/chat/completions"],
-            reasoningEfforts: [],
-          }]]),
-        }
-        runtimeState.thinkEffort = "high"
-        runtimeState.modelRouting = { gptModel: "other-model", opusModel: "other-model" }
+        if (sent.length === 1) {
+          // Reload after admission, while the decision stream still owns the old snapshot.
+          config.copilotBaseUrl = "https://new-provider.invalid"
+          config.modelCatalog = {
+            baseUrl: config.copilotBaseUrl,
+            models: new Map([[id, {
+              supportedEndpoints: ["/chat/completions"],
+              reasoningEfforts: [],
+            }]]),
+          }
+          runtimeState.thinkEffort = "high"
+          runtimeState.modelRouting = { gptModel: "other-model", opusModel: "other-model" }
 
-        return sse([
-          { type: "response.created", response: { id: "resp_search_decision", model: id, output: [] } },
-          {
-            type: "response.completed",
-            response: {
-              id: "resp_search_decision",
-              model: id,
-              status: "completed",
-              output: [{
-                type: "function_call",
-                id: "fc_search",
-                call_id: "call_search",
-                name: "WebSearch",
-                arguments: '{"query":"fixture"}',
-              }],
+          return sse([
+            { type: "response.created", response: { id: "resp_search_decision", model: id, output: [] } },
+            {
+              type: "response.completed",
+              response: {
+                id: "resp_search_decision",
+                model: id,
+                status: "completed",
+                output: [{
+                  type: "function_call",
+                  id: "fc_search",
+                  call_id: "call_search",
+                  name: "WebSearch",
+                  arguments: '{"query":"fixture"}',
+                }],
+              },
             },
-          },
-        ])
-      }
+          ])
+        }
 
-      if (body.tools?.some((tool: { type: string }) => tool.type === "web_search_preview")) {
-        return Response.json({
-          id: "resp_retrieval",
-          model: id,
-          status: "completed",
-          output: [
-            { type: "web_search_call", status: "completed", action: { query: "fixture" } },
-            { type: "message", content: [{ type: "output_text", text: "Source https://example.com/reference" }] },
-          ],
-        })
-      }
+        if (body.tools?.some((tool: { type: string }) => tool.type === "web_search_preview")) {
+          return Response.json({
+            id: "resp_retrieval",
+            model: id,
+            status: "completed",
+            output: [
+              { type: "web_search_call", status: "completed", action: { query: "fixture" } },
+              { type: "message", content: [{ type: "output_text", text: "Source https://example.com/reference" }] },
+            ],
+          })
+        }
 
-      return reply(request)
+        return reply(request)
+      },
+      refresh: async () => {},
     },
-    refresh: async () => {},
-  }, async () => {
-    const response = await app.fetch(new Request("http://localhost/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "sonnet",
-        stream: true,
-        max_tokens: 128,
-        messages: [{ role: "user", content: "Find a reference" }],
-        tools: [{
-          name: "WebSearch",
-          input_schema: { type: "object", properties: { query: { type: "string" } } },
-        }],
-      }),
-    }))
+    async () => {
+      const response = await app.fetch(new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "sonnet",
+          stream: true,
+          max_tokens: 128,
+          messages: [{ role: "user", content: "Find a reference" }],
+          tools: [{
+            name: "WebSearch",
+            input_schema: { type: "object", properties: { query: { type: "string" } } },
+          }],
+        }),
+      }))
 
-    await assertReply(response, id, true)
-  })
+      await assertReply(response, id, true)
+    },
+  )
 
+  // The decision, retrieval and final passes all keep the admitted route, model and effort.
   assert.equal(sent.length, 3)
 
   for (const request of sent) {
@@ -530,7 +567,7 @@ test("provider reload cannot change an admitted Responses search final pass", as
 
   assert.equal(sent[0].body.max_output_tokens, 64)
   assert.equal(sent[2].body.max_output_tokens, 64)
-  assert.equal(root.copilotBaseUrl, "https://new-provider.invalid")
+  assert.equal(config.copilotBaseUrl, "https://new-provider.invalid")
 })
 
 const fallbackEndpointCases = [
@@ -556,56 +593,63 @@ for (const mode of [undefined, "chat-completions", "auto"] as const) {
 
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-        await withRecordedTransport({
-          fetch: async (request) => {
-            sent.push(request)
+        await withRecordedTransport(
+          {
+            fetch: async (request) => {
+              sent.push(request)
 
-            if (request.path === "/responses") {
-              return reply(request)
-            }
+              if (request.path === "/responses") {
+                return reply(request)
+              }
 
-            const response = new Response(new ReadableStream({
-              start(controller) {
-                controller.enqueue(errorBytes)
-              },
-              cancel() {
-                cancelled = true
-              },
-            }), { status: 400, headers: { "content-type": "application/json" } })
+              const response = new Response(
+                new ReadableStream({
+                  start(controller) {
+                    controller.enqueue(errorBytes)
+                  },
+                  cancel() {
+                    cancelled = true
+                  },
+                }),
+                { status: 400, headers: { "content-type": "application/json" } },
+              )
 
-            // Isolate cancellation from tee behavior; real HTTP capture/replay tests cover tees.
-            Object.defineProperty(response, "clone", {
-              value: () => new Response(errorBytes, { status: 400, headers: response.headers }),
+              // Isolate cancellation from tee behavior; real HTTP capture/replay tests cover tees.
+              Object.defineProperty(response, "clone", {
+                value: () => new Response(errorBytes, { status: 400, headers: response.headers }),
+              })
+
+              return response
+            },
+            refresh: async () => {},
+          },
+          async () => {
+            const allowsFallback = (!isClaude || mode === "auto")
+              && (endpoints === undefined || endpoints.includes("/responses"))
+            const run = () => createChatCompletions(config, {
+              model: id,
+              max_tokens: 16,
+              messages: [{ role: "user", content: "fixture" }],
             })
 
-            return response
+            if (allowsFallback) {
+              const result = await run()
+
+              assert("choices" in result)
+              assert.equal(result.choices[0]?.message.content, "OK")
+              // The error body never closes; falling back must cancel it, not leave it open.
+              assert.equal(cancelled, true)
+            } else {
+              await assert.rejects(run(), error => error instanceof Error && "response" in error)
+            }
+
+            const expectedPaths = allowsFallback
+              ? ["/chat/completions", "/responses"]
+              : ["/chat/completions"]
+
+            assert.deepEqual(sent.map((request) => request.path), expectedPaths)
           },
-          refresh: async () => {},
-        }, async () => {
-          const allowsFallback = (!isClaude || mode === "auto")
-            && (endpoints === undefined || endpoints.includes("/responses"))
-          const run = () => createChatCompletions(config, {
-            model: id,
-            max_tokens: 16,
-            messages: [{ role: "user", content: "fixture" }],
-          })
-
-          if (allowsFallback) {
-            const result = await run()
-
-            assert("choices" in result)
-            assert.equal(result.choices[0]?.message.content, "OK")
-            assert.equal(cancelled, true)
-          } else {
-            await assert.rejects(run(), error => error instanceof Error && "response" in error)
-          }
-
-          const expectedPaths = allowsFallback
-            ? ["/chat/completions", "/responses"]
-            : ["/chat/completions"]
-
-          assert.deepEqual(sent.map((request) => request.path), expectedPaths)
-        })
+        )
       })
     }
   }
@@ -619,46 +663,49 @@ for (const outcome of ["http-400", "refusal", "partial-stream"]) {
 
     runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-    await withRecordedTransport({
-      fetch: async (request) => {
-        paths.push(request.path)
+    await withRecordedTransport(
+      {
+        fetch: async (request) => {
+          paths.push(request.path)
+
+          if (outcome === "http-400") {
+            return Response.json({ error: { code: "invalid_parameter" } }, { status: 400 })
+          }
+
+          if (outcome === "partial-stream") {
+            return sse([{
+              id: "partial",
+              model: id,
+              choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }],
+            }])
+          }
+
+          return Response.json({
+            id: "refused",
+            model: id,
+            choices: [{
+              index: 0,
+              message: { role: "assistant", content: "Refused" },
+              finish_reason: "content_filter",
+            }],
+          })
+        },
+        refresh: async () => {},
+      },
+      async () => {
+        const response = await post(config, { stream: outcome === "partial-stream" })
+        const body = await response.text()
 
         if (outcome === "http-400") {
-          return Response.json({ error: { code: "invalid_parameter" } }, { status: 400 })
+          assert.equal(response.status, 400)
+        } else if (outcome === "refusal") {
+          assert.match(body, /"stop_reason":"refusal"/)
+        } else {
+          assert.match(body, /event: error/)
+          assert.doesNotMatch(body, /event: message_stop/)
         }
-
-        if (outcome === "partial-stream") {
-          return sse([{
-            id: "partial",
-            model: id,
-            choices: [{ index: 0, delta: { content: "Partial" }, finish_reason: null }],
-          }])
-        }
-
-        return Response.json({
-          id: "refused",
-          model: id,
-          choices: [{
-            index: 0,
-            message: { role: "assistant", content: "Refused" },
-            finish_reason: "content_filter",
-          }],
-        })
       },
-      refresh: async () => {},
-    }, async () => {
-      const response = await post(config, { stream: outcome === "partial-stream" })
-      const body = await response.text()
-
-      if (outcome === "http-400") {
-        assert.equal(response.status, 400)
-      } else if (outcome === "refusal") {
-        assert.match(body, /"stop_reason":"refusal"/)
-      } else {
-        assert.match(body, /event: error/)
-        assert.doesNotMatch(body, /event: message_stop/)
-      }
-    })
+    )
 
     assert.deepEqual(paths, ["/chat/completions"])
   })
@@ -699,24 +746,27 @@ for (const position of ["active", "pending", "clear-at"] as const) {
 
       runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-      await withRecordedTransport({
-        fetch: async (request) => {
-          requestCount++
-          return reply(request)
+      await withRecordedTransport(
+        {
+          fetch: async (request) => {
+            requestCount++
+            return reply(request)
+          },
+          refresh: async () => {},
         },
-        refresh: async () => {},
-      }, async () => {
-        const response = await post(config, { messages, stream: true })
-        const text = await response.text()
+        async () => {
+          const response = await post(config, { messages, stream: true })
+          const text = await response.text()
 
-        assert.equal(response.status, rejection ? 400 : 200)
+          assert.equal(response.status, rejection ? 400 : 200)
 
-        if (rejection) {
-          assert.match(text, rejection)
-        } else {
-          assert.match(text, /event: message_stop/)
-        }
-      })
+          if (rejection) {
+            assert.match(text, rejection)
+          } else {
+            assert.match(text, /event: message_stop/)
+          }
+        },
+      )
 
       assert.equal(requestCount, rejection ? 0 : 1)
     })
@@ -730,33 +780,36 @@ test("catalog Responses preserves cache key and prefix across appended turns and
     reasoningEfforts: ["low", "high"],
   })
   const sent: Array<Record<string, any>> = []
-  const first = [{ role: "user" as const, content: "First turn" }]
-  const next = [
-    ...first,
+  const firstHistory = [{ role: "user" as const, content: "First turn" }]
+  const appendedHistory = [
+    ...firstHistory,
     { role: "assistant" as const, content: "OK" },
     { role: "user" as const, content: "Next turn" },
   ]
 
   runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-  await withRecordedTransport({
-    fetch: async (request) => {
-      sent.push(JSON.parse(request.body!))
-      return reply(request)
+  await withRecordedTransport(
+    {
+      fetch: async (request) => {
+        sent.push(JSON.parse(request.body!))
+        return reply(request)
+      },
+      refresh: async () => {},
     },
-    refresh: async () => {},
-  }, async () => {
-    for (const [messages, effort] of [[first, "low"], [next, "high"]] as const) {
-      const response = await post(config, {
-        messages,
-        output_config: { effort },
-        metadata: { user_id: "fixture-session" },
-        system: "Stable prefix",
-      })
+    async () => {
+      for (const [messages, effort] of [[firstHistory, "low"], [appendedHistory, "high"]] as const) {
+        const response = await post(config, {
+          messages,
+          output_config: { effort },
+          metadata: { user_id: "fixture-session" },
+          system: "Stable prefix",
+        })
 
-      await assertReply(response, id, false)
-    }
-  })
+        await assertReply(response, id, false)
+      }
+    },
+  )
 
   assert.equal(sent[0].prompt_cache_key, sent[1].prompt_cache_key)
   assert.match(sent[0].prompt_cache_key, /^cr-/)
@@ -773,21 +826,24 @@ for (const stream of [false, true]) {
 
     runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-    await withRecordedTransport({
-      fetch: async (request) => {
-        requestCount++
-        return reply(request)
+    await withRecordedTransport(
+      {
+        fetch: async (request) => {
+          requestCount++
+          return reply(request)
+        },
+        refresh: async () => {},
       },
-      refresh: async () => {},
-    }, async () => {
-      const response = await post(config, { stream })
-      const body = await response.text()
+      async () => {
+        const response = await post(config, { stream })
+        const body = await response.text()
 
-      assert.equal(response.status, 400)
-      assert.match(response.headers.get("content-type") ?? "", /application\/json/)
-      assert.match(body, /relay_unsupported_endpoint/)
-      assert.match(body, /protocol-policy-conflict/)
-    })
+        assert.equal(response.status, 400)
+        assert.match(response.headers.get("content-type") ?? "", /application\/json/)
+        assert.match(body, /relay_unsupported_endpoint/)
+        assert.match(body, /protocol-policy-conflict/)
+      },
+    )
 
     assert.equal(requestCount, 0)
   })
@@ -806,24 +862,28 @@ for (const [capabilities, reason] of incompatibleModels) {
       const id = "incompatible-model"
       const config = configFor(id, {
         ...capabilities,
+        // The `as const` case list is readonly; the catalog entry takes a mutable copy.
         supportedEndpoints: [...capabilities.supportedEndpoints],
       })
       let requestCount = 0
 
       runtimeState.modelRouting = { gptModel: id, opusModel: id }
 
-      await withRecordedTransport({
-        fetch: async (request) => {
-          requestCount++
-          return reply(request)
+      await withRecordedTransport(
+        {
+          fetch: async (request) => {
+            requestCount++
+            return reply(request)
+          },
+          refresh: async () => {},
         },
-        refresh: async () => {},
-      }, async () => {
-        const response = await post(config, { stream })
+        async () => {
+          const response = await post(config, { stream })
 
-        assert.equal(response.status, 400)
-        assert.match(await response.text(), new RegExp(reason))
-      })
+          assert.equal(response.status, 400)
+          assert.match(await response.text(), new RegExp(reason))
+        },
+      )
 
       assert.equal(requestCount, 0)
     })

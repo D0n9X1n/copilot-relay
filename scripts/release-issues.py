@@ -40,9 +40,14 @@ def require(condition, message):
 
 
 def repository(value):
-    require(isinstance(value, str) and re.fullmatch(
-        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}", value)
-        and value.split("/")[1] not in (".", ".."), "invalid owner/repo")
+    # Owner names are at most 39 characters, as on GitHub. A repository named "."
+    # or ".." would turn API endpoint paths into traversals.
+    require(
+        isinstance(value, str)
+        and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}", value)
+        and value.split("/")[1] not in (".", ".."),
+        "invalid owner/repo",
+    )
     return value
 
 
@@ -60,9 +65,11 @@ def timestamp(value):
     """Require timezone-qualified closure dates without inferring missing provenance."""
     require(isinstance(value, str), "missing manual closure provenance timestamp")
     try:
+        # fromisoformat() accepts a "Z" suffix only from Python 3.11.
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as error:
         raise Failure("invalid closure provenance timestamp") from error
+
     require(parsed.tzinfo is not None, "closure provenance timestamp needs timezone")
     return parsed
 
@@ -77,6 +84,8 @@ def terminate(process):
             pass
     else:
         try:
+            # Each child is started in its own session, as capture() does, so its
+            # pid is also its process group id.
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
@@ -85,8 +94,10 @@ def terminate(process):
             # reaped. Only a leader that is still running and cannot be signalled is a failure.
             if process.poll() is None:
                 raise
+
     if process.poll() is None:
         process.kill()
+
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired as error:
@@ -96,11 +107,17 @@ def terminate(process):
 def capture(command, timeout, cap, cwd=None):
     """Bound captured bytes while reading, not after an unbounded communicate()."""
     try:
-        process = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   start_new_session=os.name != "nt",
-                                   creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
     except OSError as error:
         raise Failure(f"cannot start {command[0]}: {error}") from error
+
     output = [bytearray(), bytearray()]
     exceeded = threading.Event()
     lock = threading.Lock()
@@ -110,16 +127,20 @@ def capture(command, timeout, cap, cwd=None):
             chunk = pipe.read(8192)
             if not chunk:
                 break
+
+            # One cap covers stdout and stderr together.
             with lock:
                 if sum(map(len, output)) + len(chunk) > cap:
                     exceeded.set()
                     return
+
                 output[index].extend(chunk)
 
     readers = [threading.Thread(target=drain, args=(i, pipe), daemon=True)
                for i, pipe in enumerate((process.stdout, process.stderr))]
     for reader in readers:
         reader.start()
+
     end = time.monotonic() + timeout
     clean_capture = False
     try:
@@ -127,7 +148,9 @@ def capture(command, timeout, cap, cwd=None):
             require(not exceeded.is_set(), "child output cap exceeded")
             if time.monotonic() >= end:
                 raise TimeoutError("child request timeout")
+
             exceeded.wait(min(0.01, max(0, end - time.monotonic())))
+
         require(not exceeded.is_set(), "child output cap exceeded")
         decoded = tuple(bytes(data).decode("utf-8", errors="strict") for data in output)
         clean_capture = True
@@ -139,8 +162,10 @@ def capture(command, timeout, cap, cwd=None):
         if not (os.name == "nt" and clean_capture and process.poll() is not None
                 and not exceeded.is_set() and not any(reader.is_alive() for reader in readers)):
             terminate(process)
+
         for reader in readers:
             reader.join(timeout=1)
+
         # Writers have closed through EOF or tree cleanup before closing readers.
         for pipe in (process.stdout, process.stderr):
             pipe.close()
@@ -165,9 +190,13 @@ class Api:
         key = (endpoint, tuple(sorted((fields or {}).items())))
         if key in self.cache:
             return self.cache[key]
+
         command = self.command + ["api", endpoint, "--include", "--hostname", "github.com"]
+        # Only number needs -F, which sends it as a JSON integer; -f keeps every other
+        # value a literal string.
         for key_name, value in (fields or {}).items():
             command += ["-F" if key_name == "number" else "-f", f"{key_name}={value}"]
+
         for attempt in range(3):
             require(self.requests < self.limits.max_requests, "API request cap exceeded")
             self.requests += 1
@@ -175,6 +204,8 @@ class Api:
             try:
                 code, raw, stderr = capture(command, min(self.limits.request_timeout, self.remaining()),
                                             self.limits.max_output)
+                # A failed exit with no HTTP response and a timeout on stderr is gh's own
+                # transport timeout.
                 if code != 0 and not raw.startswith("HTTP/") and re.search(
                         r"timed out|timeout|deadline exceeded", stderr, re.I):
                     raise TimeoutError("gh transport timeout")
@@ -195,23 +226,30 @@ class Api:
                         data = {}  # Gateway errors need no valid metadata body to retry.
                     else:
                         raise Failure("invalid API JSON/schema") from error
+
                 errors = data.get("errors") if isinstance(data, dict) else None
                 require(errors is None or isinstance(errors, list), "invalid GraphQL error schema")
                 message = data.get("message", "") if isinstance(data, dict) else ""
                 rate = (status in (403, 429) and bool(re.search(
                     r"rate.?limit|secondary rate|abuse detection", str(message), re.I)))
-                graph_rate = bool(errors) and all(isinstance(e, dict) and e.get("type") == "RATE_LIMITED" for e in errors)
+                graph_rate = bool(errors) and all(
+                    isinstance(e, dict) and e.get("type") == "RATE_LIMITED" for e in errors)
                 transient = status == 429 or 500 <= status <= 599 or rate or graph_rate
                 reason = f"API failure HTTP {status}" + (" rate limit" if rate or graph_rate else "")
                 if not transient:
-                    require(code == 0 and 200 <= status < 300 and not errors, reason + " (auth/metadata/schema)")
+                    require(code == 0 and 200 <= status < 300 and not errors,
+                            reason + " (auth/metadata/schema)")
+                    # A Link header with rel="next" means another page follows.
                     self.cache[key] = (data, 'rel="next"' in headers)
                     return self.cache[key]
+
             if attempt == 2:
                 raise Failure(reason + "; retries exhausted")
+
             delay = self.limits.retry_delay * (attempt + 1)
             require(self.remaining() > delay, "collector deadline exceeded before retry")
             time.sleep(delay)
+
         raise Failure("unreachable retry state")
 
     def associated(self, repo, sha):
@@ -221,8 +259,10 @@ class Api:
             require(isinstance(data, list), "invalid commit association schema")
             for item in data:
                 result.add(number(item["number"]))
+
             if not more:
                 return result
+
         raise Failure("commit association page cap exceeded")
 
     def nodes(self, repo, n, kind):
@@ -253,18 +293,23 @@ class Api:
               } }
             }'''
             field, connection_name = "issueOrPullRequest", "timelineItems"
+
         cursor, seen, nodes, identity = None, set(), [], None
         for _ in range(self.limits.max_pages):
             fields = dict(query=query, owner=owner, name=name, number=str(n))
             if cursor is not None:
                 fields["cursor"] = cursor
+
             data, _ = self.request("graphql", fields)
             item = data["data"]["repository"][field]
             require(isinstance(item, dict), f"unavailable {kind} metadata for {repo}#{n}")
             require(number(item["number"]) == n, "mismatched metadata identity")
+            # A PR nominated as an issue comes back without events; collect() skips it.
             if kind == "issue" and item.get("__typename") == "PullRequest":
                 return item, []
-            require(repository(item["repository"]["nameWithOwner"]).lower() == repo.lower(), "mismatched repository identity")
+
+            require(repository(item["repository"]["nameWithOwner"]).lower() == repo.lower(),
+                    "mismatched repository identity")
             require(kind == "pr" or item.get("__typename") == "Issue", "invalid issue type")
             current = {k: v for k, v in item.items() if k != connection_name}
             require(identity is None or identity == current, "metadata changed during pagination")
@@ -276,10 +321,12 @@ class Api:
             require(type(info["hasNextPage"]) is bool, "invalid pageInfo")
             if not info["hasNextPage"]:
                 return identity, nodes
+
             cursor = info["endCursor"]
             require(isinstance(cursor, str) and cursor and len(cursor) <= 1024 and cursor not in seen,
                     "invalid/repeated pagination cursor")
             seen.add(cursor)
+
         raise Failure(f"{kind} page cap exceeded")
 
 
@@ -294,10 +341,12 @@ def closing_references(message, repo):
     """Keywords nominate candidates; Refs, mentions, and PR numbers prove nothing."""
     result = set()
     for match in CLOSING.finditer(message):
+        # One keyword can introduce a list: "fixes #1, #2 and #3" nominates all three.
         while match:
             result.add((repository(match["repo"] or match["url_repo"] or repo),
                         number(int(match["number"] or match["url_number"]))))
             match = CONTINUATION.match(message, match.end())
+
     return result
 
 
@@ -316,6 +365,8 @@ def collect(repo, head, base="", api=None, cwd=None):
     if base:
         require(git("merge-base", "--is-ancestor", base, head, allow_failure=True) is not None,
                 "base is not an ancestor of head")
+
+    # One past the cap, so a range that exceeds it fails instead of being truncated.
     commits = git("rev-list", "--topo-order", f"--max-count={api.limits.max_commits + 1}",
                   f"{base}..{head}" if base else head).splitlines()
     require(len(commits) <= api.limits.max_commits, "commit range cap exceeded")
@@ -324,13 +375,17 @@ def collect(repo, head, base="", api=None, cwd=None):
     for sha in commits:
         messages[sha] = git("show", "-s", "--format=%B", sha)
         parents[sha] = git("show", "-s", "--format=%P", sha).split()
+        # The line git revert writes; reverting a merge continues it with ", reversing".
         markers = re.findall(r"^This reverts commit ([0-9a-f]{40})(?:\.|, reversing)$", messages[sha], re.M)
         require(len(markers) <= 1, "ambiguous canonical revert provenance")
         if markers:
             target = markers[0]
-            require(parents[sha] and git("merge-base", "--is-ancestor", target, parents[sha][0], allow_failure=True) is not None,
+            require(parents[sha]
+                    and git("merge-base", "--is-ancestor", target, parents[sha][0],
+                            allow_failure=True) is not None,
                     "canonical revert target is not an ancestor")
             reverts[sha] = target
+
     disabled = set()
 
     def effects(revert, target):
@@ -338,53 +393,67 @@ def collect(repo, head, base="", api=None, cwd=None):
         result = {target}
         target_parents = parents.get(target, [])
         if len(target_parents) > 1:
+            # Reverting a merge also undoes every commit it brought in over its mainline.
             mainlines = re.findall(r"^changes made to ([0-9a-f]{40})\.$", messages[revert], re.M)
             require(len(mainlines) == 1 and mainlines[0] in target_parents,
                     "ambiguous merge revert mainline provenance")
             introduced = git("rev-list", f"{mainlines[0]}..{target}").splitlines()
             result.update(introduced)
+
         return result & included
 
     for sha in commits:  # Reverse topological order visits undo operations first.
         if sha in reverts and sha not in disabled:
             disabled.symmetric_difference_update(effects(sha, reverts[sha]))
+
     active = included - disabled
     candidates, pulls = set(), {}
     for sha in commits:
         for n in api.associated(repo, sha):
             pulls.setdefault(n, set()).add(sha)
+
         if sha in active:
             candidates.update(closing_references(messages[sha], repo))
+
     reverted_pulls = {n for n, shas in pulls.items() if shas & disabled}
     for n in sorted(pulls):
         pr, links = api.nodes(repo, n, "pr")
         require(type(pr["merged"]) is bool, "invalid PR merged state")
         if not pr["merged"]:
             continue
+
         merge = oid(pr["mergeCommit"]["oid"])
         if merge not in active or n in reverted_pulls:
             continue
+
         for issue in links:
-            candidates.add((repository(issue["repository"]["nameWithOwner"]), number(issue["number"])))
+            candidates.add((repository(issue["repository"]["nameWithOwner"]),
+                            number(issue["number"])))
+
     # GitHub repository identity is case insensitive, including direct references.
     candidates = {(name.lower(), n) for name, n in candidates}
     selected, manual = [], []
     head_date = timestamp(git("show", "-s", "--format=%cI", head))
     base_date = timestamp(git("show", "-s", "--format=%cI", base)) if base else None
     for issue_repo, n in sorted(candidates):
+        # Candidates were lowercased for matching; restore this repository's own spelling.
         if issue_repo == repo.lower():
             issue_repo = repo
+
         issue, events = api.nodes(issue_repo, n, "issue")
         if issue["__typename"] == "PullRequest":
             continue
+
         require(isinstance(issue["title"], str) and issue["title"].strip(), "invalid issue title")
         closure_commits, manual_dates = [], []
         for event in events:
-            require(isinstance(event, dict) and event.get("__typename") == "ClosedEvent", "invalid closure event schema")
+            require(isinstance(event, dict) and event.get("__typename") == "ClosedEvent",
+                    "invalid closure event schema")
             closer = event["closer"]
             if closer is None:
                 manual_dates.append(timestamp(event.get("createdAt")))
                 continue
+
             require(isinstance(closer, dict), f"ambiguous closure provenance for {issue_repo}#{n}")
             closer_repo = repository(closer["repository"]["nameWithOwner"])
             if closer["__typename"] == "Commit":
@@ -397,21 +466,33 @@ def collect(repo, head, base="", api=None, cwd=None):
                     continue
             else:
                 raise Failure("unknown closure provenance")
+
             if closer_repo.lower() == repo.lower():
                 closure_commits.append(sha)
+
         # A prior shipped closure is not newly delivered merely because links changed.
-        prior = any(sha not in included and base and git("merge-base", "--is-ancestor", sha, base,
-                    allow_failure=True) is not None for sha in closure_commits)
+        prior = any(
+            sha not in included
+            and base
+            and git("merge-base", "--is-ancestor", sha, base, allow_failure=True) is not None
+            for sha in closure_commits
+        )
         manual_date = None
         if manual_dates:
             require(issue.get("state") in ("OPEN", "CLOSED"), "invalid manual closure state")
             if issue["state"] == "CLOSED":
                 closed_at = timestamp(issue.get("closedAt"))
                 # GitHub's issue and event timestamps may differ by one second.
-                matching = [date for date in manual_dates if abs((date - closed_at).total_seconds()) <= 1]
+                matching = [date for date in manual_dates
+                            if abs((date - closed_at).total_seconds()) <= 1]
                 require(len(matching) <= 1, "ambiguous current manual closure")
-                if matching and (base_date is None or base_date < matching[0]) and matching[0] <= head_date:
+                # Only a manual closure inside this release's commit-date window counts.
+                if (matching
+                        and (base_date is None or base_date < matching[0])
+                        and matching[0] <= head_date):
                     manual_date = matching[0]
+
+        # Titles are untrusted: keep each on one line and escape HTML and Markdown.
         title = " ".join(issue["title"].split())
         title = re.sub(r"([\\`*_{}\[\]()#+.!|~-])", r"\\\1", html.escape(title, quote=False))
         label = f"#{n}" if issue_repo.lower() == repo.lower() else f"{issue_repo}#{n}"
@@ -420,12 +501,18 @@ def collect(repo, head, base="", api=None, cwd=None):
             selected.append(entry)
         elif not prior and manual_date is not None:
             manual.append(f"{entry} (closed {manual_date.isoformat().replace('+00:00', 'Z')})")
-    notes = "## Resolved issues\n\n" + ("\n".join(selected) if selected else "No linked issues resolved in this release range.") + "\n"
+
+    notes = (
+        "## Resolved issues\n\n"
+        + ("\n".join(selected) if selected else "No linked issues resolved in this release range.")
+        + "\n"
+    )
     if manual:
         notes += ("\n## Manually closed issues (unverified release linkage)\n\n"
                   "These issues were nominated by changes in this range and manually closed during its commit-date window. "
                   "GitHub records no closing commit or PR for those events; they are not verified as resolved by this release.\n\n"
                   + "\n".join(manual) + "\n")
+
     return notes
 
 
@@ -435,11 +522,13 @@ def main():
     parser.add_argument("--head", required=True, help="exact release commit or tag; no tag creation required")
     parser.add_argument("--base", default="", help="exclusive ancestor commit/tag; omit for first release")
     args = parser.parse_args()
+
     try:
         notes = collect(args.repo, args.head, args.base, cwd=Path.cwd())
     except (Failure, KeyError, TypeError, ValueError, TimeoutError, RecursionError) as error:
         print(f"release issue lookup failed: {error}", file=sys.stderr)
         return 1
+
     print(notes, end="")
     return 0
 

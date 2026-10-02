@@ -113,6 +113,7 @@ const runWikiScript = (script: string, args: string[], home: string): void => {
 
 test("wiki publishing preserves code examples and verifies real navigation fixtures", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-wiki-fixtures-"))
+
   try {
     runWikiScript("publish-wiki_tests.py", [], home)
   } finally {
@@ -126,10 +127,12 @@ test("the actual publish script validates source and published navigation", () =
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "relay-wiki-publish-"))
   const destination = path.join(home, "wiki")
   fs.mkdirSync(destination)
+
   try {
     runWikiScript("publish-wiki.py", ["build", wikiDir, destination], home)
     assert.ok(fs.existsSync(path.join(destination, "Home.md")))
     assert.equal(fs.existsSync(path.join(destination, "README.md")), false)
+
     runWikiScript("publish-wiki.py", ["verify", destination], home)
   } finally {
     fs.rmSync(home, { recursive: true, force: true })
@@ -138,12 +141,14 @@ test("the actual publish script validates source and published navigation", () =
 
 test("wiki workflow and verification guides use the shared publishing script", () => {
   const workflow = fs.readFileSync(path.join(repoRoot, ".github/workflows/publish-wiki.yml"), "utf8")
+
   assert.match(workflow, /"scripts\/publish-wiki\.py"/)
   assert.match(workflow, /"scripts\/publish-wiki_tests\.py"/)
   assert.match(workflow, /actions\/setup-python@/)
   assert.match(workflow, /python3 scripts\/publish-wiki\.py build wiki wiki-repo/)
   assert.match(workflow, /python3 scripts\/publish-wiki\.py verify wiki-repo/)
   assert.doesNotMatch(workflow, /sed -i|find wiki-repo|cp wiki\/\*\.md/)
+
   for (const name of ["CLAUDE.md", "wiki/EN-Development.md", "wiki/ZH-Development.md"]) {
     const body = fs.readFileSync(path.join(repoRoot, name), "utf8")
     assert.ok(body.includes("python3 scripts/publish-wiki.py verify /tmp/relay-wiki"), name)
@@ -163,6 +168,8 @@ test("paired architecture guides use Mermaid for overview, request, and lifecycl
   for (const language of ["EN", "ZH"]) {
     const architecture = readPage(`${language}-Architecture.md`)
     const overview = readPage(`${language}-How-It-Works.md`)
+
+    // A checkout may carry either line ending, so each page is checked as LF and as CRLF.
     for (const body of [architecture, overview].flatMap(text => [
       text.replace(/\r\n/g, "\n"), text.replace(/\r?\n/g, "\r\n"),
     ])) {
@@ -258,7 +265,6 @@ test("CLAUDE.md names every public API surface the server registers", () => {
   }
 })
 
-
 // Why: /v1/models maps config and never contacts Copilot, so an expired token
 // or a denied model passes it. Telling a user with an auth/model-access error
 // to "re-check /v1/models" sends them to a probe that cannot detect the thing
@@ -305,6 +311,7 @@ test("Claude Code picker examples expose the same Opus and Astra choices in both
     const snippets = [...page.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)]
       .map((match) => JSON.parse(match[1]) as Record<string, any>)
     const settings = snippets.find((value) => value.modelPicker)
+
     assert(settings, `${name} needs a complete model-picker settings example`)
     assert.equal(settings.model, "gpt-6-astra[1m]")
     assert.deepEqual(settings.availableModels, ["opus", "gpt-6-astra[1m]"])
@@ -318,6 +325,7 @@ test("Claude Code picker examples expose the same Opus and Astra choices in both
     assert.match(page, /https:\/\/code\.claude\.com\/docs\/en\/settings-reference#modelpicker/)
     return settings
   })
+
   assert.deepEqual(examples[0], examples[1])
 })
 
@@ -358,6 +366,7 @@ test("routing documentation covers catalog selection and explicit no-effort capa
 
 test("README stays a concise feature overview and quick start with valid Wiki links", () => {
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
+
   assert(body.split("\n").length <= 80)
   assert.doesNotMatch(body, /\bv\d+\.\d+\.\d+\b/, "README describes current features, not release-version requirements")
   for (const required of ["## Features", "## Quick start", "copilot-relay auth", "copilot-relay start", "models --deep", "Wiki"]) {

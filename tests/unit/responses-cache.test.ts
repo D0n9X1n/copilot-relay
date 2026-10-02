@@ -23,6 +23,7 @@ test("Responses incomplete output keeps budget exhaustion and filtering distinct
       incomplete_details: { reason },
       output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "partial answer" }] }],
     })
+
     assert.equal(result.choices[0]?.finish_reason, expected)
   }
 
@@ -111,6 +112,7 @@ test("maps reasoning effort into the nested reasoning.effort field", () => {
 // would reject.
 test("omits reasoning when effort is undefined", () => {
   const payload = buildResponsesRequestPayload(basePayload(), undefined)
+
   assert.equal(payload.reasoning, undefined)
 })
 
@@ -169,6 +171,7 @@ test("Responses function tools explicitly preserve optional argument schemas", (
 
 test("Responses requests without tools do not add strictness or tools", () => {
   const request = JSON.parse(JSON.stringify(buildResponsesRequestPayload(basePayload(), "low")))
+
   assert.equal("tools" in request, false)
   assert.equal("strict" in request, false)
 })

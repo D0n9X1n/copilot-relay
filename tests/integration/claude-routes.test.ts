@@ -199,9 +199,11 @@ const startMockCopilot = async (
               || tool.function?.name === "WebSearch",
           )
         : undefined
+
       if (webSearchTool) {
         webSearchChatCalls += 1
         const toolCallId = `call_web_search_${webSearchChatCalls}`
+
         if (payload.stream) {
           // Real Copilot writes a preamble before calling the tool. Emitting the
           // tool call alone would let a classifier that mistakes text for "no
@@ -289,6 +291,7 @@ const startMockCopilot = async (
         payload.stream ? undefined : (
           payload.tools?.find((tool) => tool.function?.name === "Write")
         )
+
       if (clientTool) {
         response.end(JSON.stringify({
           id: "chat_client_tool_call",
@@ -369,6 +372,9 @@ const startMockCopilot = async (
           }
         }>
       }
+
+      // Copilot rejects the Artifact schema in two stages: the Unicode property escapes in `field`
+      // first, then, once only those are dropped, the lookaheads in `doc_id` and `database`.
       if (payload.tools?.some(
         (tool) => tool.parameters?.properties?.field?.pattern === artifactFieldPattern,
       )) {
@@ -433,10 +439,12 @@ const startMockCopilot = async (
         return
       }
 
+      // The same intent gate as the Chat Completions path above.
       const inputText = JSON.stringify((body as { input?: unknown }).input ?? [])
       const webSearchTool = /search/i.test(inputText) ?
           payload.tools?.find((tool) => tool.name === "WebSearch" || tool.name === "web_search")
         : undefined
+
       if (webSearchTool || options.functionCall) {
         const item = {
           type: "function_call",
@@ -445,9 +453,13 @@ const startMockCopilot = async (
           arguments: options.functionCall?.arguments ?? JSON.stringify({ query: "GitHub Copilot docs" }),
         }
         const result = {
-          id: "resp_web_search_call", created_at: 1, model: payload.model,
-          output: [item], usage: responsesUsage,
+          id: "resp_web_search_call",
+          created_at: 1,
+          model: payload.model,
+          output: [item],
+          usage: responsesUsage,
         }
+
         if (payload.stream) {
           response.setHeader("content-type", "text/event-stream")
           for (const event of [
@@ -479,6 +491,7 @@ const startMockCopilot = async (
         ],
         usage: responsesUsage,
       }
+
       if (payload.stream) {
         response.setHeader("content-type", "text/event-stream")
         for (const event of [
@@ -526,6 +539,7 @@ const createTestProxy = (baseUrl: string) => {
     upstreamTimeoutMs: 180_000,
     vsCodeVersion: "1.99.3",
   }
+
   return createServer(config)
 }
 
@@ -578,15 +592,19 @@ for (const model of ["default", "opus"]) {
         const mock = await startMockCopilot()
         try {
           const app = createTestProxy(mock.baseUrl)
+
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              model, stream, max_tokens: 16,
+              model,
+              stream,
+              max_tokens: 16,
               messages: [{ role: "user", content: "Reply OK only." }],
               ...fields,
             }),
           }))
+
           assert.equal(response.status, 200)
           const text = await response.text()
           if (stream) {
@@ -599,10 +617,13 @@ for (const model of ["default", "opus"]) {
             reasoning_effort?: string
             reasoning?: { effort?: string }
           }
+          // Opus goes upstream as Chat Completions (top-level effort), the default model as
+          // Responses (effort nested under `reasoning`).
           assert.equal(
             model === "opus" ? upstream.reasoning_effort : upstream.reasoning?.effort,
             expected,
           )
+          // A per-request effort never changes the configured default.
           assert.equal(runtimeState.thinkEffort, "xhigh")
         } finally {
           await mock.close()
@@ -614,9 +635,14 @@ for (const model of ["default", "opus"]) {
       const mock = await startMockCopilot()
       try {
         const app = createTestProxy(mock.baseUrl)
-        const messages: import("../../src/claude/types").ClaudeMessage[] = [{ role: "user", content: "Reply OK only." }]
+        const messages: import("../../src/claude/types").ClaudeMessage[] = [
+          { role: "user", content: "Reply OK only." },
+        ]
         let previousInput: unknown[] = []
         let cacheKey: unknown
+
+        // The request-level effort stays low. From the second turn on, an inline system control
+        // switches effort, and each switch must reach upstream.
         for (const effort of ["low", "high", "max", "medium", "low"] as const) {
           if (mock.requests.length > 0) {
             messages.push(
@@ -626,17 +652,33 @@ for (const model of ["default", "opus"]) {
             )
           }
 
-          const payload = { model, stream, max_tokens: 16, system: "Stable fixture instructions.", metadata: { user_id: "session-effort-switch" }, output_config: { effort: "low" }, messages }
+          const payload = {
+            model,
+            stream,
+            max_tokens: 16,
+            system: "Stable fixture instructions.",
+            metadata: { user_id: "session-effort-switch" },
+            output_config: { effort: "low" },
+            messages,
+          }
           const original = structuredClone(payload)
-          const count = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+
+          const countResponse = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
           }))
-          assert.equal(count.status, 200)
-          assert((await count.json() as { input_tokens: number }).input_tokens > 0)
+
+          assert.equal(countResponse.status, 200)
+          assert((await countResponse.json() as { input_tokens: number }).input_tokens > 0)
+
           const requestCount = mock.requests.length
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
           }))
+
           assert.equal(response.status, 200)
           const text = await response.text()
           if (stream) {
@@ -646,12 +688,20 @@ for (const model of ["default", "opus"]) {
 
           assert.equal(mock.requests.length, requestCount + 1)
           const sent = mock.requests.at(-1)!.body as {
-            reasoning_effort?: string; reasoning?: { effort?: string }; messages?: unknown[]; input?: unknown[]; prompt_cache_key?: string
+            reasoning_effort?: string
+            reasoning?: { effort?: string }
+            messages?: unknown[]
+            input?: unknown[]
+            prompt_cache_key?: string
           }
           assert.equal(sent.reasoning_effort ?? sent.reasoning?.effort, effort)
+
+          // Each turn only appends, so the cached prompt prefix survives the effort switch.
           const input = sent.messages ?? sent.input!
           assert.deepEqual(input.slice(0, previousInput.length), previousInput)
           previousInput = input
+
+          // Responses requests (the default model) also keep one prompt cache key throughout.
           if (model !== "opus") {
             assert(sent.prompt_cache_key)
             if (cacheKey !== undefined) {
@@ -661,6 +711,7 @@ for (const model of ["default", "opus"]) {
             cacheKey = sent.prompt_cache_key
           }
 
+          // The relay neither mutates the client's payload nor changes the configured default.
           assert.deepEqual(payload, original)
           assert.equal(runtimeState.thinkEffort, "xhigh")
         }
@@ -675,17 +726,22 @@ for (const model of ["default", "opus"]) {
       { name: "inline switch", fields: { output_config: { effort: "low" } }, markerEffort: "high" },
     ]) {
       test(`WebSearch request effort survives all passes: model=${model} stream=${stream} ${name}`, async () => {
+        // Every upstream request moves the configured default to low, so a later pass that re-read
+        // it, instead of keeping the effort resolved for this request, would send low.
         const mock = await startMockCopilot(undefined, () => {
           runtimeState.thinkEffort = "low"
         })
         const expected = markerEffort ?? ("output_config" in fields ? "medium" : "xhigh")
         try {
           const app = createTestProxy(mock.baseUrl)
+
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              model, stream, max_tokens: 16,
+              model,
+              stream,
+              max_tokens: 16,
               messages: [
                 ...(markerEffort ? [
                   { role: "user", content: "Earlier task." },
@@ -698,6 +754,7 @@ for (const model of ["default", "opus"]) {
               ...fields,
             }),
           }))
+
           assert.equal(response.status, 200)
           const text = await response.text()
           assert.match(text, /web_search_tool_result/)
@@ -705,25 +762,35 @@ for (const model of ["default", "opus"]) {
             assert.match(text, /event: message_stop/)
           }
 
-          assert.deepEqual(mock.requests.map((request) => request.path), model === "opus" ?
-            ["/chat/completions", "/responses", "/chat/completions"] :
-            ["/responses", "/responses", "/responses"])
+          assert.deepEqual(
+            mock.requests.map((request) => request.path),
+            model === "opus" ?
+              ["/chat/completions", "/responses", "/chat/completions"]
+            : ["/responses", "/responses", "/responses"],
+          )
           for (const request of mock.requests) {
             const body = request.body as { reasoning_effort?: string; reasoning?: { effort?: string } }
             assert.equal(body.reasoning_effort ?? body.reasoning?.effort, expected)
           }
 
-          const next = await app.fetch(new Request("http://localhost/v1/messages", {
+          // Control: the default really moved, so a new request without an effort sends low.
+          const followUp = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Reply OK only." }] }),
+            body: JSON.stringify({
+              model,
+              max_tokens: 16,
+              messages: [{ role: "user", content: "Reply OK only." }],
+            }),
           }))
-          assert.equal(next.status, 200)
-          await next.text()
-          const nextBody = mock.requests.at(-1)?.body as {
-            reasoning_effort?: string; reasoning?: { effort?: string }
+
+          assert.equal(followUp.status, 200)
+          await followUp.text()
+          const followUpBody = mock.requests.at(-1)?.body as {
+            reasoning_effort?: string
+            reasoning?: { effort?: string }
           }
-          assert.equal(nextBody.reasoning_effort ?? nextBody.reasoning?.effort, "low")
+          assert.equal(followUpBody.reasoning_effort ?? followUpBody.reasoning?.effort, "low")
         } finally {
           await mock.close()
         }
@@ -737,25 +804,37 @@ test("malformed inline controls still reject before SSE, counting or upstream ca
   try {
     const app = createTestProxy(mock.baseUrl)
     for (const control of [
-      { output_config: null }, { output_config: [] }, { output_config: {} },
-      { output_config: { effort: "none" } }, { output_config: { effort: "ultra" } },
+      { output_config: null },
+      { output_config: [] },
+      { output_config: {} },
+      { output_config: { effort: "none" } },
+      { output_config: { effort: "ultra" } },
       { output_config: { effort: "high", format: {} } },
       { output_config: { effort: "high" }, clear_at: "next_user_message" },
     ]) {
       for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
         for (const stream of [false, true]) {
           const response = await app.fetch(new Request(`http://localhost${route}`, {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-              model: "opus", stream, max_tokens: 16, output_config: { effort: "low" },
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model: "opus",
+              stream,
+              max_tokens: 16,
+              output_config: { effort: "low" },
               messages: [
                 { role: "system", content: [], ...control },
                 { role: "user", content: "Continue." },
               ],
             }),
           }))
+
           assert.equal(response.status, 400)
           assert.match(response.headers.get("content-type") ?? "", /application\/json/)
-          assert.equal((await response.json() as { error: { type: string } }).error.type, "invalid_request_error")
+          assert.equal(
+            (await response.json() as { error: { type: string } }).error.type,
+            "invalid_request_error",
+          )
         }
       }
     }
@@ -767,36 +846,64 @@ test("malformed inline controls still reject before SSE, counting or upstream ca
 })
 
 test("upstream HTTP errors retain a generated relay correlation header", async () => {
-  const mock = await startMockCopilot(undefined, undefined, { searchFailure: { status: 503, body: "fixture" } })
+  const mock = await startMockCopilot(undefined, undefined, {
+    searchFailure: { status: 503, body: "fixture" },
+  })
   const { withRecordedTransport } = await import("../../src/lib/request-trace")
   try {
-    await withRecordedTransport({ fetch: async () => Response.json({ error: { message: "unavailable" } }, { status: 503 }), refresh: async () => {} }, async () => {
-      const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
-        method: "POST", headers: { "content-type": "application/json", "x-copilot-relay-request-id": "forged" },
-        body: JSON.stringify({ model: "opus", max_tokens: 16, messages: [{ role: "user", content: "Fixture" }] }),
-      }))
-      assert.equal(response.status, 503)
-      assert.match(response.headers.get("x-copilot-relay-request-id") ?? "", uuidPattern)
-      await response.text()
-    })
+    await withRecordedTransport(
+      {
+        fetch: async () => Response.json({ error: { message: "unavailable" } }, { status: 503 }),
+        refresh: async () => {},
+      },
+      async () => {
+        const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-copilot-relay-request-id": "forged" },
+          body: JSON.stringify({
+            model: "opus",
+            max_tokens: 16,
+            messages: [{ role: "user", content: "Fixture" }],
+          }),
+        }))
+
+        assert.equal(response.status, 503)
+        // A relay-generated UUID replaces the client's forged ID.
+        assert.match(response.headers.get("x-copilot-relay-request-id") ?? "", uuidPattern)
+        await response.text()
+      },
+    )
   } finally {
     await mock.close()
   }
 })
 
 test("relay-generated stream errors include their correlation ID without internal details", async () => {
-  const mock = await startMockCopilot(undefined, undefined, { functionCall: { name: "Read", arguments: '{"private":' } })
+  // Truncated tool arguments make the relay, not upstream, fail the stream.
+  const mock = await startMockCopilot(undefined, undefined, {
+    functionCall: { name: "Read", arguments: '{"private":' },
+  })
   try {
     const app = createTestProxy(mock.baseUrl)
+
     const response = await app.fetch(new Request("http://localhost/v1/messages", {
-      method: "POST", headers: { "content-type": "application/json", "x-copilot-relay-request-id": "client-forged-id" },
-      body: JSON.stringify({ model: "default", stream: true, max_tokens: 16, messages: [{ role: "user", content: "Read fixture" }], tools: [{ name: "Read", input_schema: { type: "object" } }] }),
+      method: "POST",
+      headers: { "content-type": "application/json", "x-copilot-relay-request-id": "client-forged-id" },
+      body: JSON.stringify({
+        model: "default",
+        stream: true,
+        max_tokens: 16,
+        messages: [{ role: "user", content: "Read fixture" }],
+        tools: [{ name: "Read", input_schema: { type: "object" } }],
+      }),
     }))
+
     const requestId = response.headers.get("x-copilot-relay-request-id")
     assert.match(requestId ?? "", uuidPattern)
     const text = await response.text()
     assert.match(text, new RegExp(`request_id=${requestId}`))
     assert.match(text, /event: error/)
+    // Neither the forged client ID nor the argument text reaches the client.
     assert.doesNotMatch(text, /client-forged-id|\\"private\\"/)
   } finally {
     await mock.close()
@@ -809,20 +916,26 @@ test("rejects invalid request effort before SSE or upstream calls", async () => 
     const app = createTestProxy(mock.baseUrl)
     for (const fields of [
       { output_config: { effort: "ultra" } },
+      // A valid legacy effort does not rescue an invalid native one.
       { output_config: { effort: 0 }, reasoning_effort: "low" },
       { output_config: [] },
       { output_config: "high" },
       { reasoning_effort: "" },
     ]) {
-      for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+      for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
         for (const stream of [false, true]) {
-          const response = await app.fetch(new Request(`http://localhost${path}`, {
-            method: "POST", headers: { "content-type": "application/json" },
+          const response = await app.fetch(new Request(`http://localhost${route}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              model: "opus", stream, max_tokens: 16,
-              messages: [{ role: "user", content: "Reply OK only." }], ...fields,
+              model: "opus",
+              stream,
+              max_tokens: 16,
+              messages: [{ role: "user", content: "Reply OK only." }],
+              ...fields,
             }),
           }))
+
           assert.equal(response.status, 400)
           const body = await response.json() as { error: { type: string } }
           assert.equal(body.error.type, "invalid_request_error")
@@ -848,6 +961,7 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
 
         try {
           const app = createTestProxy(mock.baseUrl)
+
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
             body: JSON.stringify({
               max_tokens: 16,
@@ -898,6 +1012,8 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
           assert.ok(tool)
           assert.equal(tool.strict, model === "opus" ? undefined : false)
           assert.equal(tool.function?.strict, undefined)
+          // Only the Responses copy drops the patterns Copilot rejects; Chat Completions keeps the
+          // client's schema.
           assert.deepEqual(
             tool.parameters ?? tool.function?.parameters,
             model === "opus" ? artifactToolSchema : {
@@ -921,11 +1037,16 @@ for (const model of ["gpt-6-astra[1m]", "opus"]) {
 for (const stream of [false, true]) {
   for (const optional of [false, true]) {
     test(`Responses optional tool arguments survive stream=${stream} supplied=${optional}`, async () => {
-      const args = { description: "inspect", prompt: "read synthetic text", ...optional ? { isolation: "remote" } : {} }
+      const args = {
+        description: "inspect",
+        prompt: "read synthetic text",
+        ...optional ? { isolation: "remote" } : {},
+      }
       const schema = {
         type: "object",
         properties: {
-          description: { type: "string" }, prompt: { type: "string" },
+          description: { type: "string" },
+          prompt: { type: "string" },
           isolation: { type: "string", enum: ["worktree", "remote"] },
         },
         required: ["description", "prompt"],
@@ -935,19 +1056,28 @@ for (const stream of [false, true]) {
       })
       try {
         const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "default", max_tokens: 128, stream,
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "default",
+            max_tokens: 128,
+            stream,
             messages: [{ role: "user", content: "Call Agent." }],
             tools: [{ name: "Agent", input_schema: schema }],
           }),
         }))
+
         assert.equal(response.status, 200)
         if (stream) {
-          const events = (await response.text()).split("\n")
-            .filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6)))
-          const json = events.filter((event) => event.delta?.type === "input_json_delta")
-            .map((event) => event.delta.partial_json).join("")
-          assert.deepEqual(JSON.parse(json), args)
+          const events = (await response.text())
+            .split("\n")
+            .filter((line) => line.startsWith("data: "))
+            .map((line) => JSON.parse(line.slice(6)))
+          const inputJson = events
+            .filter((event) => event.delta?.type === "input_json_delta")
+            .map((event) => event.delta.partial_json)
+            .join("")
+          assert.deepEqual(JSON.parse(inputJson), args)
           assert.equal(events.filter((event) => event.type === "message_stop").length, 1)
         } else {
           const result = await response.json() as { content: Array<{ type: string; input?: unknown }> }
@@ -957,6 +1087,7 @@ for (const stream of [false, true]) {
         assert.equal(mock.requests.length, 1)
         assert.equal(mock.requests[0]?.path, "/responses")
         const sent = mock.requests[0]?.body as { tools: Array<{ strict: boolean; parameters: unknown }> }
+        // Explicit non-strict mode keeps upstream from making the optional `isolation` required.
         assert.equal(sent.tools[0]?.strict, false)
         assert.deepEqual(sent.tools[0]?.parameters, schema)
       } finally {
@@ -973,36 +1104,60 @@ for (const stream of [false, true]) {
   ] as const) {
     test(`WebSearch ${status} 2xx failure terminates once and preserves usage stream=${stream}`, async () => {
       const mock = await startMockCopilot(undefined, undefined, {
-        searchResponse: { id: "resp_empty_evidence", status, output,
+        searchResponse: {
+          id: "resp_empty_evidence",
+          status,
+          output,
           incomplete_details: { reason: "max_output_tokens" },
           usage: { input_tokens: 55, output_tokens: 1200, output_tokens_details: { reasoning_tokens: 1190 } },
         },
       })
       try {
         const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "opus", max_tokens: 4000, stream,
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "opus",
+            max_tokens: 4000,
+            stream,
             messages: [{ role: "user", content: "Search the web for public docs." }],
             tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
           }),
         }))
+
         assert.equal(response.status, 200)
         const text = await response.text()
         assert(text.includes(detail))
         assert.match(text, /"type":"web_search_tool_result_error","error_code":"unavailable"/)
+        // No reasoning summary or partial result from the failed search reaches the client.
         assert.doesNotMatch(text, /PRIVATE_REASONING|https:\/\/example.com\/partial/)
+
+        // Usage adds the chat pass (1 in, 1 out) to the failed search pass (55 in, 1200 out).
         if (stream) {
           assert.equal((text.match(/event: message_start/g) ?? []).length, 1)
           assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
-          const terminal = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5))).find((event) => event.type === "message_delta")
-          assert.deepEqual(terminal.usage, { input_tokens: 56, output_tokens: 1201, server_tool_use: { web_search_requests: 1 } })
+          const terminal = text
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => JSON.parse(line.slice(5)))
+            .find((event) => event.type === "message_delta")
+          assert.deepEqual(terminal.usage, {
+            input_tokens: 56,
+            output_tokens: 1201,
+            server_tool_use: { web_search_requests: 1 },
+          })
           assert.doesNotMatch(text, /event: error/)
         } else {
           const result = JSON.parse(text)
           assert.equal(result.id, "resp_empty_evidence")
-          assert.deepEqual(result.usage, { input_tokens: 56, output_tokens: 1201, server_tool_use: { web_search_requests: 1 } })
+          assert.deepEqual(result.usage, {
+            input_tokens: 56,
+            output_tokens: 1201,
+            server_tool_use: { web_search_requests: 1 },
+          })
         }
 
+        // The failure is final: no search retry and no recompose pass.
         assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
         assert.equal(mock.requests.filter((request) => request.path === "/responses").length, 1)
       } finally {
@@ -1014,16 +1169,27 @@ for (const stream of [false, true]) {
   for (const status of [503, 429, 401, 403, 400]) {
     test(`WebSearch HTTP ${status} stays a tool error with stream=${stream}`, async () => {
       const mock = await startMockCopilot(undefined, undefined, {
-        searchFailure: { status, body: JSON.stringify({ error: { message: "Please try again later." }, request: { prompt: "PRIVATE_CONTEXT" } }) },
+        searchFailure: {
+          status,
+          body: JSON.stringify({
+            error: { message: "Please try again later." },
+            request: { prompt: "PRIVATE_CONTEXT" },
+          }),
+        },
       })
       try {
         const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "opus", max_tokens: 128, stream,
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "opus",
+            max_tokens: 128,
+            stream,
             messages: [{ role: "user", content: "Search the web for public docs." }],
             tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
           }),
         }))
+
         assert.equal(response.status, 200)
         const text = await response.text()
         assert.match(text, new RegExp(`HTTP ${status}`))
@@ -1037,6 +1203,7 @@ for (const stream of [false, true]) {
         }
 
         assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
+        // Of these statuses only 503 is retried; retrievals offer only the built-in search tool.
         const retrievals = mock.requests.filter((request) => request.path === "/responses")
         assert.equal(retrievals.length, status === 503 ? 2 : 1)
         for (const retrieval of retrievals) {
@@ -1121,11 +1288,13 @@ test("advertises Astra's 1M identity and preserves its cache key and usage", asy
     assert.equal(response.status, 200)
     assert.equal(body.content[0]?.text, "OK")
     assert.equal(body.model, "gpt-6-astra[1m]")
+    // Claude reports cache reads apart from input: 9789 input tokens less 9786 cached leaves 3.
     assert.deepEqual(body.usage, {
       input_tokens: 3,
       output_tokens: 5,
       cache_read_input_tokens: 9786,
     })
+
     const upstreamRequests = mock.requests.filter(
       (request) => request.path === "/responses" || request.path === "/chat/completions",
     )
@@ -1141,6 +1310,7 @@ test("advertises Astra's 1M identity and preserves its cache key and usage", asy
     assert.equal(upstream.reasoning?.effort, "max")
     assert.match(upstream.prompt_cache_key ?? "", /^cr-[a-f0-9]{32}$/)
 
+    // A later turn of the same session, named without the [1m] selector, keeps the cache key.
     const repeatedResponse = await app.fetch(new Request("http://localhost/v1/messages", {
       body: JSON.stringify({
         max_tokens: 16,
@@ -1155,6 +1325,7 @@ test("advertises Astra's 1M identity and preserves its cache key and usage", asy
       headers: { "content-type": "application/json" },
       method: "POST",
     }))
+
     assert.equal(repeatedResponse.status, 200)
     await repeatedResponse.json()
     assert.equal(mock.requests.at(-1)?.path, "/responses")
@@ -1291,6 +1462,7 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve)
   })
+
   const address = server.address()
   assert.ok(address && typeof address === "object")
 
@@ -1316,8 +1488,8 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
         method: "POST",
       }))
 
-    const first = makeRequest("first request waits upstream")
-    const second = makeRequest("second request should still forward", true)
+    const firstResponse = makeRequest("first request waits upstream")
+    const secondResponse = makeRequest("second request should still forward", true)
 
     await withTimeout(
       secondRequestArrived,
@@ -1325,17 +1497,20 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
       "Second request was not forwarded while the first upstream response was pending",
     )
 
-    const secondBody = await (await second).json() as {
+    const secondBody = await (await secondResponse).json() as {
       content: Array<{ text?: string }>
     }
     assert.equal(secondBody.content[0]?.text, "OK 2")
 
     releaseFirstResponse()
-    const firstBody = await (await first).json() as {
+    const firstBody = await (await firstResponse).json() as {
       content: Array<{ text?: string }>
     }
     assert.equal(firstBody.content[0]?.text, "OK 1")
+
     assert.equal(requests.filter((entry) => entry.path === "/chat/completions").length, 2)
+    // The second request ends on an assistant prefill. Copilot rejects a conversation that ends
+    // on a non-user turn, so the relay keeps the prefill and appends a user turn to continue it.
     const secondUpstreamRequest = requests.filter(
       (entry) => entry.path === "/chat/completions",
     )[1]?.body as {
@@ -1348,6 +1523,7 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
       /Continue the assistant response/,
     )
   } finally {
+    // Unblock the held response even after a failure: close() waits for open connections.
     releaseFirstResponse()
     await close()
   }
@@ -1403,18 +1579,26 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
 
     assert.equal(response.status, 200)
     assert.equal(mock.requests.length, 3)
+
     assert.equal(mock.requests[0]?.path, "/chat/completions")
     assert.equal(decisionRequest.stream, false)
     assert.equal(decisionRequest.tools?.[0]?.function?.name, "web_search")
+
     assert.equal(mock.requests[1]?.path, "/responses")
     assert.equal(searchRequest.model, "gpt-5.5")
     assert.deepEqual(searchRequest.tools, [{ type: "web_search_preview" }])
+
     assert.equal(mock.requests[2]?.path, "/chat/completions")
     // The native web_search schema arrives on Claude Code's nested search call,
     // which carries no other tools, so there is nothing left to advertise here.
     assert.equal(finalRequest.tools, undefined)
     assert.equal(finalRequest.messages?.at(-1)?.role, "user")
-    assert.match(finalRequest.messages?.at(-1)?.content ?? "", /Bridge retrieval context: upstream reported a web_search_call but omitted its completion status/)
+    // The default search fixture's web_search_call has no status, and the final pass is told so.
+    assert.match(
+      finalRequest.messages?.at(-1)?.content ?? "",
+      /Bridge retrieval context: upstream reported a web_search_call but omitted its completion status/,
+    )
+
     assert.equal(body.content[0]?.type, "server_tool_use")
     assert.equal(body.content[0]?.name, "web_search")
     assert.equal(body.content[0]?.input?.query, "GitHub Copilot docs")
@@ -1479,6 +1663,7 @@ test("POST /v1/messages streaming opens before delayed upstream without ping", a
       "Streaming response did not send upstream content after upstream responded",
     )
     assert.equal(firstChunk.done, false)
+
     const chunks: Array<string> = [new TextDecoder().decode(firstChunk.value)]
     while (true) {
       const chunk = await withTimeout(
@@ -1496,6 +1681,7 @@ test("POST /v1/messages streaming opens before delayed upstream without ping", a
     assert.match(chunks.join(""), /event: message_stop/)
     assert.equal(mock.requests[0]?.path, "/chat/completions")
   } finally {
+    // Release even after a failure: close() waits for the held response.
     mock.releaseResponse()
     await mock.close()
   }
@@ -1713,19 +1899,32 @@ const startToolArgumentsCopilot = async (argumentsText: string) => {
   const server = createHttpServer(async (request, response) => {
     const body = await readJsonBody(request) as { model?: string; stream?: boolean } | undefined
     response.setHeader("content-type", "application/json")
+
     if (request.url === "/models") {
-      response.end(JSON.stringify({ object: "list", data: [{ id: "gpt-5.5" }, { id: "claude-opus-4.8" }] }))
+      response.end(JSON.stringify({
+        object: "list",
+        data: [{ id: "gpt-5.5" }, { id: "claude-opus-4.8" }],
+      }))
       return
     }
 
-    const toolCall = { id: "call_noop", type: "function", function: { name: "noop", arguments: argumentsText } }
+    const toolCall = {
+      id: "call_noop",
+      type: "function",
+      function: { name: "noop", arguments: argumentsText },
+    }
+
     if (body?.stream) {
       response.setHeader("content-type", "text/event-stream")
       const chunk = (delta: object, finish_reason: string | null) => ({
-        id: "chat_tool", object: "chat.completion.chunk", created: 1, model: body.model,
+        id: "chat_tool",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: body.model,
         choices: [{ index: 0, delta, finish_reason }],
         ...(finish_reason && { usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
       })
+
       for (const payload of [
         chunk({ role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }, null),
         chunk({}, "tool_calls"),
@@ -1738,16 +1937,25 @@ const startToolArgumentsCopilot = async (argumentsText: string) => {
     }
 
     response.end(JSON.stringify({
-      id: "chat_tool", created: 1, model: body?.model,
-      choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [toolCall] }, finish_reason: "tool_calls" }],
+      id: "chat_tool",
+      created: 1,
+      model: body?.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: null, tool_calls: [toolCall] },
+        finish_reason: "tool_calls",
+      }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     }))
   })
+
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve)
   })
+
   const address = server.address()
   assert.ok(address && typeof address === "object")
+
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     close: () => new Promise<void>((resolve, reject) => {
@@ -1756,26 +1964,42 @@ const startToolArgumentsCopilot = async (argumentsText: string) => {
   }
 }
 
-const postNoopToolTurn = (app: ReturnType<typeof createTestProxy>, stream: boolean) => app.fetch(new Request("http://localhost/v1/messages", {
-  body: JSON.stringify({
-    max_tokens: 256, model: "opus", stream,
-    messages: [{ role: "user", content: "Call the noop tool." }],
-    tools: [{ name: "noop", description: "Takes no arguments.", input_schema: { type: "object", properties: {} } }],
-  }),
-  headers: { "content-type": "application/json" },
-  method: "POST",
-}))
+const postNoopToolTurn = (app: ReturnType<typeof createTestProxy>, stream: boolean) =>
+  app.fetch(new Request("http://localhost/v1/messages", {
+    body: JSON.stringify({
+      max_tokens: 256,
+      model: "opus",
+      stream,
+      messages: [{ role: "user", content: "Call the noop tool." }],
+      tools: [{
+        name: "noop",
+        description: "Takes no arguments.",
+        input_schema: { type: "object", properties: {} },
+      }],
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  }))
 
 test("POST /v1/messages returns empty input for a zero-argument tool call", async () => {
   const mock = await startToolArgumentsCopilot("")
   try {
     const app = createTestProxy(mock.baseUrl)
+
     const response = await postNoopToolTurn(app, false)
+
     assert.equal(response.status, 200)
-    const body = await response.json() as { stop_reason: string; content: Array<{ type: string; name?: string; input?: unknown }> }
+    const body = await response.json() as {
+      stop_reason: string
+      content: Array<{ type: string; name?: string; input?: unknown }>
+    }
     assert.equal(body.stop_reason, "tool_use")
-    assert.deepEqual(body.content.filter((block) => block.type === "tool_use").map(({ name, input }) => ({ name, input })),
-      [{ name: "noop", input: {} }])
+    assert.deepEqual(
+      body.content
+        .filter((block) => block.type === "tool_use")
+        .map(({ name, input }) => ({ name, input })),
+      [{ name: "noop", input: {} }],
+    )
 
     const streamed = await (await postNoopToolTurn(app, true)).text()
     assert.match(streamed, /"partial_json":"\{\}"/)
@@ -1790,11 +2014,17 @@ test("POST /v1/messages maps invalid tool arguments to an error naming the tool"
   const mock = await startToolArgumentsCopilot('{"path":')
   try {
     const app = createTestProxy(mock.baseUrl)
+
     const response = await postNoopToolTurn(app, false)
+
     assert.equal(response.status, 502)
     const body = await response.json() as { error: { type: string; message: string } }
-    assert.deepEqual(body.error, { type: "api_error", message: 'Upstream returned tool input for "noop" that is not valid JSON.' })
+    assert.deepEqual(body.error, {
+      type: "api_error",
+      message: 'Upstream returned tool input for "noop" that is not valid JSON.',
+    })
 
+    // Streamed, the message arrives JSON-encoded inside SSE data, hence the escaped quotes.
     const streamed = await (await postNoopToolTurn(app, true)).text()
     assert.match(streamed, /Upstream returned tool input for \\"noop\\" that is not valid JSON\./)
   } finally {

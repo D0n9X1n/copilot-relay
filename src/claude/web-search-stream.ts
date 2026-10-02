@@ -11,6 +11,7 @@ export { accumulateChunks } from "~/copilot/stream"
 export type WebSearchStreamDecision =
   | { kind: "streamed"; buffered: Array<ChatCompletionChunk> }
   | { kind: "webSearch"; response: ChatCompletionResponse }
+
 const isWebSearchName = (
   name: string | undefined,
   toolNameMapper: ClaudeToolNameMapper,
@@ -137,7 +138,9 @@ export const resolveWebSearchStreamDecision = async (
     return {
       decision: { kind: "streamed", buffered: onChunk ? [] : buffered },
       rest,
-      alreadyStreamed, streamedText, streamedThinking,
+      alreadyStreamed,
+      streamedText,
+      streamedThinking,
     }
   }
 
@@ -162,6 +165,8 @@ export const resolveWebSearchStreamDecision = async (
   return {
     decision: { kind: "webSearch", response: accumulateChunks(buffered) },
     rest: { async *[Symbol.asyncIterator]() {} },
-    alreadyStreamed, streamedText, streamedThinking,
+    alreadyStreamed,
+    streamedText,
+    streamedThinking,
   }
 }

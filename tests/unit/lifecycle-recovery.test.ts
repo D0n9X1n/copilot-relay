@@ -8,6 +8,8 @@ import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { promisify, stripVTControlCharacters } from "node:util"
 
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-lifecycle-recovery-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
@@ -27,16 +29,26 @@ const fakeExecFile = () => {
 Object.defineProperty(fakeExecFile, promisify.custom, {
   value: async (file: string, args: string[]) => ({ stdout: await commandOutput(file, args), stderr: "" }),
 })
+
+// lifecycle imports execFile by name; syncing the builtin ESM exports makes
+// that named import see the fake.
 childProcess.execFile = fakeExecFile as unknown as typeof childProcess.execFile
 syncBuiltinESMExports()
+
 process.kill = () => {
   throw new Error("Real signals are forbidden")
 }
 
-const { clearRelayPidFile, findRelayOnPort, findRelayProcessIds, readRelayPidFileEntry, stopExistingRelay } =
-  await import("../../src/lib/lifecycle")
+const {
+  clearRelayPidFile,
+  findRelayOnPort,
+  findRelayProcessIds,
+  readRelayPidFileEntry,
+  stopExistingRelay
+} = await import("../../src/lib/lifecycle")
 const { paths } = await import("../../src/lib/paths")
 const { flushLogs } = await import("../../src/lib/log")
+
 await fs.mkdir(paths.appDir, { recursive: true })
 
 test.after(async () => {
@@ -46,6 +58,7 @@ test.after(async () => {
   syncBuiltinESMExports()
   await fs.rm(home, { recursive: true, force: true })
 })
+
 test.beforeEach(async () => {
   await fs.rm(paths.pidPath, { force: true })
 })
@@ -53,7 +66,9 @@ test.beforeEach(async () => {
 for (const raw of ['{"pid":', '{not-json', '900001junk']) {
   test(`clears malformed PID content without throwing: ${raw}`, async () => {
     await fs.writeFile(paths.pidPath, raw)
+
     assert.equal(await readRelayPidFileEntry(), undefined)
+
     await assert.doesNotReject(clearRelayPidFile(900_002))
     await assert.rejects(fs.stat(paths.pidPath), { code: "ENOENT" })
   })
@@ -62,21 +77,30 @@ for (const raw of ['{"pid":', '{not-json', '900001junk']) {
 for (const pid of ["900001junk", "9e5", "1.5", Number.MAX_SAFE_INTEGER + 1]) {
   test(`rejects an unsafe or partially parsed PID: ${pid}`, async () => {
     await fs.writeFile(paths.pidPath, JSON.stringify({ pid, host: "127.0.0.1", port: 45001 }))
+
     assert.equal(await readRelayPidFileEntry(), undefined)
   })
 }
 
 for (const address of [
-  { host: "", port: 45001 }, { host: " ", port: 45001 },
-  { host: "user@127.0.0.1", port: 45001 }, { host: "127.0.0.1/path", port: 45001 },
-  { host: "127.0.0.1?query", port: 45001 }, { host: "127.0.0.1#fragment", port: 45001 },
-  { host: "http://127.0.0.1", port: 45001 }, { host: "[invalid]", port: 45001 },
-  { host: "[::1]:80", port: 45001 }, { host: "[::1]:45002", port: 45001 },
-  { host: "127.0.0.1", port: 0 }, { host: "127.0.0.1", port: 65536 },
-  { host: "127.0.0.1", port: 1.5 }, { host: "127.0.0.1", port: "45001" },
+  { host: "", port: 45001 },
+  { host: " ", port: 45001 },
+  { host: "user@127.0.0.1", port: 45001 },
+  { host: "127.0.0.1/path", port: 45001 },
+  { host: "127.0.0.1?query", port: 45001 },
+  { host: "127.0.0.1#fragment", port: 45001 },
+  { host: "http://127.0.0.1", port: 45001 },
+  { host: "[invalid]", port: 45001 },
+  { host: "[::1]:80", port: 45001 },
+  { host: "[::1]:45002", port: 45001 },
+  { host: "127.0.0.1", port: 0 },
+  { host: "127.0.0.1", port: 65536 },
+  { host: "127.0.0.1", port: 1.5 },
+  { host: "127.0.0.1", port: "45001" },
 ]) {
   test(`rejects an invalid PID-record address: ${JSON.stringify(address)}`, async () => {
     await fs.writeFile(paths.pidPath, JSON.stringify({ pid: 900001, ...address }))
+
     assert.equal(await readRelayPidFileEntry(), undefined)
   })
 }
@@ -90,9 +114,13 @@ interface FakeProcess {
   startedAt: string
   alive: boolean
 }
+
 const relay = (pid = 900_001): FakeProcess => ({
-  pid, command: "node /opt/copilot-relay/dist/main.js start", cwd: "/opt/copilot-relay",
-  startedAt: "Tue Sep 29 12:00:00 2026", alive: true,
+  pid,
+  command: "node /opt/copilot-relay/dist/main.js start",
+  cwd: "/opt/copilot-relay",
+  startedAt: "Tue Sep 29 12:00:00 2026",
+  alive: true,
 })
 
 function inventory(t: TestContext, processes: FakeProcess[]) {
@@ -108,17 +136,24 @@ function inventory(t: TestContext, processes: FakeProcess[]) {
     listed?: number[]
     listeners?: number[]
   } = {}
+
   commandOutput = async (file, args) => {
     commands.push({ file, args })
-    if ((file === "ps" && args.includes("-axo"))
-      || (file === "powershell.exe" && args.join(" ").includes("Win32_Process | ForEach-Object"))) {
+    if (
+      (file === "ps" && args.includes("-axo"))
+      || (file === "powershell.exe" && args.join(" ").includes("Win32_Process | ForEach-Object"))
+    ) {
       await hooks.onList?.()
-      return processes.filter((p) => p.alive && (!hooks.listed || hooks.listed.includes(p.pid)))
-        .map((p) => `${p.pid}\t${p.command}`).join("\n")
+      return processes
+        .filter((p) => p.alive && (!hooks.listed || hooks.listed.includes(p.pid)))
+        .map((p) => `${p.pid}\t${p.command}`)
+        .join("\n")
     }
 
-    if ((file === "lsof" && args.some((arg) => arg.startsWith("-iTCP:")))
-      || (file === "powershell.exe" && args.join(" ").includes("Get-NetTCPConnection"))) {
+    if (
+      (file === "lsof" && args.some((arg) => arg.startsWith("-iTCP:")))
+      || (file === "powershell.exe" && args.join(" ").includes("Get-NetTCPConnection"))
+    ) {
       hooks.onListeners?.()
       return (hooks.listeners ?? []).join("\n")
     }
@@ -159,6 +194,7 @@ function inventory(t: TestContext, processes: FakeProcess[]) {
       throw Object.assign(new Error("synthetic ESRCH"), { code: "ESRCH" })
     }
 
+    // Signal 0 only probes liveness, so it is neither recorded nor delivered.
     if (signal !== 0) {
       signals.push([pid, signal])
       if (hooks.onSignal) {
@@ -182,12 +218,16 @@ function inventory(t: TestContext, processes: FakeProcess[]) {
 
     assert.deepEqual(unexpected, [])
   })
+
   return { commands, signals, hooks }
 }
 
 const savePid = async (p: FakeProcess) => {
   await fs.writeFile(paths.pidPath, JSON.stringify({
-    pid: p.pid, host: "127.0.0.2", port: 45001, startedAt: p.startedAt,
+    pid: p.pid,
+    host: "127.0.0.2",
+    port: 45001,
+    startedAt: p.startedAt,
   }))
 }
 
@@ -195,13 +235,16 @@ test("stop rechecks the selected process identity immediately before SIGTERM", a
   const p = relay()
   const fixture = inventory(t, [p])
   let inspections = 0
-  fixture.hooks.beforeInspect = (process) => {
+
+  // The process stops looking like the relay once it has been selected.
+  fixture.hooks.beforeInspect = (fakeProcess) => {
     if (++inspections > 1) {
-      process.command = "node /opt/other-app/server.js"
+      fakeProcess.command = "node /opt/other-app/server.js"
     }
   }
 
   const stopped = await stopExistingRelay({ port: 45001 })
+
   assert.deepEqual(fixture.signals, [])
   assert.deepEqual(stopped, [])
 })
@@ -211,6 +254,7 @@ test("stop preserves the record of a live process whose identity cannot be verif
   await savePid(p)
   const original = await fs.readFile(paths.pidPath, "utf8")
   const fixture = inventory(t, [p])
+
   fastStopClock(t)
   await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify.*900001/)
   assert.deepEqual(fixture.signals, [])
@@ -220,11 +264,12 @@ test("stop preserves the record of a live process whose identity cannot be verif
 test("stop does not SIGKILL a reused PID with the same relay command", async (t) => {
   const p = relay()
   const fixture = inventory(t, [p])
-  fixture.hooks.onSignal = (process, signal) => {
+  // After TERM the PID belongs to a new process: same command, later start time.
+  fixture.hooks.onSignal = (fakeProcess, signal) => {
     if (signal === "SIGTERM") {
-      process.startedAt = "Tue Sep 29 12:01:00 2026"
+      fakeProcess.startedAt = "Tue Sep 29 12:01:00 2026"
     } else {
-      process.alive = false
+      fakeProcess.alive = false
     }
   }
 
@@ -232,6 +277,7 @@ test("stop does not SIGKILL a reused PID with the same relay command", async (t)
   let clock = 0
   t.mock.method(Date, "now", () => (clock += 6_000))
   await stopExistingRelay({ port: 45001 })
+
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
 })
 
@@ -321,6 +367,7 @@ for (const state of ["absent", "nonrelay"] as const) {
     await savePid(p)
     const fixture = inventory(t, [p])
     fixture.hooks.listeners = [p.pid]
+
     assert.deepEqual(await stopExistingRelay({ port: 45001 }), [])
     assert.deepEqual(fixture.signals, [])
   })
@@ -339,8 +386,12 @@ for (const field of ["command", "createdAt", "cwd"] as const) {
     fixture.hooks.beforeQuery = (_process, queried) => {
       if (queried === field && fixture.signals.length > 0) {
         unavailableQueries++
+
+        // The failed query still carries matching output, which must not count
+        // as a verified identity.
+        const outputByField = { command: p.command, cwd: `n${p.cwd}`, createdAt: p.startedAt }
         throw Object.assign(new Error("synthetic process inspection failure"), {
-          stdout: field === "command" ? p.command : field === "cwd" ? `n${p.cwd}` : p.startedAt,
+          stdout: outputByField[field],
         })
       }
     }
@@ -358,9 +409,9 @@ test("stop retries a transient post-TERM inspection failure before verified esca
   const p = relay()
   const fixture = inventory(t, [p])
   let failedOnce = false
-  fixture.hooks.onSignal = (process, signal) => {
+  fixture.hooks.onSignal = (fakeProcess, signal) => {
     if (signal === "SIGKILL") {
-      process.alive = false
+      fakeProcess.alive = false
     }
   }
 
@@ -421,6 +472,7 @@ test("stop preserves a PID record created after discovery began", async (t) => {
   }
 
   await stopExistingRelay({ port: 45001 })
+
   assert.equal(await fs.readFile(paths.pidPath, "utf8"), replacement)
 })
 
@@ -436,31 +488,46 @@ test("stop preserves a concurrently replaced PID file even with identical bytes"
   }
 
   await stopExistingRelay({ port: 45001 })
+
   assert.equal(await fs.readFile(paths.pidPath, "utf8"), original)
 })
 
 test("stop discovers verified relays without a configured port hint", async (t) => {
   const p = { ...relay(), command: "node /opt/copilot-relay/dist/main.js restart" }
   const fixture = inventory(t, [p])
+
   assert.deepEqual(await stopExistingRelay({}), [p.pid])
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
-  assert.equal(fixture.commands.some(({ args }) => args.some((arg) => /iTCP:|Get-NetTCPConnection/.test(arg))), false)
+  // Without a port hint, no listener lookup runs.
+  assert.equal(
+    fixture.commands.some(({ args }) => args.some((arg) => /iTCP:|Get-NetTCPConnection/.test(arg))),
+    false
+  )
 })
 
 test("status stays port-scoped while stop finds verified relays globally", async (t) => {
   const p = relay()
   await savePid(p)
   const fixture = inventory(t, [p])
+
   assert.equal(await findRelayOnPort({ host: "127.0.0.1", port: 45002 }), undefined)
-  assert.equal(fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")), false)
+  // status must not fall back to the global process scan (#33).
+  assert.equal(
+    fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")),
+    false
+  )
+
   assert.deepEqual(await findRelayProcessIds({ port: 45002 }), [p.pid])
   assert.deepEqual(fixture.signals, [])
 })
 
 type ProcessFile = { kind: "file" | "directory"; canonical?: string; content?: string; denied?: boolean }
+
 const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile>) => {
-  const example = await fs.stat(paths.appDir)
+  const templateStats = await fs.stat(paths.appDir)
   const readFile = fs.readFile.bind(fs)
+
+  // Look up a fixture entry, failing the way the filesystem would.
   const file = (value: unknown) => {
     const name = String(value)
     const entry = entries.get(name)
@@ -477,13 +544,20 @@ const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile
 
   t.mock.method(fs, "stat", async (value: unknown) => {
     const { name, entry } = file(value)
-    return { ...example, ino: [...entries.keys()].indexOf(name) + 1,
-      isFile: () => entry.kind === "file", isDirectory: () => entry.kind === "directory" }
+    return {
+      ...templateStats,
+      ino: [...entries.keys()].indexOf(name) + 1,
+      isFile: () => entry.kind === "file",
+      isDirectory: () => entry.kind === "directory"
+    }
   })
+
   t.mock.method(fs, "realpath", async (value: unknown) => {
     const { name, entry } = file(value)
     return entry.canonical ?? name
   })
+
+  // Files under the test home, such as the PID record, stay real.
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
     const name = String(args[0])
     if (name.startsWith(home + path.sep)) {
@@ -495,12 +569,16 @@ const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile
   })
 }
 
-const proofFiles = (entry = "/workspace/Space Folder/copilot-relay/dist/main.js") => new Map<string, ProcessFile>([
-  [entry, { kind: "file" }],
-  [path.posix.join(path.posix.dirname(path.posix.dirname(entry)), "package.json"), {
-    kind: "file", content: JSON.stringify({ name: "copilot-relay" }),
-  }],
-])
+// The files that prove a command runs this relay: its entrypoint, and a
+// package.json named copilot-relay in the parent of the entrypoint's directory.
+const proofFiles = (entry = "/workspace/Space Folder/copilot-relay/dist/main.js") =>
+  new Map<string, ProcessFile>([
+    [entry, { kind: "file" }],
+    [path.posix.join(path.posix.dirname(path.posix.dirname(entry)), "package.json"), {
+      kind: "file",
+      content: JSON.stringify({ name: "copilot-relay" }),
+    }],
+  ])
 
 for (const [firstProgram, remainder] of [
   ["/usr/local/bin/worker", "./workspace/copilot-relay/dist/main.js"],
@@ -512,10 +590,14 @@ for (const [firstProgram, remainder] of [
       skip: process.platform === "win32",
     }, async (t) => {
       const p = { ...relay(), cwd: "/fixture", command: `node ${firstProgram} ${remainder} start` }
+      // ps joins argv with spaces, so the command also reads as one path with a
+      // space in it, and that path is a relay entrypoint here. The first word
+      // exists on its own, so the proof must still refuse.
       const files = proofFiles(path.posix.resolve(p.cwd, `${firstProgram} ${remainder}`))
       files.set(path.posix.resolve(p.cwd, firstProgram), { kind })
       await mockProcessFiles(t, files)
       const fixture = inventory(t, [p])
+
       assert.deepEqual(await stopExistingRelay({}), [])
       assert.deepEqual(fixture.signals, [])
     })
@@ -531,9 +613,11 @@ test("filesystem proof requires the exact regular relay entrypoint before accept
   await mockProcessFiles(t, files)
   const p = { ...relay(), command: `node ${entry} start` }
   const fixture = inventory(t, [p])
+
   fastStopClock(t)
   await assert.rejects(stopExistingRelay({}), /Could not verify.*900001/)
   assert.deepEqual(fixture.signals, [])
+
   files.set(entry, { kind: "file" })
   assert.deepEqual(await stopExistingRelay({}), [p.pid])
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
@@ -546,6 +630,7 @@ test("filesystem proof preserves exact repeated spaces in a flat entrypoint", {
   await mockProcessFiles(t, proofFiles(entry))
   const p = { ...relay(), command: `node ${entry} restart` }
   const fixture = inventory(t, [p])
+
   fastStopClock(t)
   assert.deepEqual(await stopExistingRelay({}), [p.pid])
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
@@ -561,6 +646,7 @@ test("filesystem proof recognizes an actual flat POSIX Node executable path with
   await mockProcessFiles(t, files)
   const p = { ...relay(), command: `${node} ${entry} start` }
   const fixture = inventory(t, [p])
+
   assert.deepEqual(await stopExistingRelay({}), [p.pid])
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
 })
@@ -569,6 +655,8 @@ for (const reason of ["denied", "directory", "foreign canonical path", "foreign 
   test(`filesystem proof remains unknown for ${reason}`, { skip: process.platform === "win32" }, async (t) => {
     const entry = "/workspace/Space Folder/copilot-relay/dist/main.js"
     const files = proofFiles(entry)
+
+    // "/workspace/Space" is the entrypoint path cut at its first space.
     if (reason === "denied") {
       files.set("/workspace/Space", { kind: "file", denied: true })
     }
@@ -583,13 +671,15 @@ for (const reason of ["denied", "directory", "foreign canonical path", "foreign 
 
     if (reason === "foreign package") {
       files.set("/workspace/Space Folder/copilot-relay/package.json", {
-        kind: "file", content: JSON.stringify({ name: "foreign-worker" }),
+        kind: "file",
+        content: JSON.stringify({ name: "foreign-worker" }),
       })
     }
 
     await mockProcessFiles(t, files)
     const p = { ...relay(), command: `node ${entry} start` }
     const fixture = inventory(t, [p])
+
     fastStopClock(t)
     await assert.rejects(stopExistingRelay({}), /Could not verify.*900001/)
     assert.deepEqual(fixture.signals, [])
@@ -603,9 +693,9 @@ test("filesystem proof is repeated before TERM when an earlier directory entrypo
   await mockProcessFiles(t, files)
   const p = { ...relay(), command: "node /workspace/Space Folder/copilot-relay/dist/main.js start" }
   const fixture = inventory(t, [p])
-  let commands = 0
+  let commandQueries = 0
   fixture.hooks.beforeQuery = (_process, field) => {
-    if (field === "command" && ++commands > 1) {
+    if (field === "command" && ++commandQueries > 1) {
       files.set("/workspace/Space", { kind: "directory" })
     }
   }
@@ -626,7 +716,11 @@ test("status reports an initial unknown port candidate instead of claiming no re
   }
 
   await assert.rejects(findRelayOnPort({ host: "127.0.0.1", port: 45001 }), /Could not verify/)
-  assert.equal(fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")), false)
+  // status must not fall back to the global process scan (#33).
+  assert.equal(
+    fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")),
+    false
+  )
   assert.deepEqual(fixture.signals, [])
 })
 
@@ -643,7 +737,7 @@ test("status command exits 2 with a fixed diagnostic for initial inspection fail
   }
 
   await fs.writeFile(paths.configPath, "port: 45001\nlogLevel: error\n")
-  const exitCode = process.exitCode
+  const previousExitCode = process.exitCode
   const messages: string[] = []
   t.mock.method(console, "error", (value: unknown) => {
     messages.push(String(value))
@@ -652,7 +746,7 @@ test("status command exits 2 with a fixed diagnostic for initial inspection fail
     messages.push(String(value))
   })
   t.after(async () => {
-    process.exitCode = exitCode
+    process.exitCode = previousExitCode
     await fs.rm(paths.configPath, { force: true })
   })
 
@@ -668,7 +762,10 @@ test("invalid PID-record address falls back to the same port listener record", a
   await fs.writeFile(paths.pidPath, JSON.stringify({ pid: p.pid, host: "", port: 45001 }))
   const fixture = inventory(t, [p])
   fixture.hooks.listeners = [p.pid]
+
   const detected = await findRelayOnPort({ host: "127.0.0.3", port: 45001 })
+
+  // The pid and the address must come from one record (#33).
   assert.deepEqual(detected, { pid: p.pid, host: "127.0.0.3", port: 45001, startedAt: "" })
   assert.deepEqual(fixture.signals, [])
 })
@@ -678,6 +775,9 @@ test("stop continues after valid-config log cleanup refuses a symlinked log dire
   const { stop } = await import("../../src/stop")
   const { flushLogs, log } = await import("../../src/lib/log")
   await flushLogs()
+
+  // The log directory links to an outside store holding a log old enough for
+  // retention to delete, if cleanup followed the link.
   const external = await fs.mkdtemp(path.join(home, "external-logs-"))
   const sentinel = path.join(external, "copilot-relay.2000-01-01.log")
   await fs.writeFile(sentinel, "outside log store; must not change\n")
@@ -690,26 +790,32 @@ test("stop continues after valid-config log cleanup refuses a symlinked log dire
     await fs.rm(external, { recursive: true, force: true })
     await fs.rm(paths.configPath, { force: true })
   })
+
   const warnings: unknown[][] = []
   t.mock.method(log, "error", (...values: unknown[]) => {
     warnings.push(values)
   })
+
   const p = relay()
   const fixture = inventory(t, [p])
 
   await runCommand(stop, { rawArgs: [] })
 
   assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
-  assert.ok(fixture.commands.some(({ args }) => args.join(" ").includes("-iTCP:45001")
-    || args.join(" ").includes("Get-NetTCPConnection -LocalPort 45001")))
+  // stop still uses the configured port as its listener hint.
+  assert.ok(fixture.commands.some(
+    ({ args }) => args.join(" ").includes("-iTCP:45001")
+      || args.join(" ").includes("Get-NetTCPConnection -LocalPort 45001")
+  ))
   assert.deepEqual(warnings, [["Could not clean up logs; continuing to stop verified relay processes."]])
   assert.equal(await fs.readFile(sentinel, "utf8"), "outside log store; must not change\n")
   assert.deepEqual(await fs.readdir(external), [path.basename(sentinel)])
   assert.equal((await fs.lstat(paths.logsDir)).isSymbolicLink(), true)
 })
 
-const entry = new URL("../../src/main.ts", import.meta.url)
+const mainEntryUrl = new URL("../../src/main.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
+const invalidConfigExitCodes = { status: 2, restart: 1, stop: 0 } as const
 
 for (const command of ["status", "restart", "stop"] as const) {
   test(`${command} handles invalid config without unsafe process or network access`, async (t) => {
@@ -717,11 +823,15 @@ for (const command of ["status", "restart", "stop"] as const) {
     t.after(async () => {
       await fs.rm(childHome, { recursive: true, force: true })
     })
+
     const appDir = path.join(childHome, ".copilot-relay")
     const configPath = path.join(appDir, "config.yaml")
     const original = "not a valid config line\n"
     await fs.mkdir(appDir)
     await fs.writeFile(configPath, original)
+
+    // The real CLI runs in a child process where execFile, kill and fetch fail
+    // loudly, except the answers stop needs to find and signal one fake relay.
     const script = `
       import childProcess from "node:child_process";
       import { syncBuiltinESMExports } from "node:module";
@@ -751,14 +861,16 @@ for (const command of ["status", "restart", "stop"] as const) {
       };
       globalThis.fetch = forbidden;
       process.on("exit", () => console.log("SIGNALS=" + JSON.stringify(signals)));
-      process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ${JSON.stringify(command)}];
-      await import(${JSON.stringify(entry.href)});
+      process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(mainEntryUrl))}, ${JSON.stringify(command)}];
+      await import(${JSON.stringify(mainEntryUrl.href)});
     `
+
     const result = await new Promise<{ code: number; output: string }>((resolve, reject) => {
       const child = originalExecFile(process.execPath, [
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
-        cwd, timeout: 10_000,
+        cwd,
+        timeout: 10_000,
         env: { ...process.env, HOME: childHome, USERPROFILE: childHome, FORCE_COLOR: "0" },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
@@ -770,11 +882,12 @@ for (const command of ["status", "restart", "stop"] as const) {
       })
       child.stdin?.end()
     })
+
     assert.doesNotMatch(result.output, /UNSAFE_ACCESS_FORBIDDEN/)
     assert.equal(await fs.readFile(configPath, "utf8"), original)
     assert.match(result.output, /config/i)
     assert.match(result.output, command === "stop" ? /SIGNALS=\[\[900001,"SIGTERM"\]\]/ : /SIGNALS=\[\]/)
-    assert.equal(result.code, command === "status" ? 2 : command === "restart" ? 1 : 0, result.output)
+    assert.equal(result.code, invalidConfigExitCodes[command], result.output)
     if (command === "status") {
       assert.doesNotMatch(result.output, /process\s+not running/)
     }
@@ -787,8 +900,10 @@ for (const command of ["status", "restart", "stop"] as const) {
 const versionRuntimes = [
   ["Windows", "C:/Users/u/.copilot-relay/runtime/0.4.1",
     String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\.copilot-relay\runtime\0.4.1\dist\main.js start`],
-  ["POSIX", "/home/u/.copilot-relay/runtime/0.4.1", "node /home/u/.copilot-relay/runtime/0.4.1/dist/main.js start"],
+  ["POSIX", "/home/u/.copilot-relay/runtime/0.4.1",
+    "node /home/u/.copilot-relay/runtime/0.4.1/dist/main.js start"],
 ] as const
+
 const runtimeFiles = (root: string, name = "copilot-relay") => new Map<string, ProcessFile>([
   [`${root}/dist/main.js`, { kind: "file" }],
   [`${root}/package.json`, { kind: "file", content: JSON.stringify({ name }) }],
@@ -800,7 +915,9 @@ for (const [platform, root, command] of versionRuntimes) {
     const p = { ...relay(), command, cwd: "/" }
     await savePid(p)
     const fixture = inventory(t, [p])
+
     assert.equal((await findRelayOnPort({ host: "127.0.0.2", port: 45001 }))?.pid, p.pid)
+
     // Port fallback reaches the same verdict without a pid file.
     await fs.rm(paths.pidPath, { force: true })
     fixture.hooks.listeners = [p.pid]
@@ -812,12 +929,18 @@ for (const [platform, root, command] of versionRuntimes) {
     await mockProcessFiles(t, runtimeFiles(root))
     const p = { ...relay(), command, cwd: "/" }
     const fixture = inventory(t, [p])
+
     fastStopClock(t)
     assert.deepEqual(await stopExistingRelay({}), [p.pid])
     assert.deepEqual(fixture.signals, [[p.pid, "SIGTERM"]])
   })
 
-  for (const reason of ["foreign package", "missing package.json", "missing entrypoint", "unreadable package.json"] as const) {
+  for (const reason of [
+    "foreign package",
+    "missing package.json",
+    "missing entrypoint",
+    "unreadable package.json"
+  ] as const) {
     test(`a ${platform} version-directory runtime with ${reason} is not a relay`, async (t) => {
       const files = runtimeFiles(root, reason === "foreign package" ? "some-other-app" : "copilot-relay")
       if (reason === "missing package.json") {
@@ -837,6 +960,7 @@ for (const [platform, root, command] of versionRuntimes) {
       await savePid(p)
       const fixture = inventory(t, [p])
       fixture.hooks.listeners = [p.pid]
+
       assert.equal(await findRelayOnPort({ host: "127.0.0.2", port: 45001 }), undefined)
       assert.deepEqual(await stopExistingRelay({}), [])
       assert.deepEqual(fixture.signals, [])
@@ -851,6 +975,7 @@ test("a relative dist entrypoint resolves against the process cwd before the man
   const p = { ...relay(), command: "node dist/main.js start", cwd: "/home/u/.copilot-relay/runtime/0.4.1" }
   await savePid(p)
   const fixture = inventory(t, [p])
+
   assert.equal((await findRelayOnPort({ host: "127.0.0.2", port: 45001 }))?.pid, p.pid)
   assert.deepEqual(fixture.signals, [])
 })

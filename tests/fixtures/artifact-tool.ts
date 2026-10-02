@@ -1,3 +1,6 @@
+// Modeled on Claude Code's Artifact tool. Copilot's Responses API rejects the Unicode property
+// escapes and lookaheads in `field`, `database` and `doc_id`, so the relay drops those patterns
+// upstream; every other constraint here is supported and must reach Copilot unchanged.
 export const artifactFieldPattern =
   String.raw`^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$`
 

@@ -17,31 +17,69 @@ export const models = defineCommand({
     description: "List upstream models; use --deep to test inference availability.",
   },
   args: {
-    deep: { type: "boolean", description: "Send real inference probes through an isolated relay pipeline; consumes Copilot usage." },
-    details: { type: "boolean", description: "Show safe request, route and replay evidence for each probe (requires --deep)." },
-    model: { type: "string", description: "Test only this exact upstream ID (requires --deep)." },
-    effort: { type: "string", description: "Probe effort override; otherwise use the lowest advertised effort, or unverified low." },
-    "max-tokens": { type: "string", description: "Output budget per probe (default 4096; bounded by catalog limits)." },
-    timeout: { type: "string", description: "Positive per-probe timeout in seconds (default 30; bounded by configured timeout)." },
-    "total-timeout": { type: "string", description: "Positive timeout in seconds for all probes (default 300)." },
+    deep: {
+      type: "boolean",
+      description: "Send real inference probes through an isolated relay pipeline; consumes Copilot usage.",
+    },
+    details: {
+      type: "boolean",
+      description: "Show safe request, route and replay evidence for each probe (requires --deep).",
+    },
+    model: {
+      type: "string",
+      description: "Test only this exact upstream ID (requires --deep).",
+    },
+    effort: {
+      type: "string",
+      description: "Probe effort override; otherwise use the lowest advertised effort, or unverified low.",
+    },
+    "max-tokens": {
+      type: "string",
+      description: "Output budget per probe (default 4096; bounded by catalog limits).",
+    },
+    timeout: {
+      type: "string",
+      description: "Positive per-probe timeout in seconds (default 30; bounded by configured timeout).",
+    },
+    "total-timeout": {
+      type: "string",
+      description: "Positive timeout in seconds for all probes (default 300).",
+    },
   },
   async run({ args }) {
+    // Each step records what it is attempting, so the catch below can say which
+    // step failed without printing the raw error.
     let failure = "Invalid model check options"
+
     try {
       const positive = (value: string | undefined, fallback: number) => {
         if (value === undefined) {
           return fallback
         }
 
+        // Timeouts arrive in seconds and become milliseconds. The cap keeps those
+        // within a 32-bit timer delay; Node fires a longer one after 1 ms.
         const number = Number(value)
-        if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number <= 0 || number > 2_147_483) {
+        if (
+          !/^\d+$/.test(value)
+          || !Number.isSafeInteger(number)
+          || number <= 0
+          || number > 2_147_483
+        ) {
           throw new Error("invalid option")
         }
 
         return number
       }
 
-      if (!args.deep && (args.details || [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]].some((value) => value !== undefined))) {
+      if (
+        !args.deep
+        && (
+          args.details
+          || [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]]
+            .some((value) => value !== undefined)
+        )
+      ) {
         throw new Error("deep required")
       }
 
@@ -56,6 +94,7 @@ export const models = defineCommand({
         effort: args.effort,
         details: Boolean(args.details),
       }
+
       const prepare = async () => {
         failure = "Could not load relay configuration"
         const appConfig = await readAppConfig()
@@ -64,21 +103,28 @@ export const models = defineCommand({
         const config = readProxyConfig(appConfig)
 
         failure = "Could not authenticate with GitHub Copilot"
+        // --deep keeps setup logging off the console, which would also hide the
+        // default sign-in prompt, so the device code is printed to stderr here.
         await setupProxyAuth(config, args.deep ? {
-          onDeviceCode: (url, code) => console.error(`Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`),
+          onDeviceCode: (url, code) => console.error(
+            `Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`,
+          ),
         } : undefined)
+
         failure = "Could not fetch upstream model catalog"
         const catalog = await loadCopilotModelCatalog(config)
         return { config, catalog }
       }
 
       const { config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
+
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
         if (args.model !== undefined && !catalog.models.has(args.model)) {
           throw new Error("unknown model")
         }
 
+        // Order by ID alone; a plain sort() would compare stringified [id, model] pairs.
         const entries = [...catalog.models]
           .sort(([a], [b]) => {
             if (a < b) {
@@ -88,6 +134,7 @@ export const models = defineCommand({
             return a > b ? 1 : 0
           })
           .filter(([id]) => args.model === undefined || args.model === id)
+
         failure = "Could not complete model availability checks"
         process.exitCode = await probeModels(config, entries, probeOptions)
         return
@@ -101,13 +148,15 @@ export const models = defineCommand({
     } catch (error) {
       let detail = "Check configuration, authentication, and upstream connectivity."
       if (error instanceof HTTPError) {
-        // The client wraps local aborts in synthetic HTTP responses.
+        // The client wraps local aborts in synthetic HTTP responses that carry a
+        // detail: 504 for a timeout, otherwise a cancellation.
         if (error.detail !== undefined) {
           detail = error.response.status === 504 ? "request timed out" : "request cancelled"
         } else {
           detail = `HTTP ${error.response.status}`
         }
 
+        // An unread body can hold its connection open; release it before exiting.
         await error.response.body?.cancel().catch(() => {})
       }
 

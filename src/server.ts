@@ -117,6 +117,8 @@ export const createServer = (config: ProxyConfig) => {
       ))
     }
   })
+
+  // Browser-origin and local-request checks, not authentication.
   app.use("*", async (c, next) => {
     const url = new URL(c.req.url)
     // The Node adapter supplies the real socket. This also pins an ephemeral
@@ -124,8 +126,15 @@ export const createServer = (config: ProxyConfig) => {
     const incoming = c.env?.incoming
     const boundPort = incoming?.socket.localPort ?? port
     const rawTarget = incoming?.url
-    const absoluteTarget = rawTarget && !rawTarget.startsWith("/") ? /^(https?):\/\/([^/?#]+)/i.exec(rawTarget) : undefined
-    const authority = absoluteTarget ? parseAuthority(absoluteTarget[2], `${absoluteTarget[1].toLowerCase()}:`) : parseAuthority(url.host, url.protocol)
+    // An absolute-form request target names its own authority, which Host must match.
+    const absoluteTarget =
+      rawTarget && !rawTarget.startsWith("/") ?
+        /^(https?):\/\/([^/?#]+)/i.exec(rawTarget)
+      : undefined
+    const authority =
+      absoluteTarget ?
+        parseAuthority(absoluteTarget[2], `${absoluteTarget[1].toLowerCase()}:`)
+      : parseAuthority(url.host, url.protocol)
     const hostHeader = c.req.header("host")
     const headerAuthority = hostHeader === undefined ? authority : parseAuthority(hostHeader, url.protocol)
     if (!authority || !headerAuthority || url.username || url.password
@@ -150,11 +159,15 @@ export const createServer = (config: ProxyConfig) => {
       }
     }
 
-    if (c.req.method === "POST"
+    // A message request that carries a body must declare it as JSON.
+    if (
+      c.req.method === "POST"
       && (c.req.path === "/v1/messages" || c.req.path === "/v1/messages/count_tokens")
-      && (incoming ? Boolean(incoming.headers["transfer-encoding"])
-        || Number(incoming.headers["content-length"] ?? 0) > 0 : c.req.raw.body !== null)
-      && c.req.header("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
+      && (incoming
+        ? Boolean(incoming.headers["transfer-encoding"]) || Number(incoming.headers["content-length"] ?? 0) > 0
+        : c.req.raw.body !== null)
+      && c.req.header("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
+    ) {
       const message = "Content-Type must be application/json"
       c.set("requestErrorMessage", message)
       return c.json({ error: { message } }, 415)
@@ -173,12 +186,14 @@ export const createServer = (config: ProxyConfig) => {
       cleanupCapturesIfDue()
     }
 
+    // Each request keeps the policy it was admitted with, even across a hot reload.
     const policy = snapshotProxyConfig(config)
     const runtime = snapshotRuntimeState()
     const trace = await RequestTrace.create(c.get("requestId"), c.req.raw, policy, runtime, !isReplayTransport() && isDebugLogging())
     c.set("config", policy)
     c.set("requestTrace", trace)
     c.req.raw = trace.captureRequest(c.req.raw)
+
     await withRuntimeState(runtime, () => withRequestTrace(trace, next))
     c.res = trace.captureResponse(c.res)
     trace.responseReady()
@@ -222,6 +237,7 @@ export const createServer = (config: ProxyConfig) => {
   app.on(["GET", "HEAD"], "/api/hello", (c) => c.body(null, 200))
 
   app.route("/v1", claudeRoutes)
+
   app.notFound(async (c) => {
     const message = "Unsupported Claude API route"
     c.set("requestErrorMessage", message)

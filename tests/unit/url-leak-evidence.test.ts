@@ -186,6 +186,7 @@ test("does not leak the base url path on a refused connection", async () => {
   // The class of failure must still be identifiable.
   assert.match(output, /fetch failed|ECONNREFUSED|upstream failed/)
 })
+
 // Why: this is the exact shape src/copilot/chat.ts logUpstreamError builds -
 // a nested { response: { status, url, headers, body } } - driven through the
 // real createChatCompletions rather than reconstructed by hand.

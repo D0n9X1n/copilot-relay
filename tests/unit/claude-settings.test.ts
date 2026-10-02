@@ -10,6 +10,7 @@ import { astraLimits, solLimits } from "../fixtures/model-limits"
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-settings-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
+
 const { applyClaudeConfig } = await import("../../src/lib/claude-settings")
 
 test.after(async () => {
@@ -38,15 +39,24 @@ test("seeds actual context and maximum output budgets from model discovery", asy
     ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol"],
   ] as const) {
     await withTemporarySettings(async (configPath) => {
-      const input = { baseUrl: "http://127.0.0.1:4142", configPath, gptModel, gptLimits, maxOutputTokens: 128_000 }
+      const input = {
+        baseUrl: "http://127.0.0.1:4142",
+        configPath,
+        gptModel,
+        gptLimits,
+        maxOutputTokens: 128_000
+      }
+
       await applyClaudeConfig(input)
       const settings = await readSettings(configPath)
       const env = settings.env as Record<string, unknown>
+
       assert.equal(settings.model, expectedModel)
       assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, String(gptLimits.max_context_window_tokens))
       assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "128000")
       assert.equal(env.DISABLE_COMPACT, undefined)
       assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, undefined)
+
       assert.equal((await applyClaudeConfig(input)).changed, false)
     })
   }
@@ -58,11 +68,16 @@ test("preserves explicit client context and output overrides", async () => {
     await fs.writeFile(configPath, JSON.stringify({
       env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "500000", CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192" },
     }))
+
     await applyClaudeConfig({
-      baseUrl: "http://127.0.0.1:4142", configPath, gptModel: "gpt-6-astra",
-      gptLimits: astraLimits, maxOutputTokens: 128_000,
+      baseUrl: "http://127.0.0.1:4142",
+      configPath,
+      gptModel: "gpt-6-astra",
+      gptLimits: astraLimits,
+      maxOutputTokens: 128_000,
     })
     const env = (await readSettings(configPath)).env as Record<string, unknown>
+
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "500000")
     assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "8192")
   })
@@ -365,6 +380,8 @@ for (const symlinked of [false, true]) {
       const input = { baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra" }
       const reader = await fs.open(target, "r")
       try {
+        // Windows refuses to rename over the open file, so the first publish
+        // must fail cleanly there and succeed once the reader closes.
         if (process.platform === "win32") {
           await assert.rejects(applyClaudeConfig(input), { code: "EPERM", syscall: "rename" })
           assert.equal(await fs.readFile(target, "utf8"), original)
@@ -373,7 +390,11 @@ for (const symlinked of [false, true]) {
           assert.equal((await applyClaudeConfig(input)).changed, true)
         }
 
-        assert.equal(await reader.readFile("utf8"), original, "an open reader must never see a truncated/replaced payload")
+        assert.equal(
+          await reader.readFile("utf8"),
+          original,
+          "an open reader must never see a truncated/replaced payload"
+        )
       } finally {
         await reader.close()
       }
@@ -383,6 +404,7 @@ for (const symlinked of [false, true]) {
       }
 
       const settings = await readSettings(configPath)
+
       assert.equal(settings.theme, "dark")
       assert.deepEqual(settings.permissions, { allow: ["Read"] })
       assert.equal((settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL, "http://relay.test.invalid")
@@ -396,8 +418,10 @@ for (const symlinked of [false, true]) {
         assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
       }
 
-      assert.deepEqual((await fs.readdir(path.dirname(configPath))).sort(),
-        symlinked ? ["managed.json", "settings.json"] : ["settings.json"])
+      assert.deepEqual(
+        (await fs.readdir(path.dirname(configPath))).sort(),
+        symlinked ? ["managed.json", "settings.json"] : ["settings.json"]
+      )
     })
   })
 }
@@ -406,6 +430,7 @@ test("does not overwrite a concurrent settings edit made after its snapshot read
   await withTemporarySettings(async (configPath) => {
     await fs.mkdir(path.dirname(configPath), { recursive: true })
     await fs.writeFile(configPath, '{"theme":"dark"}\n')
+
     const replacement = '{"theme":"light","concurrent":"keep me"}\n'
     const realRead = fs.readFile.bind(fs)
     const realWrite = fs.writeFile.bind(fs)
@@ -422,7 +447,9 @@ test("does not overwrite a concurrent settings edit made after its snapshot read
     })
 
     await assert.rejects(applyClaudeConfig({
-      baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra",
+      baseUrl: "http://relay.test.invalid",
+      configPath,
+      gptModel: "gpt-6-astra",
     }), /changed|conflict/i)
     assert.equal(edited, true, "fixture must actually race the snapshot read")
     assert.equal(await realRead(configPath, "utf8"), replacement)
@@ -435,6 +462,7 @@ test("preserves settings when publication fails and removes its temporary file",
     await fs.mkdir(path.dirname(configPath), { recursive: true })
     const original = '{"theme":"dark"}\n'
     await fs.writeFile(configPath, original)
+
     const realRename = fs.rename.bind(fs)
     const resolvedPath = await fs.realpath(configPath)
     const failure = Object.assign(new Error("synthetic rename failure"), { code: "EIO" })
@@ -447,7 +475,9 @@ test("preserves settings when publication fails and removes its temporary file",
     })
 
     await assert.rejects(applyClaudeConfig({
-      baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra",
+      baseUrl: "http://relay.test.invalid",
+      configPath,
+      gptModel: "gpt-6-astra",
     }), (error) => error === failure)
     assert.equal(await fs.readFile(configPath, "utf8"), original)
     assert.deepEqual(await fs.readdir(path.dirname(configPath)), ["settings.json"])

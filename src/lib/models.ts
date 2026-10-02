@@ -32,10 +32,17 @@ export const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   value === "none" || isConfiguredReasoningEffort(value)
 
 const invalidRequestEffort = (message: string): HTTPError =>
-  new HTTPError(message, new Response(JSON.stringify({
-    type: "error",
-    error: { type: "invalid_request_error", message },
-  }), { status: 400, headers: { "content-type": "application/json" } }), message)
+  new HTTPError(
+    message,
+    new Response(
+      JSON.stringify({
+        type: "error",
+        error: { type: "invalid_request_error", message },
+      }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    ),
+    message,
+  )
 
 export function getRequestReasoningEffort(request: {
   output_config?: unknown
@@ -60,7 +67,8 @@ export function getRequestReasoningEffort(request: {
 
   if (!isReasoningEffort(requested)) {
     const field = nativeEffort !== undefined && nativeEffort !== null ?
-        "output_config.effort" : "reasoning_effort"
+        "output_config.effort"
+      : "reasoning_effort"
     throw invalidRequestEffort(
       `Invalid ${field}: expected none, low, medium, high, xhigh, or max.`,
     )
@@ -90,11 +98,13 @@ export const normalizeClaudeModelId = (
     return model
   }
 
+  // A catalog fetched before a reload switched upstreams does not describe this one's models.
   const catalog = getRuntimeState().modelCatalog
   contextWindowTokens ??=
     catalog?.baseUrl === getRuntimeState().upstreamBaseUrl ?
       catalog?.models.get(normalized)?.limits?.max_context_window_tokens
     : undefined
+
   // [1m] overrides Claude's numeric context setting. Use the plain ID when
   // discovery reports another window, so that setting can represent it exactly.
   return contextWindowTokens !== undefined && contextWindowTokens !== 1_000_000 ?
@@ -128,6 +138,7 @@ export const getUpstreamModelIds = (): Array<string> => {
 
 export const routeModelId = (model: string): string => {
   const routing = getModelRouting()
+
   // Keep routing intentionally predictable for Claude Code: any alias that
   // mentions Opus gets the configured Opus upstream, all other model names use
   // the configured GPT upstream.

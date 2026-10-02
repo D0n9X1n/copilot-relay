@@ -98,6 +98,7 @@ for (const keyword of [
         forbidden: false,
       },
     }
+
     assert.deepEqual(normalizeResponsesToolSchema(schema), {
       [keyword]: {
         pattern: { type: "string" },
@@ -129,6 +130,7 @@ for (const keyword of [
       }),
       { [keyword]: { type: "string" } },
     )
+
     for (const value of [true, false]) {
       assert.deepEqual(
         normalizeResponsesToolSchema({ [keyword]: value }),
@@ -176,5 +178,6 @@ test("does not treat literal data or property names as schema keywords", () => {
     required: ["pattern"],
     $ref: "#/$defs/pattern",
   }
+
   assert.deepEqual(normalizeResponsesToolSchema(schema), schema)
 })

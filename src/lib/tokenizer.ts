@@ -76,6 +76,7 @@ const calculateMessageTokens = (
   const tokensPerMessage = 3
   const tokensPerName = 1
   let tokens = tokensPerMessage
+
   for (const [key, value] of Object.entries(message)) {
     if (typeof value === "string") {
       tokens += encoder.encode(value).length
@@ -118,6 +119,7 @@ const calculateTokens = (
     numTokens += calculateMessageTokens(message, encoder, constants)
   }
 
+  // Every reply is primed with <|start|>assistant<|message|>, which the chat format counts as 3.
   numTokens += 3
   return numTokens
 }
@@ -130,23 +132,24 @@ const getEncodeChatFunction = async (encoding: string): Promise<Encoder> => {
     }
   }
 
+  // count_tokens is advisory, so an unknown tokenizer falls back to o200k_base instead of failing.
   if (!isSupportedTokenizer(encoding)) {
     const fallback = (await encodingMap.o200k_base()) as Encoder
     encodingCache.set(encoding, fallback)
     return fallback
   }
 
-  const mod = (await encodingMap[encoding]()) as Encoder
-  encodingCache.set(encoding, mod)
-  return mod
+  const encoder = (await encodingMap[encoding]()) as Encoder
+  encodingCache.set(encoding, encoder)
+  return encoder
 }
 
 export const getTokenizerFromModel = (model: TokenizerModel): string =>
   model.capabilities.tokenizer || "o200k_base"
 
+// Tool/function overhead differs by tokenizer family. Keep these constants
+// small and explicit so count_tokens remains deterministic in tests.
 const getModelConstants = (model: TokenizerModel) =>
-  // Tool/function overhead differs by tokenizer family. Keep these constants
-  // small and explicit so count_tokens remains deterministic in tests.
   model.id === "gpt-3.5-turbo" || model.id === "gpt-4"
     ? {
         funcInit: 10,
@@ -261,16 +264,18 @@ const calculateToolTokens = (
   constants: ReturnType<typeof getModelConstants>,
 ): number => {
   let tokens = constants.funcInit
-  const func = tool.function
-  const fName = func.name
-  let fDesc = func.description || ""
-  if (fDesc.endsWith(".")) {
-    fDesc = fDesc.slice(0, -1)
+  const definition = tool.function
+  const functionName = definition.name
+  let functionDescription = definition.description || ""
+
+  if (functionDescription.endsWith(".")) {
+    functionDescription = functionDescription.slice(0, -1)
   }
 
-  tokens += encoder.encode(`${fName}:${fDesc}`).length
-  if (typeof func.parameters === "object" && func.parameters !== null) {
-    tokens += calculateParametersTokens(func.parameters, encoder, constants)
+  tokens += encoder.encode(`${functionName}:${functionDescription}`).length
+
+  if (typeof definition.parameters === "object" && definition.parameters !== null) {
+    tokens += calculateParametersTokens(definition.parameters, encoder, constants)
   }
 
   return tokens

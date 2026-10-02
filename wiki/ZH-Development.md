@@ -304,6 +304,9 @@ linter 依赖。
 | `else`、`catch`、`finally` 紧接在上一个块的 `}` 所在行 | `@stylistic/brace-style: "1tbs"` |
 | 每行一条语句 —— 不写 `a(); b()` | `@stylistic/max-statements-per-line` |
 | 跨多行的块语句（`if`、循环、`try`、`switch`、函数）之后空一行 | `@stylistic/padding-line-between-statements`（`multiline-block-like`） |
+| 非空的块或主体中，`{` 之后、`}` 之前不留空行 | `@stylistic/padded-blocks: "never"` |
+| 字符串和模板字面量之外，最多连续一个空行；Python 仍按 PEP 8 在顶层定义前后空两行 | `@stylistic/no-multiple-empty-lines`，`max: 1` |
+| 三元表达式的分支中不再嵌套三元表达式 —— 改用 `if`/`else`、提前返回或查找表 | `no-nested-ternary` |
 | 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
 | 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
 | Python：不写单行复合语句（包括 `case` 子句），不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
@@ -324,7 +327,7 @@ linter 依赖。
   API、配置键、错误码或协议字段。
 - 注释解释原因 —— 不变量、顺序约束或不明显的理由 —— 而不是复述下一行在做什么。改正
   过时的注释，而不是再加新的。
-- 优先用提前返回代替深层嵌套；用 `if`/`else` 或小型查找表代替嵌套三元表达式。
+- 优先用提前返回代替深层嵌套。
 - 测试用空行分开准备、执行和断言；fixture 不能掩盖被测行为。
 
 纯格式提交要与改名和逻辑改动分开，评审者才能确认格式提交编译出的程序完全相同。

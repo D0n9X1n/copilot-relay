@@ -20,6 +20,7 @@ import { paths } from "~/lib/paths"
 
 export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
+
 export interface AppConfig {
   claudeSetup: boolean
   copilotBaseUrl: string
@@ -127,13 +128,19 @@ const normalizeInteger = (
     return undefined
   }
 
-  const number = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
-  if (typeof number !== "number" || !Number.isSafeInteger(number)
-    || number < minimum || number > maximum) {
+  // parseConfigYaml returns every scalar as a string, so a plain digit string is read as a number.
+  const candidate = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
+
+  if (
+    typeof candidate !== "number"
+    || !Number.isSafeInteger(candidate)
+    || candidate < minimum
+    || candidate > maximum
+  ) {
     throw new Error(`Invalid ${key}: expected an integer from ${minimum} to ${maximum}`)
   }
 
-  return number
+  return candidate
 }
 
 const normalizeString = (value: unknown): string | undefined =>
@@ -318,6 +325,7 @@ const readStartupDocument = async (snapshot: FileSnapshot): Promise<string> => {
 
 const readDefaultConfigTemplate = async (): Promise<string> => {
   let currentDir = dirname(fileURLToPath(import.meta.url))
+
   // Both src/ and a packaged dist/ locate the package-level template this way.
   while (true) {
     try {
@@ -349,6 +357,7 @@ const configAliases: Record<string, keyof AppConfig> = {
   web_search_backend: "webSearchBackend",
   claude_upstream_api: "claudeUpstreamApi",
 }
+
 const configKeys = Object.keys(defaultConfig) as Array<keyof AppConfig>
 
 // This is deliberately a flat scalar subset, not a permissive partial YAML
@@ -365,10 +374,16 @@ const parseYamlScalar = (value: string): string => {
     if (match) {
       try {
         return JSON.parse(match[1]) as string
-      } catch { /* invalid escape */ }
+      } catch {
+        // An invalid escape falls through to the unsupported-syntax error below.
+      }
     }
   } else {
     const plain = trimmed.replace(/(^|[ \t]+)#.*$/, "").trim()
+
+    // A value that starts with one of these YAML indicators, or contains ": ", means something
+    // other than a plain string to a full YAML parser, so it is rejected rather than read
+    // differently here.
     if (!/^[\[\]{},&*!>|%@`]/.test(plain) && !/:[ \t]/.test(plain)) {
       return plain
     }
@@ -380,6 +395,7 @@ const parseYamlScalar = (value: string): string => {
 const parseConfigYaml = (content: string): Record<string, unknown> => {
   const config: Record<string, unknown> = {}
   const seen = new Set<string>()
+
   for (const [index, line] of content.split(/\r?\n/).entries()) {
     if (!line.trim() || line.trimStart().startsWith("#")) {
       continue
@@ -398,6 +414,7 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
     }
 
     seen.add(canonical)
+
     const scalar = parseYamlScalar(value)
     if (Object.hasOwn(defaultConfig, canonical)) {
       config[canonical] = scalar
@@ -419,10 +436,17 @@ const materializeMissingKeys = (
 
   // Reuse the generated guidance only for absent keys. Never serialize an
   // explicitly supplied value over its spelling, comments, or unknown neighbors.
-  const additions = serializeConfig(config).split("\n\n").filter((section) => {
-    const key = /^([A-Za-z][A-Za-z0-9]*):/m.exec(section)?.[1]
-    return key !== undefined && missing.has(key as keyof AppConfig)
-  }).join("\n\n").trimEnd()
+  // serializeConfig writes each key, with its guidance, as its own blank-line-separated section.
+  const additions = serializeConfig(config)
+    .split("\n\n")
+    .filter((section) => {
+      const key = /^([A-Za-z][A-Za-z0-9]*):/m.exec(section)?.[1]
+      return key !== undefined && missing.has(key as keyof AppConfig)
+    })
+    .join("\n\n")
+    .trimEnd()
+
+  // Follow the document's own line endings, so a CRLF file is not left with mixed ones.
   const newline = document.includes("\r\n") ? "\r\n" : "\n"
   const separator = document && !document.endsWith("\n") ? newline : ""
   return document + separator + newline + additions.replaceAll("\n", newline) + newline
@@ -503,6 +527,7 @@ export async function readAppConfig(): Promise<AppConfig> {
   const raw = parseConfigYaml(document)
   const config = resolveConfig(raw)
   const content = document ? materializeMissingKeys(document, raw, config) : serializeConfig(config)
+
   if (content !== snapshot.raw) {
     await writeFileSnapshot(snapshot, content)
   }
@@ -511,14 +536,19 @@ export async function readAppConfig(): Promise<AppConfig> {
 }
 
 const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>
-  left.resolvedPath === right.resolvedPath && left.raw === right.raw && left.mode === right.mode
+  left.resolvedPath === right.resolvedPath
+  && left.raw === right.raw
+  && left.mode === right.mode
   && JSON.stringify(left.identity) === JSON.stringify(right.identity)
 
 export const watchAppConfig = (
   onReload: (config: AppConfig) => void,
 ): ReturnType<typeof setInterval> => {
   let lastSnapshot: FileSnapshot | undefined
+  // setInterval does not wait for an async callback, so this keeps a slow reload from overlapping
+  // the next tick.
   let reloading = false
+
   const timer = setInterval(async () => {
     if (reloading) {
       return
@@ -543,12 +573,15 @@ export const watchAppConfig = (
       }
 
       const config = resolveConfig(raw)
+
+      // A save that lands while this one is being validated is picked up on the next tick.
       const current = await readFileSnapshot(paths.configPath)
       if (!sameSnapshot(snapshot, current)) {
         throw new FileConflictError()
       }
 
       onReload(config)
+
       // Failed verification or application must remain retryable without a new edit.
       lastSnapshot = snapshot
     } catch (error) {
@@ -561,6 +594,8 @@ export const watchAppConfig = (
       reloading = false
     }
   }, 1000)
+
+  // Unref'd, so the watcher alone does not keep the process running.
   if (typeof timer.unref === "function") {
     timer.unref()
   }

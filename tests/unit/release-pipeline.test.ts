@@ -39,7 +39,10 @@ test("test preload isolates static imports per child and cleans only owned tempo
     process.env.USERPROFILE = process.env.INHERITED_HOME
     console.log(JSON.stringify(result))
   `)
+
   try {
+    // Each child inherits a home, a verbose logger and tsx disk caching that the
+    // bootstrap must override.
     const run = () => execute(process.execPath, ["--import", bootstrap, "--import", tsx, probe], {
       cwd: root,
       env: {
@@ -47,6 +50,7 @@ test("test preload isolates static imports per child and cleans only owned tempo
         INHERITED_HOME: inheritedHome, CONSOLA_LEVEL: "5", TSX_DISABLE_CACHE: "",
       },
     })
+
     const results = await Promise.all([run(), run()])
     const homes = new Set<string>()
     for (const { stdout } of results) {
@@ -61,6 +65,7 @@ test("test preload isolates static imports per child and cleans only owned tempo
       assert.deepEqual(result.diskCaches, [], "tsx must not leave asynchronous disk-cache writes racing exit cleanup")
       assert.equal(path.dirname(result.temporary), path.dirname(result.home))
       homes.add(result.home)
+
       for (const owned of [result.home, result.temporary, result.suiteHome]) {
         await assert.rejects(fs.access(owned), { code: "ENOENT" })
       }
@@ -81,10 +86,13 @@ test("bootstrap silences its logger without silencing a spawned CLI help command
     const output = execFileSync(process.execPath, ["--import", ${JSON.stringify(tsx)}, ${JSON.stringify(path.join(root, "src/main.ts"))}, "--help"], { encoding: "utf8", env: { ...process.env, CI: "true" } })
     process.stdout.write(output)
   `)
+
   try {
+    // Without an inherited level, a silent --help can only mean the bootstrap leaked its own.
     const env = { ...process.env }
     delete env.CONSOLA_LEVEL
     const { stdout } = await execute(process.execPath, ["--import", bootstrap, probe], { cwd: root, env })
+
     assert.match(stdout, /USAGE/)
     assert.match(stdout, /copilot-relay/)
   } finally {
@@ -145,13 +153,17 @@ for (const suite of ["chat-completions", "auth-recovery", "model-limits", "web-s
         }
       }, ...options);
     `)
+
     try {
+      // Run the suite as a top-level test run, not as a child of this one. The
+      // name pattern matches no test, so only the suite's setup and teardown run.
       const env = { ...process.env }
       delete env.NODE_TEST_CONTEXT
       const { stdout } = await execute(process.execPath, [
         "--import", bootstrap, "--import", tsx, "--import", pathToFileURL(guard).href,
         "--test", "--test-name-pattern=^__teardown_order_only__$", path.join(root, "tests/unit", `${suite}.test.ts`),
       ], { cwd: root, env, timeout: 20_000, maxBuffer: 1024 * 1024 })
+
       assert.match(stdout, /LOG_TEARDOWN_DRAIN_VERIFIED/)
     } finally {
       await fs.rm(fixture, { recursive: true, force: true })
@@ -162,10 +174,12 @@ for (const suite of ["chat-completions", "auth-recovery", "model-limits", "web-s
 test("dependency lock pins the manifest and all platform-specific build dependencies", async () => {
   const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))
   const lock = JSON.parse(await fs.readFile(path.join(root, "package-lock.json"), "utf8"))
+
   assert.equal(lock.lockfileVersion, 3)
   assert.equal(lock.version, manifest.version)
   assert.deepEqual(lock.packages[""].dependencies, manifest.dependencies)
   assert.deepEqual(lock.packages[""].devDependencies, manifest.devDependencies)
+
   for (const [location, value] of Object.entries(lock.packages)) {
     if (!location) {
       continue
@@ -192,15 +206,18 @@ test("release graph validates tags then gates immutable publishers on every plat
   const publish = await fs.readFile(path.join(root, ".github/workflows/publish.yml"), "utf8")
   const ci = await fs.readFile(path.join(root, ".github/workflows/ci.yml"), "utf8")
   const jobs = workflowJobs(publish)
+
   assert.ok(jobs.validate, "tag validation must be a separate prerequisite")
   assert.match(jobs.validate, /refs\/tags\//)
   assert.match(jobs.validate, /manifest\.version/)
+
   assert.match(jobs.candidates, /needs: validate/)
   assert.match(jobs.candidates, /npm ci/)
   assert.equal((jobs.candidates.match(/npm run build/g) ?? []).length, 1)
   assert.equal((jobs.candidates.match(/npm pack --ignore-scripts/g) ?? []).length, 2)
   assert.match(jobs.candidates, /actions\/upload-artifact@v4/)
   assert.match(jobs.candidates, /SHA256SUMS/)
+
   assert.match(jobs.test, /needs: \[validate, candidates\]/)
   for (const workflow of [jobs.test, ci]) {
     assert.match(workflow, /node-version: \[22, 26\]/)
@@ -241,6 +258,7 @@ type OfflineScenario = {
   head?: string; registry?: "matching" | "different" | "missing" | "unavailable"
   release?: "matching" | "different" | "missing-tarball" | "missing-checksum" | "partial-different" | "missing" | "unavailable"
 }
+
 const fixtureVersion = "1.2.3"
 const fixtureCommit = "a".repeat(40)
 const fixtureTarball = `copilot-relay-${fixtureVersion}.tgz`
@@ -256,6 +274,8 @@ const workflowRunBlock = (yaml: string, job: string): string => {
   const lines = section.split(/\r?\n/)
   const starts = lines.flatMap((line, index) => line === "        run: |" ? [index] : [])
   assert.equal(starts.length, 1, `expected one shell block in ${job}`)
+
+  // The literal block ends at the first non-empty line indented less than its body.
   const block: string[] = []
   for (const line of lines.slice(starts[0] + 1)) {
     if (line && !line.startsWith("          ")) {
@@ -272,6 +292,7 @@ const workflowRunBlock = (yaml: string, job: string): string => {
 test("release workflow extraction preserves the same jobs and shell blocks with LF or CRLF", async () => {
   const lf = (await fs.readFile(publishWorkflow, "utf8")).replace(/\r\n/g, "\n")
   const crlf = lf.replace(/\n/g, "\r\n")
+
   const jobs = workflowJobs(lf)
   assert.deepEqual(Object.keys(jobs), ["validate", "candidates", "test", "publish-npm", "publish-github", "github-release"])
   assert.deepEqual(Object.fromEntries(Object.entries(workflowJobs(crlf))
@@ -309,6 +330,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     }
 
     assert.ok(bash, "Git Bash (Windows) or bash is required; publishing behavior is never skipped")
+
     const env: NodeJS.ProcessEnv = {}
     for (const [key, value] of Object.entries(process.env)) {
       if (/^(?:SystemRoot|WINDIR|ComSpec|PATHEXT)$/i.test(key)) {
@@ -320,6 +342,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
       HOME: home, USERPROFILE: home, TMPDIR: bashPath(temporary), TMP: temporary, TEMP: temporary,
       CONSOLA_LEVEL: "0", BASH_ENV: "", ENV: "", LANG: "C", LC_ALL: "C",
     })
+
     const utilityNames = ["mkdir", "cp", "mktemp", "rm", "basename", "cmp", "grep", "jq"]
     const inheritedPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1]
     const { stdout: discovered } = await execute(bash, ["--noprofile", "--norc", "-c",
@@ -336,6 +359,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     const archive = fixtureBytes.toString("base64")
     const checksum = Buffer.from(fixtureChecksum).toString("base64")
     const assets: Record<string, string> = { [fixtureTarball]: archive, SHA256SUMS: checksum }
+
     if (["different", "partial-different"].includes(scenario.release ?? "")) {
       assets[fixtureTarball] = Buffer.from("different immutable bytes").toString("base64")
     }
@@ -358,6 +382,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
       registry: scenario.registry ?? "matching", release: scenario.release ?? "matching", assets,
       integrity: `sha512-${createHash("sha512").update(fixtureBytes).digest("base64")}`,
     }
+
     await fs.writeFile(path.join(work, "state.json"), JSON.stringify(state))
     await fs.writeFile(path.join(work, "operations.jsonl"), "")
     await fs.writeFile(path.join(work, "package.json"), JSON.stringify({ name: scenario.packageName ?? "copilot-relay", version }))
@@ -421,6 +446,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
         }
       } else assert.fail("unrecognized offline CLI: " + program);
     `)
+
     // Native Node cannot exec a Git Bash script as git on Windows. Redirect only
     // that one execFileSync call to the same fake CLI; refuse every other child
     // launch and all sockets/fetches. Hashing, JSON and assertions remain real.
@@ -435,6 +461,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
       for (const name of ["exec", "execSync", "execFile", "spawn", "spawnSync", "fork"]) cp[name] = deny;
       require("node:module").syncBuiltinESMExports();
     `)
+
     Object.assign(env, {
       PATH: bashPath(bin), NODE_OPTIONS: `--require="${bashPath(path.join(work, "offline-guard.cjs"))}"`,
       FIXTURE_NODE: bashPath(process.execPath), FIXTURE_CLI: bashPath(path.join(work, "mock-cli.cjs")),
@@ -456,15 +483,18 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     await fs.writeFile(copy, yaml)
     const script = path.join(work, "run.sh")
     await fs.writeFile(script, workflowRunBlock(await fs.readFile(copy, "utf8"), job))
+
     let code = 0
     let stdout = ""
     let stderr = ""
     try {
       // Bash's own PWD is already /c/... on Windows; use it for PATH rather
       // than a drive-letter colon, and avoid executable search via the host.
-      ({ stdout, stderr } = await execute(bash, ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'export PATH="$PWD/mock-bin"; source ./run.sh'], {
-        cwd: work, env, timeout: 20_000, maxBuffer: 1024 * 1024,
-      }))
+      ({ stdout, stderr } = await execute(
+        bash,
+        ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", 'export PATH="$PWD/mock-bin"; source ./run.sh'],
+        { cwd: work, env, timeout: 20_000, maxBuffer: 1024 * 1024 },
+      ))
     } catch (error) {
       const failure = error as { code: number | string; stdout: string; stderr: string; killed?: boolean }
       assert.equal(failure.killed, false, `workflow fixture timed out: ${failure.stderr}`)
@@ -475,12 +505,20 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     }
 
     assert.equal(await fs.readFile(env.FIXTURE_GUARD!, "utf8"), "offline guard active")
-    const operations: OfflineOperation[] = (await fs.readFile(env.FIXTURE_LOG!, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line))
+    const operations: OfflineOperation[] = (await fs.readFile(env.FIXTURE_LOG!, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line))
     for (const operation of operations) {
       assert.equal(operation.sentinel, state.sentinel, "only fixture CLI operations are allowed")
     }
 
-    return { code, stdout, stderr, operations,
+    return {
+      code,
+      stdout,
+      stderr,
+      operations,
       outputs: await fs.readFile(env.GITHUB_OUTPUT!, "utf8").catch(() => ""),
       assets: JSON.parse(await fs.readFile(env.FIXTURE_STATE!, "utf8")).assets as Record<string, string>,
     }
@@ -497,20 +535,24 @@ const assertRegistryRefused = (result: Awaited<ReturnType<typeof offlineWorkflow
 
 test("offline registry mutation proof rejects removal of the real integrity comparison", async () => {
   for (const job of ["publish-npm", "publish-github"]) {
-    const result = await offlineWorkflow(job, { registry: "different" }, yaml => {
+    const mutant = await offlineWorkflow(job, { registry: "different" }, yaml => {
       const jobText = workflowJobs(yaml)[job]
       const mutated = jobText.replace(/^[ \t]+test "\$existing" = "\$integrity".*\r?\n/m, "")
       assert.notEqual(mutated, jobText, "mutation must remove exactly the integrity guard")
       return yaml.replace(jobText, () => mutated)
     })
-    assert.equal(result.code, 0, "the mutant incorrectly succeeds on different bytes")
-    assert.throws(() => assertRegistryRefused(result), /different immutable registry bytes must fail/)
+
+    assert.equal(mutant.code, 0, "the mutant incorrectly succeeds on different bytes")
+    assert.throws(() => assertRegistryRefused(mutant), /different immutable registry bytes must fail/)
+
+    // The real workflow, guard intact, refuses the same bytes.
     assertRegistryRefused(await offlineWorkflow(job, { registry: "different" }))
   }
 })
 
 test("offline tag validation emits the exact committed identity only on success", async () => {
   const result = await offlineWorkflow("validate")
+
   assert.equal(result.code, 0, result.stderr)
   assert.equal(result.outputs, `commit=${fixtureCommit}\nversion=${fixtureVersion}\nowner=owner\n`)
   assert.deepEqual(result.operations.map(op => [op.program, ...op.args]), [
@@ -560,6 +602,7 @@ test("offline validation and asset comparisons reject temporary fail-open mutati
       },
     },
   ]
+
   for (const { job, scenario, guard, check } of mutations) {
     const mutant = await offlineWorkflow(job, scenario, yaml => {
       const section = workflowJobs(yaml)[job]
@@ -569,8 +612,11 @@ test("offline validation and asset comparisons reject temporary fail-open mutati
       // A function replacement preserves literal $' and $& inside shell text.
       return yaml.replace(section, () => replacement)
     })
+
     assert.equal(mutant.code, 0, mutant.stderr)
     assert.throws(() => check(mutant), /must fail/)
+
+    // The real workflow, guard intact, passes the same check.
     check(await offlineWorkflow(job, scenario))
   }
 })
@@ -586,6 +632,7 @@ for (const [description, scenario] of [
 ] as const) {
   test(`offline tag validation rejects ${description} without publisher outputs`, async () => {
     const result = await offlineWorkflow("validate", scenario)
+
     assert.notEqual(result.code, 0)
     assert.match(result.stderr, /AssertionError/)
     assert.equal(result.outputs, "", "failed validation cannot authorize candidate creation")
@@ -600,8 +647,10 @@ for (const [job, packageName, directory, registry] of [
   for (const behavior of ["matching", "different", "missing", "unavailable"] as const) {
     test(`offline ${job} handles ${behavior} registry bytes without live publication`, async () => {
       const result = await offlineWorkflow(job, { registry: behavior })
+
       assert.deepEqual(result.operations[0].args, ["view", `${packageName}@${fixtureVersion}`, "dist.integrity", "--json", `--registry=${registry}`])
       assert.ok(result.operations.every(op => op.program === "npm"), "actual workflow must reach only the fake npm")
+
       if (behavior === "different") {
         assertRegistryRefused(result)
         return
@@ -633,6 +682,7 @@ const expectedReleaseAssets = { [fixtureTarball]: fixtureBytes.toString("base64"
 
 test("offline GitHub release rerun compares existing assets without replacing them", async () => {
   const result = await offlineWorkflow("github-release")
+
   assert.equal(result.code, 0, result.stderr)
   assert.deepEqual(result.assets, expectedReleaseAssets)
   assert.deepEqual(githubOperations(result).map(op => op.args.slice(0, 2)), [
@@ -645,11 +695,13 @@ test("offline GitHub release rerun compares existing assets without replacing th
 for (const behavior of ["different", "partial-different"] as const) {
   test(`offline GitHub release ${behavior} bytes fail before any asset upload or release edit`, async () => {
     const result = await offlineWorkflow("github-release", { release: behavior })
+
     assert.notEqual(result.code, 0)
     assert.match(result.stderr, /Existing release asset differs; refusing replacement/)
     assert.ok(githubOperations(result).some(op => op.args[1] === "download"))
     assert.ok(githubOperations(result).every(op => op.args[0] === "api" || op.args[1] === "download"))
     assert.equal(result.assets[fixtureTarball], Buffer.from("different immutable bytes").toString("base64"))
+
     if (behavior === "partial-different") {
       assert.ok(!Object.hasOwn(result.assets, "SHA256SUMS"), "do not upload a missing checksum before comparing every existing asset")
     }
@@ -659,8 +711,10 @@ for (const behavior of ["different", "partial-different"] as const) {
 for (const [behavior, missing] of [["missing-tarball", fixtureTarball], ["missing-checksum", "SHA256SUMS"]] as const) {
   test(`offline GitHub release partial rerun uploads only ${missing}`, async () => {
     const result = await offlineWorkflow("github-release", { release: behavior })
+
     assert.equal(result.code, 0, result.stderr)
     assert.deepEqual(result.assets, expectedReleaseAssets)
+
     const uploads = githubOperations(result).filter(op => op.args[1] === "upload")
     assert.equal(uploads.length, 1)
     assert.deepEqual(uploads[0].args, ["release", "upload", `v${fixtureVersion}`, `release/${missing}`])
@@ -673,8 +727,10 @@ for (const [behavior, missing] of [["missing-tarball", fixtureTarball], ["missin
 
 test("offline GitHub release 404 creates only the candidate archive and checksum", async () => {
   const result = await offlineWorkflow("github-release", { release: "missing" })
+
   assert.equal(result.code, 0, result.stderr)
   assert.deepEqual(result.assets, expectedReleaseAssets)
+
   const operations = githubOperations(result)
   assert.equal(operations.length, 2)
   assert.deepEqual(operations[1].args.slice(0, 6), ["release", "create", `v${fixtureVersion}`, `release/${fixtureTarball}`, "release/SHA256SUMS", "--verify-tag"])
@@ -682,6 +738,7 @@ test("offline GitHub release 404 creates only the candidate archive and checksum
 
 test("offline GitHub release non-404 lookup fails without uploads, creates or edits", async () => {
   const result = await offlineWorkflow("github-release", { release: "unavailable" })
+
   assert.notEqual(result.code, 0)
   assert.match(result.stderr, /GitHub release lookup failed; refusing publication/)
   assert.deepEqual(githubOperations(result).map(op => op.args[0]), ["api"])
@@ -692,6 +749,7 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
   const smoke = path.join(root, "scripts/package-smoke.mjs")
   await fs.access(smoke)
   const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "relay-packed-test-"))
+
   try {
     const project = path.join(fixture, "project")
     await fs.mkdir(project)
@@ -702,7 +760,9 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
     await fs.cp(path.join(root, "src"), path.join(project, "src"), { recursive: true })
     await fs.symlink(path.join(root, "node_modules"), path.join(project, "node_modules"), process.platform === "win32" ? "junction" : "dir")
     await execute(process.execPath, [path.join(root, "node_modules/tsdown/dist/run.mjs")], { cwd: project, timeout: 60_000 })
+
     const manifest = JSON.parse(await fs.readFile(path.join(project, "package.json"), "utf8"))
+    // Run npm's CLI script through Node: on Windows, execFile cannot launch the npm.cmd shim.
     const npmCLI = process.env.npm_execpath ?? (process.platform === "win32"
       ? path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js") : undefined)
     const pack = async (directory: string) => {
@@ -720,11 +780,16 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
       const tarball = await pack(directory)
       const { stdout } = await execute(process.execPath, [smoke, directory, name, manifest.version], { cwd: root, timeout: 45_000 })
       assert.match(stdout, /help, version, tokenizer, mocked server: ok/)
+
+      // Bytes appended after packing must fail the checksum.
       await fs.appendFile(tarball, "tampered")
-      await assert.rejects(execute(process.execPath, [smoke, "--verify", directory, name, manifest.version]), (error: unknown) => {
-        assert.match((error as { stderr: string }).stderr, /checksum/i)
-        return true
-      })
+      await assert.rejects(
+        execute(process.execPath, [smoke, "--verify", directory, name, manifest.version]),
+        (error: unknown) => {
+          assert.match((error as { stderr: string }).stderr, /checksum/i)
+          return true
+        },
+      )
     }
   } finally {
     await fs.rm(fixture, { recursive: true, force: true })
@@ -741,6 +806,7 @@ test("package smoke feeds checksummed bytes to tar without absolute path argumen
 
 test("package smoke rejects a checksum-matching corrupt archive without leaking temporary files", async () => {
   const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "relay-corrupt-pack-"))
+
   try {
     const candidate = path.join(fixture, "candidate")
     const temporary = path.join(fixture, "tmp")
@@ -750,14 +816,20 @@ test("package smoke rejects a checksum-matching corrupt archive without leaking 
     const bytes = Buffer.alloc(2 * 1024 * 1024, 0x78)
     await fs.writeFile(path.join(candidate, filename), bytes)
     await fs.writeFile(path.join(candidate, "SHA256SUMS"), `${createHash("sha256").update(bytes).digest("hex")}  ${filename}\n`)
-    await assert.rejects(execute(process.execPath, [path.join(root, "scripts/package-smoke.mjs"), "--verify", candidate, "copilot-relay", "1.2.3"], {
-      env: { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary }, timeout: 30_000,
-    }), (error: unknown) => {
-      const stderr = (error as { stderr: string }).stderr
-      assert.match(stderr, /tar|archive|gzip/i)
-      assert.doesNotMatch(stderr, /Unhandled 'error' event|checksum mismatch/)
-      return true
-    })
+
+    // The checksum matches, so the failure has to come from tar reading bytes
+    // that are not a gzip archive.
+    await assert.rejects(
+      execute(process.execPath, [path.join(root, "scripts/package-smoke.mjs"), "--verify", candidate, "copilot-relay", "1.2.3"], {
+        env: { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary }, timeout: 30_000,
+      }),
+      (error: unknown) => {
+        const stderr = (error as { stderr: string }).stderr
+        assert.match(stderr, /tar|archive|gzip/i)
+        assert.doesNotMatch(stderr, /Unhandled 'error' event|checksum mismatch/)
+        return true
+      },
+    )
     assert.deepEqual(await fs.readdir(temporary), [])
   } finally {
     await fs.rm(fixture, { recursive: true, force: true })
@@ -766,6 +838,7 @@ test("package smoke rejects a checksum-matching corrupt archive without leaking 
 
 test("both package test commands preload home isolation before tsx", async () => {
   const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))
+
   for (const name of ["test:unit", "test:integration"]) {
     assert.match(manifest.scripts[name], /^node --import \.\/scripts\/test-bootstrap\.mjs --import tsx --test /)
   }

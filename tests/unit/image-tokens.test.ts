@@ -16,9 +16,12 @@ const { getTokenCount } = await import("../../src/lib/tokenizer")
 test.after(async () => {
   await fs.rm(tempHome, { recursive: true, force: true })
 })
+
 const fetch = test.mock.method(globalThis, "fetch", () => {
   assert.fail("Token estimation must not fetch image data or URLs")
 })
+
+// Also pin the count, in case the code under test swallows the mock's failure.
 test.after(() => {
   assert.equal(fetch.mock.callCount(), 0)
   test.mock.restoreAll()
@@ -31,9 +34,11 @@ test("small and multi-megabyte image data each add 4096 tokens to unchanged text
   const text = "Describe the screenshot."
   const textPart: ContentPart = { type: "text", text }
   const baseline = { input: 7 + encode(text).length, output: 0 }
+
   for (const content of [text, [textPart]]) {
     assert.deepEqual(await getTokenCount({
-      model: model.id, messages: [{ role: "user", content }],
+      model: model.id,
+      messages: [{ role: "user", content }],
     }, model), baseline)
   }
 
@@ -42,6 +47,7 @@ test("small and multi-megabyte image data each add 4096 tokens to unchanged text
       model: model.id,
       messages: [{ role: "user", content: [textPart, image(`data:image/png;base64,${data}`)] }],
     }, model)
+
     assert.deepEqual(result, { input: baseline.input + 4096, output: 0 })
   }
 })
@@ -50,7 +56,9 @@ test("multiple images add independently without changing text, tool definitions,
   const prompt = "Describe the screenshots."
   const answer = "Inspecting the screenshots."
   const toolCall: ToolCall = {
-    id: "call_image", type: "function", function: { name: "Inspect", arguments: "{}" },
+    id: "call_image",
+    type: "function",
+    function: { name: "Inspect", arguments: "{}" },
   }
   const payload: ChatCompletionsPayload = {
     model: model.id,
@@ -60,6 +68,7 @@ test("multiple images add independently without changing text, tool definitions,
     ],
     tools: [{ type: "function", function: { name: "Inspect", parameters: { type: "object" } } }],
   }
+
   const baseline = await getTokenCount(payload, model)
   assert.deepEqual(baseline, {
     input: 7 + encode(prompt).length + 7 + encode("Inspect:").length + encode("type:object").length + 12,
@@ -77,6 +86,8 @@ test("multiple images add independently without changing text, tool definitions,
       ],
     })),
   }, model)
+
+  // Two images on the user message, one on the assistant's.
   assert.deepEqual(result, { input: baseline.input + 2 * 4096, output: baseline.output + 4096 })
 })
 
@@ -89,7 +100,9 @@ test("estimates an image without reading its URL or encoded payload", async () =
       },
     },
   }
+
   assert.deepEqual(await getTokenCount({
-    model: model.id, messages: [{ role: "user", content: [unreadableImage] }],
+    model: model.id,
+    messages: [{ role: "user", content: [unreadableImage] }],
   }, model), { input: 7 + 4096, output: 0 })
 })

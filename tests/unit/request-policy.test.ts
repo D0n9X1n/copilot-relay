@@ -6,10 +6,13 @@ import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
 
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-policy-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
+
 const { runtimeState, withRuntimeState, snapshotRuntimeState } = await import("../../src/lib/state")
 const { routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
 const { snapshotProxyConfig } = await import("../../src/lib/config")
@@ -22,6 +25,7 @@ test.after(async () => {
   await flushLogs()
   await fs.rm(home, { recursive: true, force: true })
 })
+
 test.afterEach(() => {
   delete runtimeState.modelRouting
   delete runtimeState.thinkEffort
@@ -31,14 +35,19 @@ test("request policy stays fixed across a concurrent config reload", async () =>
   runtimeState.modelRouting = { gptModel: "gpt-before", opusModel: "opus-before" }
   runtimeState.thinkEffort = "low"
   const snapshot = snapshotRuntimeState()
+
   await withRuntimeState(snapshot, async () => {
     assert.equal(routeModelId("opus"), "opus-before")
+
+    // A config reload lands while the request is still in flight.
     runtimeState.modelRouting = { gptModel: "gpt-after", opusModel: "opus-after" }
     runtimeState.thinkEffort = "max"
     await Promise.resolve()
+
     assert.equal(routeModelId("opus"), "opus-before")
     assert.equal(resolveReasoningEffort(), "low")
   })
+
   assert.equal(routeModelId("opus"), "opus-after")
 })
 
@@ -55,6 +64,7 @@ test("frozen request policy still reads refreshed credentials from the provider"
   source.copilotBaseUrl = "http://provider-after.invalid"
   source.upstreamTimeoutMs = 9000
   await snapshot.refreshCopilotToken?.("fixture-old", 1)
+
   assert.equal(snapshot.copilotBaseUrl, "http://provider-before.invalid")
   assert.equal(snapshot.upstreamTimeoutMs, 3000)
   assert.equal(snapshot.copilotToken, "fixture-new")
@@ -89,12 +99,15 @@ test("catalog assurance preserves optional discovery and refreshes before native
     assert.equal(discoveries, 0)
     assert.equal(config.modelCatalog, undefined)
 
+    // A current catalog that already lists the model is used as is.
     config.modelCatalog = { baseUrl, models: new Map([[model, {}]]) }
     const current = config.modelCatalog
     await ensureCopilotModelCatalog(config, model)
     assert.equal(config.modelCatalog, current)
     assert.equal(discoveries, 0)
 
+    // A catalog from another base URL, or one that lacks the model, is
+    // rediscovered before native selection.
     for (const stale of [true, false]) {
       config.modelCatalog = {
         baseUrl: stale ? "https://old-policy.invalid" : baseUrl,

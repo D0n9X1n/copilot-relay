@@ -32,9 +32,15 @@ interface ProbeResult extends ProbeRow {
 
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+// Model IDs come from the catalog and from response bodies, so one is printed only when it is a
+// plain identifier that contains neither the live token nor a known credential prefix (GitHub
+// tokens, sk- keys, JWTs).
 const safeId = (id: unknown, token?: string): id is string =>
-  typeof id === "string" && /^[A-Za-z0-9._\[\]-]{1,128}$/.test(id)
-  && !(token && id.includes(token)) && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(id)
+  typeof id === "string"
+  && /^[A-Za-z0-9._\[\]-]{1,128}$/.test(id)
+  && !(token && id.includes(token))
+  && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(id)
 
 const httpCategory = (status: number): string => {
   if (status === 401) {
@@ -85,6 +91,7 @@ const settleDiagnostic = async (trace: RequestTrace): Promise<void> => {
   const deadline = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, 1000)
   })
+
   try {
     await Promise.race([trace.finished, deadline])
   } finally {
@@ -125,22 +132,29 @@ export async function probeModels(
   console.log(`\nModel check · ${entries.length} ${entries.length === 1 ? "model" : "models"} · real Copilot usage`)
   console.log("Isolated relay pipeline; not running-daemon health.")
   console.log(`Up to ${options.maxTokens} output tokens/probe; existing retries may add calls.\n`)
+
   const controller = new AbortController()
   const interrupt = () => controller.abort()
   process.on("SIGINT", interrupt)
   process.on("SIGTERM", interrupt)
-  const total = AbortSignal.timeout(options.totalTimeoutMs)
+  const totalDeadline = AbortSignal.timeout(options.totalTimeoutMs)
+
   // Probes route exact catalog IDs in this process, then restore the caller's policy.
   const saved = {
     modelRouting: runtimeState.modelRouting,
     modelCatalog: runtimeState.modelCatalog,
     upstreamBaseUrl: runtimeState.upstreamBaseUrl,
   }
+
   const results: ProbeResult[] = []
   const app = createServer(config)
   const columns = Math.max(40, process.stdout.columns || 80)
-  const width = probeColumnWidth(entries.map(([id]) => safeId(id, config.copilotToken) ? id : "[unsupported ID]"), columns)
+  const width = probeColumnWidth(
+    entries.map(([id]) => safeId(id, config.copilotToken) ? id : "[unsupported ID]"),
+    columns,
+  )
   const color = colorEnabled()
+
   if (entries.length) {
     console.log(renderProbeHeader(width))
   }
@@ -164,7 +178,12 @@ export async function probeModels(
         model.limits?.max_output_tokens ?? options.maxTokens,
         model.limits?.max_non_streaming_output_tokens ?? options.maxTokens,
       )
-      const timeoutMs = Math.min(options.timeoutMs, config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : Infinity)
+
+      // upstreamTimeoutSeconds: 0 disables the relay deadline, leaving only the probe's own timeout.
+      const timeoutMs = Math.min(
+        options.timeoutMs,
+        config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : Infinity,
+      )
       const selection = selectCopilotEndpoint(config, id)
       const endpoint = selection.endpoint ?? "none"
       const { advertisedEndpoints, unknownEndpoints } = summarizeAdvertisedEndpoints(model.supportedEndpoints)
@@ -185,7 +204,7 @@ export async function probeModels(
         unverified: model.reasoningEfforts === undefined || model.supportedEndpoints === undefined,
       }
 
-      if (controller.signal.aborted || total.aborted) {
+      if (controller.signal.aborted || totalDeadline.aborted) {
         row.detail = controller.signal.aborted ? "cancelled" : "total-deadline"
       } else if (!safeId(id, config.copilotToken) || normalizeCopilotModelId(id) !== id) {
         row.status = "SKIPPED"
@@ -197,10 +216,11 @@ export async function probeModels(
         row.status = "SKIPPED"
         row.detail = "unsupported-effort"
       } else {
-        const signal = AbortSignal.any([controller.signal, total, AbortSignal.timeout(timeoutMs)])
+        const signal = AbortSignal.any([controller.signal, totalDeadline, AbortSignal.timeout(timeoutMs)])
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
         const started = performance.now()
         row.sent = true
+
         let trace: RequestTrace | undefined
         let completedFetch = false
 
@@ -208,24 +228,29 @@ export async function probeModels(
           trace = value
         }
 
+        // app.fetch handles the request in this process, so nothing has to listen on this URL.
         const sendProbe = async () => {
-          const response = await app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            signal,
-            body: JSON.stringify({
-              model: id,
-              stream: false,
-              max_tokens: maxTokens,
-              ...(effort !== undefined && { output_config: { effort } }),
-              messages: [{ role: "user", content: "Reply with OK only." }],
+          const response = await app.fetch(
+            new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              signal,
+              body: JSON.stringify({
+                model: id,
+                stream: false,
+                max_tokens: maxTokens,
+                ...(effort !== undefined && { output_config: { effort } }),
+                messages: [{ role: "user", content: "Reply with OK only." }],
+              }),
             }),
-          }))
+          )
           const body: unknown = await response.json().catch(() => undefined)
           return { response, body }
         }
 
         try {
+          // The pipeline's own logging is silenced so it cannot interleave with the table. A failed
+          // row is logged once below, to the file only.
           const { response, body } = await withoutLogging(() => withTraceObserver(observeTrace, sendProbe))
           completedFetch = true
           row.status = "FAIL"
@@ -233,7 +258,7 @@ export async function probeModels(
             if (controller.signal.aborted) {
               row.status = "NOT_TESTED"
               row.detail = "cancelled"
-            } else if (total.aborted) {
+            } else if (totalDeadline.aborted) {
               row.status = "NOT_TESTED"
               row.detail = "total-deadline"
             } else {
@@ -241,6 +266,8 @@ export async function probeModels(
             }
           } else if (!response.ok) {
             row.detail = httpCategory(response.status)
+
+            // A known error code in the body refines the HTTP category.
             const code = record(body) && record(body.error) ? body.error.code : undefined
             if (code === "upstream_response_failed") {
               row.detail = "upstream-response-failed"
@@ -257,17 +284,40 @@ export async function probeModels(
           } else if (!record(body) || !Array.isArray(body.content)) {
             row.detail = "malformed-response"
           } else {
+            // PASS needs all of: a reported model that matches the probe, an end_turn stop, no
+            // content block with a type other than text or thinking, and some non-empty text.
+            // Content entries that are not objects are skipped, not treated as blocks.
             row.reported = safeId(body.model, config.copilotToken) ? body.model : "unreported"
-            const nativeOpusSpelling = endpoint === "/v1/messages" && id === "claude-opus-5.5" && row.reported === "claude-opus-5-5"
+
+            // The native Messages endpoint reports this model with a hyphen where the catalog ID
+            // has a dot; that is the same model, not a mismatch.
+            const nativeOpusSpelling = endpoint === "/v1/messages"
+              && id === "claude-opus-5.5"
+              && row.reported === "claude-opus-5-5"
+
             if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling) {
               row.detail = "model-mismatch"
             } else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"
-              const tokens = record(body.usage) ? body.usage.output_tokens : undefined
-              row.detail = typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? "reachable-output-budget-exhausted" : "output-budget-exhausted-usage-unreported"
-            } else if (body.stop_reason !== "end_turn" || body.content.some((part: unknown) => record(part) && part.type !== "text" && part.type !== "thinking")) {
+              const outputTokens = record(body.usage) ? body.usage.output_tokens : undefined
+              row.detail = typeof outputTokens === "number" && Number.isSafeInteger(outputTokens) && outputTokens > 0
+                ? "reachable-output-budget-exhausted"
+                : "output-budget-exhausted-usage-unreported"
+            } else if (
+              body.stop_reason !== "end_turn"
+              || body.content.some(
+                (part: unknown) => record(part) && part.type !== "text" && part.type !== "thinking",
+              )
+            ) {
               row.detail = body.stop_reason === "refusal" ? "refusal" : "refusal-or-unexpected-completion"
-            } else if (body.content.some((part: unknown) => record(part) && part.type === "text" && typeof part.text === "string" && part.text.trim())) {
+            } else if (
+              body.content.some(
+                (part: unknown) => record(part)
+                  && part.type === "text"
+                  && typeof part.text === "string"
+                  && part.text.trim(),
+              )
+            ) {
               row.status = "PASS"
               row.detail = "completed-text"
             } else {
@@ -278,7 +328,7 @@ export async function probeModels(
           if (controller.signal.aborted) {
             row.status = "NOT_TESTED"
             row.detail = "cancelled"
-          } else if (total.aborted) {
+          } else if (totalDeadline.aborted) {
             row.status = "NOT_TESTED"
             row.detail = "total-deadline"
           } else {
@@ -288,6 +338,7 @@ export async function probeModels(
         }
 
         row.latency = Math.round(performance.now() - started)
+
         if (trace) {
           if (completedFetch) {
             await settleDiagnostic(trace)
@@ -305,6 +356,8 @@ export async function probeModels(
         }
       }
 
+      // The token may have been refreshed during the probe, so the ID is checked against the
+      // current one too.
       if (!safeId(id, config.copilotToken)) {
         row.id = "[unsupported ID]"
       }
@@ -322,6 +375,7 @@ export async function probeModels(
         console.log(`  request_id=${row.diagnostic.requestId}`)
       }
 
+      // File only: the table above has already shown this row on the console.
       if (row.status !== "PASS" && row.sent) {
         withoutConsoleLogging(() => log.info(
           `request_id=${row.diagnostic?.requestId ?? "unknown"} model_probe model=${row.id} status=${row.status} reason=${row.detail}`,
@@ -329,6 +383,7 @@ export async function probeModels(
       }
     }
   } finally {
+    // A key that was unset before the probe is deleted again rather than left holding undefined.
     for (const key of ["modelRouting", "modelCatalog", "upstreamBaseUrl"] as const) {
       if (saved[key] === undefined) {
         delete runtimeState[key]
@@ -356,7 +411,14 @@ export async function probeModels(
     console.log("* Effort or endpoint metadata is unverified.")
   }
 
-  const hints = new Set(results.filter((row) => row.status !== "PASS").map((row) => probeHint(row.detail)).filter(Boolean))
+  // A Set, so a hint shared by several failed rows prints once.
+  const hints = new Set(
+    results
+      .filter((row) => row.status !== "PASS")
+      .map((row) => probeHint(row.detail))
+      .filter(Boolean),
+  )
+
   for (const hint of hints) {
     console.log(hint)
   }
@@ -365,6 +427,7 @@ export async function probeModels(
     console.log("Use --details for request evidence; another deep run consumes usage.")
   }
 
+  // 130 is what a shell reports for Ctrl-C (128 + SIGINT); a SIGTERM abort exits the same way.
   if (controller.signal.aborted) {
     return 130
   }

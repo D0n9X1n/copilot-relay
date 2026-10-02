@@ -15,7 +15,10 @@ type Rule =
   | "multilineBlocks"
   | "oneStatementPerLine"
   | "blankLineAfterBlock"
+  | "paddedBlocks"
+  | "multipleBlankLines"
   | "continuationOnClosingLine"
+  | "nestedTernaries"
   | "strictEquality"
   | "declarations"
 
@@ -30,6 +33,11 @@ const maintainedRoots = ["src", "tests", "scripts"]
 const scriptPattern = /\.(?:[cm]?ts|[cm]?js)$/
 const skippedDirectories = new Set(["node_modules", "dist"])
 const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
+
+// A blank line holds only spaces or tabs; both patterns include the line breaks around it.
+// A run of blank lines may also open the file, with no line break before it.
+const blankLine = /\n[ \t]*\r?\n/
+const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -71,6 +79,11 @@ const collectViolations = (file: string, text: string): Violation[] => {
 
   const childOfKind = (node: ts.Node, kind: ts.SyntaxKind) => {
     return node.getChildren(sourceFile).find((child) => child.kind === kind)
+  }
+
+  // Parentheses do not hide nesting: `a ? (b ? c : d) : e` is still a nested ternary.
+  const unwrapParentheses = (node: ts.Expression): ts.Expression => {
+    return ts.isParenthesizedExpression(node) ? unwrapParentheses(node.expression) : node
   }
 
   // `else if` is the one unbraced shape allowed; the inner if is checked on its own.
@@ -129,6 +142,9 @@ const collectViolations = (file: string, text: string): Violation[] => {
     return undefined
   }
 
+  // String and template literals hold content rather than layout, so their blank lines are kept.
+  const literalRanges: Array<[number, number]> = []
+
   const visit = (node: ts.Node): void => {
     if (ts.isIfStatement(node)) {
       requireBlock(node.thenStatement)
@@ -158,13 +174,34 @@ const collectViolations = (file: string, text: string): Violation[] => {
     // A non-empty block or body keeps `{` and `}` off its content lines; an empty `{}` may stay compact.
     const contents = bracedContents(node)
 
-    if (contents !== undefined && contents.length > 0) {
+    if (contents !== undefined) {
       const openBrace = childOfKind(node, ts.SyntaxKind.OpenBraceToken) ?? node
-      const opensBesideFirst = lineOf(startOf(openBrace)) === lineOf(startOf(contents[0]))
-      const closesBesideLast = lineOf(node.getEnd()) === lineOf(contents[contents.length - 1].getEnd())
+      const closeBrace = node.getEnd() - 1
 
-      if (opensBesideFirst || closesBesideLast) {
-        record("multilineBlocks", startOf(openBrace))
+      if (contents.length > 0) {
+        const opensBesideFirst = lineOf(startOf(openBrace)) === lineOf(startOf(contents[0]))
+        const closesBesideLast = lineOf(node.getEnd()) === lineOf(contents[contents.length - 1].getEnd())
+
+        if (opensBesideFirst || closesBesideLast) {
+          record("multilineBlocks", startOf(openBrace))
+        }
+      }
+
+      // No blank line between a brace and the contents. Comments count as contents, so a body
+      // holding only a comment is checked too; only a body of whitespace is exempt.
+      const inside = text.slice(startOf(openBrace) + 1, closeBrace)
+
+      if (inside.trim() !== "") {
+        const leadingSpace = inside.slice(0, inside.length - inside.trimStart().length)
+        const trailingSpace = inside.slice(inside.trimEnd().length)
+
+        if (blankLine.test(leadingSpace)) {
+          record("paddedBlocks", startOf(openBrace))
+        }
+
+        if (blankLine.test(trailingSpace)) {
+          record("paddedBlocks", closeBrace)
+        }
       }
     }
 
@@ -175,7 +212,7 @@ const collectViolations = (file: string, text: string): Violation[] => {
         const current = node.statements[index]
         const sharesLine = lineOf(startOf(current)) === lineOf(previous.getEnd())
         const spansLines = lineOf(startOf(previous)) !== lineOf(previous.getEnd())
-        const hasBlankLine = /\n[ \t]*\r?\n/.test(text.slice(previous.getEnd(), startOf(current)))
+        const hasBlankLine = blankLine.test(text.slice(previous.getEnd(), startOf(current)))
 
         // A multi-line block statement ends a paragraph: the next statement follows a blank line.
         if (sharesLine) {
@@ -209,6 +246,15 @@ const collectViolations = (file: string, text: string): Violation[] => {
       }
     }
 
+    // A ternary inside a ternary's branch hides a decision tree that if/else or a lookup would show.
+    if (ts.isConditionalExpression(node)) {
+      const branches = [node.whenTrue, node.whenFalse].map(unwrapParentheses)
+
+      if (branches.some((branch) => ts.isConditionalExpression(branch))) {
+        record("nestedTernaries", startOf(node))
+      }
+    }
+
     if (ts.isBinaryExpression(node)) {
       const operator = node.operatorToken.kind
       const isLoose = operator === ts.SyntaxKind.EqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsToken
@@ -230,10 +276,24 @@ const collectViolations = (file: string, text: string): Violation[] => {
       }
     }
 
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) {
+      literalRanges.push([startOf(node), node.getEnd()])
+    }
+
     ts.forEachChild(node, visit)
   }
 
   visit(sourceFile)
+
+  // At most one blank line in a row anywhere outside string and template literals.
+  for (const run of text.matchAll(blankLineRuns)) {
+    const insideLiteral = literalRanges.some(([start, end]) => run.index > start && run.index < end)
+
+    if (!insideLiteral) {
+      record("multipleBlankLines", run.index + run[0].length)
+    }
+  }
+
   return violations
 }
 
@@ -401,6 +461,19 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "    handle()",
     "    break",
     "}",
+    "",
+    "const label = ready ? (fast ? 'now' : 'soon') : 'later'",
+    "const size = small ? 1 : medium ? 2 : 3",
+    "const total = (left ? 1 : 2) + (right ? 3 : 4)",
+    "",
+    "if (ready) {",
+    "",
+    "  start()",
+    "",
+    "}",
+    "",
+    "",
+    "stop()",
   ].join("\n")
 
   const found = collectViolations("sample.ts", sample)
@@ -424,6 +497,34 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "37 multilineBlocks",
     "38 multilineBlocks",
     "41 oneStatementPerLine",
+    "50 nestedTernaries",
+    "51 nestedTernaries",
+    "54 paddedBlocks",
+    "58 paddedBlocks",
+    "61 multipleBlankLines",
+  ])
+})
+
+// Comments count as contents, and a run of blank lines can open the file.
+test("blank-line checks cover comment-only bodies and the start of a file", () => {
+  const sample = [
+    "",
+    "",
+    "function check() {",
+    "",
+    "  // intentionally empty",
+    "",
+    "}",
+  ].join("\n")
+
+  const found = collectViolations("sample.ts", sample)
+    .sort((left, right) => left.line - right.line || left.rule.localeCompare(right.rule))
+    .map((violation) => `${violation.line} ${violation.rule}`)
+
+  assert.deepEqual(found, [
+    "3 multipleBlankLines",
+    "3 paddedBlocks",
+    "7 paddedBlocks",
   ])
 })
 
@@ -443,8 +544,20 @@ test("a multi-line block statement is followed by a blank line", () => {
   assertNoViolations("blankLineAfterBlock")
 })
 
+test("blocks and bodies neither start nor end with a blank line", () => {
+  assertNoViolations("paddedBlocks")
+})
+
+test("at most one blank line separates two lines of code", () => {
+  assertNoViolations("multipleBlankLines")
+})
+
 test("else, catch and finally continue the line that closes the previous block", () => {
   assertNoViolations("continuationOnClosingLine")
+})
+
+test("a ternary never nests another ternary in its branches", () => {
+  assertNoViolations("nestedTernaries")
 })
 
 test("equality is strict except for an intentional == null", () => {

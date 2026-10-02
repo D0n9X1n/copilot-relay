@@ -14,6 +14,7 @@ test("exposes the 1M GPT identity in Claude stream metadata", () => {
     thinkingBlockOpen: false,
     toolCalls: {},
   }
+
   const events = translateChunkToClaudeEvents({
     id: "chat_stream",
     object: "chat.completion.chunk",
@@ -39,21 +40,39 @@ test("exposes the 1M GPT identity in Claude stream metadata", () => {
 // #114: a zero-parameter tool streams its id and name with empty arguments.
 const toolStream = (calls: Array<{ name: string; argumentDeltas: string[] }>) => {
   const state: ClaudeStreamState = {
-    messageStartSent: false, contentBlockIndex: 0, contentBlockOpen: false, thinkingBlockOpen: false, toolCalls: {},
+    messageStartSent: false,
+    contentBlockIndex: 0,
+    contentBlockOpen: false,
+    thinkingBlockOpen: false,
+    toolCalls: {},
   }
   const chunk = (delta: object, finish_reason: "tool_calls" | null = null) => ({
-    id: "chat_stream", object: "chat.completion.chunk" as const, created: 1, model: "test-model",
+    id: "chat_stream",
+    object: "chat.completion.chunk" as const,
+    created: 1,
+    model: "test-model",
     choices: [{ index: 0, delta, finish_reason, logprobs: null }],
   })
+
   const events = []
   calls.forEach((call, index) => {
-    events.push(...translateChunkToClaudeEvents(chunk({ role: "assistant", tool_calls: [{
-      index, id: `call_${index}`, type: "function", function: { name: call.name, arguments: "" },
-    }] }), state))
+    events.push(...translateChunkToClaudeEvents(chunk({
+      role: "assistant",
+      tool_calls: [{
+        index,
+        id: `call_${index}`,
+        type: "function",
+        function: { name: call.name, arguments: "" },
+      }]
+    }), state))
     for (const argumentsDelta of call.argumentDeltas) {
-      events.push(...translateChunkToClaudeEvents(chunk({ tool_calls: [{ index, function: { arguments: argumentsDelta } }] }), state))
+      events.push(...translateChunkToClaudeEvents(
+        chunk({ tool_calls: [{ index, function: { arguments: argumentsDelta } }] }),
+        state
+      ))
     }
   })
+
   events.push(...translateChunkToClaudeEvents(chunk({}, "tool_calls"), state))
   return events
 }
@@ -63,11 +82,18 @@ test("streams a zero-argument tool call as an empty JSON object and completes", 
     { name: "noop", argumentDeltas: [] },
     { name: "echo", argumentDeltas: ['{"text"', ':"hi"}'] },
   ])
+
   const starts = events.filter((event) => event.type === "content_block_start")
-  assert.deepEqual(starts.map((event) => event.type === "content_block_start" && event.content_block.type === "tool_use"
-    ? event.content_block.name : undefined), ["noop", "echo"])
+  assert.deepEqual(
+    starts.map((event) => event.type === "content_block_start" && event.content_block.type === "tool_use"
+      ? event.content_block.name
+      : undefined),
+    ["noop", "echo"]
+  )
+
   const partials = events.flatMap((event) => event.type === "content_block_delta" && event.delta.type === "input_json_delta"
-    ? [event.delta.partial_json] : [])
+    ? [event.delta.partial_json]
+    : [])
   assert.deepEqual(partials, ["{}", '{"text":"hi"}'])
   for (const partial of partials) {
     assert.equal(typeof JSON.parse(partial), "object")
@@ -78,13 +104,16 @@ test("streams a zero-argument tool call as an empty JSON object and completes", 
 
 test("streams whitespace-only tool arguments as an empty JSON object", () => {
   const events = toolStream([{ name: "noop", argumentDeltas: [" ", "\n"] }])
+
   const partials = events.flatMap((event) => event.type === "content_block_delta" && event.delta.type === "input_json_delta"
-    ? [event.delta.partial_json] : [])
+    ? [event.delta.partial_json]
+    : [])
   assert.deepEqual(partials, ["{}"])
 })
 
 test("invalid streamed tool arguments surface a client-safe error naming the tool", async () => {
   const { translateErrorToClaudeErrorEvent } = await import("../../src/claude/stream")
+
   let caught: unknown
   try {
     toolStream([{ name: "noop", argumentDeltas: ['{"secret":'] }])
@@ -93,8 +122,22 @@ test("invalid streamed tool arguments surface a client-safe error naming the too
   }
 
   const event = translateErrorToClaudeErrorEvent(caught)
-  assert.deepEqual(event, { type: "error", error: { type: "api_error",
-    message: 'Upstream returned tool input for "noop" that is not valid JSON.' } })
-  assert.deepEqual(translateErrorToClaudeErrorEvent(new Error("internal detail")), { type: "error", error: {
-    type: "api_error", message: "An unexpected error occurred during streaming." } })
+
+  assert.deepEqual(event, {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: 'Upstream returned tool input for "noop" that is not valid JSON.'
+    }
+  })
+
+  // A plain internal error is reported generically, so its detail never
+  // reaches the client.
+  assert.deepEqual(translateErrorToClaudeErrorEvent(new Error("internal detail")), {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: "An unexpected error occurred during streaming."
+    }
+  })
 })

@@ -6,8 +6,9 @@ import os from "node:os"
  * Static defaults for copilot-relay. Previously these lived in
  * `~/.config/copilot-relay/settings.json`, but that file became an implicit
  * third source of truth alongside `~/.claude/settings.json`, which caused
- * subtle port-mismatch bugs. copilot-relay now relies on these defaults plus
- * CLI flags only.
+ * subtle port-mismatch bugs. The relay's host and port now come from
+ * `~/.copilot-relay/config.yaml`, whose shipped defaults are `defaultConfig`
+ * in app-config.ts.
  */
 
 export const defaultHost = "127.0.0.1"

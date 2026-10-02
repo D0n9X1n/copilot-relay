@@ -13,13 +13,24 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-fmt-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { log, setLogLevel, isDebugLogging, flushLogs, withoutConsoleLogging, withoutLogging } = await import("../../src/lib/log")
+const {
+  log,
+  setLogLevel,
+  isDebugLogging,
+  flushLogs,
+  withoutConsoleLogging,
+  withoutLogging
+} = await import("../../src/lib/log")
 const { getLogPath, paths } = await import("../../src/lib/paths")
 
+// Capture console output instead of printing it, so tests can compare it with
+// the file.
 const consoleOutput: Array<string> = []
 log.setReporters([{
   log: (entry: { args: Array<unknown> }) => {
-    consoleOutput.push(entry.args.map((value) => typeof value === "string" ? value : inspect(value)).join(" "))
+    consoleOutput.push(entry.args
+      .map((value) => typeof value === "string" ? value : inspect(value))
+      .join(" "))
   },
 }])
 
@@ -44,9 +55,8 @@ test.beforeEach(async () => {
   setLogLevel("debug")
 })
 
-// Why: this was two thirds of the 9.3 GB. inspect(depth: null) pretty-printed
-// each payload across thousands of indented lines - 226,488 of 275,442 sampled
-// lines were object-dump continuations. One entry must be one line.
+// The quiet scope is still open when "visible request" logs from outside it,
+// so console suppression must follow the async scope, not a global switch.
 test("console-only quiet scopes retain file evidence without suppressing other requests", async () => {
   let release!: () => void
   const pending = withoutConsoleLogging(async () => {
@@ -57,11 +67,14 @@ test("console-only quiet scopes retain file evidence without suppressing other r
     log.error("quiet error")
     withoutLogging(() => log.info("fully suppressed"))
   })
+
   log.info("visible request")
   release()
   await pending
   await flushLogs()
+
   assert.deepEqual(consoleOutput, ["visible request"])
+
   const file = await fs.readFile(getLogPath(), "utf8")
   assert.match(file, /quiet setup/)
   assert.match(file, /quiet error/)
@@ -70,6 +83,9 @@ test("console-only quiet scopes retain file evidence without suppressing other r
   assert.equal(file.trim().split("\n").length, 3)
 })
 
+// Why: this was two thirds of the 9.3 GB. inspect(depth: null) pretty-printed
+// each payload across thousands of indented lines - 226,488 of 275,442 sampled
+// lines were object-dump continuations. One entry must be one line.
 test("collapses a nested payload onto a single line", async () => {
   log.error("Failed to create responses", {
     request: {
@@ -130,6 +146,9 @@ for (const [name, payload] of [
   test(`bounds a multi-MiB ${name} to 16 KiB in both sinks`, async () => {
     log.error(payload)
     await flushLogs()
+
+    // Strip the timestamp, level and trailing newline to compare the file line
+    // with what the console received.
     const file = await fs.readFile(getLogPath(), "utf8")
     const rendered = file.slice(0, -1).replace(/^\S+ error /, "")
     assert.ok(Buffer.byteLength(rendered) <= 16 * 1024, "one rendered argument exceeded 16 KiB")
@@ -143,9 +162,14 @@ for (const [name, payload] of [
 }
 
 test("bounds a multi-argument entry to 64 KiB including file framing", async () => {
-  log.error("argument-0 " + "x".repeat(12 * 1024),
-    ...Array.from({ length: 31 }, (_, index) => `argument-${index + 1} ` + "x".repeat(12 * 1024)))
+  // Each of the 32 arguments fits the 16 KiB bound on its own; together they
+  // far exceed 64 KiB.
+  log.error(
+    "argument-0 " + "x".repeat(12 * 1024),
+    ...Array.from({ length: 31 }, (_, index) => `argument-${index + 1} ` + "x".repeat(12 * 1024))
+  )
   await flushLogs()
+
   const file = await fs.readFile(getLogPath(), "utf8")
   const rendered = file.slice(0, -1).replace(/^\S+ error /, "")
   assert.ok(Buffer.byteLength(file) <= 64 * 1024, "whole entry exceeded 64 KiB")
@@ -184,6 +208,8 @@ test("keeps an Error stack on one physical line without losing frames", async ()
   log.error("Request failed", error)
 
   const content = await readActiveLog()
+
+  // One physical line: the only line break is the final newline.
   assert.match(content, /\n$/)
   assert.doesNotMatch(content.slice(0, -1), /[\r\n]/)
   assert.match(content, /upstream failed/)
@@ -196,6 +222,7 @@ for (const [name, separator] of [["LF", "\n"], ["CRLF", "\r\n"], ["CR", "\r"]]) 
     log.error(`first${separator}second`, `context${separator}last`)
 
     const content = await readActiveLog()
+
     assert.match(content, /\n$/)
     assert.doesNotMatch(content.slice(0, -1), /[\r\n]/)
     for (const word of ["first", "second", "context", "last"]) {
@@ -258,6 +285,7 @@ test("does not append through an active log symlink or change its target mode", 
       });
       log.error("must not reach outside");
     `
+
     const { stdout } = await promisify(execFile)(process.execPath, [
       "--import", "tsx", "--input-type=module", "--eval", script,
     ], {
@@ -265,6 +293,7 @@ test("does not append through an active log symlink or change its target mode", 
       env: { ...process.env, HOME: home, USERPROFILE: home },
       timeout: 10_000,
     })
+
     assert.deepEqual(JSON.parse(stdout), { content: "untouched\n", mode: 0o644 })
   } finally {
     await fs.rm(home, { recursive: true, force: true })
@@ -289,7 +318,8 @@ test("compact: true is required beyond the default compact depth", () => {
   }
 
   const lines = (options: InspectOptions): number =>
-    inspect(payload, { breakLength: Infinity, depth: 6, ...options }).split("\n")
+    inspect(payload, { breakLength: Infinity, depth: 6, ...options })
+      .split("\n")
       .length
 
   // The default does not collapse this payload, breakLength notwithstanding.
@@ -319,6 +349,9 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
   const entered = new Promise<void>((resolve) => {
     opened = resolve
   })
+
+  // The log file's append pauses until release(), so flushLogs is observed
+  // while a write is still in flight.
   const realOpen = fs.open.bind(fs)
   const mockOpen = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
     const handle = await realOpen(...args)
@@ -333,6 +366,7 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
 
     return handle
   })
+
   log.error("queued flush fixture")
   let flushed = false
   let flushing: Promise<void> | undefined
@@ -342,6 +376,7 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
     })
     await entered
     assert.equal(flushed, false)
+
     release()
     await flushing
     assert.match(await fs.readFile(getLogPath(), "utf8"), /queued flush fixture/)

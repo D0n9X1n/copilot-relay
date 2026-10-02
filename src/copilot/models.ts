@@ -38,6 +38,7 @@ export const pinCopilotModelCatalog = (config: ProxyConfig): void => {
   pinnedCatalogs.set(config, config.modelCatalog)
 }
 
+// Concurrent callers for the same config and base URL share one in-flight /models request.
 const pendingCatalogs = new WeakMap<
   ProxyConfig,
   { baseUrl: string; promise: Promise<CopilotModelCatalog> }
@@ -144,10 +145,15 @@ export async function loadCopilotModelCatalog(
 
   const promise = (async () => {
     const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
-    const response = await fetchCopilot(provider, "/models", {
-      method: "GET",
-      headers: { accept: "application/json" },
-    }, { signal, timeoutMs: config.upstreamTimeoutMs })
+    const response = await fetchCopilot(
+      provider,
+      "/models",
+      {
+        method: "GET",
+        headers: { accept: "application/json" },
+      },
+      { signal, timeoutMs: config.upstreamTimeoutMs },
+    )
     if (!response.ok) {
       throw new HTTPError("Failed to validate upstream models", response)
     }
@@ -186,6 +192,8 @@ export async function loadCopilotModelCatalog(
 
     const catalog = { baseUrl: provider.baseUrl, models }
     publishCopilotModelCatalog(config, catalog)
+
+    // Update the request's runtime view and the process-wide one, each only for its own base URL.
     const state = getRuntimeState()
     if (state.upstreamBaseUrl === provider.baseUrl) {
       state.modelCatalog = catalog
@@ -198,6 +206,7 @@ export async function loadCopilotModelCatalog(
     return catalog
   })()
   pendingCatalogs.set(config, { baseUrl: provider.baseUrl, promise })
+
   try {
     return await promise
   } finally {
@@ -238,6 +247,7 @@ export async function boundModelOutputTokens(
   requested: number | null | undefined,
 ): Promise<number | null | undefined> {
   await ensureCopilotModelCatalog(config, model)
+
   const limits = getCachedCopilotModel(config, model)?.limits
   if (!limits || !isPositiveInteger(requested)) {
     return requested

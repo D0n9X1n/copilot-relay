@@ -17,6 +17,7 @@ const runSuite = async (executable: string, suite: string) => {
       cwd: root,
       timeout: 180_000,
       maxBuffer: 4 * 1024 * 1024,
+      // Leave no __pycache__ behind, and read and write UTF-8 on every platform.
       env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
     })
   } catch (error) {
@@ -28,6 +29,8 @@ const runSuite = async (executable: string, suite: string) => {
 for (const suite of ["release-issues_tests.py", "release-notes_tests.py"]) {
   test(`offline release notes: ${suite}`, { timeout: 190_000 }, async () => {
     const { stderr } = await runSuite(python, suite)
+
+    // unittest reports its summary on stderr.
     const output = stripVTControlCharacters(stderr)
     assert.match(output, /Ran \d+ tests/)
     assert.match(output, /^OK(?: \(.*\))?$/m)
@@ -35,17 +38,19 @@ for (const suite of ["release-issues_tests.py", "release-notes_tests.py"]) {
 }
 
 test("release-note tests fail loudly when Python is missing", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-missing-python-"))
+  const emptyDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "relay-missing-python-"))
+
   try {
-    await assert.rejects(runSuite(path.join(home, "nonexistent-python"), "release-notes_tests.py"), /ENOENT/)
+    await assert.rejects(runSuite(path.join(emptyDirectory, "nonexistent-python"), "release-notes_tests.py"), /ENOENT/)
   } finally {
-    await fs.rm(home, { recursive: true, force: true })
+    await fs.rm(emptyDirectory, { recursive: true, force: true })
   }
 })
 
 test("release workflow generates verified notes with Python provisioned", async () => {
   const publish = await fs.readFile(path.join(root, ".github/workflows/publish.yml"), "utf8")
   const ci = await fs.readFile(path.join(root, ".github/workflows/ci.yml"), "utf8")
+
   assert.match(publish, /python3 scripts\/release-notes\.py "\$tag" release > "\$notes_file"/)
   assert.match(publish, /issues: read/)
   assert.match(publish, /pull-requests: read/)

@@ -270,9 +270,12 @@ const handleClaudeMessageRequest = async (
 ): Promise<ClaudeResponse | undefined> => {
   const upstreamModel = translateModelName(claudePayload.model)
   if (shouldUseNativeMessages(config, upstreamModel)) {
-    return handleNativeMessages(config, { ...claudePayload, model: upstreamModel }, {
-      requestId, signal: requestSignal, headers: requestHeaders,
-    }, writeEvent)
+    return handleNativeMessages(
+      config,
+      { ...claudePayload, model: upstreamModel },
+      { requestId, signal: requestSignal, headers: requestHeaders },
+      writeEvent,
+    )
   }
 
   const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
@@ -366,20 +369,29 @@ const handleClaudeMessageRequest = async (
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
       const searchResponse = createClaudeWebSearchResponse(search)
+      // The decision pass's tokens count toward the search turn's usage.
       const decisionUsage = translateToClaude(effectiveResponse, toolNameMapper).usage
       searchResponse.usage.input_tokens += decisionUsage.input_tokens
       searchResponse.usage.output_tokens += decisionUsage.output_tokens
       if (decisionUsage.cache_read_input_tokens !== undefined) {
-        searchResponse.usage.cache_read_input_tokens = (searchResponse.usage.cache_read_input_tokens ?? 0) + decisionUsage.cache_read_input_tokens
+        searchResponse.usage.cache_read_input_tokens =
+          (searchResponse.usage.cache_read_input_tokens ?? 0) + decisionUsage.cache_read_input_tokens
       }
 
-      const siblingResponse = translateToClaude({
-        ...effectiveResponse,
-        choices: effectiveResponse.choices.map((choice) => ({
-          ...choice,
-          message: { ...choice.message, tool_calls: choice.message.tool_calls?.filter((call) => call.id !== webSearchToolCall.toolCall.id) },
-        })),
-      }, toolNameMapper)
+      // Other tool calls from this turn go back to the client to run, beside the search blocks.
+      const siblingResponse = translateToClaude(
+        {
+          ...effectiveResponse,
+          choices: effectiveResponse.choices.map((choice) => ({
+            ...choice,
+            message: {
+              ...choice.message,
+              tool_calls: choice.message.tool_calls?.filter((call) => call.id !== webSearchToolCall.toolCall.id),
+            },
+          })),
+        },
+        toolNameMapper,
+      )
       const siblingTools = siblingResponse.content.filter((block) => block.type === "tool_use")
 
       if (siblingTools.length > 0) {
@@ -427,6 +439,8 @@ const handleClaudeMessageRequest = async (
       }
     } else {
       claudeResponse = translateToClaude(effectiveResponse, toolNameMapper)
+
+      // The preamble already streamed live; send only what follows it.
       if (streamedBeforeDecision) {
         claudeResponse.content = claudeResponse.content.flatMap((block): ClaudeAssistantContentBlock[] => {
           if (block.type === "text") {
@@ -485,9 +499,6 @@ const handleClaudeMessageRequest = async (
       }),
     )
   }
-
-  // streamState is declared above and shared with the decision pass, so block
-  // indices stay monotonic when classification already emitted content.
 
   // Chunks consumed while classifying the turn, replayed in order so the client
   // sees an unbroken stream.
@@ -553,7 +564,9 @@ claudeRoutes.post("/messages", async (c) => {
   const claudePayload = await c.req.json<ClaudeMessagesPayload>()
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {
+    // Rejects a malformed effort control with HTTP 400 before any other work.
     getRequestReasoningEffort(claudePayload)
+
     const upstreamModel = translateModelName(claudePayload.model)
     const validate = () => {
       if (shouldUseNativeMessages(config, upstreamModel)) {
@@ -696,19 +709,22 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
   try {
     const claudeBeta = c.req.header("claude-beta")
     const claudePayload = await c.req.json<ClaudeMessagesPayload>()
-    const countPayload = shouldUseNativeMessages(c.get("config"), translateModelName(claudePayload.model)) ? {
-      ...claudePayload,
-      // Controls affect native execution, not local advisory token counting.
-      // Copy only system messages; real Messages requests retain their controls.
-      messages: claudePayload.messages.map((message) => {
-        if (message.role !== "system") {
-          return message
-        }
+    const countPayload =
+      shouldUseNativeMessages(c.get("config"), translateModelName(claudePayload.model)) ?
+        {
+          ...claudePayload,
+          // Controls affect native execution, not local advisory token counting.
+          // Copy only system messages; real Messages requests retain their controls.
+          messages: claudePayload.messages.map((message) => {
+            if (message.role !== "system") {
+              return message
+            }
 
-        const { output_config: _outputConfig, clear_at: _clearAt, ...textMessage } = message
-        return textMessage
-      }),
-    } : claudePayload
+            const { output_config: _outputConfig, clear_at: _clearAt, ...textMessage } = message
+            return textMessage
+          }),
+        }
+      : claudePayload
     const openAIPayload = translateToOpenAI(countPayload)
     const exposedModels = getExposedModelIds()
     const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
@@ -726,14 +742,14 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     // non-MCP local tools, add a small Claude-family overhead to avoid
     // under-reporting context use in the UI.
     if (claudePayload.tools && claudePayload.tools.length > 0) {
-      let mcpToolExist = false
+      let hasMcpTools = false
       if (claudeBeta?.startsWith("claude-code")) {
-        mcpToolExist = claudePayload.tools.some((tool) =>
+        hasMcpTools = claudePayload.tools.some((tool) =>
           tool.name.startsWith("mcp__"),
         )
       }
 
-      if (!hasDiscoveredTokenizer && !mcpToolExist && effectiveModelId.startsWith("claude")) {
+      if (!hasDiscoveredTokenizer && !hasMcpTools && effectiveModelId.startsWith("claude")) {
         tokenCount.input += 346
       }
     }

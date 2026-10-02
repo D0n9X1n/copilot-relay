@@ -18,6 +18,7 @@ export const stop = defineCommand({
       log.error("Could not read config; stopping only verified relay processes without a port hint.")
       return undefined
     })
+
     if (appConfig) {
       setLogLevel(appConfig.logLevel)
       await cleanupLogs(appConfig.logRetentionDays).catch(() => {

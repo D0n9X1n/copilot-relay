@@ -21,7 +21,7 @@ import { colorEnabled, colorText } from "~/lib/terminal"
 /**
  * Exit codes, so `status` is usable in a health check or a script.
  *
- * 2 is distinct from 1 on purpose: "running but broken" and "not running" call
+ * 2 is distinct from 1 on purpose: "not running" and "running but broken" call
  * for different responses - restart the service versus re-authenticate.
  *
  * A failed health probe is a 2, not a 0. Printing FAILED while exiting 0 would
@@ -46,13 +46,13 @@ interface ProbeResult {
 /**
  * The resolved config as `status` reports it.
  *
- * Derived from AppConfig rather than restated, so a twelfth config key cannot
- * be added without this type following it automatically. Two deliberate
+ * Derived from AppConfig rather than restated, so a new config key cannot be
+ * added without this type following it automatically. Two deliberate
  * differences:
  *
  * `webSearchBackend` is null rather than undefined when unset. JSON.stringify
  * drops undefined properties, so leaving it optional would make `status --json`
- * emit 10 config keys on a default install and 11 on a customized one; anything
+ * omit that key on a default install but emit it on a customized one; anything
  * parsing that deserves a stable key set.
  *
  * `copilotBaseUrl` is the display form, not the raw value. It is user-supplied
@@ -174,7 +174,7 @@ const formatUptime = (startedAt: string | undefined): string => {
  * rather than alphabetical so it reads like the file it was resolved from.
  *
  * A Record keyed by StatusConfig rather than an array of keys: an array only
- * checks that each entry *is* a key, so a twelfth config key would type-check
+ * checks that each entry *is* a key, so a new config key would type-check
  * while silently never appearing in `status` — the exact failure this command
  * exists to prevent. Keyed this way, adding one fails the build here.
  */
@@ -202,9 +202,9 @@ const configRowKeys = (
  *
  * These are the values on disk. That is not the same question as "what is the
  * running daemon honouring", and the footnote says so rather than leaving it
- * implied: applyRuntimeConfig() in start.ts hot-reloads eight of these keys,
- * never reads claudeSetup, and deliberately does not rebind the listening
- * socket when host or port changes. Printing all eleven without that line
+ * implied: applyRuntimeConfig() in start.ts never reads claudeSetup and
+ * deliberately does not rebind the listening socket when host or port
+ * changes; it hot-reloads the rest. Printing every key without that line
  * would imply a live daemon had read values it has not.
  *
  * Only shown when running, because with nothing up every value applies at the
@@ -220,6 +220,7 @@ const renderConfig = (
       key === "webSearchBackend" && value === null ?
         "(unset — uses gptModel)"
       : String(value)
+
     // Every value is user-supplied and lands on a terminal unescaped. Raw
     // control bytes could clear the line and paint status rows the relay never
     // produced, so no config value is trusted to be printable. See #47.
@@ -341,6 +342,7 @@ const probe = async (
     signal: AbortSignal.timeout(timeoutMs),
   })
   const body = (await response.json().catch(() => undefined)) as unknown
+
   return {
     body,
     ms: Math.round(performance.now() - started),
@@ -351,6 +353,7 @@ const probe = async (
 
 const describeError = (error: unknown): string => {
   if (error instanceof Error) {
+    // AbortSignal.timeout() rejects fetch with a DOMException named TimeoutError.
     return error.name === "TimeoutError" ? "timed out" : error.message
   }
 
@@ -372,6 +375,7 @@ const checkHealth = async (
     const probeResult = await probe(`${baseUrl}/healthz`, {}, localProbeTimeoutMs)
     const version = (probeResult.body as { version?: unknown } | undefined)
       ?.version
+
     return {
       result:
         probeResult.ok ?
@@ -388,6 +392,7 @@ const readModels = async (baseUrl: string): Promise<Array<string>> => {
   try {
     const result = await probe(`${baseUrl}/v1/models`, {}, localProbeTimeoutMs)
     const data = (result.body as { data?: Array<{ id?: string }> } | undefined)?.data
+
     return Array.isArray(data) ?
         data.flatMap((model) => (typeof model.id === "string" ? [model.id] : []))
       : []
@@ -428,6 +433,7 @@ export const checkDeep = async (
       const message = (
         result.body as { error?: { message?: string } } | undefined
       )?.error?.message
+
       return {
         detail: message ? `http ${result.status}: ${message}` : `http ${result.status}`,
         ms: result.ms,
@@ -442,6 +448,7 @@ export const checkDeep = async (
       type?: unknown
       usage?: { output_tokens?: unknown }
     } | undefined
+
     if (Array.isArray(body?.content)) {
       if (body.content.length > 0) {
         return { ms: result.ms, ok: true }
@@ -479,16 +486,18 @@ export const collectStatus = async (options: {
     // Do not claim "not running" or probe a guessed port when config is invalid.
     throw new StatusConfigError(`Could not read config at ${paths.configPath}; fix it before checking status.`)
   })
+
   setLogLevel(appConfig.logLevel)
+
   // Before any probe runs, so a URL this origin appears in - a fetch failure
   // from checkHealth or checkDeep, which quotes the URL it tried - is already
   // covered by the time it reaches a detail string. See #47.
   registerSensitiveOrigin(appConfig.copilotBaseUrl)
 
   const base = {
-    // Both of these are derived from the same appConfig as `config`, so they
-    // cannot drift from it. They predate the config block and something may
-    // parse them out of `status --json`, so they stay.
+    // logLevel and thinkEffort are derived from the same appConfig as `config`,
+    // so they cannot drift from it. They predate the config block and something
+    // may parse them out of `status --json`, so they stay.
     config: toStatusConfig(appConfig),
     configPath: paths.configPath,
     logLevel: appConfig.logLevel,
@@ -567,6 +576,7 @@ export const status = defineCommand({
       const diagnostic = error instanceof RelayInspectionError
         ? "Could not verify relay process state; status is unknown."
         : sanitizeTerminalString(error.message)
+
       if (args.json) {
         console.log(JSON.stringify({ error: diagnostic, configPath: paths.configPath }))
       } else {

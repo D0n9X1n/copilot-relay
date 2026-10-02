@@ -46,12 +46,14 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     ...appConfig,
     thinkEffort: normalizeThinkEffort(appConfig.thinkEffort) ?? defaultReasoningEffort,
   }
+
   setLogLevel(appConfig.logLevel)
   await cleanupLogs(appConfig.logRetentionDays)
   await cleanupCaptures(appConfig.logRetentionDays)
 
   const claudeConfigPath = defaultClaudeConfigPath
   const config = readProxyConfig(appConfig)
+
   const applyRuntimeConfig = (nextConfig: AppConfig) => {
     // Hot reload updates behavior for future requests; it intentionally does
     // not rebind the already-listening socket when host or port changes.
@@ -62,9 +64,14 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // base URL can still be in flight when the config changes, and its error
     // must stay redacted on its way to the log. See #47.
     registerSensitiveOrigin(nextConfig.copilotBaseUrl)
+
     setLogLevel(nextConfig.logLevel)
-    void cleanupLogs(nextConfig.logRetentionDays).catch(() => log.error("Log retention failed; existing logs retained."))
+    void cleanupLogs(nextConfig.logRetentionDays)
+      .catch(() => log.error("Log retention failed; existing logs retained."))
     void cleanupCaptures(nextConfig.logRetentionDays)
+
+    // Checked before runtimeState.debug is updated below, so the warning appears
+    // when debug capture switches on rather than on every reload.
     if (nextConfig.logLevel === "debug" && !runtimeState.debug) {
       log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
     }
@@ -114,6 +121,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   const baseUrl = getRelayBaseUrl(config.host, config.port)
   log.info(`copilot-relay listening on ${baseUrl}`)
   log.info(`copilot base url: ${formatUrlForDisplay(config.copilotBaseUrl)}`)
+
   if (appConfig.claudeSetup) {
     try {
       const gptLimits = getCachedCopilotModel(config, appConfig.gptModel)?.limits
@@ -127,6 +135,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
             Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
           : undefined,
       })
+
       if (claudeResult.changed) {
         log.info(
           `claude settings ${claudeResult.created ? "created" : "updated"}: ${claudeResult.configPath}`,
@@ -187,6 +196,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
         log.info("Grace period elapsed; closing remaining connections")
         server.closeAllConnections()
       }, shutdownGraceMs)
+
       // Must not itself hold the event loop open, or it would delay the exit
       // it exists to accelerate.
       forceClose.unref()
