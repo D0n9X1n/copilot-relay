@@ -186,14 +186,26 @@ const collectViolations = (file: string, text: string): Violation[] => {
       }
     }
 
-    // Statements are compared within one clause above, so `case 1: a(); case 2: b()` is caught here.
+    // Statements are compared within one clause above. Across clauses, the last statement of one
+    // clause meets the first statement of the next, so `case 1: a(); case 2: b()` is caught here.
+    // Case labels are not statements: grouped labels such as `case 1: case 2:` may share a line.
     if (ts.isCaseBlock(node)) {
-      for (let index = 1; index < node.clauses.length; index++) {
-        const clause = node.clauses[index]
+      let previousStatement: ts.Statement | undefined
 
-        if (lineOf(startOf(clause)) === lineOf(node.clauses[index - 1].getEnd())) {
-          record("oneStatementPerLine", startOf(clause))
+      for (const clause of node.clauses) {
+        if (clause.statements.length === 0) {
+          continue
         }
+
+        const firstStatement = clause.statements[0]
+        const sharesLine = previousStatement !== undefined
+          && lineOf(startOf(firstStatement)) === lineOf(previousStatement.getEnd())
+
+        if (sharesLine) {
+          record("oneStatementPerLine", startOf(firstStatement))
+        }
+
+        previousStatement = clause.statements[clause.statements.length - 1]
       }
     }
 
@@ -382,6 +394,12 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "",
     "switch (kind) {",
     "  case 1: first(); case 2: second()",
+    "}",
+    "",
+    "switch (kind) {",
+    "  case 1: case 2:",
+    "    handle()",
+    "    break",
     "}",
   ].join("\n")
 
