@@ -565,6 +565,18 @@ Code 的检查，因为 `/healthz` 和 `/v1/models` 都不访问上游。它是�
 是未知，不代表成功完成或零缓存用量。普通 `info` 结果行只包含这些元数据，不含提示词
 或响应文本。
 
+`withTraceObserver` 为进程内调用者提供请求作用域的 handle，不新增 HTTP API，也不读取
+捕获文件。回调只保存 handle：必须消费响应之后才能等待 `finished`。`probeModels`
+限制诊断等待时间，之后调用 `diagnosticSnapshot`，而非输出整个 manifest。快照会用
+全部已登记凭据（包括刷新后的 token）重新过滤允许列表中的标识符，只输出已知接口、
+状态、结果和捕获状态。未知错误不能证明责任在上游。
+
+`src/lib/model-probe-output.ts` 负责展示，`src/lib/terminal.ts` 的颜色策略不依赖模块
+导入时的环境快照。Status 文字使用同一策略，但 JSON 和探测逻辑不变。深度检查启动
+使用 `withoutConsoleLogging` 保留文件证据；推理和正文消费使用 `withoutLogging`
+避免原始 payload 泄漏，再单独记录一条安全失败摘要。设备认证提示通过明确回调绕过
+安静启动模式。
+
 只有 debug 才生成正文文件。`safeHeaders` 使用不含认证 header 的允许列表，策略快照
 省略 bearer token 和私有上游 URL 尾部。**原始正文字节刻意不脱敏**，可能包含提示词、
 工具结果或上游回显中的凭据。有界异步写入队列不会让磁盘吞吐阻塞转发；过载/写入失败
@@ -581,7 +593,9 @@ owner 存活/未知的 pending 记录保留，只有 `ESRCH` 才证明 pending o
 元数据/schema、固定正文文件名、chunk 总长、路径与大小限制。`withRecordedTransport`
 只按原顺序提供记录的上游响应、错误和刷新结果。不创建监听器/socket，不执行设备认证、
 token 交换，不写配置或新捕获。它比较当前 handler 实际生成的出站 JSON 与最终 JSON/SSE；
-未消费或意外的操作被标为差异，不回退到网络。
+未消费或意外的操作被标为差异，不回退到网络。已校验 manifest 的请求 ID 通过内部
+recorded transport 传入，以准确复现本地错误关联文本；客户端 header 无权选择此 ID。
+当前错误文本变化后，旧错误记录合理地可能返回差异。
 
 比较忽略传输 chunk 分界，仅规范化已知的新生成 bridge ID，并保护 provider ID 和字面
 内容。Diff 只输出结构路径和固定原因，不输出值或来自 payload 的属性名。`MATCH` 表示

@@ -249,16 +249,7 @@ const processState = (pid: number): "alive" | "gone" | "unknown" => {
 // Only ESRCH proves absence; unexpected probe failures must preserve the record.
 const isProcessAlive = (pid: number): boolean => processState(pid) !== "gone"
 
-/**
- * Full pid-file record, for callers that need the listening address or start
- * time rather than just the pid.
- *
- * Deliberately tolerant: a corrupt or half-written pid file yields undefined
- * rather than throwing, because `status` must be able to report "not running"
- * instead of crashing on a file the user may have been mid-edit on.
- *
- * Returns undefined for the legacy bare-pid format, which carries no address.
- */
+// Missing, malformed or legacy records provide no identity evidence; callers must still inspect their process/listener scope.
 export const readRelayPidFileEntry = async (): Promise<
   RelayPidFile | undefined
 > => {

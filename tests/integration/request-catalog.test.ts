@@ -16,7 +16,7 @@ const { snapshotProxyConfig } = await import("../../src/lib/config")
 const { boundModelOutputTokens, ensureCopilotModelCatalog, loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { createServer } = await import("../../src/server")
 const { normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
-const { RequestTrace, withRecordedTransport, withRequestTrace } = await import("../../src/lib/request-trace")
+const { RequestTrace, withRecordedTransport, withRequestTrace, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
 
@@ -39,6 +39,36 @@ test.afterEach(() => {
   delete runtimeState.modelRouting
   delete runtimeState.thinkEffort
 })
+
+for (const status of [400, 401, 429]) {
+  test(`catalog HTTP ${status} is upstream evidence, not local validation`, async () => {
+    const config = configFor(providerB)
+    config.modelCatalog = { baseUrl: providerA, models: new Map([[model, {}]]) }
+    let trace: Awaited<ReturnType<typeof RequestTrace.create>> | undefined
+    await withTraceObserver((value) => { trace = value }, () => withRecordedTransport({
+      fetch: async (request) => {
+        assert.equal(request.path, "/models")
+        return Response.json({ error: { message: "fixture" } }, { status })
+      }, refresh: async () => { throw new Error("Unexpected refresh") },
+    }, async () => {
+      const response = await createServer(config).fetch(new Request("http://localhost/v1/messages", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+          model, max_tokens: 16, messages: [{ role: "user", content: "Fixture" }],
+        }),
+      }))
+      assert.equal(response.status, status)
+      assert.deepEqual(await response.json(), { error: { message: "fixture" } })
+    }))
+    assert(trace)
+    await trace.finished
+    const snapshot = trace.diagnosticSnapshot()
+    assert.equal(snapshot.failure, undefined)
+    assert.equal(snapshot.exchanges[0].path, "/models")
+    assert.equal(snapshot.exchanges[0].status, status)
+    assert.equal(snapshot.exchanges[0].responseState, "complete")
+    assert.equal(snapshot.responseState, "complete")
+  })
+}
 
 test("lazy discovery after hot reload is reused by the next request and publishes runtime limits", async () => {
   const root = configFor(providerA)

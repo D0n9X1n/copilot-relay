@@ -16,6 +16,7 @@ import {
   scrubSensitiveUrls,
 } from "~/lib/redact"
 import { appVersion } from "~/lib/version"
+import { colorEnabled, colorText } from "~/lib/terminal"
 
 /**
  * Exit codes, so `status` is usable in a health check or a script.
@@ -221,12 +222,12 @@ const renderConfig = (
  * Pure state-to-lines mapping, kept free of IO so it can be tested directly
  * without spawning a relay or opening a socket.
  */
-export const renderStatus = (status: RelayStatus): Array<string> => {
+export const renderStatus = (status: RelayStatus, color = false): Array<string> => {
   const lines = [`copilot-relay ${status.version}`]
 
   if (!status.running) {
     lines.push(
-      "  process    not running",
+      `  process    ${colorText("not running", "warning", color)}`,
       `  log        ${status.logPath}`,
       `  config     ${status.configPath}`,
       ...renderConfig(status.config, false),
@@ -237,7 +238,7 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
   }
 
   lines.push(
-    `  process    running (pid ${status.pid}, up ${formatUptime(status.startedAt)})`,
+    `  process    ${colorText("running", "good", color)} (pid ${status.pid}, up ${formatUptime(status.startedAt)})`,
   )
 
   // The daemon's own build, distinct from the header line above, which is the
@@ -246,9 +247,9 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
   // mismatch would leave "did it even check?" unanswered. See #43.
   lines.push(
     status.daemonVersion === undefined ?
-      "  version    unknown (daemon predates version reporting — restart to report it)"
+      `  version    ${colorText("unknown", "muted", color)} (daemon predates version reporting — restart to report it)`
     : hasVersionMismatch(status) ?
-      `  version    ${status.daemonVersion} — MISMATCH, ${status.version} is installed`
+      `  version    ${status.daemonVersion} — ${colorText("MISMATCH", "warning", color)}, ${status.version} is installed`
     : `  version    ${status.daemonVersion}`,
   )
 
@@ -257,24 +258,24 @@ export const renderStatus = (status: RelayStatus): Array<string> => {
   const health = status.health
   lines.push(
     health?.ok ?
-      `  health     ok (${health.ms}ms)`
-    : `  health     FAILED${health?.detail ? ` — ${health.detail}` : ""}`,
+      `  health     ${colorText("ok", "good", color)} (${health.ms}ms)`
+    : `  health     ${colorText("FAILED", "bad", color)}${health?.detail ? ` — ${health.detail}` : ""}`,
   )
 
   lines.push(
     status.models?.length ?
       `  models     ${status.models.join(", ")}`
-    : "  models     unavailable",
+    : `  models     ${colorText("unavailable", "warning", color)}`,
   )
 
   if (status.deep) {
     lines.push(
       status.deep.ok ?
-        `  upstream   ok (${status.deep.ms}ms) — ${status.deep.detail ?? "end-to-end Copilot round trip"}`
-      : `  upstream   FAILED${status.deep.detail ? ` — ${status.deep.detail}` : ""}`,
+        `  upstream   ${colorText("ok", "good", color)} (${status.deep.ms}ms) — ${status.deep.detail ?? "end-to-end Copilot round trip"}`
+      : `  upstream   ${colorText("FAILED", "bad", color)}${status.deep.detail ? ` — ${status.deep.detail}` : ""}`,
     )
   } else {
-    lines.push("  upstream   not checked (use --deep)")
+    lines.push(`  upstream   ${colorText("not checked", "muted", color)} (use --deep)`)
   }
 
   lines.push(
@@ -555,7 +556,7 @@ export const status = defineCommand({
     if (args.json) {
       console.log(scrubSensitiveUrls(JSON.stringify(result, null, 2)))
     } else {
-      console.log(scrubSensitiveUrls(renderStatus(result).join("\n")))
+      console.log(scrubSensitiveUrls(renderStatus(result, colorEnabled()).join("\n")))
     }
 
     // 0 requires both a live process and a passing health probe. A relay that

@@ -85,6 +85,45 @@ const render = (status: RelayStatus): string => renderStatus(status).join("\n")
 
 // Why: "not running" is an answer, not an error. It must say so plainly and
 // point at the fix rather than making the user infer it.
+test("status JSON command stays uncolored even when color is forced", async (t) => {
+  const { status: command } = await import("../../src/status")
+  await fs.mkdir(paths.appDir, { recursive: true })
+  await fs.writeFile(paths.configPath, "port: 4199\n")
+  const output: string[] = []
+  t.mock.method(console, "log", (value: unknown) => { output.push(String(value)) })
+  const originalForce = process.env.FORCE_COLOR
+  const originalExit = process.exitCode
+  process.env.FORCE_COLOR = "1"
+  try {
+    const run = command.run as (context: { args: Record<string, unknown> }) => Promise<void>
+    await run({ args: { json: true } })
+    assert.equal(output.length, 1)
+    assert.doesNotMatch(output[0], /\u001b/)
+    const value = JSON.parse(output[0])
+    assert.equal(value.running, false)
+    assert.equal(process.exitCode, 1)
+    assert.equal(value.config.port, 4199)
+  } finally {
+    if (originalForce === undefined) delete process.env.FORCE_COLOR
+    else process.env.FORCE_COLOR = originalForce
+    process.exitCode = originalExit
+    await fs.rm(paths.configPath, { force: true })
+  }
+})
+
+test("status colors retain identical text and health semantics", () => {
+  const plain = renderStatus({ ...runningStatus, daemonVersion: "0.1.0", deep: { ok: false, detail: "timed out" } }, false).join("\n")
+  const colored = renderStatus({ ...runningStatus, daemonVersion: "0.1.0", deep: { ok: false, detail: "timed out" } }, true).join("\n")
+  assert.equal(colored.replace(/\u001b\[[0-9;]*m/g, ""), plain)
+  assert.match(colored, /\u001b\[32mrunning\u001b\[0m/)
+  assert.match(colored, /\u001b\[32mok\u001b\[0m/)
+  assert.match(colored, /\u001b\[31mFAILED\u001b\[0m/)
+  assert.match(colored, /\u001b\[33mMISMATCH\u001b\[0m/)
+  assert.doesNotMatch(plain, /\u001b/)
+  assert.match(renderStatus(runningStatus, true).join("\n"), /\u001b\[90mnot checked\u001b\[0m/)
+  assert.match(renderStatus(baseStatus, true).join("\n"), /\u001b\[33mnot running\u001b\[0m/)
+})
+
 test("reports not running with a next step", () => {
   const out = render(baseStatus)
 
@@ -694,7 +733,7 @@ test.after(async () => {
   syncBuiltinESMExports()
   await fs.rm(tempHome, { force: true, recursive: true })
   assert.deepEqual(signalCalls, [])
-  assert.equal(discoveryCalls.length, 2)
+  assert.equal(discoveryCalls.length, 3)
   for (const { file, args } of discoveryCalls) {
     if (process.platform === "win32") {
       assert.equal(file, "powershell.exe")

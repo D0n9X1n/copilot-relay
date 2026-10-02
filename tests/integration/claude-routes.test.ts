@@ -737,6 +737,39 @@ test("malformed inline controls still reject before SSE, counting or upstream ca
   }
 })
 
+test("upstream HTTP errors retain a generated relay correlation header", async () => {
+  const mock = await startMockCopilot(undefined, undefined, { searchFailure: { status: 503, body: "fixture" } })
+  const { withRecordedTransport } = await import("../../src/lib/request-trace")
+  try {
+    await withRecordedTransport({ fetch: async () => Response.json({ error: { message: "unavailable" } }, { status: 503 }), refresh: async () => {} }, async () => {
+      const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+        method: "POST", headers: { "content-type": "application/json", "x-copilot-relay-request-id": "forged" },
+        body: JSON.stringify({ model: "opus", max_tokens: 16, messages: [{ role: "user", content: "Fixture" }] }),
+      }))
+      assert.equal(response.status, 503)
+      assert.match(response.headers.get("x-copilot-relay-request-id") ?? "", uuidPattern)
+      await response.text()
+    })
+  } finally { await mock.close() }
+})
+
+test("relay-generated stream errors include their correlation ID without internal details", async () => {
+  const mock = await startMockCopilot(undefined, undefined, { functionCall: { name: "Read", arguments: '{"private":' } })
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json", "x-copilot-relay-request-id": "client-forged-id" },
+      body: JSON.stringify({ model: "default", stream: true, max_tokens: 16, messages: [{ role: "user", content: "Read fixture" }], tools: [{ name: "Read", input_schema: { type: "object" } }] }),
+    }))
+    const requestId = response.headers.get("x-copilot-relay-request-id")
+    assert.match(requestId ?? "", uuidPattern)
+    const text = await response.text()
+    assert.match(text, new RegExp(`request_id=${requestId}`))
+    assert.match(text, /event: error/)
+    assert.doesNotMatch(text, /client-forged-id|\\"private\\"/)
+  } finally { await mock.close() }
+})
+
 test("rejects invalid request effort before SSE or upstream calls", async () => {
   const mock = await startMockCopilot()
   try {

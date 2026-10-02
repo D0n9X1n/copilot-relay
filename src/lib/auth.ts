@@ -46,6 +46,7 @@ interface GitHubUserResponse {
 
 interface AuthOptions {
   force?: boolean
+  onDeviceCode?: (url: string, code: string) => void
 }
 
 export interface ProxyAuthSession {
@@ -260,7 +261,8 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
   }
 
   const deviceCode = await getDeviceCode()
-  log.info(
+  if (options.onDeviceCode) options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
+  else log.info(
     `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
   )
 

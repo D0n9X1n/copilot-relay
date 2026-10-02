@@ -35,8 +35,10 @@ const fileLevelByMethod: Record<string, number> = {
 }
 
 const loggingSuppressed = new AsyncLocalStorage<boolean>()
+const consoleSuppressed = new AsyncLocalStorage<boolean>()
 
 export const withoutLogging = <T>(run: () => T): T => loggingSuppressed.run(true, run)
+export const withoutConsoleLogging = <T>(run: () => T): T => consoleSuppressed.run(true, run)
 
 let currentLogLevel = consolaLevelByName.info
 const pendingLogWrites = new Set<Promise<void>>()
@@ -271,10 +273,11 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
     if (loggingSuppressed.getStore()) return
     const methodLevel = fileLevelByMethod[level] ?? consolaLevelByName.info
     const writesToFile = methodLevel <= currentLogLevel
-    const writesToConsole = methodLevel <= consola.level
+    const quiet = consoleSuppressed.getStore() === true
+    const writesToConsole = !quiet && methodLevel <= consola.level
 
     if (!writesToFile && !writesToConsole) {
-      return fn(...args)
+      return quiet ? undefined : fn(...args)
     }
 
     // Redact before escaping or bounding: raw separators delimit URLs, and a
@@ -293,7 +296,7 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
       pendingLogWrites.add(pending)
       void pending.then(() => pendingLogWrites.delete(pending))
     }
-    return fn(...rendered)
+    return quiet ? undefined : fn(...rendered)
   }) as T
 
 consola.error = wrapFileLog("error", consola.error.bind(consola))

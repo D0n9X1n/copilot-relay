@@ -8,7 +8,7 @@ import { Hono } from "hono"
 import { snapshotProxyConfig, type ProxyConfig, type ProxyEnv } from "~/lib/config"
 import { isDebugLogging, log } from "~/lib/log"
 import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
-import { cleanupCapturesIfDue, isReplayTransport, RequestTrace, withRequestTrace } from "~/lib/request-trace"
+import { cleanupCapturesIfDue, getReplayRequestId, isReplayTransport, RequestTrace, withRequestTrace } from "~/lib/request-trace"
 import { appVersion } from "~/lib/version"
 import { claudeRoutes } from "~/routes/claude"
 
@@ -83,7 +83,7 @@ export const createServer = (config: ProxyConfig) => {
   const configuredHost = parseAuthority(host.includes(":") && !host.startsWith("[") ? `[${host}]` : host, "http:")?.hostname
 
   app.use("*", async (c, next) => {
-    const requestId = randomUUID()
+    const requestId = getReplayRequestId() ?? randomUUID()
     c.set("config", config)
     c.set("requestId", requestId)
     c.header("x-copilot-relay-request-id", requestId)
@@ -93,6 +93,8 @@ export const createServer = (config: ProxyConfig) => {
     try {
       await next()
     } finally {
+      // A route can return a new Response and replace headers prepared before next().
+      c.header("x-copilot-relay-request-id", requestId)
       const ms = Math.round(performance.now() - started)
       // Emit exactly one info-level request summary even when downstream route
       // handling throws; deeper diagnostics belong to debug/error logs.
@@ -171,7 +173,8 @@ export const createServer = (config: ProxyConfig) => {
       requestId: c.get("requestId"),
       error,
     })
-    return c.json({ error: { message: "Internal server error" } }, 500)
+    c.get("requestTrace")?.recordFailure("internal-error")
+    return c.json({ error: { message: `Internal server error (request_id=${c.get("requestId")})` } }, 500)
   })
 
   app.get("/", (c) =>

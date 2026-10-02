@@ -13,7 +13,7 @@ const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-fmt-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
 
-const { log, setLogLevel, isDebugLogging, flushLogs } = await import("../../src/lib/log")
+const { log, setLogLevel, isDebugLogging, flushLogs, withoutConsoleLogging, withoutLogging } = await import("../../src/lib/log")
 const { getLogPath, paths } = await import("../../src/lib/paths")
 
 const consoleOutput: Array<string> = []
@@ -45,6 +45,27 @@ test.beforeEach(async () => {
 // Why: this was two thirds of the 9.3 GB. inspect(depth: null) pretty-printed
 // each payload across thousands of indented lines - 226,488 of 275,442 sampled
 // lines were object-dump continuations. One entry must be one line.
+test("console-only quiet scopes retain file evidence without suppressing other requests", async () => {
+  let release!: () => void
+  const pending = withoutConsoleLogging(async () => {
+    log.info("quiet setup")
+    await new Promise<void>((resolve) => { release = resolve })
+    log.error("quiet error")
+    withoutLogging(() => log.info("fully suppressed"))
+  })
+  log.info("visible request")
+  release()
+  await pending
+  await flushLogs()
+  assert.deepEqual(consoleOutput, ["visible request"])
+  const file = await fs.readFile(getLogPath(), "utf8")
+  assert.match(file, /quiet setup/)
+  assert.match(file, /quiet error/)
+  assert.match(file, /visible request/)
+  assert.doesNotMatch(file, /fully suppressed/)
+  assert.equal(file.trim().split("\n").length, 3)
+})
+
 test("collapses a nested payload onto a single line", async () => {
   log.error("Failed to create responses", {
     request: {

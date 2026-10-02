@@ -668,6 +668,21 @@ reason and reported input/output/cache usage. Missing or oversized metadata is
 unknown, not a successful completion or zero cache use. Normal `info` outcome
 lines contain this metadata, not prompt or response text.
 
+`withTraceObserver` gives an in-process caller a request-scoped handle without
+publishing a new HTTP API or reading captured files. The callback only stores the
+handle: the response must be consumed before awaiting `finished`. `probeModels`
+bounds that diagnostic wait, then uses `diagnosticSnapshot` rather than dumping
+the manifest. The snapshot rechecks allowlisted identifiers against every
+registered credential, including refreshed tokens, and emits only known routes,
+statuses, outcomes and capture states. Unknown errors do not prove upstream blame.
+
+`src/lib/model-probe-output.ts` owns presentation; `src/lib/terminal.ts` owns color
+policy independently of the environment at module import. Status text shares
+that policy but its JSON and detection logic do not change. Deep setup uses
+`withoutConsoleLogging` so file evidence remains; inference and body consumption
+use `withoutLogging` to avoid raw payload disclosure, then one safe failure summary
+is logged. Device-auth instructions bypass quiet setup through an explicit callback.
+
 Only debug enables body files. `safeHeaders` is an allowlist excluding auth
 headers; policy snapshots omit bearer tokens and private upstream URL tails.
 **Raw body bytes are intentionally not redacted** and can include credentials
@@ -691,7 +706,10 @@ in process. `withRecordedTransport` supplies only recorded upstream responses,
 errors and refresh outcomes in their original order. No listener/socket, device
 auth, token refresh exchange, config write or new capture is created. It compares
 actual current outgoing JSON and final JSON/SSE with the recording; unused or
-unexpected operations are differences, not a network fallback.
+unexpected operations are differences, not a network fallback. The validated
+manifest request ID is supplied through internal recorded transport so local error
+correlation text is reproduced exactly; client headers never select that identity.
+Older error recordings can legitimately differ when the current error text changes.
 
 Comparison ignores transport chunk boundaries and normalizes only known freshly
 generated bridge IDs while protecting provider IDs and literal content. Diff

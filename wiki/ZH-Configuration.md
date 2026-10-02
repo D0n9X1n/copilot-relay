@@ -128,8 +128,29 @@ copilot-relay models --deep --timeout 20 --total-timeout 120
 copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
 ```
 
-表格显示 `MODEL`、`STATUS`、发送/报告的模型 ID（`SENT/REPORTED`）、`LATENCY`
-及固定诊断 `DETAILS`，最后汇总各类结果数量。不会打印响应文本。
+简洁表格显示 `MODEL`、`STATUS`、`TIME` 和简短的 `RESULT`，最后只汇总非零结果。
+模型 ID 只显示一次；长 ID 换行而不静默截断。每次串行探测完成后立即显示一行。
+`*` 表示目录没有公布 effort 或接口元数据，不代表相关能力已被验证。
+
+TTY 输出中，PASS 为绿色、FAIL 为红色、INCOMPLETE 为黄色，SKIPPED/NOT_TESTED
+使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
+策略。文字状态始终是判断依据，颜色不会改变退出码。管道和 dumb 终端默认无颜色；
+`NO_COLOR` 或 `FORCE_COLOR=0` 禁用 ANSI，正值 `FORCE_COLOR` 可明确启用，
+`NO_COLOR` 优先。`status --json` 始终不带颜色。
+
+深度命令的常规启动消息保留在日志文件中，不再挤占表格；必要的登录提示和启动错误
+仍可见。不会打印探测响应文本、工具参数或原始异常。未通过的探测显示生成的
+`request_id`，重复的下一步建议会去重。
+
+需要每个探测的安全证据时，在本次调用中加入详情选项：
+
+```sh
+copilot-relay models --deep --model claude-opus-5.5 --details
+```
+
+详情包括计划/实际接口、有效 effort/输出上限、报告模型、客户端/上游 HTTP 状态、
+完成状态、关联 ID 和捕获状态。只有完整且实际存在的私有捕获才会显示 replay 命令。
+它仍然是**新的真实探测**，不是离线查看之前的失败；见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 | 状态 | 含义 |
 | --- | --- |
@@ -150,6 +171,7 @@ Messages handler、翻译、上游客户端、token 刷新和响应翻译。每�
 | 选项 | 默认值 / 行为 |
 | --- | --- |
 | `--model` | 默认测试全部公布的 ID；指定值必须准确匹配目录。需要 `--deep`。 |
+| `--details` | 显示每次探测的安全证据及捕获/replay 可用性。需要 `--deep`，不会增加探测或重试次数。 |
 | `--max-tokens` | 每次 4096，并受目录中的输出上限及原生非流式输出上限约束。 |
 | `--effort` | 按 `none`、`low`、`medium`、`high`、`xhigh`、`max` 选择公布的最低档；无元数据时使用标为未验证的 `low`。目录明确不支持的覆盖值会跳过。 |
 | `--timeout` | 每个模型 30 秒，同时不超过正数的 `upstreamTimeoutSeconds`。 |
@@ -361,6 +383,51 @@ upstreamTimeoutSeconds: 0
 
 该设置会热重载，只移除 relay 的总超时。客户端取消，以及客户端、上游和传输层自身
 的超时仍然有效。全新安装的默认值仍为 `180`，已有值不会被迁移。
+
+### 推荐的自动压缩窗口
+
+对于文档中的 **1M 上下文 Opus 5.5 / GPT-6 Astra 模型对**，建议先使用保守的
+**800K 自动压缩窗口**，并保持自动压缩启用。这是留有余量的 relay 建议，不是实测
+最优值，也不能保证消除 API 错误。上方注明日期的目录给 Astra 872K prompt 上限和
+128K 最大输出；从 1M 总窗口预留 128K 后同样剩余 872K。800K 目标再留约 72K，
+用于工具输出、压缩和 token 估算误差。客户端扣除自身输出/缓冲预留后，可能更早压缩。
+
+对当前会话生效并保存到用户设置：
+
+```text
+/autocompact 800k
+```
+
+只对一次启动生效，不修改已保存的设置：
+
+```sh
+claude --autocompact 800k
+```
+
+等价的用户设置片段为：
+
+```json
+{ "autoCompactWindow": 800000 }
+```
+
+环境变量覆盖必须使用纯数字 token 数量：
+
+```sh
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=800000 claude
+```
+
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 优先于命令、启动参数和已保存设置，不要在这个
+环境变量中填写 `800k`。移除环境覆盖后，`/autocompact auto` 恢复模型调优的默认值；
+`claude --autocompact auto` 仅对一次启动恢复默认。托管设置可能覆盖交互命令保存的值。
+见官方[自动压缩窗口说明](https://code.claude.com/docs/en/model-config)
+和[环境变量参考](https://code.claude.com/docs/en/env-vars)。
+
+如果网关公布更低限制，应使用更小的值。选窗口时可参考上界：
+`min(最大 prompt, 总上下文 - 计划输出预留) - 额外余量`，并按会切换到的模型中最严格
+的限制计算。工具/图片输出大、或本地 token 估算不确定时，应增加余量而不是扩大窗口。
+部分客户端模型接近 1M 的默认值（约 967K）可能已经超过网关 872K 的输入限制。
+`[1m]` 和客户端窗口设置都不能扩大上游容量。不要通过禁用压缩解决问题，也不要为
+应用此建议而自动重写现有设置。
 
 ## copilotBaseUrl 规则
 

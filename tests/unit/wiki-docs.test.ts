@@ -305,6 +305,24 @@ test("Claude Code picker examples expose the same Opus and Astra choices in both
   assert.deepEqual(examples[0], examples[1])
 })
 
+test("both guides recommend a bounded auto-compact window with explicit limits", () => {
+  for (const name of ["EN-Configuration.md", "ZH-Configuration.md"]) {
+    const page = readPage(name)
+    for (const text of ["/autocompact 800k", "--autocompact 800k", '"autoCompactWindow": 800000', "CLAUDE_CODE_AUTO_COMPACT_WINDOW=800000", "/autocompact auto", "872", "128", "https://code.claude.com/docs/en/model-config"]) {
+      assert(page.includes(text), `${name} must explain ${text}`)
+    }
+  }
+})
+
+test("both troubleshooting guides distinguish probe evidence from private replay", () => {
+  for (const name of ["EN-Logging-Troubleshooting.md", "ZH-Logging-Troubleshooting.md"]) {
+    const page = readPage(name)
+    for (const text of ["models --deep --model claude-opus-5.5 --details", "request_id", "capture=off", "capture=incomplete", "MATCH", "NO_COLOR", "800K"]) {
+      assert(page.includes(text), `${name} must explain ${text}`)
+    }
+  }
+})
+
 test("README stays a concise feature overview and quick start with valid Wiki links", () => {
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
   assert(body.split("\n").length <= 80)
@@ -330,7 +348,10 @@ test("Configuration documents live model discovery and simple updates", () => {
       "copilot-relay restart",
       "models --deep",
       "--total-timeout",
-      "SENT/REPORTED",
+      "--details",
+      "MODEL",
+      "RESULT",
+      "NO_COLOR",
       "NOT_TESTED",
       "130",
       "[1m]",

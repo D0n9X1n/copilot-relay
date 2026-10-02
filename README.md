@@ -49,8 +49,8 @@ copilot-relay models --deep --model claude-opus-5.5
 ```
 
 Deep checks **consume Copilot usage** and test an isolated relay pipeline, not the
-running daemon. Use `copilot-relay status --deep` for daemon health, and
-`copilot-relay stop` when finished.
+running daemon. Add `--details` for safe failure evidence and private replay hints.
+Use `copilot-relay status --deep` for daemon health, and `copilot-relay stop` when finished.
 
 ## Go further
 

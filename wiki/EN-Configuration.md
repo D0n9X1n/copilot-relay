@@ -149,8 +149,34 @@ copilot-relay models --deep --timeout 20 --total-timeout 120
 copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
 ```
 
-The table shows `MODEL`, `STATUS`, `SENT/REPORTED` model IDs, `LATENCY`, and fixed
-`DETAILS`, followed by counts for each outcome. No response text is printed.
+The compact table shows `MODEL`, `STATUS`, `TIME`, and a short `RESULT`, followed
+by nonzero outcome counts. A model ID appears once; long IDs wrap rather than
+being silently shortened. Rows arrive as each sequential probe finishes. `*`
+means effort or endpoint metadata was not advertised, not that it was verified.
+
+TTY output uses green for PASS, red for FAIL, yellow for INCOMPLETE and muted
+SKIPPED/NOT_TESTED labels. `status` and `status --deep` use the same policy for
+health, upstream checks and version mismatches. Text labels remain authoritative;
+color never changes an exit code. Pipes and dumb terminals default to plain text;
+`NO_COLOR` or `FORCE_COLOR=0` disables ANSI, and a positive `FORCE_COLOR` enables
+it explicitly. `NO_COLOR` takes precedence. `status --json` is always uncolored.
+
+Routine deep-command setup messages stay in the log file rather than cluttering
+the table; required sign-in instructions and setup errors remain visible. Probe
+response text, tool arguments and raw errors are never printed. Nonpassing probes
+include their generated `request_id`, and repeated next-step hints are deduplicated.
+
+To see safe evidence for each probe, request details on the same invocation:
+
+```sh
+copilot-relay models --deep --model claude-opus-5.5 --details
+```
+
+Details include planned/actual routes, effective effort/output cap, reported model,
+client/upstream HTTP status, completion state, correlation IDs and capture state.
+A replay command appears only for a complete existing private capture. This is
+still a **new real probe**, not offline inspection of an earlier failure; see
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 | Status | Meaning |
 | --- | --- |
@@ -172,6 +198,7 @@ Use `status --deep` to check the running daemon's configured route.
 | Option | Default / behavior |
 | --- | --- |
 | `--model` | All advertised IDs; supplied ID must match the catalog exactly. Requires `--deep`. |
+| `--details` | Include safe per-probe evidence and capture/replay availability. Requires `--deep`; does not add probes or retries. |
 | `--max-tokens` | 4096 per probe, clamped to catalog output and native non-streaming ceilings. |
 | `--effort` | Lowest advertised recognized value (`none`, `low`, `medium`, `high`, `xhigh`, `max`); missing metadata uses `low` marked unverified. An override unsupported by advertised metadata is skipped. |
 | `--timeout` | 30 seconds per probe, capped by a positive `upstreamTimeoutSeconds`. |
@@ -419,6 +446,57 @@ upstreamTimeoutSeconds: 0
 This hot-reloads and removes only the relay's total deadline. Client cancellation
 and client/provider/transport timeouts still apply. The fresh-install default
 remains `180`, and existing saved values are never migrated.
+
+### Recommended auto-compact window
+
+For the documented **1M-context Opus 5.5 / GPT-6 Astra pair**, start conservatively
+with an **800K auto-compact window**, keeping auto-compaction enabled. This is a
+relay recommendation with headroom, not a measured optimum or a guarantee against
+API errors. The dated catalog above gives Astra an 872K prompt limit and 128K
+maximum output; reserving 128K from a 1M total also leaves 872K. An 800K target
+keeps roughly 72K additional room for tool output, compaction and token-estimation
+error. The client can compact earlier after its own output/buffer reservations.
+
+Set it for the current session and save it to user settings:
+
+```text
+/autocompact 800k
+```
+
+Or use it for one launch without changing saved settings:
+
+```sh
+claude --autocompact 800k
+```
+
+The equivalent user-settings fragment is:
+
+```json
+{ "autoCompactWindow": 800000 }
+```
+
+For an environment override, use plain token counts:
+
+```sh
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=800000 claude
+```
+
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` takes precedence over the command, flag and saved
+setting. Do not use `800k` in that environment variable. `/autocompact auto` returns
+to the model-tuned default after removing any environment override;
+`claude --autocompact auto` does so for one launch. Managed settings can override
+what the interactive command saves. See the official
+[auto-compact window guidance](https://code.claude.com/docs/en/model-config)
+and [environment variables](https://code.claude.com/docs/en/env-vars).
+
+Use a smaller value when your gateway advertises lower limits. A useful upper
+bound for choosing a window is `min(maximum prompt, total context - planned output
+reserve) - extra headroom`; use the most restrictive model you switch to. Large
+tool/image outputs or uncertain local token counts call for more headroom, not a
+larger window. A native near-1M default (roughly 967K on some client models) can
+already exceed a gateway's 872K prompt allowance. `[1m]` and client window settings
+do not increase upstream limits. Do not disable compaction or automatically
+rewrite existing settings to apply this recommendation.
 
 ## copilotBaseUrl rules
 
