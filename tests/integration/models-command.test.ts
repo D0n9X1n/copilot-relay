@@ -162,16 +162,16 @@ const respond = (response: ServerResponse, payload: unknown, status = 200) => {
 }
 
 test("models help is registered without upstream access in CI rendering", async (t) => {
-  const f = await fixture(t, (_request, response) => respond(response, { data: [] }))
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [] }))
   const env = { CI: "true", FORCE_COLOR: "0" }
-  const help = await f.run(["--help"], env)
+  const help = await harness.run(["--help"], env)
   assert.equal(help.code, 0)
   assert.match(help.stdout, /^\s*`?models`?\s+List upstream models;.*$/mi)
-  const commandHelp = await f.run(["models", "--help"], env)
+  const commandHelp = await harness.run(["models", "--help"], env)
   assert.equal(commandHelp.code, 0)
   assert.match(commandHelp.stdout, /upstream/i)
   assert.match(commandHelp.stdout, /--deep/)
-  assert.equal(f.requests.length, 0)
+  assert.equal(harness.requests.length, 0)
 })
 
 test("models lists the fresh full catalog with sorted exact IDs, independent of configured models", async (t) => {
@@ -180,27 +180,27 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
     { id: "gpt-example" }, null, {}, { id: 7 }, { id: "" },
     { id: "b-no-limits", capabilities: { limits: "invalid" } },
   ] }
-  const f = await fixture(t, (_request, response) => respond(response, catalog))
-  const result = await f.run()
+  const harness = await fixture(t, (_request, response) => respond(response, catalog))
+  const result = await harness.run()
   assert.equal(result.code, 0)
   assert.match(result.stdout, /Upstream-advertised models \(4\):\na-embedding\nb-no-limits\ngpt-example\nz-chat\n/)
   assert.match(result.stdout, /not verified/i)
   assert.doesNotMatch(result.stdout, /\[1m\]|missing-gpt-model|missing-opus-model/)
-  assert.deepEqual(f.requests.map((request) => request.authorization), [`Bearer ${oldToken}`])
+  assert.deepEqual(harness.requests.map((request) => request.authorization), [`Bearer ${oldToken}`])
   catalog = { data: [{ id: "newly-advertised" }] }
-  const fresh = await f.run()
+  const fresh = await harness.run()
   assert.equal(fresh.code, 0)
   assert.match(fresh.stdout, /Upstream-advertised models \(1\):\nnewly-advertised\n/)
   assert.doesNotMatch(fresh.stdout, /a-embedding|z-chat/)
-  assert.equal(f.requests.length, 2)
+  assert.equal(harness.requests.length, 2)
 })
 
 test("models sanitizes terminal controls and redacts sensitive URLs in upstream IDs", async (t) => {
-  const f = await fixture(t, (request, response) => respond(response, { data: [
+  const harness = await fixture(t, (request, response) => respond(response, { data: [
     { id: "a-\u001b[2K\u001b[1Aexample\r\nforged-row" },
     { id: `http://${request.headers.host}${secretPath}/model` },
   ] }))
-  const result = await f.run()
+  const result = await harness.run()
   assert.equal(result.code, 0)
   const listing = result.rawStdout.slice(result.rawStdout.indexOf("Upstream-advertised models"))
   assert.doesNotMatch(listing, /\u001b|\r/)
@@ -209,16 +209,16 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
 })
 
 test("models reports an empty catalog successfully", async (t) => {
-  const f = await fixture(t, (_request, response) => respond(response, { data: [] }))
-  const result = await f.run()
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [] }))
+  const result = await harness.run()
   assert.equal(result.code, 0)
   assert.match(result.stdout, /No models advertised by upstream/)
 })
 
 for (const payload of [{ models: [] }, { data: null }, { data: "payload-private-sentinel" }]) {
   test(`models rejects a malformed catalog: ${JSON.stringify(payload)}`, async (t) => {
-    const f = await fixture(t, (_request, response) => respond(response, payload))
-    const result = await f.run()
+    const harness = await fixture(t, (_request, response) => respond(response, payload))
+    const result = await harness.run()
     assert.equal(result.code, 1)
     assert.match(result.output, /Could not fetch upstream model catalog/)
     assert.doesNotMatch(result.stdout, /Upstream-advertised models|No models advertised/)
@@ -226,55 +226,55 @@ for (const payload of [{ models: [] }, { data: null }, { data: "payload-private-
 }
 
 test("models rejects invalid JSON without leaking the response body", async (t) => {
-  const f = await fixture(t, (_request, response) => response.end("payload-private-sentinel invalid JSON"))
-  const result = await f.run()
+  const harness = await fixture(t, (_request, response) => response.end("payload-private-sentinel invalid JSON"))
+  const result = await harness.run()
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not fetch upstream model catalog/)
 })
 
 for (const status of [403, 503, 504]) {
   test(`models reports genuine HTTP ${status} without response-body disclosure`, async (t) => {
-    const f = await fixture(t, (_request, response) => respond(response, { error: "payload-private-sentinel" }, status))
-    const result = await f.run()
+    const harness = await fixture(t, (_request, response) => respond(response, { error: "payload-private-sentinel" }, status))
+    const result = await harness.run()
     assert.equal(result.code, 1)
     assert.match(result.output, new RegExp(`Could not fetch upstream model catalog: HTTP ${status}`))
     assert.doesNotMatch(result.output, /request timed out/)
-    assert.equal(f.requests.length, status >= 500 ? 2 : 1)
+    assert.equal(harness.requests.length, status >= 500 ? 2 : 1)
   })
 }
 
 test("models distinguishes a local deadline from an upstream HTTP 504", async (t) => {
-  const f = await fixture(t, () => {}, { timeout: 1 })
-  const result = await f.run()
+  const harness = await fixture(t, () => {}, { timeout: 1 })
+  const result = await harness.run()
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not fetch upstream model catalog: request timed out/)
   assert.doesNotMatch(result.output, /HTTP 504/)
 })
 
 test("models returns a nonzero exit on connection failure", async (t) => {
-  const f = await fixture(t, () => {})
-  await new Promise<void>((resolve) => f.server.close(() => resolve()))
-  const result = await f.run()
+  const harness = await fixture(t, () => {})
+  await new Promise<void>((resolve) => harness.server.close(() => resolve()))
+  const result = await harness.run()
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not fetch upstream model catalog/)
 })
 
 test("models reuses bounded rejected-token recovery", async (t) => {
-  const f = await fixture(t, (_request, response, attempt) => {
+  const harness = await fixture(t, (_request, response, attempt) => {
     respond(response, attempt === 1 ? {} : { data: [{ id: "recovered-model" }] }, attempt === 1 ? 401 : 200)
   })
-  const result = await f.run()
+  const result = await harness.run()
   assert.equal(result.code, 0)
   assert.match(result.stdout, /recovered-model/)
-  assert.deepEqual(f.requests.map((request) => request.authorization), [`Bearer ${oldToken}`, `Bearer ${newToken}`])
+  assert.deepEqual(harness.requests.map((request) => request.authorization), [`Bearer ${oldToken}`, `Bearer ${newToken}`])
 })
 
 test("models fails safely when rejected-token recovery fails", async (t) => {
-  const f = await fixture(t, (_request, response) => respond(response, {}, 401), { failRefresh: true })
-  const result = await f.run()
+  const harness = await fixture(t, (_request, response) => respond(response, {}, 401), { failRefresh: true })
+  const result = await harness.run()
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not fetch upstream model catalog/)
-  assert.equal(f.requests.length, 1)
+  assert.equal(harness.requests.length, 1)
 })
 
 const deepCatalog = { data: [
@@ -304,7 +304,7 @@ const probeReply = (body: Record<string, any>, overrides: Record<string, unknown
 
 test("models deep tests exact IDs through the isolated pipeline and prints a structured summary", async (t) => {
   const sent: Array<Record<string, any>> = []
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
@@ -313,7 +313,7 @@ test("models deep tests exact IDs through the isolated pipeline and prints a str
     sent.push(body)
     respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep"])
+  const result = await harness.run(["models", "--deep"])
   assert.equal(result.code, 0)
   assert.match(result.stdout, /isolated relay pipeline/i)
   assert.match(result.stdout, /not running-daemon health/i)
@@ -360,7 +360,7 @@ for (const endpoint of ["/chat/completions", "/responses"]) {
       })),
     }
 
-    const f = await fixture(t, async (req, res) => {
+    const harness = await fixture(t, async (req, res) => {
       if (req.method === "GET") {
         return respond(res, catalog)
       }
@@ -371,14 +371,14 @@ for (const endpoint of ["/chat/completions", "/responses"]) {
       respond(res, probeReply(body))
     }, { deep: true, logLevel: "info" })
 
-    const result = await f.run(["models", "--deep", "--details"])
+    const result = await harness.run(["models", "--deep", "--details"])
 
     assert.equal(result.code, 0, result.output)
     assert.deepEqual(sent, [...routeSkippedModels].sort())
     assert.match(result.stdout, /Summary: 10 passed/)
     assert.match(result.stdout, /route_source=catalog/)
     assert.doesNotMatch(result.stdout, /SKIPPED|Unsupported route/)
-    assert.equal(f.requests.filter((request) => request.method === "POST").length, routeSkippedModels.length)
+    assert.equal(harness.requests.filter((request) => request.method === "POST").length, routeSkippedModels.length)
   })
 }
 
@@ -392,7 +392,7 @@ for (const capability of [false, []]) {
       }],
     }
 
-    const f = await fixture(t, async (req, res) => {
+    const harness = await fixture(t, async (req, res) => {
       if (req.method === "GET") {
         return respond(res, catalog)
       }
@@ -402,18 +402,18 @@ for (const capability of [false, []]) {
       respond(res, probeReply(body))
     }, { deep: true, logLevel: "info" })
 
-    const result = await f.run(["models", "--deep", "--details"])
+    const result = await harness.run(["models", "--deep", "--details"])
 
     assert.equal(result.code, 0, result.output)
     assert.match(result.stdout, /effort=omitted/)
     assert.match(result.stdout, /Summary: 1 passed/)
 
     // An explicit override is a user request the model cannot honor, so it is skipped unsent.
-    const explicit = await f.run(["models", "--deep", "--effort", "none"])
+    const explicit = await harness.run(["models", "--deep", "--effort", "none"])
 
     assert.equal(explicit.code, 2)
     assert.match(explicit.stdout, /Unsupported effort/)
-    assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+    assert.equal(harness.requests.filter((request) => request.method === "POST").length, 1)
   })
 }
 
@@ -427,8 +427,8 @@ test("deep details distinguish unavailable endpoints without leaking catalog str
     ],
   }
 
-  const f = await fixture(t, (_req, res) => respond(res, catalog), { deep: true, logLevel: "info" })
-  const result = await f.run(["models", "--deep", "--details"])
+  const harness = await fixture(t, (_req, res) => respond(res, catalog), { deep: true, logLevel: "info" })
+  const result = await harness.run(["models", "--deep", "--details"])
 
   assert.equal(result.code, 2)
   assert.match(result.stdout, /No advertised route/)
@@ -437,18 +437,18 @@ test("deep details distinguish unavailable endpoints without leaking catalog str
   assert.match(result.stdout, /advertised_endpoints=none-compatible unknown_endpoints=2/)
   assert.match(result.stdout, /advertised_endpoints=\/v1\/messages unknown_endpoints=0/)
   assert.doesNotMatch(result.output + result.logs, /hidden.invalid|internal-secret/)
-  assert.equal(f.requests.filter((request) => request.method === "POST").length, 0)
+  assert.equal(harness.requests.filter((request) => request.method === "POST").length, 0)
 })
 
 test("quiet deep setup still presents device login instructions once", async (t) => {
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
 
     respond(res, probeReply(await requestBody(req)))
   }, { deep: true, deviceAuth: true })
-  const result = await f.run(["models", "--deep"])
+  const result = await harness.run(["models", "--deep"])
   assert.equal(result.code, 0)
   assert.equal(result.output.split("FIXTURE-CODE").length - 1, 1)
   assert.match(result.output, /Sign in: open https:\/\/github.com\/login\/device/)
@@ -457,7 +457,7 @@ test("quiet deep setup still presents device login instructions once", async (t)
 
 for (const logLevel of ["info", "debug"] as const) {
   test(`deep details report safe refusal evidence with capture ${logLevel}`, async (t) => {
-    const f = await fixture(t, async (req, res) => {
+    const harness = await fixture(t, async (req, res) => {
       if (req.method === "GET") {
         return respond(res, deepCatalog)
       }
@@ -467,7 +467,7 @@ for (const logLevel of ["info", "debug"] as const) {
       res.setHeader("x-request-id", oldToken)
       respond(res, probeReply(body, { id: "msg_refusal_fixture", choices: [{ index: 0, message: { role: "assistant", content: "PRIVATE_REFUSAL" }, finish_reason: "content_filter" }] }))
     }, { deep: true, logLevel })
-    const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+    const result = await harness.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
     assert.equal(result.code, 2)
     assert.match(result.stdout, /Refused/)
     assert.match(result.stdout, /upstream_http=200/)
@@ -483,24 +483,24 @@ for (const logLevel of ["info", "debug"] as const) {
     } else {
       assert.match(result.stdout, /capture=off/)
       assert.doesNotMatch(result.stdout, /Offline replay:/)
-      await assert.rejects(fs.access(path.join(f.home, ".copilot-relay", "captures")), { code: "ENOENT" })
+      await assert.rejects(fs.access(path.join(harness.home, ".copilot-relay", "captures")), { code: "ENOENT" })
     }
   })
 }
 
 test("deep details retain upstream HTTP failures instead of relabeling them as local", async (t) => {
-  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, { error: { message: "PRIVATE_HTTP_BODY" } }, 500), { deep: true })
-  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+  const harness = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, { error: { message: "PRIVATE_HTTP_BODY" } }, 500), { deep: true })
+  const result = await harness.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /HTTP 500/)
   assert.match(result.stdout, /upstream_http=500/)
   assert.doesNotMatch(result.stdout, /Unknown API error|PRIVATE_HTTP_BODY/)
-  assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
+  assert.equal(harness.requests.filter((request) => request.method === "POST").length, 2)
 })
 
 test("a model ID matching a refreshed token is never printed", async (t) => {
   let attempts = 0
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, { data: [{ id: newToken }] })
     }
@@ -512,20 +512,20 @@ test("a model ID matching a refreshed token is never printed", async (t) => {
 
     respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep", "--details"])
+  const result = await harness.run(["models", "--deep", "--details"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /\[unsupported ID\]/)
   assert.doesNotMatch(result.output, /new-private-token-sentinel/)
 })
 
 test("deep details distinguish failed token refresh from generic internal errors", async (t) => {
-  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, {}, 401), { deep: true, failRefresh: true })
-  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
+  const harness = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, {}, 401), { deep: true, failRefresh: true })
+  const result = await harness.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /Token refresh failed/)
   assert.match(result.stdout, /refresh=failure/)
   assert.match(result.stdout, /upstream_http=401/)
-  assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+  assert.equal(harness.requests.filter((request) => request.method === "POST").length, 1)
 })
 
 for (const [name, env, colored] of [
@@ -535,14 +535,14 @@ for (const [name, env, colored] of [
   ["pipe in CI", { FORCE_COLOR: undefined, NO_COLOR: undefined, CI: "true" }, false],
 ] as const) {
   test(`models deep color policy: ${name}`, async (t) => {
-    const f = await fixture(t, async (req, res) => {
+    const harness = await fixture(t, async (req, res) => {
       if (req.method === "GET") {
         return respond(res, deepCatalog)
       }
 
       respond(res, probeReply(await requestBody(req)))
     }, { deep: true })
-    const result = await f.run(["models", "--deep"], env)
+    const result = await harness.run(["models", "--deep"], env)
     assert.equal(result.code, 0)
     assert.equal(/\u001b\[32mPASS\u001b\[0m/.test(result.rawStdout), colored)
     if (!colored) {
@@ -550,13 +550,13 @@ for (const [name, env, colored] of [
     }
 
     assert.match(result.stdout, /MODEL\s+STATUS\s+TIME\s+RESULT/)
-    assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
+    assert.equal(harness.requests.filter((request) => request.method === "POST").length, 2)
   })
 }
 
 test("models deep selection sends only the selected exact model", async (t) => {
   const sent: string[] = []
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
@@ -565,7 +565,7 @@ test("models deep selection sends only the selected exact model", async (t) => {
     sent.push(body.model)
     respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra", "--effort", "max", "--max-tokens", "64", "--details"])
+  const result = await harness.run(["models", "--deep", "--model", "gpt-6-astra", "--effort", "max", "--max-tokens", "64", "--details"])
   assert.equal(result.code, 0)
   assert.deepEqual(sent, ["gpt-6-astra"])
   assert.match(result.stdout, /effort=max/)
@@ -584,14 +584,14 @@ for (const [name, overrides, status] of [
   ["wrong model", { model: "other-model" }, "FAIL"],
 ] as const) {
   test(`models deep never passes ${name} responses`, async (t) => {
-    const f = await fixture(t, async (req, res) => {
+    const harness = await fixture(t, async (req, res) => {
       if (req.method === "GET") {
         return respond(res, deepCatalog)
       }
 
       respond(res, probeReply(await requestBody(req), overrides))
     }, { deep: true })
-    const result = await f.run(["models", "--deep", "--model", "gpt-6-astra"])
+    const result = await harness.run(["models", "--deep", "--model", "gpt-6-astra"])
     assert.equal(result.code, 2)
     assert.match(result.stdout, new RegExp(status))
     assert.match(result.stdout, status === "INCOMPLETE" ? /Summary: 1 incomplete/ : /Summary: 1 failed/)
@@ -601,30 +601,30 @@ for (const [name, overrides, status] of [
 }
 
 test("models deep skips explicit unsupported capabilities without inference", async (t) => {
-  const f = await fixture(t, (_req, res) => respond(res, { data: [
+  const harness = await fixture(t, (_req, res) => respond(res, { data: [
     { id: "embedding", capabilities: { type: "embeddings" } },
     { id: "native-only", supported_endpoints: ["/v1/messages"] },
     { id: "high-only", capabilities: { supports: { reasoning_effort: ["high"] } } },
   ] }), { deep: true })
-  const result = await f.run(["models", "--deep", "--effort", "low"])
+  const result = await harness.run(["models", "--deep", "--effort", "low"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /3 skipped/)
-  assert.equal(f.requests.length, 1)
+  assert.equal(harness.requests.length, 1)
 })
 
 for (const args of [["--details"], ["--model", "gpt-6-astra"], ["--deep", "--timeout", "0"], ["--deep", "--max-tokens", "NaN"], ["--deep", "--effort", "invalid"], ["--deep", "--model", "missing"]]) {
   test(`models rejects invalid selection/options ${args.join(" ")}`, async (t) => {
-    const f = await fixture(t, (_req, res) => respond(res, deepCatalog), { deep: true })
-    const result = await f.run(["models", ...args])
+    const harness = await fixture(t, (_req, res) => respond(res, deepCatalog), { deep: true })
+    const result = await harness.run(["models", ...args])
     assert.equal(result.code, 1)
-    assert.equal(f.requests.filter((request) => request.method === "POST").length, 0)
+    assert.equal(harness.requests.filter((request) => request.method === "POST").length, 0)
   })
 }
 
 test("models deep handles HTTP errors without leaking shared pipeline logs", async (t) => {
-  const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog)
+  const harness = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog)
     : respond(res, { error: { message: "payload-private-sentinel" } }, 429), { deep: true })
-  const result = await f.run(["models", "--deep"])
+  const result = await harness.run(["models", "--deep"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /Rate limited \(429\)/)
   assert.match(result.stdout, /2 failed/)
@@ -634,12 +634,12 @@ test("models deep handles HTTP errors without leaking shared pipeline logs", asy
 
 for (const interrupt of [false, true]) {
   test(`models deep stops remaining probes on ${interrupt ? "interruption" : "total deadline"}`, async (t) => {
-    const f = await fixture(t, (req, res) => {
+    const harness = await fixture(t, (req, res) => {
       if (req.method === "GET") {
         respond(res, deepCatalog)
       }
     }, { deep: true, interrupt })
-    const result = await f.run(["models", "--deep", "--timeout", "5", "--total-timeout", interrupt ? "10" : "1"])
+    const result = await harness.run(["models", "--deep", "--timeout", "5", "--total-timeout", interrupt ? "10" : "1"])
     assert.equal(result.code, interrupt ? 130 : 2)
     if (interrupt) {
       assert.match(result.stdout, /PROBE_INTERRUPT_DELIVERED/)
@@ -650,12 +650,12 @@ for (const interrupt of [false, true]) {
     assert.match(result.stdout, /claude-opus-5\.5\s+NOT_TESTED/)
     assert.match(result.stdout, /Summary: 2 not tested/)
     assert.doesNotMatch(result.stdout, /\bFAIL\b|\bPASS\b/)
-    assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+    assert.equal(harness.requests.filter((request) => request.method === "POST").length, 1)
   })
 }
 
 test("models deep continues after a per-model timeout", async (t) => {
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
@@ -665,47 +665,47 @@ test("models deep continues after a per-model timeout", async (t) => {
       respond(res, probeReply(body))
     }
   }, { deep: true, timeout: 0, controlledProbeTimeout: true })
-  const result = await f.run(["models", "--deep", "--timeout", "10"])
+  const result = await harness.run(["models", "--deep", "--timeout", "10"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /PROBE_DEADLINE_DELIVERED/)
   assert.match(result.stdout, /PROBE_DEADLINES_INDEPENDENT/)
   assert.match(result.stdout, /claude-opus-5\.5\s+FAIL[^\n]+Timed out/)
   assert.match(result.stdout, /gpt-6-astra\s+PASS[^\n]+Ready/)
   assert.match(result.stdout, /Summary: 1 passed · 1 failed/)
-  assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
+  assert.equal(harness.requests.filter((request) => request.method === "POST").length, 2)
 })
 
 test("models deep recovers a rejected inference token without printing response bodies", async (t) => {
-  const headers: string[] = []
-  const f = await fixture(t, async (req, res) => {
+  const authorizations: string[] = []
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
 
     const body = await requestBody(req)
-    headers.push(req.headers.authorization ?? "")
-    if (headers.length === 1) {
+    authorizations.push(req.headers.authorization ?? "")
+    if (authorizations.length === 1) {
       return respond(res, {}, 401)
     }
 
     respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep", "--model", "gpt-6-astra"])
+  const result = await harness.run(["models", "--deep", "--model", "gpt-6-astra"])
   assert.equal(result.code, 0)
-  assert.deepEqual(headers, [`Bearer ${oldToken}`, `Bearer ${newToken}`])
+  assert.deepEqual(authorizations, [`Bearer ${oldToken}`, `Bearer ${newToken}`])
   assert.doesNotMatch(result.output, /PRIVATE_PROBE_ANSWER/)
 })
 
 test("models deep empty catalog has no successful checks", async (t) => {
-  const f = await fixture(t, (_req, res) => respond(res, { data: [] }), { deep: true })
-  const result = await f.run(["models", "--deep"])
+  const harness = await fixture(t, (_req, res) => respond(res, { data: [] }), { deep: true })
+  const result = await harness.run(["models", "--deep"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /Summary: no models to test/)
-  assert.equal(f.requests.length, 1)
+  assert.equal(harness.requests.length, 1)
 })
 
 test("models deep rejects explicit chat refusals even alongside text", async (t) => {
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, deepCatalog)
     }
@@ -715,14 +715,14 @@ test("models deep rejects explicit chat refusals even alongside text", async (t)
       role: "assistant", content: "partial", refusal: "PRIVATE_REFUSAL",
     } }] }))
   }, { deep: true })
-  const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5"])
+  const result = await harness.run(["models", "--deep", "--model", "claude-opus-5.5"])
   assert.equal(result.code, 2)
   assert.match(result.stdout, /Refused/)
   assert.doesNotMatch(result.output, /PRIVATE_REFUSAL/)
 })
 
 test("models deep missing metadata is explicitly unverified", async (t) => {
-  const f = await fixture(t, async (req, res) => {
+  const harness = await fixture(t, async (req, res) => {
     if (req.method === "GET") {
       return respond(res, { data: [{ id: "claude-opus-5.5" }] })
     }
@@ -731,16 +731,16 @@ test("models deep missing metadata is explicitly unverified", async (t) => {
     assert.equal(body.reasoning_effort, "low")
     respond(res, probeReply(body))
   }, { deep: true })
-  const result = await f.run(["models", "--deep"])
+  const result = await harness.run(["models", "--deep"])
   assert.equal(result.code, 0)
   assert.match(result.stdout, /Ready \*/)
   assert.match(result.stdout, /Effort or endpoint metadata is unverified/)
 })
 
 test("models fails safely during initial authentication", async (t) => {
-  const f = await fixture(t, () => {}, { failRefresh: true, expiredToken: true })
-  const result = await f.run()
+  const harness = await fixture(t, () => {}, { failRefresh: true, expiredToken: true })
+  const result = await harness.run()
   assert.equal(result.code, 1)
   assert.match(result.output, /Could not authenticate with GitHub Copilot/)
-  assert.equal(f.requests.length, 0)
+  assert.equal(harness.requests.length, 0)
 })

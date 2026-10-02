@@ -116,36 +116,36 @@ const fixture = async (options: {
 
 for (const current of [true, false]) {
   test(`reconstructs ${current ? "current" : "stale"} catalog and consumes recorded discovery only when needed`, async () => {
-    const f = await fixture({
+    const capture = await fixture({
       runtime: { modelCatalog: { baseUrl: current ? baseUrl : "https://old.invalid", models: new Map([["claude-test", { limits: { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 } }]]) } },
       respond: (request) => request.path === "/models" ? Response.json({ data: [{ id: "claude-test", capabilities: { limits: { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 } } }] }) : Response.json(chatResponse()),
     })
-    assert.deepEqual(f.requests.map((request) => request.path), current ? ["/chat/completions"] : ["/models", "/chat/completions"])
-    assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
+    assert.deepEqual(capture.requests.map((request) => request.path), current ? ["/chat/completions"] : ["/models", "/chat/completions"])
+    assert.equal((await replayCapture(capture.directory)).verdict, "MATCH")
   })
 }
 
 for (const outcome of ["success", "failure", "cancelled"] as const) {
   test(`replays ordered authentication refresh ${outcome} without auth callbacks`, async () => {
-    const f = await fixture({ refresh: outcome, respond: (_request, attempt) => attempt === 1 ? new Response("Forbidden", { status: 401 }) : Response.json(chatResponse()) })
-    assert.equal(f.manifest.refreshes[0].outcome, outcome)
-    assert.equal(f.manifest.refreshes[0].order, 2)
-    const result = await replayCapture(f.directory)
+    const capture = await fixture({ refresh: outcome, respond: (_request, attempt) => attempt === 1 ? new Response("Forbidden", { status: 401 }) : Response.json(chatResponse()) })
+    assert.equal(capture.manifest.refreshes[0].outcome, outcome)
+    assert.equal(capture.manifest.refreshes[0].order, 2)
+    const result = await replayCapture(capture.directory)
     assert.equal(result.verdict, "MATCH")
     assert.equal(result.exitCode, 0)
   })
 }
 
 test("preserves recorded transport error names and retry order", async () => {
-  const f = await fixture({ respond: (_request, attempt) => {
+  const capture = await fixture({ respond: (_request, attempt) => {
     if (attempt === 1) {
       throw new TypeError("PRIVATE_TRANSPORT_ERROR")
     }
 
     return Response.json(chatResponse())
   } })
-  assert.equal(f.manifest.exchanges[0].error, "TypeError")
-  assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
+  assert.equal(capture.manifest.exchanges[0].error, "TypeError")
+  assert.equal((await replayCapture(capture.directory)).verdict, "MATCH")
   const timedOut = await fixture({ respond: () => {
     throw new DOMException("PRIVATE_TIMEOUT", "TimeoutError")
   } })
@@ -159,31 +159,31 @@ test("client SSE comparison ignores framing but checks ordered semantic events",
     { id: "chat_stream", created: 123, model: "claude-test", choices: [{ index: 0, delta: { role: "assistant", content: "PRIVATE_RESPONSE" }, finish_reason: null }] },
     { id: "chat_stream", created: 123, model: "claude-test", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1 } },
   ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n"
-  const f = await fixture({ payload: { ...clientPayload, stream: true }, respond: () => new Response(upstream, { headers: { "content-type": "text/event-stream" } }) })
-  const expected = f.response.replaceAll("\n", "\r\n")
-  await fs.writeFile(path.join(f.directory, "client-response.bin"), expected)
-  f.manifest.response!.bytes = Buffer.byteLength(expected)
-  f.manifest.response!.chunks = [1, f.manifest.response!.bytes - 1]
-  f.manifest.exchanges[0].response!.chunks = [3, 1, f.manifest.exchanges[0].response!.bytes - 4]
-  await f.save()
-  assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
+  const capture = await fixture({ payload: { ...clientPayload, stream: true }, respond: () => new Response(upstream, { headers: { "content-type": "text/event-stream" } }) })
+  const expected = capture.response.replaceAll("\n", "\r\n")
+  await fs.writeFile(path.join(capture.directory, "client-response.bin"), expected)
+  capture.manifest.response!.bytes = Buffer.byteLength(expected)
+  capture.manifest.response!.chunks = [1, capture.manifest.response!.bytes - 1]
+  capture.manifest.exchanges[0].response!.chunks = [3, 1, capture.manifest.exchanges[0].response!.bytes - 4]
+  await capture.save()
+  assert.equal((await replayCapture(capture.directory)).verdict, "MATCH")
   const changed = expected.replace("PRIVATE_RESPONSE", "PRIVATE_DIFFERENT")
-  await fs.writeFile(path.join(f.directory, "client-response.bin"), changed)
-  f.manifest.response!.bytes = Buffer.byteLength(changed)
-  f.manifest.response!.chunks = [f.manifest.response!.bytes]
-  await f.save()
-  const result = await replayCapture(f.directory)
+  await fs.writeFile(path.join(capture.directory, "client-response.bin"), changed)
+  capture.manifest.response!.bytes = Buffer.byteLength(changed)
+  capture.manifest.response!.chunks = [capture.manifest.response!.bytes]
+  await capture.save()
+  const result = await replayCapture(capture.directory)
   assert.equal(result.verdict, "DIFF")
   assert.match(result.differences.map((difference) => difference.path).join(" "), /client\.body\[\d+\]\.data\.delta\.text/)
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_RESPONSE|PRIVATE_DIFFERENT/)
 })
 
 test("replay reports bounded per-exchange outcome and usage without trusting arbitrary metadata", async () => {
-  const f = await fixture()
-  f.manifest.exchanges[0].outcome = { finish_reason: "stop", input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 5, refusal_category: "PRIVATE_METADATA", message_id: "PRIVATE_METADATA" }
-  f.manifest.outcome = { stop_reason: "end_turn", input_tokens: 2, output_tokens: 3, cache_read_input_tokens: 5 }
-  await f.save()
-  const result = await runCli(f.directory)
+  const capture = await fixture()
+  capture.manifest.exchanges[0].outcome = { finish_reason: "stop", input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 5, refusal_category: "PRIVATE_METADATA", message_id: "PRIVATE_METADATA" }
+  capture.manifest.outcome = { stop_reason: "end_turn", input_tokens: 2, output_tokens: 3, cache_read_input_tokens: 5 }
+  await capture.save()
+  const result = await runCli(capture.directory)
   assert.equal(result.code, 0)
   assert.match(result.output, /exchange=1 .*outcome=stop .*input_tokens=7 .*output_tokens=3 .*cache_read_input_tokens=5/)
   assert.match(result.output, /client_blocks=text tool_calls=0/)
@@ -191,17 +191,17 @@ test("replay reports bounded per-exchange outcome and usage without trusting arb
 })
 
 test("upstream request differences identify semantic field paths, not content", async () => {
-  const f = await fixture()
-  const exchange = f.manifest.exchanges[0]
-  const expected = JSON.parse(await fs.readFile(path.join(f.directory, exchange.request.file), "utf8"))
+  const capture = await fixture()
+  const exchange = capture.manifest.exchanges[0]
+  const expected = JSON.parse(await fs.readFile(path.join(capture.directory, exchange.request.file), "utf8"))
   expected.messages[0].role = "assistant"
   expected.messages[0].content = "PRIVATE_DIFFERENCE"
   const bytes = Buffer.from(JSON.stringify(expected))
-  await fs.writeFile(path.join(f.directory, exchange.request.file), bytes)
+  await fs.writeFile(path.join(capture.directory, exchange.request.file), bytes)
   exchange.request.bytes = bytes.length
   exchange.request.chunks = [bytes.length]
-  await f.save()
-  const result = await replayCapture(f.directory)
+  await capture.save()
+  const result = await replayCapture(capture.directory)
   assert.equal(result.verdict, "DIFF")
   assert.equal(result.exitCode, 2)
   assert.ok(result.differences.some((difference) => difference.path.endsWith(".messages[0].role")))
@@ -244,25 +244,25 @@ const runCli = async (target: string) => {
 }
 
 test("CLI exits 0 MATCH, 1 missing/malformed, and 2 DIFF/INCOMPLETE without config or sockets", async () => {
-  const f = await fixture()
-  let result = await runCli(f.directory)
+  const capture = await fixture()
+  let result = await runCli(capture.directory)
   assert.equal(result.code, 0)
   assert.match(result.output, /MATCH/)
   assert.match(result.output, /POST \/v1\/messages/)
   assert.match(result.output, /\/chat\/completions/)
   assert.doesNotMatch(result.output, /PRIVATE_PROMPT|PRIVATE_RESPONSE|NETWORK_OR_AUTH_FORBIDDEN/)
-  f.manifest.status = 201
-  await f.save()
-  result = await runCli(f.directory)
+  capture.manifest.status = 201
+  await capture.save()
+  result = await runCli(capture.directory)
   assert.equal(result.code, 2)
   assert.match(result.output, /DIFF/)
-  f.manifest.captureState = "incomplete"
-  await f.save()
-  result = await runCli(f.directory)
+  capture.manifest.captureState = "incomplete"
+  await capture.save()
+  result = await runCli(capture.directory)
   assert.equal(result.code, 2)
   assert.match(result.output, /INCOMPLETE/)
-  await fs.writeFile(path.join(f.directory, "meta.json"), "invalid")
-  result = await runCli(f.directory)
+  await fs.writeFile(path.join(capture.directory, "meta.json"), "invalid")
+  result = await runCli(capture.directory)
   assert.equal(result.code, 1)
   assert.match(result.output, /MALFORMED/)
   result = await runCli(path.join(home, "PRIVATE_MISSING_DIRECTORY"))
@@ -272,19 +272,19 @@ test("CLI exits 0 MATCH, 1 missing/malformed, and 2 DIFF/INCOMPLETE without conf
 })
 
 test("only intentional discarded retry bodies can be replayed when cancelled", async () => {
-  const f = await fixture({ respond: (_request, attempt) => attempt === 1 ? new Response("partial", { status: 503 }) : Response.json(chatResponse()) })
-  f.manifest.exchanges[0].response!.state = "cancelled"
-  await f.save()
-  assert.equal((await replayCapture(f.directory)).verdict, "INCOMPLETE")
-  Object.assign(f.manifest.exchanges[0], { discarded: true })
-  await f.save()
-  assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
+  const capture = await fixture({ respond: (_request, attempt) => attempt === 1 ? new Response("partial", { status: 503 }) : Response.json(chatResponse()) })
+  capture.manifest.exchanges[0].response!.state = "cancelled"
+  await capture.save()
+  assert.equal((await replayCapture(capture.directory)).verdict, "INCOMPLETE")
+  Object.assign(capture.manifest.exchanges[0], { discarded: true })
+  await capture.save()
+  assert.equal((await replayCapture(capture.directory)).verdict, "MATCH")
 })
 
 for (const stream of [false, true]) {
   test(`normalizes only bridge-generated WebSearch IDs (${stream ? "SSE" : "JSON"}) and keeps tool references bijective`, async () => {
     let chat = 0
-    const f = await fixture({ payload: { ...clientPayload, stream, tools: [{ name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }] }, respond: (request) => {
+    const capture = await fixture({ payload: { ...clientPayload, stream, tools: [{ name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }] }, respond: (request) => {
       if (request.path === "/responses") {
         return Response.json({ status: "completed", output: [], usage: { input_tokens: 2, output_tokens: 1 } })
       }
@@ -299,54 +299,54 @@ for (const stream of [false, true]) {
       return new Response(`data: ${JSON.stringify({ ...response, choices: [{ index: 0, delta: { ...message, tool_calls: message.tool_calls.map((call, index) => ({ ...call, index })) }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } })
     } })
     assert.equal(chat, 1)
-    assert.match(f.response, /srvtoolu_[a-f0-9]{32}/)
-    assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
-    const collision = f.response.replace(/srvtoolu_[a-f0-9]{32}/g, `srvtoolu_replay_${stream ? 0 : 1}`)
-    await fs.writeFile(path.join(f.directory, "client-response.bin"), collision)
-    f.manifest.response!.bytes = Buffer.byteLength(collision)
-    f.manifest.response!.chunks = [f.manifest.response!.bytes]
-    await f.save()
-    assert.equal((await replayCapture(f.directory)).verdict, "DIFF")
-    const changed = f.response.replace(/("tool_use_id"\s*:\s*")srvtoolu_[a-f0-9]{32}/, "$1srvtoolu_ffffffffffffffffffffffffffffffff")
-    assert.notEqual(changed, f.response)
-    await fs.writeFile(path.join(f.directory, "client-response.bin"), changed)
-    f.manifest.response!.bytes = Buffer.byteLength(changed)
-    f.manifest.response!.chunks = [f.manifest.response!.bytes]
-    await f.save()
-    assert.equal((await replayCapture(f.directory)).verdict, "DIFF")
+    assert.match(capture.response, /srvtoolu_[a-f0-9]{32}/)
+    assert.equal((await replayCapture(capture.directory)).verdict, "MATCH")
+    const collision = capture.response.replace(/srvtoolu_[a-f0-9]{32}/g, `srvtoolu_replay_${stream ? 0 : 1}`)
+    await fs.writeFile(path.join(capture.directory, "client-response.bin"), collision)
+    capture.manifest.response!.bytes = Buffer.byteLength(collision)
+    capture.manifest.response!.chunks = [capture.manifest.response!.bytes]
+    await capture.save()
+    assert.equal((await replayCapture(capture.directory)).verdict, "DIFF")
+    const changed = capture.response.replace(/("tool_use_id"\s*:\s*")srvtoolu_[a-f0-9]{32}/, "$1srvtoolu_ffffffffffffffffffffffffffffffff")
+    assert.notEqual(changed, capture.response)
+    await fs.writeFile(path.join(capture.directory, "client-response.bin"), changed)
+    capture.manifest.response!.bytes = Buffer.byteLength(changed)
+    capture.manifest.response!.chunks = [capture.manifest.response!.bytes]
+    await capture.save()
+    assert.equal((await replayCapture(capture.directory)).verdict, "DIFF")
   })
 }
 
 test("provider IDs stay significant even when upstream JSON escapes their characters", async () => {
   const providerId = `msg_${"a".repeat(32)}`
-  const f = await fixture({ payload: { ...clientPayload, tools: [{ name: "WebSearch" }] }, respond: (request) => {
+  const capture = await fixture({ payload: { ...clientPayload, tools: [{ name: "WebSearch" }] }, respond: (request) => {
     if (request.path === "/responses") {
       return new Response(JSON.stringify({ id: providerId, status: "completed", output: [] }).replace("a".repeat(32), "\\u0061".repeat(32)), { headers: { "content-type": "application/json" } })
     }
 
     return Response.json({ ...chatResponse(), choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "provider-call", type: "function", function: { name: "WebSearch", arguments: '{"query":"test"}' } }] }, finish_reason: "tool_calls" }] })
   } })
-  assert.equal(JSON.parse(f.response).id, providerId)
-  const changed = f.response.replace(providerId, `msg_${"b".repeat(32)}`)
-  await fs.writeFile(path.join(f.directory, "client-response.bin"), changed)
-  await f.save()
-  assert.equal((await replayCapture(f.directory)).verdict, "DIFF")
+  assert.equal(JSON.parse(capture.response).id, providerId)
+  const changed = capture.response.replace(providerId, `msg_${"b".repeat(32)}`)
+  await fs.writeFile(path.join(capture.directory, "client-response.bin"), changed)
+  await capture.save()
+  assert.equal((await replayCapture(capture.directory)).verdict, "DIFF")
 })
 
 test("an absent upstream body differs from a JSON null body", async () => {
-  const f = await fixture({ runtime: { modelCatalog: { baseUrl: "https://old.invalid", models: new Map() } }, respond: (request) => request.path === "/models" ? Response.json({ data: [{ id: "claude-test" }] }) : Response.json(chatResponse()) })
-  const request = f.manifest.exchanges[0].request
+  const capture = await fixture({ runtime: { modelCatalog: { baseUrl: "https://old.invalid", models: new Map() } }, respond: (request) => request.path === "/models" ? Response.json({ data: [{ id: "claude-test" }] }) : Response.json(chatResponse()) })
+  const request = capture.manifest.exchanges[0].request
   assert.equal(request.bytes, 0)
-  await fs.writeFile(path.join(f.directory, request.file), "null")
+  await fs.writeFile(path.join(capture.directory, request.file), "null")
   request.bytes = 4
   request.chunks = [4]
-  await f.save()
-  assert.equal((await replayCapture(f.directory)).verdict, "DIFF")
+  await capture.save()
+  assert.equal((await replayCapture(capture.directory)).verdict, "DIFF")
 })
 
 test("complete captures replay the current handler without network, sockets, or ambient policy", async (t) => {
-  const f = await fixture()
-  assert.equal(JSON.parse(f.response).content[0].text, "PRIVATE_RESPONSE")
+  const capture = await fixture()
+  assert.equal(JSON.parse(capture.response).content[0].text, "PRIVATE_RESPONSE")
   let networkCalls = 0
   t.mock.method(globalThis, "fetch", () => {
     networkCalls++
@@ -359,7 +359,7 @@ test("complete captures replay the current handler without network, sockets, or 
   runtimeState.modelRouting = { gptModel: "WRONG_AMBIENT_MODEL", opusModel: "WRONG_AMBIENT_MODEL" }
   runtimeState.thinkEffort = "max"
   try {
-    const result = await replayCapture(f.directory)
+    const result = await replayCapture(capture.directory)
     assert.equal(result.verdict, "MATCH")
     assert.equal(result.exitCode, 0)
     assert.deepEqual(result.differences, [])

@@ -311,8 +311,8 @@ function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
       id: block.id, type: "function" as const, function: { name: modelName(model, block.name), arguments: JSON.stringify(block.input) },
     }))
     // With tools the existing translated contract puts text before thinking.
-    const ordered = calls.length ? [...message.content.filter((b) => b.type === "text").map((b) => b.text),
-      ...message.content.filter((b) => b.type === "thinking").map((b) => b.thinking)] : content
+    const ordered = calls.length ? [...message.content.filter((block) => block.type === "text").map((block) => block.text),
+      ...message.content.filter((block) => block.type === "thinking").map((block) => block.thinking)] : content
     return [{ role: "assistant", content: ordered.join("\n\n") || null, ...(calls.length && { tool_calls: calls }) }]
   })
 }
