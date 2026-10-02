@@ -354,6 +354,9 @@ project already uses, so it adds no linter dependency.
 | `else`, `catch` and `finally` continue the line that closes the previous block | `@stylistic/brace-style: "1tbs"` |
 | One statement per line — no `a(); b()` | `@stylistic/max-statements-per-line` |
 | A blank line follows each multi-line block statement (`if`, loop, `try`, `switch`, function) | `@stylistic/padding-line-between-statements` (`multiline-block-like`) |
+| No blank line directly after `{` or before `}` of a non-empty block or body | `@stylistic/padded-blocks: "never"` |
+| At most one blank line in a row outside string and template literals; Python keeps PEP 8's two around top-level definitions | `@stylistic/no-multiple-empty-lines` with `max: 1` |
+| No ternary inside a ternary's branch — use `if`/`else`, an early return or a lookup | `no-nested-ternary` |
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
 | Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
@@ -376,8 +379,7 @@ Reviewed rather than enforced:
   wire fields.
 - Comments explain why — an invariant, ordering constraint or non-obvious reason —
   not what the next line does. Fix stale comments instead of adding more.
-- Prefer guard clauses to deep nesting, and `if`/`else` or a small lookup to
-  nested ternaries.
+- Prefer guard clauses to deep nesting.
 - Tests separate arrange, act and assert with blank lines; fixtures do not hide
   the behavior under test.
 
