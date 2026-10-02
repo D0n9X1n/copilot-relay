@@ -306,7 +306,7 @@ linter 依赖。
 | 跨多行的块语句（`if`、循环、`try`、`switch`、函数）之后空一行 | `@stylistic/padding-line-between-statements`（`multiline-block-like`） |
 | 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
 | 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
-| Python：不写单行复合语句，不用 `;` 分隔语句 | PEP 8（pycodestyle E701、E702） |
+| Python：不写单行复合语句，不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
 
 强制加花括号可以避免一类经典错误：第二行缩进看起来受条件控制，实际上总会执行 ——
 Apple 2014 年 TLS `goto fail` 漏洞就是这种形状。

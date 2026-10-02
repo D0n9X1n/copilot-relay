@@ -90,8 +90,12 @@ const collectViolations = (file: string, text: string): Violation[] => {
   }
 
   // ESLint's "block-like": the statement's last token closes a block (if, loops, try, switch,
-  // function bodies). The closing brace of an object literal or class does not count.
+  // function bodies), or it is a braced do-while. Object-literal and class braces do not count.
   const endsWithBlock = (statement: ts.Statement) => {
+    if (ts.isDoStatement(statement)) {
+      return ts.isBlock(statement.statement)
+    }
+
     const end = text[statement.getEnd() - 1] === ";" ? statement.getEnd() - 1 : statement.getEnd()
     let node: ts.Node | undefined = statement
 
@@ -211,11 +215,14 @@ for path in sys.argv[1:]:
     depth = 0
     first_word = None
     header_colon_row = None
+    reported = False
 
+    # A logical line ends only at NEWLINE, so a backslash continuation cannot hide a one-liner.
     for kind, value, (row, _), _, _ in tokenize.generate_tokens(io.StringIO(source).readline):
         if kind == tokenize.NEWLINE:
             first_word = None
             header_colon_row = None
+            reported = False
             continue
 
         if kind in IGNORED_TOKENS:
@@ -224,9 +231,9 @@ for path in sys.argv[1:]:
         if first_word is None:
             first_word = value
 
-        if header_colon_row == row:
-            print(f"{path}:{row} compound statement on one line")
-            header_colon_row = None
+        if header_colon_row is not None and not reported:
+            print(f"{path}:{header_colon_row} compound statement on one line")
+            reported = True
 
         if kind != tokenize.OP:
             continue
@@ -235,7 +242,7 @@ for path in sys.argv[1:]:
             depth += 1
         elif value in (")", "]", "}"):
             depth -= 1
-        elif value == ":" and depth == 0 and first_word in HEADER_KEYWORDS:
+        elif value == ":" and depth == 0 and first_word in HEADER_KEYWORDS and header_colon_row is None:
             header_colon_row = row
         elif value == ";" and depth == 0:
             print(f"{path}:{row} semicolon-separated statements")
@@ -298,6 +305,11 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "if (value == null) {",
     "  ignore()",
     "}",
+    "",
+    "do {",
+    "  poll()",
+    "} while (waiting)",
+    "done()",
   ].join("\n")
 
   const found = collectViolations("sample.ts", sample)
@@ -315,6 +327,7 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "22 blankLineAfterBlock",
     "22 declarations",
     "23 declarations",
+    "32 blankLineAfterBlock",
   ])
 })
 
@@ -346,16 +359,26 @@ test("declarations use const or let with one variable each", () => {
   assertNoViolations("declarations")
 })
 
-test("the Python checker reports a compound one-liner and a semicolon", (t) => {
+test("the Python checker reports compound one-liners, even when continued, and semicolons", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
   const sample = path.join(directory, "sample.py")
-  fs.writeFileSync(sample, "if ready: start()\nfirst = 1; second = 2\nif ready:\n    start()\n")
+  const source = [
+    "if ready: start()",
+    "first = 1; second = 2",
+    "if ready:",
+    "    start()",
+    "if ready: \\",
+    "    start()",
+  ].join("\n")
+
+  fs.writeFileSync(sample, `${source}\n`)
 
   assert.deepEqual(runPythonChecker([sample]), [
     `${sample}:1 compound statement on one line`,
     `${sample}:2 semicolon-separated statements`,
+    `${sample}:5 compound statement on one line`,
   ])
 })
 

@@ -356,7 +356,7 @@ project already uses, so it adds no linter dependency.
 | A blank line follows each multi-line block statement (`if`, loop, `try`, `switch`, function) | `@stylistic/padding-line-between-statements` (`multiline-block-like`) |
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
-| Python: no compound one-line statements or `;` separators | PEP 8 (pycodestyle E701, E702) |
+| Python: no compound one-line statements or `;` separators | PEP 8 (pycodestyle E701–E704) |
 
 Mandatory braces prevent the classic failure where a second indented line looks
 conditional but always runs — the shape of Apple's 2014 `goto fail` TLS bug.
