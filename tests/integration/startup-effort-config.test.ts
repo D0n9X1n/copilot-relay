@@ -17,35 +17,58 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
     const originalConfig = `thinkEffort: ${effort}\nclaudeSetup: false\n`
     await fs.mkdir(path.dirname(configPath), { recursive: true })
     await fs.writeFile(configPath, originalConfig)
+
+    // Authentication uses the global fetch, which now throws, so reaching auth shows as
+    // NETWORK_ACCESS_FORBIDDEN. The upstream preflight would use undici's own fetch instead,
+    // so its log line is checked as well.
     const script = `
       globalThis.fetch = async () => { throw new Error("NETWORK_ACCESS_FORBIDDEN"); };
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, "start"];
       await import(${JSON.stringify(entry.href)});
     `
+
     try {
       const result = await new Promise<{ code: number; output: string }>((resolve, reject) => {
-        const child = execFile(process.execPath, [
-          "--import", "tsx", "--input-type=module", "--eval", script,
-        ], {
-          cwd, timeout: 10_000,
-          env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
-        }, (error, stdout, stderr) => {
-          const code = error ? error.code : 0
-          if (error?.killed || typeof code !== "number") {
-            reject(error ?? new Error("Missing startup exit code"))
-            return
-          }
+        const child = execFile(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "--eval", script],
+          {
+            cwd,
+            timeout: 10_000,
+            env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
+          },
+          (error, stdout, stderr) => {
+            const code = error ? error.code : 0
 
-          resolve({ code, output: stripVTControlCharacters(stdout + stderr) })
-        })
+            // A timeout, a signal or a spawn failure leaves no exit code to check.
+            if (error?.killed || typeof code !== "number") {
+              reject(error ?? new Error("Missing startup exit code"))
+              return
+            }
+
+            resolve({ code, output: stripVTControlCharacters(stdout + stderr) })
+          },
+        )
+
+        // The relay never reads stdin; closing it anyway means an unexpected read gets EOF at
+        // once instead of hanging until the timeout.
         child.stdin?.end()
       })
+
       assert.equal(result.code, 1)
       assert.match(result.output, /Invalid thinkEffort/)
       assert.match(result.output, /Valid values: low, medium, high, xhigh, max/)
-      assert.doesNotMatch(result.output, /NETWORK_ACCESS_FORBIDDEN|Running upstream preflight|Default think effort: none/)
+      assert.doesNotMatch(
+        result.output,
+        /NETWORK_ACCESS_FORBIDDEN|Running upstream preflight|Default think effort: none/,
+      )
+
+      // The config is untouched and no relay process started.
       assert.equal(await fs.readFile(configPath, "utf8"), originalConfig)
-      await assert.rejects(fs.stat(path.join(home, ".copilot-relay", "copilot-relay.pid")), { code: "ENOENT" })
+      await assert.rejects(
+        fs.stat(path.join(home, ".copilot-relay", "copilot-relay.pid")),
+        { code: "ENOENT" },
+      )
     } finally {
       await fs.rm(home, { recursive: true, force: true })
     }
