@@ -17,6 +17,23 @@ test.after(async () => {
 const fixture = async (): Promise<string> =>
   path.join(await fs.mkdtemp(path.join(home, "case-")), "settings.json")
 
+// Pin only metadata in the deterministic acquisition tests. Real bytes, reads,
+// renames and publication still go through the filesystem.
+const metadataFixture = async (t: import("node:test").TestContext, file: string, drift: (call: number) => number) => {
+  const realStat = fs.lstat.bind(fs)
+  const baseline = await realStat(file)
+  let calls = 0
+  const tracked = (value: unknown) => path.resolve(String(value)).toLowerCase() === path.resolve(file).toLowerCase()
+  t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
+    const stat = await realStat(...args)
+    if (tracked(args[0])) {
+      stat.ctimeMs = baseline.ctimeMs + drift(++calls)
+    }
+    return stat
+  })
+  return { baseline, calls: () => calls, tracked }
+}
+
 test("snapshots an absent nested file without creating directories and publishes privately", async () => {
   const file = path.join(await fixture(), "nested", "config.yaml")
   const snapshot = await readFileSnapshot(file)
@@ -143,4 +160,135 @@ test("failed temporary writes leave the original intact and remove partial bytes
   assert.equal(injected, true)
   assert.equal(await fs.readFile(file, "utf8"), "original\n")
   assert.deepEqual(await fs.readdir(path.dirname(file)), ["settings.json"])
+})
+
+test("reacquires a snapshot after one inconsistent metadata read", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  const metadata = await metadataFixture(t, file, (call) => call === 2 ? 1 : 0)
+  const snapshot = await readFileSnapshot(file)
+  assert.equal(snapshot.raw, "original\n")
+  assert.equal(snapshot.identity?.ctimeMs, metadata.baseline.ctimeMs)
+  assert.equal(metadata.calls(), 4)
+})
+
+test("persistent snapshot drift fails after three whole acquisition attempts", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  const metadata = await metadataFixture(t, file, (call) => call)
+  const realRead = fs.readFile.bind(fs)
+  let reads = 0
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (metadata.tracked(args[0])) reads++
+    return realRead(...args)
+  })
+  await assert.rejects(readFileSnapshot(file), (error) => {
+    assert.ok(error instanceof FileConflictError)
+    assert.equal(error.constructor, FileConflictError)
+    assert.equal("snapshot" in error, false, "file bytes must not escape in a loggable error")
+    return true
+  })
+  assert.equal(reads, 3)
+  assert.equal(metadata.calls(), 6)
+})
+
+test("snapshot permission errors propagate without acquisition retries", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  const realRead = fs.readFile.bind(fs)
+  const failure = Object.assign(new Error("synthetic permission denied"), { code: "EACCES" })
+  let reads = 0
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (path.basename(String(args[0])) === "settings.json") { reads++; throw failure }
+    return realRead(...args)
+  })
+  await assert.rejects(readFileSnapshot(file), (error) => error === failure)
+  assert.equal(reads, 1)
+})
+
+test("a non-regular target fails bounded acquisition without reading it", async (t) => {
+  const file = await fixture()
+  await fs.mkdir(file)
+  const realStat = fs.lstat.bind(fs)
+  let stats = 0
+  t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => { stats++; return realStat(...args) })
+  const read = t.mock.method(fs, "readFile", async () => { assert.fail("must not read a non-regular file") })
+  await assert.rejects(readFileSnapshot(file), FileConflictError)
+  assert.equal(stats, 1)
+  assert.equal(read.mock.callCount(), 0)
+})
+
+for (const stableChange of [false, true]) {
+  test(`publication reacquisition never authorizes a changed original, stableChange=${stableChange}`, async (t) => {
+    const file = await fixture()
+    await fs.writeFile(file, "original\n")
+    let changed = false
+    const metadata = await metadataFixture(t, file, (call) => !changed ? 0 : stableChange ? 1 : call === 4 ? 1 : 0)
+    const snapshot = await readFileSnapshot(file)
+    changed = true
+    if (stableChange) {
+      await assert.rejects(writeFileSnapshot(snapshot, "replacement\n"), FileConflictError)
+      assert.equal(metadata.calls(), 4, "stable new identity must reject at comparison, not exhaust retries")
+      assert.equal(await fs.readFile(file, "utf8"), "original\n")
+    } else {
+      await writeFileSnapshot(snapshot, "replacement\n")
+      assert.equal(await fs.readFile(file, "utf8"), "replacement\n")
+    }
+    assert.deepEqual(await fs.readdir(path.dirname(file)), ["settings.json"])
+  })
+}
+
+for (const duringPublish of [false, true]) {
+  test(`deletion during a read rejects immediately: publish=${duringPublish}`, async (t) => {
+    const file = await fixture()
+    await fs.writeFile(file, "original\n")
+    await metadataFixture(t, file, () => 0)
+    const snapshot = duringPublish ? await readFileSnapshot(file) : undefined
+    const realRead = fs.readFile.bind(fs)
+    let removed = false
+    t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+      if (!removed && path.basename(String(args[0])) === "settings.json") { removed = true; await fs.unlink(file) }
+      return realRead(...args)
+    })
+    if (snapshot) {
+      await assert.rejects(writeFileSnapshot(snapshot, "stale\n"), FileConflictError)
+      await assert.rejects(fs.stat(file), { code: "ENOENT" })
+    } else {
+      await assert.rejects(readFileSnapshot(file), FileConflictError)
+    }
+    assert.deepEqual(await fs.readdir(path.dirname(file)), [])
+  })
+}
+
+test("replacement during an initial read still rejects", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  const replacement = `${file}.replacement`
+  await fs.writeFile(replacement, "new\n")
+  const realRead = fs.readFile.bind(fs)
+  let replaced = false
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (!replaced && path.basename(String(args[0])) === "settings.json") {
+      replaced = true
+      await fs.rename(replacement, file)
+    }
+    return realRead(...args)
+  })
+  await assert.rejects(readFileSnapshot(file), FileConflictError)
+  assert.equal(await realRead(file, "utf8"), "new\n")
+})
+
+test("ctime-only reacquisition cannot accept different bytes with matching metadata", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  await metadataFixture(t, file, (call) => call === 2 ? 1 : 0)
+  const realRead = fs.readFile.bind(fs)
+  let reads = 0
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (path.basename(String(args[0])) === "settings.json" && ++reads > 1) return "modified\n"
+    return realRead(...args)
+  })
+  await assert.rejects(readFileSnapshot(file), FileConflictError)
+  assert.equal(reads, 2)
+  assert.equal(await realRead(file, "utf8"), "original\n")
 })

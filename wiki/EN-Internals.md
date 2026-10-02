@@ -81,6 +81,12 @@ Cooperative writers serialize in process. This is **not an OS-wide compare-and-s
 rename**: an external writer can still race the final check and replacement.
 `applyClaudeConfig` shares this boundary, preserves unrelated settings and refuses
 malformed or already-empty JSON rather than overwriting it.
+A read whose only inconsistent identity field is `ctime` may be reacquired
+immediately, with at most three total attempts. Each retry must reproduce the
+first read's bytes, target, mode and other identity fields; other changes and
+persistent inconsistency fail closed. Publication checks may reacquire a read,
+but still compare its full identity (including `ctime`) against the caller's
+original snapshot. Stale writes are never retried.
 
 > Once a key is materialized, its saved value wins over a new shipped default.
 
