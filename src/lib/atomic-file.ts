@@ -39,10 +39,15 @@ const identityOf = (stat: Stats): FileIdentity => ({
   ctimeMs: stat.ctimeMs,
 })
 
+// A null identity is a missing file: two missing files match, a missing and a present one do not.
 const sameIdentity = (left: FileIdentity | null, right: FileIdentity | null): boolean =>
-  left === null || right === null ? left === right
-    : left.dev === right.dev && left.ino === right.ino && left.size === right.size
-      && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+  left === null || right === null ?
+      left === right
+    : left.dev === right.dev
+      && left.ino === right.ino
+      && left.size === right.size
+      && left.mtimeMs === right.mtimeMs
+      && left.ctimeMs === right.ctimeMs
 
 // realpath also canonicalizes parents (notably /var -> /private/var on macOS).
 // Missing suffixes are retained without creating them during a read. Resolve a
@@ -62,12 +67,16 @@ const resolveTarget = async (filePath: string, remainingLinks = 40): Promise<str
 
       return undefined
     })
+
     if (entry?.isSymbolicLink()) {
       if (remainingLinks === 0) {
         throw new Error("Too many symbolic links")
       }
 
-      return resolveTarget(path.resolve(path.dirname(filePath), await fs.readlink(filePath)), remainingLinks - 1)
+      return resolveTarget(
+        path.resolve(path.dirname(filePath), await fs.readlink(filePath)),
+        remainingLinks - 1,
+      )
     }
 
     const parent = path.dirname(filePath)
@@ -89,6 +98,7 @@ const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
 
     return undefined
   })
+
   if (!before) {
     return { requestedPath, resolvedPath, raw: null, mode: 0o600, identity: null }
   }
@@ -110,11 +120,24 @@ const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
     throw error
   }
 
-  const snapshot = { requestedPath, resolvedPath, raw, mode: before.mode & 0o777, identity: identityOf(before) }
-  if (!after.isFile() || before.mode !== after.mode || await resolveTarget(requestedPath) !== resolvedPath) {
+  const snapshot = {
+    requestedPath,
+    resolvedPath,
+    raw,
+    mode: before.mode & 0o777,
+    identity: identityOf(before),
+  }
+
+  if (
+    !after.isFile()
+    || before.mode !== after.mode
+    || await resolveTarget(requestedPath) !== resolvedPath
+  ) {
     throw new FileConflictError()
   }
 
+  // A change in ctime alone is retried by readFileSnapshot; any other difference means the file
+  // was edited while it was being read.
   if (!sameIdentity(snapshot.identity, identityOf(after))) {
     if (sameReadContent(snapshot, { ...snapshot, identity: identityOf(after) })) {
       throw new MetadataReadConflictError(snapshot)
@@ -133,8 +156,11 @@ const sameReadContent = (left: FileSnapshot, right: FileSnapshot): boolean =>
   && left.identity !== null && right.identity !== null
   && sameIdentity(left.identity, { ...right.identity, ctimeMs: left.identity.ctimeMs })
 
+// A read during which only ctime moved. It carries the bytes read, so readFileSnapshot never lets
+// it reach a caller.
 class MetadataReadConflictError extends FileConflictError {
   readonly snapshot: FileSnapshot
+
   constructor(snapshot: FileSnapshot) {
     super()
     this.snapshot = snapshot
@@ -143,6 +169,7 @@ class MetadataReadConflictError extends FileConflictError {
 
 export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> => {
   let firstRead: FileSnapshot | undefined
+
   for (let attempt = 1; ; attempt++) {
     try {
       const snapshot = await readStableSnapshot(filePath)
@@ -173,8 +200,13 @@ export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> 
 
 const assertUnchanged = async (expected: FileSnapshot): Promise<void> => {
   const current = await readFileSnapshot(expected.requestedPath)
-  if (current.resolvedPath !== expected.resolvedPath || current.raw !== expected.raw
-    || current.mode !== expected.mode || !sameIdentity(current.identity, expected.identity)) {
+
+  if (
+    current.resolvedPath !== expected.resolvedPath
+    || current.raw !== expected.raw
+    || current.mode !== expected.mode
+    || !sameIdentity(current.identity, expected.identity)
+  ) {
     throw new FileConflictError()
   }
 }
@@ -185,16 +217,24 @@ const assertUnchanged = async (expected: FileSnapshot): Promise<void> => {
 const pendingWrites = new Map<string, Promise<void>>()
 
 const publish = async (snapshot: FileSnapshot, content: string): Promise<void> => {
+  // Checked first, again after creating the directory, and again once the temporary file is
+  // written and closed, so the last check sits directly before the link or rename that publishes.
   await assertUnchanged(snapshot)
   const directory = path.dirname(snapshot.resolvedPath)
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   await assertUnchanged(snapshot)
 
-  const temporaryPath = path.join(directory, `.${path.basename(snapshot.resolvedPath)}.${randomUUID()}.tmp`)
+  // Same directory as the target, so the rename stays on one filesystem and is atomic.
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(snapshot.resolvedPath)}.${randomUUID()}.tmp`,
+  )
   const handle = await fs.open(temporaryPath, "wx", 0o600)
   try {
     try {
       await handle.writeFile(content, "utf8")
+
+      // Windows keeps no POSIX mode bits; chmod there only toggles the read-only flag.
       if (process.platform !== "win32") {
         await handle.chmod(snapshot.mode)
       }
@@ -227,11 +267,14 @@ const publish = async (snapshot: FileSnapshot, content: string): Promise<void> =
 
 export const writeFileSnapshot = async (snapshot: FileSnapshot, content: string): Promise<void> => {
   const previous = pendingWrites.get(snapshot.resolvedPath) ?? Promise.resolve()
+  // A failed earlier write has already been reported to its own caller; it must not block this one.
   const current = previous.catch(() => undefined).then(() => publish(snapshot, content))
   pendingWrites.set(snapshot.resolvedPath, current)
+
   try {
     await current
   } finally {
+    // A later write may already have queued behind this one; only the newest clears the entry.
     if (pendingWrites.get(snapshot.resolvedPath) === current) {
       pendingWrites.delete(snapshot.resolvedPath)
     }

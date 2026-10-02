@@ -51,6 +51,8 @@ const maxLogArgumentBytes = 16 * 1024
 // Leave room for the timestamp, level, separating spaces, and final newline.
 const maxLogPayloadBytes = 64 * 1024 - 64
 
+// The spellings a secret can take in a log entry: raw, JSON-escaped, and inspect()-quoted with each
+// of the three delimiters inspect() may pick.
 const escapedSecretForms = (value: string): Array<string> => {
   const inspected = inspect(value, { compact: true, breakLength: Infinity, maxStringLength: Infinity })
   const quote = inspected[0]
@@ -70,13 +72,20 @@ export const registerLogSecret = (value: string | undefined): void => {
   }
 
   registeredLogSecrets.add(value)
+
+  // Escaped forms of each escaped form too: a token can be escaped twice before it reaches the
+  // log, such as inside a JSON string that is then inspected.
   for (const form of escapedSecretForms(value)) {
     for (const nested of escapedSecretForms(form)) {
       logSecretForms.add(nested)
     }
   }
 
-  const alternatives = [...logSecretForms].sort((left, right) => right.length - left.length)
+  // Longest first: at each position the first alternative that matches wins, so a form that
+  // begins with a shorter one must come first, or the rest of the longer form would stay in
+  // the log.
+  const alternatives = [...logSecretForms]
+    .sort((left, right) => right.length - left.length)
     .map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   logSecretPattern = new RegExp(alternatives.join("|"), "g")
 }
@@ -105,6 +114,7 @@ const scrubLogSecrets = (value: string): string => {
       return quote + (hiddenLength ? body.slice(0, -hiddenLength) + redactedSecret : body) + quote + suffix
     },
   )
+
   return truncatedStrings.replace(logSecretPattern, () => redactedSecret)
 }
 
@@ -115,6 +125,8 @@ const boundLogText = (value: string, maxBytes: number): string => {
 
   const bytes = Buffer.from(value)
   let end = maxBytes - Buffer.byteLength(truncatedMarker)
+
+  // Back up off UTF-8 continuation bytes (10xxxxxx), so the cut never splits a character.
   while ((bytes[end] & 0xc0) === 0x80) {
     end -= 1
   }
@@ -174,8 +186,12 @@ const formatLogValue = (value: unknown): string =>
     })
   )
 
+// One entry, one physical line. U+2028 and U+2029 are escaped too: JavaScript counts them as line
+// terminators, and so do some editors and log viewers.
 const escapeLogLineSeparators = (value: string): string =>
-  value.replaceAll("\r", "\\r").replaceAll("\n", "\\n")
+  value
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n")
     .replaceAll(String.fromCodePoint(0x2028), "\\u2028")
     .replaceAll(String.fromCodePoint(0x2029), "\\u2029")
 
@@ -193,11 +209,13 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
       throw error
     }
   })
+
   const observed = await fs.lstat(directory)
   if (!observed.isDirectory() || observed.isSymbolicLink()) {
     throw new Error("Refusing an unsafe log directory")
   }
 
+  // Windows has no O_NOFOLLOW and no POSIX mode bits, so the lstat check above is all it gets.
   if (process.platform === "win32") {
     return
   }
@@ -228,18 +246,28 @@ const appendPrivateLog = async (filePath: string, content: string): Promise<void
 
     return undefined
   })
+
+  // A symlink or a second hard link would send the append and the chmod to some other file.
   if (observed && (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1)) {
     throw new Error("Refusing an unsafe log file")
   }
 
+  // Node defines no O_NOFOLLOW on Windows.
   const flags = fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT
     | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW)
   const handle = await fs.open(filePath, flags, 0o600)
   try {
     const opened = await handle.stat()
     const current = await fs.lstat(filePath)
-    if (!opened.isFile() || opened.nlink !== 1 || current.isSymbolicLink()
-      || !sameFile(opened, current) || (observed && !sameFile(observed, opened))) {
+
+    // Checked again on the open handle, in case the path was swapped between the lstat and the open.
+    if (
+      !opened.isFile()
+      || opened.nlink !== 1
+      || current.isSymbolicLink()
+      || !sameFile(opened, current)
+      || (observed && !sameFile(observed, opened))
+    ) {
       throw new Error("Log file changed while opening")
     }
 
@@ -267,7 +295,8 @@ const writeLogFile = async (
 ): Promise<void> => {
   await ensureLogDirectory()
   await cleanupLogsIfDue()
-  const line = [new Date().toISOString(), level, values.join(" ")].join(" ")
+
+  const line =[new Date().toISOString(), level, values.join(" ")].join(" ")
   // Resolved per write, so a relay running across local midnight starts the next
   // dated file on its own; there is no rotation timer to drift or miss.
   await appendPrivateLog(getLogPath(), `${line}\n`)
@@ -316,12 +345,19 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
 
     // Redact before escaping or bounding: raw separators delimit URLs, and a
     // size cap must never turn a complete registered secret into a leaked prefix.
-    const rendered = [boundLogText(args.map((value) =>
+    const rendered = [
       boundLogText(
-        escapeLogLineSeparators(scrubLogSecrets(scrubSensitiveUrls(formatLogValue(value)))),
-        maxLogArgumentBytes,
+        args
+          .map((value) =>
+            boundLogText(
+              escapeLogLineSeparators(scrubLogSecrets(scrubSensitiveUrls(formatLogValue(value)))),
+              maxLogArgumentBytes,
+            ),
+          )
+          .join(" "),
+        maxLogPayloadBytes,
       ),
-    ).join(" "), maxLogPayloadBytes)]
+    ]
 
     if (writesToFile) {
       // File logging must never block the console path or fail a request. If
@@ -354,6 +390,7 @@ const parseLogFileDate = (fileName: string): Date | undefined => {
 
   const [, year, month, day] = match
   const date = new Date(Number(year), Number(month) - 1, Number(day))
+
   // Rejects impossible stamps such as 2026-13-45, which Date would otherwise
   // roll forward into a plausible-looking day.
   return (
@@ -379,8 +416,12 @@ export const cleanupLogs = async (retentionDays: number): Promise<void> => {
   const entries = await fs.readdir(paths.logsDir, { withFileTypes: true })
   await Promise.all(
     entries
-      .filter((entry) => entry.isFile()
-        && (entry.name === `${paths.logFileBaseName}.log` || datedLogFilePattern.test(entry.name)))
+      // Only the relay's legacy/dated names are ours. Service-manager stderr
+      // files and saved diagnostics may share this directory but are not swept.
+      .filter((entry) =>
+        entry.isFile()
+        && (entry.name === `${paths.logFileBaseName}.log` || datedLogFilePattern.test(entry.name)),
+      )
       .map(async (entry) => {
         const filePath = `${paths.logsDir}/${entry.name}`
         const current = await fs.lstat(filePath).catch((error: unknown) => {
@@ -390,13 +431,13 @@ export const cleanupLogs = async (retentionDays: number): Promise<void> => {
 
           return undefined
         })
+
         if (!current?.isFile() || current.nlink !== 1) {
           return
         }
 
+        // The legacy undated file has no stamp, so it ages by mtime instead.
         const fileDate = parseLogFileDate(entry.name)
-        // Only the relay's legacy/dated names are ours. Service-manager stderr
-        // files and saved diagnostics may share this directory but are not swept.
         const timestamp = fileDate?.getTime() ?? current.mtimeMs
         if (timestamp < cutoff) {
           await fs.rm(filePath, { force: true })

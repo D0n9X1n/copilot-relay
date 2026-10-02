@@ -12,12 +12,19 @@ export interface RuntimeState {
   upstreamBaseUrl?: string
 }
 
+// Hot reload assigns fields on this object. The server runs each request on a snapshot taken when it
+// arrives, so a reload that lands mid-request cannot change that request's settings halfway through.
 export const runtimeState: RuntimeState = {}
 const requestState = new AsyncLocalStorage<RuntimeState>()
 export const getRuntimeState = (): RuntimeState => requestState.getStore() ?? runtimeState
+
 export const snapshotRuntimeState = (): RuntimeState => {
   const state = getRuntimeState()
-  return { ...state, ...(state.modelRouting && { modelRouting: { ...state.modelRouting } }) }
+
+  return {
+    ...state,
+    ...(state.modelRouting && { modelRouting: { ...state.modelRouting } }),
+  }
 }
 
 export const withRuntimeState = <T>(state: RuntimeState, run: () => T): T => requestState.run(state, run)

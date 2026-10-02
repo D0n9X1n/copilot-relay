@@ -2,6 +2,7 @@ import { colorText, terminalText, type TerminalTone } from "./terminal"
 import type { RequestDiagnostic } from "./request-trace"
 
 export type ProbeStatus = "PASS" | "FAIL" | "INCOMPLETE" | "SKIPPED" | "NOT_TESTED"
+
 export interface ProbeRow {
   id: string
   status: ProbeStatus
@@ -19,8 +20,13 @@ export interface ProbeRow {
 }
 
 const tones: Record<ProbeStatus, TerminalTone> = {
-  PASS: "good", FAIL: "bad", INCOMPLETE: "warning", SKIPPED: "muted", NOT_TESTED: "muted",
+  PASS: "good",
+  FAIL: "bad",
+  INCOMPLETE: "warning",
+  SKIPPED: "muted",
+  NOT_TESTED: "muted",
 }
+
 const reasonLabels: Record<string, string> = {
   "completed-text": "Ready",
   "probe-timeout": "Timed out",
@@ -54,11 +60,18 @@ const reasonLabels: Record<string, string> = {
   "unknown-error": "Unknown API error",
 }
 
-export const probeReason = (code: string): string => reasonLabels[code]
+export const probeReason = (code: string): string =>
+  reasonLabels[code]
   ?? (/^HTTP-\d{3}$/.test(code) ? `HTTP ${code.slice(5)}` : "Unknown result")
 
+// Capping the model column at columns - 42 leaves the result at least 20 columns beside the 22 that
+// status and time take. The model column is at least 14 wide, so a terminal narrower than 56
+// columns squeezes the result instead.
 export const probeColumnWidth = (ids: string[], columns: number): number =>
-  Math.min(Math.max(14, ...ids.map((id) => terminalText(id).length)), Math.max(14, columns - 42))
+  Math.min(
+    Math.max(14, ...ids.map((id) => terminalText(id).length)),
+    Math.max(14, columns - 42),
+  )
 
 export const renderProbeHeader = (width: number): string =>
   `${"MODEL".padEnd(width)}  ${"STATUS".padEnd(10)}  ${"TIME".padStart(6)}  RESULT`
@@ -77,6 +90,7 @@ const probeTime = (row: ProbeRow): string => {
     return "-"
   }
 
+  // The six-column TIME field holds seconds up to 999.9s; from 1000 s on, minutes are shown instead.
   const seconds = row.latency / 1000
   if (seconds < 1000) {
     return `${seconds.toFixed(1)}s`
@@ -96,11 +110,17 @@ export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, col
   const resultLines = wrap(label, Math.max(1, columns - width - 22))
   // ANSI bytes do not occupy columns, so pad the uncolored label separately.
   const status = colorText(row.status, tones[row.status], color) + " ".repeat(10 - row.status.length)
-  return Array.from({ length: Math.max(modelLines.length, resultLines.length) }, (_, index) => {
-    const model = (modelLines[index] ?? "").padEnd(width)
-    const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(22)
-    return `${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
-  })
+
+  // The model ID and the result wrap independently. Status and time sit on the first line only;
+  // later lines leave those 22 columns blank.
+  return Array.from(
+    { length: Math.max(modelLines.length, resultLines.length) },
+    (_, index) => {
+      const model = (modelLines[index] ?? "").padEnd(width)
+      const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(22)
+      return `${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
+    },
+  )
 }
 
 export const renderProbeSummary = (rows: ProbeRow[]): string => {
@@ -108,11 +128,22 @@ export const renderProbeSummary = (rows: ProbeRow[]): string => {
     return "Summary: no models to test"
   }
 
-  const labels: Record<ProbeStatus, string> = { PASS: "passed", FAIL: "failed", INCOMPLETE: "incomplete", SKIPPED: "skipped", NOT_TESTED: "not tested" }
-  return "Summary: " + (Object.keys(labels) as ProbeStatus[]).flatMap((status) => {
-    const count = rows.filter((row) => row.status === status).length
-    return count ? [`${count} ${labels[status]}`] : []
-  }).join(" · ")
+  // The summary lists statuses in this key order and leaves out any with no rows.
+  const labels: Record<ProbeStatus, string> = {
+    PASS: "passed",
+    FAIL: "failed",
+    INCOMPLETE: "incomplete",
+    SKIPPED: "skipped",
+    NOT_TESTED: "not tested",
+  }
+
+  return "Summary: "
+    + (Object.keys(labels) as ProbeStatus[])
+      .flatMap((status) => {
+        const count = rows.filter((row) => row.status === status).length
+        return count ? [`${count} ${labels[status]}`] : []
+      })
+      .join(" · ")
 }
 
 export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic): string[] => {
@@ -121,6 +152,7 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
     `  effort=${row.effort} max_tokens=${row.maxTokens} planned_route=${row.endpoint}`,
     `  reported=${row.reported} reason=${row.detail}`,
   ]
+
   if (row.routeSource) {
     lines.push(`  route_source=${row.routeSource} advertised_endpoints=${row.advertisedEndpoints} unknown_endpoints=${row.unknownEndpoints}`)
   }
@@ -133,6 +165,7 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
 
   lines.push(`  request_id=${diagnostic.requestId}`)
   lines.push(`  client_http=${diagnostic.status ?? "unknown"} response=${diagnostic.responseState ?? "unknown"} terminal=${diagnostic.terminal ? "observed" : "not observed"}`)
+
   for (const exchange of diagnostic.exchanges) {
     lines.push(`  route=${exchange.path} upstream_http=${exchange.status ?? "unknown"} response=${exchange.responseState ?? "unknown"}${exchange.discarded ? " discarded=yes" : ""}`)
     lines.push(`  upstream_request_id=${exchange.upstreamRequestId ?? "unknown"}`)

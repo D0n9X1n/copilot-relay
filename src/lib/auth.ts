@@ -101,8 +101,9 @@ const readStoredCopilotToken = async (): Promise<StoredCopilotToken | undefined>
     }
   }
 
-  // Migrate only caches that still match the current JSON shape; older files
-  // are ignored so a corrupt token cache does not poison new installs.
+  // Migrate a legacy cache only if it still has the current JSON shape, so no stale shape reaches
+  // the new cache. A missing file, or valid JSON of another shape, is skipped; a file that cannot
+  // be read, is not valid JSON, or holds null throws instead.
   for (const legacyPath of paths.legacyCopilotTokenPaths) {
     try {
       const content = await fs.readFile(legacyPath, "utf8")
@@ -132,15 +133,20 @@ const writeStoredCopilotToken = async (
 ): Promise<void> => {
   registerLogSecret(input.token)
   await ensurePaths()
+
   const payload: StoredCopilotToken = {
     refreshedAt: Date.now(),
     refreshIn: input.refresh_in,
     token: input.token,
   }
+
+  // Written to a fresh file and renamed into place, so a reader sees the old cache or the new one,
+  // never a partial write.
   const temporaryPath = `${paths.copilotTokenPath}.${randomUUID()}.tmp`
   try {
     await fs.writeFile(temporaryPath, `${JSON.stringify(payload, null, 2)}\n`, {
-      mode: 0o600, flag: "wx",
+      mode: 0o600,
+      flag: "wx",
     })
     await fs.rename(temporaryPath, paths.copilotTokenPath)
   } finally {
@@ -296,13 +302,20 @@ export const setupProxyAuth = async (
   let githubToken = await ensureGitHubToken(options)
 
   const exchangeCopilotToken = async () => {
+    // upstreamTimeoutSeconds: 0 disables the request deadline, but the token exchange is never left
+    // unbounded: it falls back to 180 seconds, the shipped default.
     const tokenResponse = await getCopilotToken(
       githubToken,
       config.vsCodeVersion,
       AbortSignal.timeout(config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : 180_000),
     )
-    if (typeof tokenResponse.token !== "string" || !tokenResponse.token.trim()
-      || !Number.isFinite(tokenResponse.refresh_in) || tokenResponse.refresh_in <= 0) {
+
+    if (
+      typeof tokenResponse.token !== "string"
+      || !tokenResponse.token.trim()
+      || !Number.isFinite(tokenResponse.refresh_in)
+      || tokenResponse.refresh_in <= 0
+    ) {
       throw new Error("Copilot token exchange returned invalid credentials metadata.")
     }
 
@@ -313,6 +326,7 @@ export const setupProxyAuth = async (
     return tokenResponse.refresh_in
   }
 
+  // Concurrent callers (the refresh timer and requests whose token was rejected) share one exchange.
   let refreshInFlight: Promise<number> | undefined
   const applyCopilotToken = () => {
     if (refreshInFlight) {
@@ -349,6 +363,7 @@ export const setupProxyAuth = async (
       }
     }, refreshMs)
 
+    // Unref'd, so a pending refresh alone does not keep the process running.
     if (typeof copilotTokenRefreshTimer.unref === "function") {
       copilotTokenRefreshTimer.unref()
     }
@@ -356,9 +371,10 @@ export const setupProxyAuth = async (
 
   const storedToken = await readStoredCopilotToken()
   let refreshIn: number
+
+  // Avoid using tokens that are close to expiry; Claude Code requests can
+  // be long-running, so keep at least one minute of freshness for new calls.
   if (storedToken && getStoredTokenRemainingSeconds(storedToken) > 60) {
-    // Avoid using tokens that are close to expiry; Claude Code requests can
-    // be long-running, so keep at least one minute of freshness for new calls.
     config.copilotToken = storedToken.token
     refreshIn = getStoredTokenRemainingSeconds(storedToken)
     log.info(`Using cached Copilot token at ${paths.copilotTokenPath}`)
@@ -385,6 +401,8 @@ export const setupProxyAuth = async (
     }
   }
 
+  // The client passes the token and generation its rejected request carried. If either has moved
+  // on, a newer token is already in place and there is nothing to refresh.
   config.refreshCopilotToken = async (rejectedToken, generation) => {
     if (config.copilotToken !== rejectedToken || (config.copilotTokenGeneration ?? 0) !== generation) {
       return

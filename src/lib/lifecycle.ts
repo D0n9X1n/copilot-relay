@@ -38,11 +38,17 @@ const sleep = (ms: number) =>
 
 const parsePid = (value: unknown): number | undefined => {
   const pid = typeof value === "string" && /^\d+$/.test(value.trim())
-    ? Number(value.trim()) : value
+    ? Number(value.trim())
+    : value
+
   return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
-    ? pid : undefined
+    ? pid
+    : undefined
 }
 
+// With `required`, a failed query throws instead of returning "", so a listing that could not be
+// read is never taken for an empty one. Per-process queries leave it off: observeProcess already
+// treats an empty answer as unknown.
 const readCommandOutput = async (
   file: string,
   args: Array<string>,
@@ -56,9 +62,14 @@ const readCommandOutput = async (
     return String(stdout)
   } catch (error) {
     // lsof uses exit 1 (with empty output) for a verified empty listener set.
-    const emptyListeners = file === "lsof" && args.some((arg) => arg.startsWith("-iTCP:"))
-      && typeof error === "object" && error !== null && "code" in error && error.code === 1
-      && "stdout" in error && error.stdout === "" && "stderr" in error && error.stderr === ""
+    const emptyListeners = file === "lsof"
+      && args.some((arg) => arg.startsWith("-iTCP:"))
+      && typeof error === "object"
+      && error !== null
+      && "code" in error && error.code === 1
+      && "stdout" in error && error.stdout === ""
+      && "stderr" in error && error.stderr === ""
+
     if (required && !emptyListeners) {
       throw new RelayInspectionError()
     }
@@ -78,7 +89,16 @@ const parsePidLines = (output: string): Array<number> =>
 // mentions. A false negative is safer than signalling an editor or grep.
 const commandArgs = (command: string): Array<string> => {
   const tokens = command.match(/"[^"\r\n]*"|'[^'\r\n]*'|[^\s"']+/g) ?? []
-  if (tokens.join(" ") !== command.trim().replace(/\s+(?=(?:[^"']*["'][^"']*["'])*[^"']*$)/g, " ")) {
+
+  // The tokens must account for the whole command: rejoined with single spaces, they must equal
+  // the command with each whitespace run collapsed when an even number of quote characters, of
+  // either kind, follows it, which approximates "outside quotes". The check fails, yielding no
+  // arguments at all, for an unbalanced quote, a quote glued to a bare word, or whitespace other
+  // than one space before a quoted path holding an odd number of the other quote.
+  if (
+    tokens.join(" ")
+    !== command.trim().replace(/\s+(?=(?:[^"']*["'][^"']*["'])*[^"']*$)/g, " ")
+  ) {
     return []
   }
 
@@ -97,6 +117,7 @@ const nodeDaemonEntry = (args: Array<string>): string | undefined => {
   }
 
   let index = 1
+
   // These documented loader forms are used for source checkouts. Do not skip
   // arbitrary Node switches: --eval/--print can merely quote a relay command.
   if (args[index] === "--import" && args[index + 1] === "tsx") {
@@ -111,6 +132,7 @@ const nodeDaemonEntry = (args: Array<string>): string | undefined => {
 
 const resolveEntry = (entry: string, cwd: string | undefined): string | undefined => {
   const normalizedCwd = cwd?.replaceAll("\\", "/")
+  // posix.isAbsolute does not recognize a Windows drive path such as C:/relay/dist/main.js.
   const absolute = posix.isAbsolute(entry) || /^[A-Za-z]:\//.test(entry)
   if (!absolute && !normalizedCwd) {
     return undefined
@@ -164,10 +186,20 @@ const packageEntryProof = async (entry: string): Promise<CommandProof> => {
       return "nonrelay"
     }
 
-    const manifest: unknown = JSON.parse(await fs.readFile(
-      posix.join(posix.dirname(posix.dirname(canonical)), "package.json"), "utf8"))
-    return typeof manifest === "object" && manifest !== null && "name" in manifest
-      && manifest.name === "copilot-relay" ? "relay" : "nonrelay"
+    // Two levels up from dist/main.js or src/main.ts is the package root.
+    const manifest: unknown = JSON.parse(
+      await fs.readFile(
+        posix.join(posix.dirname(posix.dirname(canonical)), "package.json"),
+        "utf8",
+      ),
+    )
+
+    return typeof manifest === "object"
+      && manifest !== null
+      && "name" in manifest
+      && manifest.name === "copilot-relay"
+      ? "relay"
+      : "nonrelay"
   } catch {
     return "nonrelay"
   }
@@ -175,9 +207,11 @@ const packageEntryProof = async (entry: string): Promise<CommandProof> => {
 
 export class RelayInspectionError extends Error {
   constructor(pid?: number) {
-    super(pid === undefined
-      ? "Could not verify relay process discovery; stop was not confirmed."
-      : `Could not verify copilot-relay process pid=${pid}; stop was not confirmed.`)
+    super(
+      pid === undefined
+        ? "Could not verify relay process discovery; stop was not confirmed."
+        : `Could not verify copilot-relay process pid=${pid}; stop was not confirmed.`,
+    )
     this.name = "RelayInspectionError"
   }
 }
@@ -198,8 +232,11 @@ const flatInvocation = (command: string): FlatInvocation | undefined => {
 
   const spans = [...command.matchAll(/\S+/g)]
   const args = spans.map((span) => span[0])
-  const joined = (start: number, end: number) => command.slice(spans[start].index,
-    spans[end].index + spans[end][0].length)
+
+  // The original text of arguments start..end. A flattened command line no longer shows where a
+  // path containing spaces ends, so candidate paths are rebuilt from consecutive pieces.
+  const joined = (start: number, end: number) =>
+    command.slice(spans[start].index, spans[end].index + spans[end][0].length)
   const nodeEnd = args.findIndex((_part, at) => posix.basename(joined(0, at)) === "node")
   if (nodeEnd < 0) {
     return undefined
@@ -207,6 +244,7 @@ const flatInvocation = (command: string): FlatInvocation | undefined => {
 
   const node = joined(0, nodeEnd)
   const earlierExecutables = args.slice(0, nodeEnd).map((_part, at) => joined(0, at))
+
   let start = nodeEnd + 1
   if (args[start] === "--import" && args[start + 1] === "tsx") {
     start += 2
@@ -229,7 +267,9 @@ const flatInvocation = (command: string): FlatInvocation | undefined => {
   }
 
   return {
-    node, earlierExecutables, program,
+    node,
+    earlierExecutables,
+    program,
     earlierPrograms: args.slice(start, end - 1).map((_part, at) => joined(start, start + at)),
   }
 }
@@ -311,8 +351,12 @@ const verifyCommand = async (command: string, cwd: string | undefined): Promise<
     }
 
     const manifest: unknown = JSON.parse(await fs.readFile(packagePath, "utf8"))
-    if (typeof manifest !== "object" || manifest === null || !("name" in manifest)
-      || manifest.name !== "copilot-relay") {
+    if (
+      typeof manifest !== "object"
+      || manifest === null
+      || !("name" in manifest)
+      || manifest.name !== "copilot-relay"
+    ) {
       return "unknown"
     }
 
@@ -331,6 +375,8 @@ const processState = (pid: number): "alive" | "gone" | "unknown" => {
       return "gone"
     }
 
+    // EPERM means the process exists but may not be signalled from here, for example because
+    // another user owns it or a sandbox forbids it.
     if (isNodeErrno(error) && error.code === "EPERM") {
       return "alive"
     }
@@ -342,7 +388,8 @@ const processState = (pid: number): "alive" | "gone" | "unknown" => {
 // Only ESRCH proves absence; unexpected probe failures must preserve the record.
 const isProcessAlive = (pid: number): boolean => processState(pid) !== "gone"
 
-// Missing, malformed or legacy records provide no identity evidence; callers must still inspect their process/listener scope.
+// Missing, malformed or legacy records provide no identity evidence; callers must still inspect
+// their process/listener scope.
 export const readRelayPidFileEntry = async (): Promise<
   RelayPidFile | undefined
 > => {
@@ -355,20 +402,34 @@ export const readRelayPidFileEntry = async (): Promise<
 
     const payload = JSON.parse(trimmed) as Partial<RelayPidFile>
     const pid = parsePid(payload.pid)
+
+    // The host is placed into a URL, so it may not carry anything that would change where that URL
+    // points: whitespace, a slash or backslash, userinfo, a query or fragment, a percent escape, or
+    // a control byte. A bracketed host must be an IPv6 literal.
     if (
       pid === undefined
       || typeof payload.host !== "string"
-      || !payload.host || /[\s\\/@?#%\u0000-\u001f\u007f]/.test(payload.host)
+      || !payload.host
+      || /[\s\\/@?#%\u0000-\u001f\u007f]/.test(payload.host)
       || (payload.host.startsWith("[") && !/^\[[0-9a-fA-F:.]+\]$/.test(payload.host))
-      || typeof payload.port !== "number" || !Number.isInteger(payload.port)
-      || payload.port < 1 || payload.port > 65_535
+      || typeof payload.port !== "number"
+      || !Number.isInteger(payload.port)
+      || payload.port < 1
+      || payload.port > 65_535
     ) {
       return undefined
     }
 
+    // The URL they produce must still be a bare origin.
     const address = new URL(getRelayBaseUrl(payload.host, payload.port))
-    if (!address.hostname || address.username || address.password || address.pathname !== "/"
-      || address.search || address.hash) {
+    if (
+      !address.hostname
+      || address.username
+      || address.password
+      || address.pathname !== "/"
+      || address.search
+      || address.hash
+    ) {
       return undefined
     }
 
@@ -376,8 +437,7 @@ export const readRelayPidFileEntry = async (): Promise<
       host: payload.host,
       pid,
       port: payload.port,
-      startedAt:
-        typeof payload.startedAt === "string" ? payload.startedAt : "",
+      startedAt: typeof payload.startedAt === "string" ? payload.startedAt : "",
       ...(typeof payload.version === "string" && payload.version ?
         { version: payload.version }
       : {}),
@@ -393,8 +453,11 @@ interface PidSnapshot {
 }
 
 const sameFile = (left: Stats, right: Stats): boolean =>
-  left.dev === right.dev && left.ino === right.ino && left.size === right.size
-  && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+  left.dev === right.dev
+  && left.ino === right.ino
+  && left.size === right.size
+  && left.mtimeMs === right.mtimeMs
+  && left.ctimeMs === right.ctimeMs
 
 const readPidSnapshot = async (): Promise<PidSnapshot | undefined> => {
   try {
@@ -405,6 +468,8 @@ const readPidSnapshot = async (): Promise<PidSnapshot | undefined> => {
 
     const raw = await fs.readFile(paths.pidPath, "utf8")
     const stat = await fs.lstat(paths.pidPath)
+
+    // The bytes count only if the file was not replaced or rewritten while they were read.
     return sameFile(before, stat) ? { raw, stat } : undefined
   } catch (error) {
     if (isNodeErrno(error) && error.code === "ENOENT") {
@@ -451,6 +516,7 @@ export const writeRelayPidFile = async (
   config: Pick<ProxyConfig, "host" | "port">,
 ): Promise<void> => {
   await fs.mkdir(paths.appDir, { recursive: true })
+
   const payload: RelayPidFile = {
     host: config.host,
     pid: process.pid,
@@ -461,6 +527,7 @@ export const writeRelayPidFile = async (
     // invoked. See #43. Covers the window before the daemon answers /healthz.
     version: appVersion,
   }
+
   await fs.writeFile(paths.pidPath, `${JSON.stringify(payload, null, 2)}\n`, {
     mode: 0o600,
   })
@@ -503,6 +570,8 @@ const getProcessCwd = async (pid: number): Promise<string | undefined> => {
     return undefined
   }
 
+  // -a ANDs the pid and descriptor filters. -Fn prints one field per line, each prefixed by its
+  // field letter, so the cwd path is the line that starts with n.
   const output = await readCommandOutput("lsof", [
     "-a",
     "-p",
@@ -511,6 +580,7 @@ const getProcessCwd = async (pid: number): Promise<string | undefined> => {
     "cwd",
     "-Fn",
   ])
+
   return output
     .split(/\r?\n/)
     .find((line) => line.startsWith("n"))
@@ -519,29 +589,45 @@ const getProcessCwd = async (pid: number): Promise<string | undefined> => {
 
 const getPortListenerPids = async (port: number): Promise<Array<number>> => {
   if (process.platform === "win32") {
-    return parsePidLines(await readCommandOutput("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`,
-    ], true))
+    return parsePidLines(
+      await readCommandOutput(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`,
+        ],
+        true,
+      ),
+    )
   }
 
-  return parsePidLines(await readCommandOutput("lsof", [
-    "-nP",
-    `-iTCP:${port}`,
-    "-sTCP:LISTEN",
-    "-t",
-  ], true))
+  return parsePidLines(
+    await readCommandOutput(
+      "lsof",
+      [
+        "-nP",
+        `-iTCP:${port}`,
+        "-sTCP:LISTEN",
+        "-t",
+      ],
+      true,
+    ),
+  )
 }
 
 const getProcessList = async (): Promise<Array<{ command: string; pid: number }>> => {
   const output =
     process.platform === "win32" ?
-      await readCommandOutput("powershell.exe", [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
-      ], true)
+      await readCommandOutput(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }",
+        ],
+        true,
+      )
     : await readCommandOutput("ps", ["-axo", "pid=,command="], true)
 
   return output
@@ -564,13 +650,16 @@ interface RelayProcessIdentity {
   createdAt: string
 }
 
+// The start time tells this process apart from a later one that reuses its pid.
 const getProcessCreatedAt = async (pid: number): Promise<string> => {
   const output = process.platform === "win32"
     ? await readCommandOutput("powershell.exe", [
-      "-NoProfile", "-Command",
+      "-NoProfile",
+      "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CreationDate.ToUniversalTime().ToString("o")`,
     ])
     : await readCommandOutput("ps", ["-p", String(pid), "-o", "lstart="])
+
   return output.trim()
 }
 
@@ -584,14 +673,21 @@ const observeProcess = async (pid: number): Promise<ProcessObservation> => {
     return { state }
   }
 
+  // The start time is read before and after the other queries, so the snapshot only counts if
+  // one and the same process answered all of them.
   const createdAt = await getProcessCreatedAt(pid)
   const command = await getProcessCommand(pid)
   const cwd = await getProcessCwd(pid)
   const confirmedCreatedAt = await getProcessCreatedAt(pid)
+
   // A failed/empty query, including a missing POSIX cwd, says nothing about
   // whether this process exited. Only a successful, coherent snapshot is proof.
-  if (!createdAt || !command || (process.platform !== "win32" && !cwd)
-    || createdAt !== confirmedCreatedAt) {
+  if (
+    !createdAt
+    || !command
+    || (process.platform !== "win32" && !cwd)
+    || createdAt !== confirmedCreatedAt
+  ) {
     return { state: processState(pid) === "gone" ? "gone" : "unknown" }
   }
 
@@ -628,6 +724,7 @@ const isRelayPid = async (pid: number): Promise<boolean> => {
 // "gone" includes a verified replacement: the original process no longer
 // occupies this PID. "unknown" must never count as exit or authorize a signal.
 type RelayState = "same" | "gone" | "unknown"
+
 const inspectRelay = async (expected: RelayProcessIdentity): Promise<RelayState> => {
   const observed = await observeProcess(expected.pid)
   if (observed.state !== "present") {
@@ -635,8 +732,11 @@ const inspectRelay = async (expected: RelayProcessIdentity): Promise<RelayState>
   }
 
   const current = observed.identity
-  if (current.command !== expected.command || current.cwd !== expected.cwd
-    || current.createdAt !== expected.createdAt) {
+  if (
+    current.command !== expected.command
+    || current.cwd !== expected.cwd
+    || current.createdAt !== expected.createdAt
+  ) {
     return "gone"
   }
 
@@ -700,8 +800,12 @@ const findRelayProcesses = async (
     candidates.add(storedPid)
   }
 
-  if (typeof config.port === "number" && Number.isInteger(config.port)
-    && config.port > 0 && config.port <= 65_535) {
+  if (
+    typeof config.port === "number"
+    && Number.isInteger(config.port)
+    && config.port > 0
+    && config.port <= 65_535
+  ) {
     for (const pid of await getPortListenerPids(config.port)) {
       candidates.add(pid)
     }
@@ -713,15 +817,23 @@ const findRelayProcesses = async (
     }
 
     // A recognizable inventory row is only a candidate; do not discard it when
-    // its subsequent cwd/command/creation query is unavailable.
-    if (isRelayStartProcess(command) || flatInvocation(command)
-      || isRelayStartProcess(command, "/copilot-relay") || packagedEntryCandidate(command)) {
+    // its subsequent cwd/command/creation query is unavailable. The listing
+    // carries no cwd, so a relative entry is tried as if run from a directory
+    // named copilot-relay; observeRelay then checks it against the real cwd.
+    if (
+      isRelayStartProcess(command)
+      || flatInvocation(command)
+      || isRelayStartProcess(command, "/copilot-relay")
+      || packagedEntryCandidate(command)
+    ) {
       candidates.add(pid)
     }
   }
 
   const relays: Array<RelayProcessIdentity> = []
   for (const pid of candidates) {
+    // Each candidate gets its own deadline. An unknown answer is retried until then, and one still
+    // unknown fails the whole search rather than being dropped as a non-relay.
     const deadline = Date.now() + stopTimeoutMs
     let observed = await observeRelay(pid)
     while (observed.state === "unknown" && Date.now() < deadline) {
@@ -746,14 +858,18 @@ export const findRelayProcessIds = async (
 ): Promise<Array<number>> =>
   (await findRelayProcesses(config, await readPidSnapshot())).map(({ pid }) => pid)
 
+// "verified" waits only for a definite answer; "gone" also keeps waiting while the relay is alive.
+// Either way, an answer still unknown at the deadline throws.
 const waitForRelay = async (
   identity: RelayProcessIdentity,
   until: "verified" | "gone",
 ): Promise<Exclude<RelayState, "unknown">> => {
   const deadline = Date.now() + stopTimeoutMs
   let state = await inspectRelay(identity)
-  while ((state === "unknown" || (until === "gone" && state === "same"))
-    && Date.now() < deadline) {
+  while (
+    (state === "unknown" || (until === "gone" && state === "same"))
+    && Date.now() < deadline
+  ) {
     await sleep(stopPollMs)
     state = await inspectRelay(identity)
   }

@@ -69,6 +69,9 @@ export async function applyClaudeConfig(
   const created = snapshot.raw === null
 
   let parsed: Record<string, unknown> = {}
+
+  // Only a missing file is created. An existing blank one is treated like a malformed file and left
+  // as it is.
   if (!created && raw.trim().length === 0) {
     return { configPath, changed: false, created: false }
   }
@@ -97,6 +100,7 @@ export async function applyClaudeConfig(
     typeof env.ANTHROPIC_BASE_URL === "string"
       ? (env.ANTHROPIC_BASE_URL as string)
       : undefined
+
   const hadPrimaryModelOverride = hasPrimaryModelOverride(parsed, env)
   const contextWindow = input.gptLimits?.max_context_window_tokens
   const claudeGptModel = normalizeClaudeModelId(gptModel, contextWindow)
@@ -115,6 +119,7 @@ export async function applyClaudeConfig(
   }
 
   env.ANTHROPIC_BASE_URL = baseUrl
+
   // Claude Code only requires a syntactically present auth token here; real
   // upstream authentication is handled by copilot-relay's Copilot token.
   if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {

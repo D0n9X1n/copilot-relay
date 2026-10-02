@@ -1,3 +1,5 @@
+// Reduces upstream tool-schema details into safe diagnostics for debug logs.
+
 const openaiToolNamePattern = /^[A-Za-z0-9_-]{1,64}$/
 const toolSchemaSuspectKeys = new Set([
   "$defs",
@@ -14,7 +16,6 @@ const toolSchemaSuspectKeys = new Set([
 ])
 const maxDiagnosticItems = 8
 
-// Reduces upstream tool-schema details into safe diagnostics for debug logs.
 export type ToolDiagnostics = {
   count: number
   invalidNames?: Array<string>
@@ -53,6 +54,8 @@ const getToolParameters = (tool: unknown): unknown => {
   return tool.parameters
 }
 
+// Every recursive call appends to the same `keys` array, so each level rechecks the cap after a
+// nested call returns and stops walking once it is reached.
 const collectSuspiciousSchemaKeys = (
   value: unknown,
   path = "$",
