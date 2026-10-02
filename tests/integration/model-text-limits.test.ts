@@ -22,7 +22,10 @@ const { loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { runtimeState } = await import("../../src/lib/state")
 
 const { flushLogs } = await import("../../src/lib/log")
-test.after(async () => { await flushLogs(); await fs.rm(tempHome, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(tempHome, { recursive: true, force: true })
+})
 test.afterEach(() => {
   delete runtimeState.modelRouting
   delete runtimeState.modelCatalog
@@ -66,7 +69,10 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
     const requests: Array<{ path: string; body: Record<string, unknown> }> = []
     const upstream = createHttpServer(async (request, response) => {
       let raw = ""
-      for await (const chunk of request) raw += chunk
+      for await (const chunk of request) {
+        raw += chunk
+      }
+
       const body = raw ? JSON.parse(raw) as Record<string, unknown> : {}
       requests.push({ path: request.url ?? "/", body })
       response.setHeader("content-type", "application/json")
@@ -150,10 +156,12 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         assert.equal(rejected.status, 400)
         assert.equal((await rejected.json() as { error: { type: string } }).error.type, "invalid_request_error")
       }
+
       for (const mode of [undefined, "chat-completions"] as const) {
         config.claudeUpstreamApi = mode
         assert.equal((await post(payload)).status, 400)
       }
+
       config.claudeUpstreamApi = claudeUpstreamApi
       assert.equal((await post({ ...payload, model: "sonnet" })).status, 400)
       assert.equal(requests.length, 0)
@@ -177,7 +185,10 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
       const requests: Array<{ path: string; body: Record<string, unknown> }> = []
       const upstream = createHttpServer(async (request, response) => {
         let raw = ""
-        for await (const chunk of request) raw += chunk
+        for await (const chunk of request) {
+          raw += chunk
+        }
+
         const body = raw ? JSON.parse(raw) as Record<string, unknown> : {}
         requests.push({ path: request.url ?? "/", body })
         response.setHeader("content-type", "application/json")
@@ -185,6 +196,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
           response.end(JSON.stringify(modelCatalogPayload))
           return
         }
+
         const writeEvent = (event: unknown) => response.write(`data: ${JSON.stringify(event)}\n\n`)
         const usage = {
           prompt_tokens: limits.max_prompt_tokens,
@@ -204,11 +216,16 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
             for (let index = 0; index < output.length; index += 4096) {
               writeEvent({ type: "response.output_text.delta", output_index: 0, delta: output.slice(index, index + 4096) })
             }
+
             writeEvent({ type: "response.completed", response: result })
             response.end()
-          } else response.end(JSON.stringify(result))
+          } else {
+            response.end(JSON.stringify(result))
+          }
+
           return
         }
+
         if (request.url === "/chat/completions") {
           // Opus's native JSON ceiling is lower. The relay must request SSE,
           // even when its own caller requested a completed JSON response.
@@ -217,6 +234,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
             response.end(JSON.stringify({ error: { message: "streaming required above 16000 tokens" } }))
             return
           }
+
           response.setHeader("content-type", "text/event-stream")
           for (let index = 0; index < output.length; index += 4096) {
             writeEvent({
@@ -224,6 +242,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
               choices: [{ index: 0, delta: { content: output.slice(index, index + 4096) }, finish_reason: null }],
             })
           }
+
           writeEvent({
             id: "chat_long", model, created: 1,
             choices: [{ index: 0, delta: {}, finish_reason: "length" }], usage,
@@ -231,6 +250,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
           response.end("data: [DONE]\n\n")
           return
         }
+
         response.statusCode = 404
         response.end()
       })
@@ -307,6 +327,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
           assert.equal(body.usage.output_tokens, limits.max_output_tokens)
           assert.equal(body.stop_reason, "max_tokens")
         }
+
         assert.equal(returnedText, output)
         assert.equal(encode(returnedText).length, limits.max_output_tokens)
         assert.equal(requests.length, 2)

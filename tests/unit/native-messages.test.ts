@@ -19,7 +19,10 @@ const config: ProxyConfig = {
   modelCatalog: { baseUrl: base, models: new Map([["claude-opus-5.5", { supportedEndpoints: ["/v1/messages", "/chat/completions"] }]]) },
 }
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 
 test("native selection requires advertised support in auto mode", () => {
   assert.equal(shouldUseNativeMessages(config, "claude-opus-5.5"), true)
@@ -42,7 +45,9 @@ test("native request preserves signed blocks, cache markers and in-place operato
       assert.equal(new Headers(input.headers).get("anthropic-version"), "2023-06-01")
       return Response.json({ id: "msg_native", type: "message", role: "assistant", model: "claude-opus-5.5", content: [{ type: "text", text: "OK" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } })
     },
-    refresh: async () => { throw new Error("Unexpected refresh") },
+    refresh: async () => {
+      throw new Error("Unexpected refresh")
+    },
   }, () => createNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 512, messages, output_config: { effort: "low" } } as never, { requestId: "native-test" }))
   assert.deepEqual((sent as { messages: unknown }).messages, messages)
   assert.deepEqual((sent as { output_config: unknown }).output_config, { effort: "low" })
@@ -79,10 +84,17 @@ for (const stream of [false, true]) {
         { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
         { type: "message_stop" },
       ]) : Response.json(message([{ type: "text", text: "OK" }]))
-    }, refresh: async () => { throw new Error("Unexpected refresh") } }, () => handleNativeMessages(config, payload as never, {
+    }, refresh: async () => {
+      throw new Error("Unexpected refresh")
+    } }, () => handleNativeMessages(config, payload as never, {
       requestId: "native-effort-switch", headers: new Headers({ "anthropic-beta": "mid-conversation-output-config-2026-07-01" }),
-    }, stream ? async (event) => { emitted.push(event) } : undefined))
-    if (stream) assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
+    }, stream ? async (event) => {
+      emitted.push(event)
+    } : undefined))
+    if (stream) {
+      assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
+    }
+
     assert.deepEqual(payload, original)
   })
 }
@@ -109,13 +121,16 @@ test("native search retrieval honors an active inline effort without flattening 
         { type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] },
       ], usage: { input_tokens: 1, output_tokens: 1 } })
     }
+
     assert.equal(request.path, "/v1/messages")
     assert.deepEqual(sent.output_config, { effort: "low" })
     assert.deepEqual(sent.messages.slice(0, messages.length), messages)
     return Response.json(message(paths.length === 1 ? [
       { type: "tool_use", id: "toolu_search", name: "WebSearch", input: { query: "reference" } },
     ] : [{ type: "text", text: "Answer" }], paths.length === 1 ? "tool_use" : "end_turn"))
-  }, refresh: async () => { throw new Error("Unexpected refresh") } }, () => handleNativeMessages(config, payload, { requestId: "native-search-effort" }))
+  }, refresh: async () => {
+    throw new Error("Unexpected refresh")
+  } }, () => handleNativeMessages(config, payload, { requestId: "native-search-effort" }))
   assert.deepEqual(paths, ["/v1/messages", "/responses", "/v1/messages"])
   assert.deepEqual(payload, original)
 })
@@ -139,7 +154,10 @@ test("native search resolves effort against restored tool-result user turns", as
   await withRecordedTransport({ fetch: async (request) => {
     const body = JSON.parse(request.body!)
     calls.push({ path: request.path, body })
-    if (request.path === "/responses") return Response.json({ id: "resp_empty", model: body.model, status: "completed", output: [] })
+    if (request.path === "/responses") {
+      return Response.json({ id: "resp_empty", model: body.model, status: "completed", output: [] })
+    }
+
     assert.deepEqual(body.messages.map((message: { role: string }) => message.role), ["user", "system", "assistant", "user"])
     assert.deepEqual(body.output_config, { effort: "low" })
     return Response.json(message([{ type: "tool_use", id: "toolu_next", name: "WebSearch", input: { query: "next" } }], "tool_use"))
@@ -183,7 +201,9 @@ test("native streamed trailing usage cannot erase refusal reason or category", a
       { type: "message_delta", delta: {}, usage: { output_tokens: 5 } },
       { type: "message_stop" },
     ]), refresh: async () => {},
-  }, () => handleNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Hi" }] }, { requestId: "native-refusal" }, async (event) => { emitted.push(event) }))
+  }, () => handleNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Hi" }] }, { requestId: "native-refusal" }, async (event) => {
+    emitted.push(event)
+  }))
   const final = emitted.findLast((event) => event.type === "message_delta")
   assert.equal(final?.type === "message_delta" ? final.delta.stop_reason : undefined, "refusal")
   assert.equal(final?.type === "message_delta" ? final.usage?.output_tokens : undefined, 5)
@@ -203,8 +223,14 @@ test("native search history reconstructs the exact signed continuation prefix", 
     fetch: async (request) => {
       const body = JSON.parse(request.body!)
       calls.push({ path: request.path, body })
-      if (calls.length === 1) return Response.json(decision)
-      if (request.path === "/responses") return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [{ type: "web_search_call", status: "completed" }, { type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] }], usage: { input_tokens: 1, output_tokens: 1 } })
+      if (calls.length === 1) {
+        return Response.json(decision)
+      }
+
+      if (request.path === "/responses") {
+        return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [{ type: "web_search_call", status: "completed" }, { type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] }], usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+
       return Response.json(message([{ type: "thinking", thinking: "", signature: "final-signature" }, { type: "text", text: "Answer" }]))
     }, refresh: async () => {},
   }, async () => {
@@ -222,7 +248,10 @@ test("native search history reconstructs the exact signed continuation prefix", 
 
 test("native forced search is rejected before retrieval", async () => {
   let calls = 0
-  await withRecordedTransport({ fetch: async () => { calls++; throw new Error("unexpected") }, refresh: async () => {} }, async () => {
+  await withRecordedTransport({ fetch: async () => {
+    calls++
+    throw new Error("unexpected")
+  }, refresh: async () => {} }, async () => {
     await assert.rejects(handleNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Hi" }], tools: [{ name: "WebSearch", input_schema: { type: "object" } }], tool_choice: { type: "tool", name: "WebSearch" } }, { requestId: "forced" }))
   })
   assert.equal(calls, 0)
@@ -265,7 +294,9 @@ for (const stream of [false, true]) {
       { type: "content_block_stop", index: 0 },
       { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 32 } },
       { type: "message_stop" },
-    ]), refresh: async () => {} }, () => handleNativeMessages(limited, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Read" }] }, { requestId: "partial" }, stream ? async (event) => { emitted.push(event) } : undefined))
+    ]), refresh: async () => {} }, () => handleNativeMessages(limited, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Read" }] }, { requestId: "partial" }, stream ? async (event) => {
+      emitted.push(event)
+    } : undefined))
     if (stream) {
       assert.equal(emitted.some((event) => event.type === "content_block_start" && event.content_block.type === "tool_use"), false)
       assert.equal(emitted.find((event) => event.type === "message_delta")?.delta.stop_reason, "max_tokens")
@@ -284,10 +315,15 @@ const streamedNative = (response: ReturnType<typeof message>) => {
     values.push({ type: "content_block_start", index, content_block: start })
     if (block.type === "thinking") {
       values.push({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: block.thinking } }, { type: "content_block_delta", index, delta: { type: "signature_delta", signature: block.signature } })
-    } else if (block.type === "text") values.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } })
-    else values.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } })
+    } else if (block.type === "text") {
+      values.push({ type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } })
+    } else {
+      values.push({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } })
+    }
+
     values.push({ type: "content_block_stop", index })
   }
+
   values.push({ type: "message_delta", delta: { stop_reason: response.stop_reason }, usage: response.usage }, { type: "message_stop" })
   return streamResponse(values)
 }
@@ -301,17 +337,36 @@ const collectClientBlocks = (events: import("../../src/claude/types").ClaudeStre
       assert.equal(event.index, content.length)
       content.push(structuredClone(event.content_block))
     }
+
     if (event.type === "content_block_delta") {
       assert.equal(closed.has(event.index), false)
       const block = content[event.index]
-      if (event.delta.type === "text_delta") block.text += event.delta.text
-      if (event.delta.type === "thinking_delta") block.thinking += event.delta.thinking
-      if (event.delta.type === "signature_delta") block.signature = (block.signature ?? "") + event.delta.signature
-      if (event.delta.type === "input_json_delta") inputs.set(event.index, (inputs.get(event.index) ?? "") + event.delta.partial_json)
+      if (event.delta.type === "text_delta") {
+        block.text += event.delta.text
+      }
+
+      if (event.delta.type === "thinking_delta") {
+        block.thinking += event.delta.thinking
+      }
+
+      if (event.delta.type === "signature_delta") {
+        block.signature = (block.signature ?? "") + event.delta.signature
+      }
+
+      if (event.delta.type === "input_json_delta") {
+        inputs.set(event.index, (inputs.get(event.index) ?? "") + event.delta.partial_json)
+      }
     }
-    if (event.type === "content_block_stop") closed.add(event.index)
+
+    if (event.type === "content_block_stop") {
+      closed.add(event.index)
+    }
   }
-  for (const [index, input] of inputs) content[index].input = JSON.parse(input)
+
+  for (const [index, input] of inputs) {
+    content[index].input = JSON.parse(input)
+  }
+
   assert.equal(closed.size, content.length)
   return content
 }
@@ -329,11 +384,19 @@ for (const sibling of [false, true]) {
     const emitted: import("../../src/claude/types").ClaudeStreamEventData[] = []
     await withRecordedTransport({ fetch: async (request) => {
       calls.push({ path: request.path, body: JSON.parse(request.body!) })
-      if (calls.length === 1) return streamedNative(message(content, "tool_use"))
-      if (request.path === "/responses") return Response.json({ id: "resp_search", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] }], usage: { input_tokens: 1, output_tokens: 1 } })
+      if (calls.length === 1) {
+        return streamedNative(message(content, "tool_use"))
+      }
+
+      if (request.path === "/responses") {
+        return Response.json({ id: "resp_search", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] }], usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+
       return streamedNative(message([{ type: "thinking", thinking: "", signature: "signed-final-prefix" }, { type: "text", text: "Answer" }]))
     }, refresh: async () => {} }, async () => {
-      await handleNativeMessages(config, payload, { requestId: "streamed-search" }, async (event) => { emitted.push(event) })
+      await handleNativeMessages(config, payload, { requestId: "streamed-search" }, async (event) => {
+        emitted.push(event)
+      })
       assert.equal(emitted.filter((event) => event.type === "message_start").length, 1)
       assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
       const reconstructed = collectClientBlocks(emitted)
@@ -342,8 +405,12 @@ for (const sibling of [false, true]) {
       const final = calls.at(-1)!.body
       assert.deepEqual(final.messages[1].content, content)
       assert.equal(JSON.stringify(final.messages).includes("server_tool_use"), false)
-      if (sibling) assert.deepEqual(final.messages[2].content.map((block: any) => block.tool_use_id), ["toolu_search", "toolu_client"])
-      else assert.deepEqual(final.messages.slice(0, calls[2].body.messages.length), calls[2].body.messages)
+      if (sibling) {
+        assert.deepEqual(final.messages[2].content.map((block: any) => block.tool_use_id), ["toolu_search", "toolu_client"])
+      } else {
+        assert.deepEqual(final.messages.slice(0, calls[2].body.messages.length), calls[2].body.messages)
+      }
+
       assert.equal(reconstructed[0].signature, "signed-search-prefix")
     })
   })
@@ -356,7 +423,9 @@ test("native redacted thinking survives request and streamed response unchanged"
     const sent = JSON.parse(request.body!)
     assert.deepEqual(sent.messages[1].content[0], redacted)
     return streamResponse([{ type: "message_start", message: message([], null as never) }, { type: "content_block_start", index: 0, content_block: redacted }, { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "end_turn" } }, { type: "message_stop" }])
-  }, refresh: async () => {} }, () => handleNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Hi" }, { role: "assistant", content: [redacted] } as never, { role: "user", content: "Continue" }] }, { requestId: "redacted-thinking" }, async (event) => { emitted.push(event) }))
+  }, refresh: async () => {} }, () => handleNativeMessages(config, { model: "claude-opus-5.5", max_tokens: 32, messages: [{ role: "user", content: "Hi" }, { role: "assistant", content: [redacted] } as never, { role: "user", content: "Continue" }] }, { requestId: "redacted-thinking" }, async (event) => {
+    emitted.push(event)
+  }))
   assert.deepEqual(collectClientBlocks(emitted)[0], redacted)
 })
 

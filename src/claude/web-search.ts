@@ -134,8 +134,14 @@ const textFromMessageContent = (content: ClaudeMessage["content"]): string => {
 
   return content
     .flatMap((block) => {
-      if (block.type === "text") return [block.text]
-      if (block.type === "tool_result") return [block.content]
+      if (block.type === "text") {
+        return [block.text]
+      }
+
+      if (block.type === "tool_result") {
+        return [block.content]
+      }
+
       return []
     })
     .join("\n\n")
@@ -180,11 +186,17 @@ export const getClaudeWebSearchToolCallFromChatResponse = (
   response: ChatCompletionResponse,
   toolNameMapper: ClaudeToolNameMapper,
 ): ClaudeWebSearchToolCall | undefined => {
-  if (response.choices.some((choice) => choice.finish_reason !== "tool_calls" || choice.message.refusal)) return undefined
+  if (response.choices.some((choice) => choice.finish_reason !== "tool_calls" || choice.message.refusal)) {
+    return undefined
+  }
+
   const searchCalls = response.choices
     .flatMap((choice) => choice.message.tool_calls ?? [])
     .filter((call) => isClaudeWebSearchToolName(toolNameMapper.toClaude(call.function.name)))
-  if (searchCalls.length > 1) throw new Error("Multiple bridge-managed web searches in one turn are unsupported.")
+  if (searchCalls.length > 1) {
+    throw new Error("Multiple bridge-managed web searches in one turn are unsupported.")
+  }
+
   const toolCall = searchCalls[0]
 
   if (!toolCall) {
@@ -207,7 +219,10 @@ const buildSearchInput = (
   const messages = payload.messages
     .flatMap((message) => {
       const text = textFromMessageContent(message.content)
-      if (message.role === "system" && message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) return []
+      if (message.role === "system" && message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) {
+        return []
+      }
+
       return [`${message.role}: ${text}`]
     })
     .join("\n\n")
@@ -246,14 +261,19 @@ const getSearchQuery = (
   requestedQuery: string,
 ): string => {
   for (const item of response.output ?? []) {
-    if (item.type !== "web_search_call") continue
+    if (item.type !== "web_search_call") {
+      continue
+    }
+
     const action = isRecord(item.action) ? item.action : undefined
     const queries = Array.isArray(action?.queries) ? action.queries : []
     const query =
       typeof action?.query === "string" ? action.query
       : typeof queries[0] === "string" ? queries[0]
       : undefined
-    if (query) return query
+    if (query) {
+      return query
+    }
   }
 
   return requestedQuery.slice(0, 200)
@@ -262,7 +282,10 @@ const getSearchQuery = (
 const getResponseText = (response: ResponsesWebSearchResponse): string =>
   (response.output ?? [])
     .flatMap((item) => {
-      if (item.type !== "message") return []
+      if (item.type !== "message") {
+        return []
+      }
+
       const content = Array.isArray(item.content) ? item.content : []
       return content.flatMap((part) =>
         isRecord(part)
@@ -315,6 +338,7 @@ const getStructuredSearchResults = (response: ResponsesWebSearchResponse): Array
     if (item.type === "web_search_call" && isRecord(item.action) && Array.isArray(item.action.sources)) {
       sources.push(...item.action.sources)
     }
+
     if (item.type === "message" && Array.isArray(item.content)) {
       for (const part of item.content) {
         if (isRecord(part) && Array.isArray(part.annotations)) {
@@ -323,18 +347,30 @@ const getStructuredSearchResults = (response: ResponsesWebSearchResponse): Array
       }
     }
   }
+
   const results: WebSearchResult[] = []
   const seen = new Set<string>()
   for (const source of sources) {
-    if (!isRecord(source) || typeof source.url !== "string") continue
+    if (!isRecord(source) || typeof source.url !== "string") {
+      continue
+    }
+
     try {
       const url = new URL(source.url)
-      if (!/^https?:$/.test(url.protocol) || url.username || url.password || seen.has(url.href)) continue
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password || seen.has(url.href)) {
+        continue
+      }
+
       seen.add(url.href)
       results.push({ url: url.href, title: typeof source.title === "string" && source.title.trim() ? source.title.trim() : url.hostname })
-      if (results.length === searchResultLimit) break
-    } catch { continue }
+      if (results.length === searchResultLimit) {
+        break
+      }
+    } catch {
+      continue
+    }
   }
+
   return results
 }
 
@@ -356,7 +392,10 @@ const safeResponseId = (value: unknown, token: string | undefined): string | und
 
 const summarizeCounts = (values: string[]): string => {
   const counts = new Map<string, number>()
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+
   return [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([key, count]) => `${key}:${count}`).join(",") || "none"
 }
 
@@ -411,7 +450,11 @@ const interpretSearchResponse = (
       : status === "completed" ? "Copilot web search completed without extractable text or sources."
       : "Copilot web search returned no usable results (response status unreported; no extractable text or sources)."
   }
-  if (failure) results = []
+
+  if (failure) {
+    results = []
+  }
+
   const modelLabel = sanitizeTerminalString(scrubSensitiveUrls(request.model))
   const safeModel = /^[a-z0-9._-]{1,100}$/i.test(modelLabel) && !(config.copilotToken && modelLabel.includes(config.copilotToken)) ? modelLabel : "redacted"
   log.info([
@@ -453,11 +496,26 @@ const createFailedSearchExecution = (
 })
 
 const getSearchFailureCategory = (status: number): string => {
-  if (status === 503) return "service unavailable"
-  if (status >= 500) return "server failure"
-  if (status === 429) return "rate limited"
-  if (status === 401) return "authentication rejected"
-  if (status === 403) return "access denied"
+  if (status === 503) {
+    return "service unavailable"
+  }
+
+  if (status >= 500) {
+    return "server failure"
+  }
+
+  if (status === 429) {
+    return "rate limited"
+  }
+
+  if (status === 401) {
+    return "authentication rejected"
+  }
+
+  if (status === 403) {
+    return "access denied"
+  }
+
   return "request failed"
 }
 
@@ -469,7 +527,9 @@ const getSearchFailureDetail = (body: string, token: string | undefined): string
     detail = typeof error?.message === "string" ? error.message
       : typeof error?.code === "string" ? error.code : ""
   } catch {
-    if (/^[{[<]/.test(detail)) return ""
+    if (/^[{[<]/.test(detail)) {
+      return ""
+    }
   }
 
   detail = scrubSensitiveUrls(sanitizeTerminalString(detail))
@@ -482,14 +542,20 @@ const getSearchFailureDetail = (body: string, token: string | undefined): string
       return "[redacted]"
     }
   })
-  if (token) detail = detail.replaceAll(token, "[redacted]")
+  if (token) {
+    detail = detail.replaceAll(token, "[redacted]")
+  }
+
   // Upstream prose is untrusted; omit credential or request echoes rather than truncate them.
   if (
     /\b(?:authorization|bearer|api[_ -]?key|password|secret|access[_ -]?token|refresh[_ -]?token)\b/i.test(detail)
     || /\btoken\s*[=:]/i.test(detail)
     || /\b(?:gh[pousr]_|github_pat_|sk-|eyJ)[A-Za-z0-9_-]+/.test(detail)
     || /\b(?:request|payload|prompt|messages|input|headers|conversation)\b["']?\s*[:=]/i.test(detail)
-  ) return ""
+  ) {
+    return ""
+  }
+
   return detail.trim().slice(0, 240)
 }
 
@@ -572,8 +638,11 @@ export const createClaudeWebSearchExecution = async (
   try {
     upstream = await readCopilotJson<unknown>(response, signal, options.timeoutMs)
   } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error
+    if (!(error instanceof SyntaxError)) {
+      throw error
+    }
   }
+
   return interpretSearchResponse(upstream, config, requestedQuery, request, getClaudeTurnEffort(payload).requested ?? "unset", options.requestId)
 }
 
@@ -605,6 +674,7 @@ export const createClaudeWebSearchResponse = (
   if (search.correlation) {
     log.info(`request_id=${search.correlation.requestId} Copilot web search tool result upstream_response_id=${search.correlation.upstreamResponseId} tool_use_id=${toolUseId}`)
   }
+
   const content: Array<ClaudeAssistantContentBlock> = [
     {
       type: "server_tool_use",

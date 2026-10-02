@@ -46,6 +46,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   for await (const chunk of request) {
     body += String(chunk)
   }
+
   return body ? JSON.parse(body) as unknown : undefined
 }
 
@@ -179,9 +180,11 @@ const startMockCopilot = async (
         for (const payloadObject of payloadObjects) {
           response.write(`data: ${JSON.stringify(payloadObject)}\n\n`)
         }
+
         response.write("data: [DONE]\n\n")
         response.end()
       }
+
       // A real model selects web_search based on intent, not on the tool merely
       // being advertised. Gating on intent lets a test represent the common
       // Claude Code case: WebSearch is offered every turn and used on few.
@@ -247,6 +250,7 @@ const startMockCopilot = async (
           )
           return
         }
+
         response.end(JSON.stringify({
           id: "chat_web_search_call",
           created: 1,
@@ -377,6 +381,7 @@ const startMockCopilot = async (
         }))
         return
       }
+
       if (payload.tools?.some((tool) =>
         tool.parameters?.properties?.doc_id?.pattern === artifactToolSchema.properties.doc_id.pattern
         || tool.parameters?.properties?.database?.pattern === artifactToolSchema.properties.database.pattern,
@@ -390,12 +395,14 @@ const startMockCopilot = async (
         }))
         return
       }
+
       if (payload.tools?.some((tool) => tool.type === "web_search_preview")) {
         if (options.searchFailure) {
           response.statusCode = options.searchFailure.status
           response.end(options.searchFailure.body)
           return
         }
+
         response.end(JSON.stringify(options.searchResponse ?? {
           id: "resp_web_search",
           created_at: 1,
@@ -447,9 +454,15 @@ const startMockCopilot = async (
             { type: "response.created", response: { ...result, output: [] } },
             { type: "response.output_item.added", output_index: 0, item },
             { type: "response.completed", response: result },
-          ]) response.write(`data: ${JSON.stringify(event)}\n\n`)
+          ]) {
+            response.write(`data: ${JSON.stringify(event)}\n\n`)
+          }
+
           response.end()
-        } else response.end(JSON.stringify(result))
+        } else {
+          response.end(JSON.stringify(result))
+        }
+
         return
       }
 
@@ -475,9 +488,11 @@ const startMockCopilot = async (
         ]) {
           response.write(`data: ${JSON.stringify(event)}\n\n`)
         }
+
         response.end()
         return
       }
+
       response.end(JSON.stringify(result))
       return
     }
@@ -578,6 +593,7 @@ for (const model of ["default", "opus"]) {
             assert.match(text, /event: message_stop/)
             assert.doesNotMatch(text, /event: error/)
           }
+
           assert.equal(mock.requests.length, 1)
           const upstream = mock.requests[0]?.body as {
             reasoning_effort?: string
@@ -602,11 +618,14 @@ for (const model of ["default", "opus"]) {
         let previousInput: unknown[] = []
         let cacheKey: unknown
         for (const effort of ["low", "high", "max", "medium", "low"] as const) {
-          if (mock.requests.length > 0) messages.push(
-            { role: "assistant", content: "OK" },
-            { role: "system", content: [], output_config: { effort } },
-            { role: "user", content: "Reply OK again." },
-          )
+          if (mock.requests.length > 0) {
+            messages.push(
+              { role: "assistant", content: "OK" },
+              { role: "system", content: [], output_config: { effort } },
+              { role: "user", content: "Reply OK again." },
+            )
+          }
+
           const payload = { model, stream, max_tokens: 16, system: "Stable fixture instructions.", metadata: { user_id: "session-effort-switch" }, output_config: { effort: "low" }, messages }
           const original = structuredClone(payload)
           const count = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
@@ -624,6 +643,7 @@ for (const model of ["default", "opus"]) {
             assert.match(text, /event: message_stop/)
             assert.doesNotMatch(text, /event: error/)
           }
+
           assert.equal(mock.requests.length, requestCount + 1)
           const sent = mock.requests.at(-1)!.body as {
             reasoning_effort?: string; reasoning?: { effort?: string }; messages?: unknown[]; input?: unknown[]; prompt_cache_key?: string
@@ -634,9 +654,13 @@ for (const model of ["default", "opus"]) {
           previousInput = input
           if (model !== "opus") {
             assert(sent.prompt_cache_key)
-            if (cacheKey !== undefined) assert.equal(sent.prompt_cache_key, cacheKey)
+            if (cacheKey !== undefined) {
+              assert.equal(sent.prompt_cache_key, cacheKey)
+            }
+
             cacheKey = sent.prompt_cache_key
           }
+
           assert.deepEqual(payload, original)
           assert.equal(runtimeState.thinkEffort, "xhigh")
         }
@@ -677,7 +701,10 @@ for (const model of ["default", "opus"]) {
           assert.equal(response.status, 200)
           const text = await response.text()
           assert.match(text, /web_search_tool_result/)
-          if (stream) assert.match(text, /event: message_stop/)
+          if (stream) {
+            assert.match(text, /event: message_stop/)
+          }
+
           assert.deepEqual(mock.requests.map((request) => request.path), model === "opus" ?
             ["/chat/completions", "/responses", "/chat/completions"] :
             ["/responses", "/responses", "/responses"])
@@ -685,6 +712,7 @@ for (const model of ["default", "opus"]) {
             const body = request.body as { reasoning_effort?: string; reasoning?: { effort?: string } }
             assert.equal(body.reasoning_effort ?? body.reasoning?.effort, expected)
           }
+
           const next = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -731,6 +759,7 @@ test("malformed inline controls still reject before SSE, counting or upstream ca
         }
       }
     }
+
     assert.equal(mock.requests.length, 0)
   } finally {
     await mock.close()
@@ -750,7 +779,9 @@ test("upstream HTTP errors retain a generated relay correlation header", async (
       assert.match(response.headers.get("x-copilot-relay-request-id") ?? "", uuidPattern)
       await response.text()
     })
-  } finally { await mock.close() }
+  } finally {
+    await mock.close()
+  }
 })
 
 test("relay-generated stream errors include their correlation ID without internal details", async () => {
@@ -767,7 +798,9 @@ test("relay-generated stream errors include their correlation ID without interna
     assert.match(text, new RegExp(`request_id=${requestId}`))
     assert.match(text, /event: error/)
     assert.doesNotMatch(text, /client-forged-id|\\"private\\"/)
-  } finally { await mock.close() }
+  } finally {
+    await mock.close()
+  }
 })
 
 test("rejects invalid request effort before SSE or upstream calls", async () => {
@@ -796,6 +829,7 @@ test("rejects invalid request effort before SSE or upstream calls", async () => 
         }
       }
     }
+
     assert.equal(mock.requests.length, 0)
   } finally {
     await mock.close()
@@ -919,6 +953,7 @@ for (const stream of [false, true]) {
           const result = await response.json() as { content: Array<{ type: string; input?: unknown }> }
           assert.deepEqual(result.content.find((block) => block.type === "tool_use")?.input, args)
         }
+
         assert.equal(mock.requests.length, 1)
         assert.equal(mock.requests[0]?.path, "/responses")
         const sent = mock.requests[0]?.body as { tools: Array<{ strict: boolean; parameters: unknown }> }
@@ -929,6 +964,7 @@ for (const stream of [false, true]) {
       }
     })
   }
+
   for (const [status, output, detail] of [
     ["completed", [], "completed without extractable text or sources"],
     ["incomplete", [{ type: "reasoning", summary: [{ text: "PRIVATE_REASONING" }] }], "incomplete (max_output_tokens)"],
@@ -966,11 +1002,15 @@ for (const stream of [false, true]) {
           assert.equal(result.id, "resp_empty_evidence")
           assert.deepEqual(result.usage, { input_tokens: 56, output_tokens: 1201, server_tool_use: { web_search_requests: 1 } })
         }
+
         assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
         assert.equal(mock.requests.filter((request) => request.path === "/responses").length, 1)
-      } finally { await mock.close() }
+      } finally {
+        await mock.close()
+      }
     })
   }
+
   for (const status of [503, 429, 401, 403, 400]) {
     test(`WebSearch HTTP ${status} stays a tool error with stream=${stream}`, async () => {
       const mock = await startMockCopilot(undefined, undefined, {
@@ -995,6 +1035,7 @@ for (const stream of [false, true]) {
           assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
           assert.doesNotMatch(text, /event: error/)
         }
+
         assert.equal(mock.requests.filter((request) => request.path === "/chat/completions").length, 1)
         const retrievals = mock.requests.filter((request) => request.path === "/responses")
         assert.equal(retrievals.length, status === 503 ? 2 : 1)
@@ -1153,6 +1194,7 @@ test("POST /v1/messages routes opus requests to configured opus model", async ()
     if (!upstream) {
       throw new Error("Expected /chat/completions upstream request")
     }
+
     assert.equal((upstream.body as { model?: string }).model, "claude-opus-4.8")
     assert.equal((upstream.body as { reasoning_effort?: string }).reasoning_effort, "xhigh")
   } finally {
@@ -1185,6 +1227,7 @@ test("POST /v1/messages routes non-opus requests to configured gpt model", async
     if (!upstream) {
       throw new Error("Expected /responses upstream request")
     }
+
     assert.equal((upstream.body as { model?: string }).model, "gpt-5.5")
     assert.equal(
       ((upstream.body as { reasoning?: { effort?: string } }).reasoning)?.effort,
@@ -1446,6 +1489,7 @@ test("POST /v1/messages streaming opens before delayed upstream without ping", a
       if (chunk.done) {
         break
       }
+
       chunks.push(new TextDecoder().decode(chunk.value))
     }
 
@@ -1673,6 +1717,7 @@ const startToolArgumentsCopilot = async (argumentsText: string) => {
       response.end(JSON.stringify({ object: "list", data: [{ id: "gpt-5.5" }, { id: "claude-opus-4.8" }] }))
       return
     }
+
     const toolCall = { id: "call_noop", type: "function", function: { name: "noop", arguments: argumentsText } }
     if (body?.stream) {
       response.setHeader("content-type", "text/event-stream")
@@ -1684,22 +1729,30 @@ const startToolArgumentsCopilot = async (argumentsText: string) => {
       for (const payload of [
         chunk({ role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }, null),
         chunk({}, "tool_calls"),
-      ]) response.write(`data: ${JSON.stringify(payload)}\n\n`)
+      ]) {
+        response.write(`data: ${JSON.stringify(payload)}\n\n`)
+      }
+
       response.end("data: [DONE]\n\n")
       return
     }
+
     response.end(JSON.stringify({
       id: "chat_tool", created: 1, model: body?.model,
       choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [toolCall] }, finish_reason: "tool_calls" }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     }))
   })
-  await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve) })
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
   const address = server.address()
   assert.ok(address && typeof address === "object")
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()) }),
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
   }
 }
 

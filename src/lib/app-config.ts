@@ -84,18 +84,36 @@ export const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
 }
 
 const normalizeClaudeUpstreamApi = (value: unknown): AppConfig["claudeUpstreamApi"] => {
-  if (value === undefined) return undefined
-  if (value === "auto" || value === "messages" || value === "chat-completions") return value
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (value === "auto" || value === "messages" || value === "chat-completions") {
+    return value
+  }
+
   throw new Error("Invalid claudeUpstreamApi: expected auto, messages, or chat-completions")
 }
 
 const normalizeBoolean = (value: unknown): boolean | undefined => {
-  if (value === undefined) return undefined
-  if (typeof value === "boolean") return value
-  if (typeof value === "string") {
-    if (value.toLowerCase() === "true") return true
-    if (value.toLowerCase() === "false") return false
+  if (value === undefined) {
+    return undefined
   }
+
+  if (typeof value === "boolean") {
+    return value
+  }
+
+  if (typeof value === "string") {
+    if (value.toLowerCase() === "true") {
+      return true
+    }
+
+    if (value.toLowerCase() === "false") {
+      return false
+    }
+  }
+
   throw new Error("Invalid claudeSetup: expected true or false")
 }
 
@@ -105,12 +123,16 @@ const normalizeInteger = (
   minimum: number,
   maximum = Number.MAX_SAFE_INTEGER,
 ): number | undefined => {
-  if (value === undefined) return undefined
+  if (value === undefined) {
+    return undefined
+  }
+
   const number = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
   if (typeof number !== "number" || !Number.isSafeInteger(number)
     || number < minimum || number > maximum) {
     throw new Error(`Invalid ${key}: expected an integer from ${minimum} to ${maximum}`)
   }
+
   return number
 }
 
@@ -118,9 +140,15 @@ const normalizeString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined
 
 const normalizeRequiredString = (value: unknown, key: string): string | undefined => {
-  if (value === undefined) return undefined
+  if (value === undefined) {
+    return undefined
+  }
+
   const normalized = normalizeString(value)
-  if (normalized === undefined) throw new Error(`Invalid ${key}: expected a non-empty string`)
+  if (normalized === undefined) {
+    throw new Error(`Invalid ${key}: expected a non-empty string`)
+  }
+
   return normalized
 }
 
@@ -243,11 +271,17 @@ class InvalidThinkEffortError extends Error {
 export const normalizeThinkEffort = (
   value: unknown,
 ): ConfiguredReasoningEffort | undefined => {
-  if (value === undefined) return undefined
+  if (value === undefined) {
+    return undefined
+  }
+
   if (typeof value === "string") {
     const normalized = value.toLowerCase() === "minimal" ? "low" : value.toLowerCase()
-    if (isConfiguredReasoningEffort(normalized)) return normalized
+    if (isConfiguredReasoningEffort(normalized)) {
+      return normalized
+    }
   }
+
   throw new InvalidThinkEffortError()
 }
 
@@ -268,11 +302,17 @@ export const normalizeUpstreamTimeoutSeconds = (
 }
 
 const readStartupDocument = async (snapshot: FileSnapshot): Promise<string> => {
-  if (snapshot.raw !== null) return snapshot.raw
+  if (snapshot.raw !== null) {
+    return snapshot.raw
+  }
+
   for (const legacyPath of paths.legacyConfigPaths) {
     const legacy = await readFileSnapshot(legacyPath)
-    if (legacy.raw !== null) return legacy.raw
+    if (legacy.raw !== null) {
+      return legacy.raw
+    }
   }
+
   return readDefaultConfigTemplate()
 }
 
@@ -283,9 +323,15 @@ const readDefaultConfigTemplate = async (): Promise<string> => {
     try {
       return await fs.readFile(resolve(currentDir, "config.default.yaml"), "utf8")
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error
+      }
+
       const parentDir = dirname(currentDir)
-      if (parentDir === currentDir) return ""
+      if (parentDir === currentDir) {
+        return ""
+      }
+
       currentDir = parentDir
     }
   }
@@ -311,16 +357,23 @@ const parseYamlScalar = (value: string): string => {
   const trimmed = value.trim()
   if (trimmed.startsWith("'")) {
     const match = /^'((?:[^']|'')*)'(?:[ \t]+#.*)?[ \t]*$/.exec(trimmed)
-    if (match) return match[1].replaceAll("''", "'")
+    if (match) {
+      return match[1].replaceAll("''", "'")
+    }
   } else if (trimmed.startsWith('"')) {
     const match = /^("(?:[^"\\]|\\.)*")(?:[ \t]+#.*)?[ \t]*$/.exec(trimmed)
     if (match) {
-      try { return JSON.parse(match[1]) as string } catch { /* invalid escape */ }
+      try {
+        return JSON.parse(match[1]) as string
+      } catch { /* invalid escape */ }
     }
   } else {
     const plain = trimmed.replace(/(^|[ \t]+)#.*$/, "").trim()
-    if (!/^[\[\]{},&*!>|%@`]/.test(plain) && !/:[ \t]/.test(plain)) return plain
+    if (!/^[\[\]{},&*!>|%@`]/.test(plain) && !/:[ \t]/.test(plain)) {
+      return plain
+    }
   }
+
   throw new Error("Invalid config scalar: unsupported YAML syntax")
 }
 
@@ -328,19 +381,29 @@ const parseConfigYaml = (content: string): Record<string, unknown> => {
   const config: Record<string, unknown> = {}
   const seen = new Set<string>()
   for (const [index, line] of content.split(/\r?\n/).entries()) {
-    if (!line.trim() || line.trimStart().startsWith("#")) continue
+    if (!line.trim() || line.trimStart().startsWith("#")) {
+      continue
+    }
+
     const match = /^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)$/.exec(line)
     if (!match) {
       // Do not echo an invalid line: config values can contain private data.
       throw new Error(`Invalid config syntax on line ${index + 1}: expected a flat scalar key`)
     }
+
     const [, key, value] = match
     const canonical = Object.hasOwn(configAliases, key) ? configAliases[key] : key
-    if (seen.has(canonical)) throw new Error(`Duplicate config key on line ${index + 1}`)
+    if (seen.has(canonical)) {
+      throw new Error(`Duplicate config key on line ${index + 1}`)
+    }
+
     seen.add(canonical)
     const scalar = parseYamlScalar(value)
-    if (Object.hasOwn(defaultConfig, canonical)) config[canonical] = scalar
+    if (Object.hasOwn(defaultConfig, canonical)) {
+      config[canonical] = scalar
+    }
   }
+
   return config
 }
 
@@ -350,7 +413,10 @@ const materializeMissingKeys = (
   config: AppConfig,
 ): string => {
   const missing = new Set(configKeys.filter((key) => !Object.hasOwn(raw, key)))
-  if (missing.size === 0) return document
+  if (missing.size === 0) {
+    return document
+  }
+
   // Reuse the generated guidance only for absent keys. Never serialize an
   // explicitly supplied value over its spelling, comments, or unknown neighbors.
   const additions = serializeConfig(config).split("\n\n").filter((section) => {
@@ -437,7 +503,10 @@ export async function readAppConfig(): Promise<AppConfig> {
   const raw = parseConfigYaml(document)
   const config = resolveConfig(raw)
   const content = document ? materializeMissingKeys(document, raw, config) : serializeConfig(config)
-  if (content !== snapshot.raw) await writeFileSnapshot(snapshot, content)
+  if (content !== snapshot.raw) {
+    await writeFileSnapshot(snapshot, content)
+  }
+
   return config
 }
 
@@ -451,21 +520,34 @@ export const watchAppConfig = (
   let lastSnapshot: FileSnapshot | undefined
   let reloading = false
   const timer = setInterval(async () => {
-    if (reloading) return
+    if (reloading) {
+      return
+    }
+
     reloading = true
     try {
       const snapshot = await readFileSnapshot(paths.configPath)
-      if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) return
-      if (snapshot.raw === null) throw new Error("Config file is missing")
+      if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) {
+        return
+      }
+
+      if (snapshot.raw === null) {
+        throw new Error("Config file is missing")
+      }
+
       const raw = parseConfigYaml(snapshot.raw)
       // Removing even an optional-but-materialized field during an editor save
       // is not permission to restore its default or change the live backend.
       if (configKeys.some((key) => !Object.hasOwn(raw, key))) {
         throw new Error("Config reload requires every materialized key")
       }
+
       const config = resolveConfig(raw)
       const current = await readFileSnapshot(paths.configPath)
-      if (!sameSnapshot(snapshot, current)) throw new FileConflictError()
+      if (!sameSnapshot(snapshot, current)) {
+        throw new FileConflictError()
+      }
+
       onReload(config)
       // Failed verification or application must remain retryable without a new edit.
       lastSnapshot = snapshot
@@ -479,6 +561,9 @@ export const watchAppConfig = (
       reloading = false
     }
   }, 1000)
-  if (typeof timer.unref === "function") timer.unref()
+  if (typeof timer.unref === "function") {
+    timer.unref()
+  }
+
   return timer
 }

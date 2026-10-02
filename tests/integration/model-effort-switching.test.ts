@@ -20,7 +20,10 @@ const { withRecordedTransport } = await import("../../src/lib/request-trace")
 const { getTokenCount } = await import("../../src/lib/tokenizer")
 const { flushLogs } = await import("../../src/lib/log")
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 test.afterEach(() => {
   delete runtimeState.modelRouting
   delete runtimeState.thinkEffort
@@ -52,6 +55,7 @@ const config = (): ProxyConfig => {
     }])) },
   }
 }
+
 const post = async (app: ReturnType<typeof createServer>, payload: ClaudeMessagesPayload, route = "messages") =>
   app.fetch(new Request(`http://localhost/v1/${route}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
@@ -65,7 +69,10 @@ const sse = (events: unknown[], done = false) => new Response(
 // cannot receive deltas; tools are parsed from the bytes actually sent to the client.
 async function readReply(response: Response, stream: boolean): Promise<ClaudeResponse> {
   assert.equal(response.status, 200, await response.clone().text())
-  if (!stream) return await response.json() as ClaudeResponse
+  if (!stream) {
+    return await response.json() as ClaudeResponse
+  }
+
   assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/)
   const frames = (await response.text()).split(/\r?\n\r?\n/).filter((frame) => frame.trim())
   let reply: ClaudeResponse | undefined
@@ -95,14 +102,20 @@ async function readReply(response: Response, stream: boolean): Promise<ClaudeRes
         const block = reply.content[event.index]
         if (event.delta.type === "text_delta") {
           assert.equal(block.type, "text")
-          if (block.type === "text") block.text += event.delta.text
+          if (block.type === "text") {
+            block.text += event.delta.text
+          }
         } else if (event.delta.type === "thinking_delta") {
           assert.equal(block.type, "thinking")
-          if (block.type === "thinking") block.thinking += event.delta.thinking
+          if (block.type === "thinking") {
+            block.thinking += event.delta.thinking
+          }
         } else if (event.delta.type === "input_json_delta") {
           assert.ok(block.type === "tool_use" || block.type === "server_tool_use")
           argumentsByIndex.set(event.index, (argumentsByIndex.get(event.index) ?? "") + event.delta.partial_json)
-        } else assert.fail("unexpected translated delta")
+        } else {
+          assert.fail("unexpected translated delta")
+        }
       } else if (event.type === "content_block_stop") {
         assert.ok(open.delete(event.index), "duplicate block stop")
         const block = reply.content[event.index]
@@ -116,7 +129,9 @@ async function readReply(response: Response, stream: boolean): Promise<ClaudeRes
         assert.equal(deltaSeen, false)
         deltaSeen = true
         reply.stop_reason = event.delta.stop_reason ?? null
-        if (event.usage) Object.assign(reply.usage, event.usage)
+        if (event.usage) {
+          Object.assign(reply.usage, event.usage)
+        }
       } else if (event.type === "message_stop") {
         assert.equal(open.size, 0)
         assert.ok(deltaSeen)
@@ -125,13 +140,16 @@ async function readReply(response: Response, stream: boolean): Promise<ClaudeRes
       }
     }
   }
+
   assert.ok(stopped, "missing message_stop")
   return reply!
 }
 
 const barrier = () => {
   let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -144,17 +162,24 @@ type WireBody = {
   tools?: Array<{ type: string; name?: string; function?: { name: string } }>; prompt_cache_key?: string;
 }
 function wireTurns(body: WireBody): WireTurn[] {
-  if (body.messages) return body.messages.map((message) => ({
-    role: message.role, text: message.content == null ? "" : String(message.content),
-    ...(message.tool_calls && { calls: message.tool_calls.map((call) => ({ id: call.id, ...call.function })) }),
-    ...(message.role === "tool" && { id: message.tool_call_id }),
-  }))
-  if (typeof body.input === "string") return [{ role: "user", text: body.input }]
+  if (body.messages) {
+    return body.messages.map((message) => ({
+      role: message.role, text: message.content == null ? "" : String(message.content),
+      ...(message.tool_calls && { calls: message.tool_calls.map((call) => ({ id: call.id, ...call.function })) }),
+      ...(message.role === "tool" && { id: message.tool_call_id }),
+    }))
+  }
+
+  if (typeof body.input === "string") {
+    return [{ role: "user", text: body.input }]
+  }
+
   return (body.input ?? []).map((item) => item.type === "function_call"
     ? { role: "assistant", calls: [{ id: item.call_id!, name: item.name!, arguments: item.arguments! }] }
     : item.type === "function_call_output" ? { role: "tool", id: item.call_id, text: item.output }
     : { role: item.role!, text: item.content })
 }
+
 const semanticTurns = (turns: WireTurn[]) => turns.flatMap((turn) => [
   ...(turn.text ? [{ role: turn.role, text: turn.text, ...(turn.id && { id: turn.id }) }] : []),
   ...(turn.calls?.map((call) => ({ role: "assistant", call })) ?? []),
@@ -176,6 +201,7 @@ function validateWire(request: RecordedRequest, model: string, effort: string, b
     assert.match(name, /^[A-Za-z0-9_-]+$/)
     assert.ok(name.length <= (responses ? 128 : 64))
   }
+
   const calls = new Set<string>()
   for (const turn of wireTurns(body)) {
     for (const call of turn.calls ?? []) {
@@ -184,13 +210,18 @@ function validateWire(request: RecordedRequest, model: string, effort: string, b
       assert.equal(typeof call.arguments, "string")
       const input: unknown = JSON.parse(call.arguments)
       assert.ok(input && typeof input === "object" && !Array.isArray(input))
-      if (call.name === modelName(model, longName)) assert.equal(call.arguments, "{}")
+      if (call.name === modelName(model, longName)) {
+        assert.equal(call.arguments, "{}")
+      }
+
       calls.add(call.id)
     }
+
     if (turn.role === "tool") {
       assert.ok(turn.id && calls.has(turn.id), "tool result has no preceding matching call")
     }
   }
+
   return body
 }
 
@@ -213,12 +244,16 @@ function upstreamReply(body: WireBody, turn: number, call?: { name: string; argu
       { type: "response.completed", response },
     ]) : Response.json(response)
   }
+
   const functionCall = call ? [{ id, type: "function", function: call }] : undefined
   const base = { id: `chat_${turn}`, model: body.model, created: 1 }
   const finish_reason = call ? "tool_calls" : "stop"
   const usage = { prompt_tokens: 10, completion_tokens: turn + 1, total_tokens: 11 + turn }
-  if (!body.stream) return Response.json({ ...base, choices: [{ index: 0, finish_reason,
-    message: { role: "assistant", content: text, reasoning_text: thinking, tool_calls: functionCall } }], usage })
+  if (!body.stream) {
+    return Response.json({ ...base, choices: [{ index: 0, finish_reason,
+      message: { role: "assistant", content: text, reasoning_text: thinking, tool_calls: functionCall } }], usage })
+  }
+
   const chunk = (delta: object, finish: string | null = null) => ({ ...base, object: "chat.completion.chunk",
     choices: [{ index: 0, delta, finish_reason: finish, logprobs: null }], ...(finish && { usage }) })
   return sse([
@@ -231,14 +266,21 @@ function upstreamReply(body: WireBody, turn: number, call?: { name: string; argu
 // Independent expected history for these text/tool fixtures, not translateToOpenAI.
 function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
   return messages.flatMap((message): Message[] => {
-    if (typeof message.content === "string") return [{ role: message.role, content: message.content }]
+    if (typeof message.content === "string") {
+      return [{ role: message.role, content: message.content }]
+    }
+
     if (message.role === "system") {
       const text = message.content.map((block) => block.text).join("\n\n")
       return text ? [{ role: "system", content: text }] : []
     }
-    if (message.role === "user") return message.content.flatMap((block): Message[] => block.type === "tool_result"
-      ? [{ role: "tool", tool_call_id: block.tool_use_id, content: typeof block.content === "string" ? block.content : "" }]
-      : block.type === "text" ? [{ role: "user", content: block.text }] : [])
+
+    if (message.role === "user") {
+      return message.content.flatMap((block): Message[] => block.type === "tool_result"
+        ? [{ role: "tool", tool_call_id: block.tool_use_id, content: typeof block.content === "string" ? block.content : "" }]
+        : block.type === "text" ? [{ role: "user", content: block.text }] : [])
+    }
+
     const content = message.content.flatMap((block) => block.type === "text" ? [block.text] : block.type === "thinking" ? [block.thinking] : [])
     const calls = message.content.filter((block) => block.type === "tool_use").map((block) => ({
       id: block.id, type: "function" as const, function: { name: modelName(model, block.name), arguments: JSON.stringify(block.input) },
@@ -249,6 +291,7 @@ function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
     return [{ role: "assistant", content: ordered.join("\n\n") || null, ...(calls.length && { tool_calls: calls }) }]
   })
 }
+
 async function assertCount(app: ReturnType<typeof createServer>, payload: ClaudeMessagesPayload, model: string) {
   const expected: ChatCompletionsPayload = { model, messages: [
     { role: "system", content: String(payload.system) }, ...expectedHistory(payload.messages, model),
@@ -262,156 +305,184 @@ async function assertCount(app: ReturnType<typeof createServer>, payload: Claude
   assert.ok(tokens.input + tokens.output > 1)
 }
 
-for (const first of [opus, gpt]) for (const mode of ["json", "sse", "buffered"] as const) {
-  for (const change of ["model", "effort", "both"] as const) {
-    test(`replay real ${mode} history starting ${first}, changing ${change}`, async () => {
-      runtimeState.modelRouting = { opusModel: opus, gptModel: gpt }
-      runtimeState.thinkEffort = "xhigh"
-      const app = createServer(config())
-      const messages: ClaudeMessage[] = [{ role: "user", content: "Start." }]
-      const seen: WireBody[] = []
-      const failures: unknown[] = []
-      let target = first
-      let effort = "low"
-      let turn = 0
-      const maxTokens = mode === "buffered" ? 8192 : 256
-      await withRecordedTransport({
-        refresh: async () => assert.fail("no credential refresh expected"),
-        fetch: async (request) => {
-          try {
-            const body = validateWire(request, target, effort, Math.min(maxTokens, limits(target).max_output_tokens))
-            assert.equal(body.stream, mode === "sse" || mode === "buffered" && target === opus)
-            seen.push(body)
-            return upstreamReply(body, turn, turn < 3 ? {
-              name: modelName(target, turn === 1 ? "Echo" : longName),
-              arguments: turn === 1 ? '{"text":"hi"}' : "",
-            } : undefined)
-          } catch (error) { failures.push(error); throw error }
-        },
-      }, async () => {
-        for (turn = 0; turn < 4; turn++) {
-          target = change === "effort" || turn % 2 === 0 ? first : other(first)
-          effort = change === "model" ? "low" : ["low", "high", "max", "medium"][turn]
-          const payload: ClaudeMessagesPayload = {
-            model: selector(target), max_tokens: maxTokens, stream: mode === "sse",
-            system: "Stable instruction.", tools, metadata: { user_id: "switch-session" }, messages,
-            output_config: { effort: change === "both" ? "low" : effort as "low" }, reasoning_effort: "xhigh",
+for (const first of [opus, gpt]) {
+  for (const mode of ["json", "sse", "buffered"] as const) {
+    for (const change of ["model", "effort", "both"] as const) {
+      test(`replay real ${mode} history starting ${first}, changing ${change}`, async () => {
+        runtimeState.modelRouting = { opusModel: opus, gptModel: gpt }
+        runtimeState.thinkEffort = "xhigh"
+        const app = createServer(config())
+        const messages: ClaudeMessage[] = [{ role: "user", content: "Start." }]
+        const seen: WireBody[] = []
+        const failures: unknown[] = []
+        let target = first
+        let effort = "low"
+        let turn = 0
+        const maxTokens = mode === "buffered" ? 8192 : 256
+        await withRecordedTransport({
+          refresh: async () => assert.fail("no credential refresh expected"),
+          fetch: async (request) => {
+            try {
+              const body = validateWire(request, target, effort, Math.min(maxTokens, limits(target).max_output_tokens))
+              assert.equal(body.stream, mode === "sse" || mode === "buffered" && target === opus)
+              seen.push(body)
+              return upstreamReply(body, turn, turn < 3 ? {
+                name: modelName(target, turn === 1 ? "Echo" : longName),
+                arguments: turn === 1 ? '{"text":"hi"}' : "",
+              } : undefined)
+            } catch (error) {
+              failures.push(error)
+              throw error
+            }
+          },
+        }, async () => {
+          for (turn = 0; turn < 4; turn++) {
+            target = change === "effort" || turn % 2 === 0 ? first : other(first)
+            effort = change === "model" ? "low" : ["low", "high", "max", "medium"][turn]
+            const payload: ClaudeMessagesPayload = {
+              model: selector(target), max_tokens: maxTokens, stream: mode === "sse",
+              system: "Stable instruction.", tools, metadata: { user_id: "switch-session" }, messages,
+              output_config: { effort: change === "both" ? "low" : effort as "low" }, reasoning_effort: "xhigh",
+            }
+            const original = structuredClone(payload)
+            const before = seen.length
+            await assertCount(app, payload, target)
+            assert.equal(seen.length, before, "counting must not contact upstream")
+            const response = await post(app, payload)
+            assert.deepEqual(failures, [])
+            const reply = await readReply(response, mode === "sse")
+            assert.deepEqual(payload, original)
+            assert.equal(reply.usage.output_tokens, turn + 1)
+            assert.equal(seen.length, before + 1)
+            const body = seen.at(-1)!
+            const wire = wireTurns(body)
+            assert.equal(wire[0].role, "system")
+            assert.equal(wire[0].text, "Stable instruction.")
+            const expected = expectedHistory(messages, target)
+            // Chat appends its documented user continuation after a tool/system
+            // tail. Compare semantic history across formats, not differing wire bytes.
+            if (target === opus && expected.at(-1)?.role !== "user") {
+              expected.push({ role: "user", content: "Continue based on the context above." })
+            }
+
+            assert.deepEqual(semanticTurns(wire.slice(1)), semanticTurns(wireTurns({ model: target, messages: expected })))
+            for (let earlier = 0; earlier < turn; earlier++) {
+              assert.ok(wire.some((item) => item.text?.includes(`answer-${earlier}`)))
+              assert.ok(wire.some((item) => item.text?.includes(`reason-${earlier}`)))
+              assert.ok(wire.some((item) => item.role === "tool" && item.text === `result-${earlier}`))
+            }
+
+            if (turn < 3) {
+              const call = reply.content.find((block) => block.type === "tool_use")
+              assert.ok(call?.type === "tool_use")
+              assert.equal(call.name, turn === 1 ? "Echo" : longName)
+              assert.deepEqual(call.input, turn === 1 ? { text: "hi" } : {})
+              messages.push({ role: "assistant", content: reply.content })
+              if (change === "both") {
+                messages.push({ role: "system", content: [], output_config: { effort: ["high", "max", "medium"][turn] as "high" } })
+              }
+
+              messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: `result-${turn}` }] })
+              if (turn === 1) {
+                messages.push({ role: "system", content: "Keep the operator instruction here." })
+              }
+
+              if (turn === 2) {
+                messages.push({ role: "system", content: [], output_config: { effort: "low" } })
+              }
+            }
+
+            assert.equal(runtimeState.thinkEffort, "xhigh")
           }
-          const original = structuredClone(payload)
-          const before = seen.length
-          await assertCount(app, payload, target)
-          assert.equal(seen.length, before, "counting must not contact upstream")
-          const response = await post(app, payload)
-          assert.deepEqual(failures, [])
-          const reply = await readReply(response, mode === "sse")
-          assert.deepEqual(payload, original)
-          assert.equal(reply.usage.output_tokens, turn + 1)
-          assert.equal(seen.length, before + 1)
-          const body = seen.at(-1)!
-          const wire = wireTurns(body)
-          assert.equal(wire[0].role, "system")
-          assert.equal(wire[0].text, "Stable instruction.")
-          const expected = expectedHistory(messages, target)
-          // Chat appends its documented user continuation after a tool/system
-          // tail. Compare semantic history across formats, not differing wire bytes.
-          if (target === opus && expected.at(-1)?.role !== "user") expected.push({ role: "user", content: "Continue based on the context above." })
-          assert.deepEqual(semanticTurns(wire.slice(1)), semanticTurns(wireTurns({ model: target, messages: expected })))
-          for (let earlier = 0; earlier < turn; earlier++) {
-            assert.ok(wire.some((item) => item.text?.includes(`answer-${earlier}`)))
-            assert.ok(wire.some((item) => item.text?.includes(`reason-${earlier}`)))
-            assert.ok(wire.some((item) => item.role === "tool" && item.text === `result-${earlier}`))
-          }
-          if (turn < 3) {
-            const call = reply.content.find((block) => block.type === "tool_use")
-            assert.ok(call?.type === "tool_use")
-            assert.equal(call.name, turn === 1 ? "Echo" : longName)
-            assert.deepEqual(call.input, turn === 1 ? { text: "hi" } : {})
-            messages.push({ role: "assistant", content: reply.content })
-            if (change === "both") messages.push({ role: "system", content: [], output_config: { effort: ["high", "max", "medium"][turn] as "high" } })
-            messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: `result-${turn}` }] })
-            if (turn === 1) messages.push({ role: "system", content: "Keep the operator instruction here." })
-            if (turn === 2) messages.push({ role: "system", content: [], output_config: { effort: "low" } })
-          }
-          assert.equal(runtimeState.thinkEffort, "xhigh")
-        }
+        })
+        assert.deepEqual(failures, [])
       })
-      assert.deepEqual(failures, [])
-    })
+    }
   }
 }
 
-for (const first of [opus, gpt]) for (const stream of [false, true]) {
-  test(`switch after translated WebSearch from ${first}, stream=${stream}`, async () => {
-    runtimeState.modelRouting = { opusModel: opus, gptModel: gpt }
-    runtimeState.thinkEffort = "high"
-    const policy = config()
-    const app = createServer(policy)
-    const entered = barrier()
-    const release = barrier()
-    const seen: WireBody[] = []
-    const failures: unknown[] = []
-    const searchTools = [...tools, { name: "WebSearch", input_schema: { type: "object" } }]
-    const messages: ClaudeMessage[] = [{ role: "user", content: "Search for the fixture." }]
-    let turn = 0
-    await withRecordedTransport({
-      refresh: async () => assert.fail("no refresh expected"),
-      fetch: async (request) => {
-        try {
-          const incoming = JSON.parse(request.body!) as WireBody
-          const retrieval = incoming.tools?.some((tool) => tool.type === "web_search_preview")
-          const target = turn === 0 ? (retrieval ? gpt : first) : other(first)
-          const body = validateWire(request, target, turn === 0 ? "high" : "max", 256)
-          seen.push(body)
-          if (seen.length === 1) {
+for (const first of [opus, gpt]) {
+  for (const stream of [false, true]) {
+    test(`switch after translated WebSearch from ${first}, stream=${stream}`, async () => {
+      runtimeState.modelRouting = { opusModel: opus, gptModel: gpt }
+      runtimeState.thinkEffort = "high"
+      const policy = config()
+      const app = createServer(policy)
+      const entered = barrier()
+      const release = barrier()
+      const seen: WireBody[] = []
+      const failures: unknown[] = []
+      const searchTools = [...tools, { name: "WebSearch", input_schema: { type: "object" } }]
+      const messages: ClaudeMessage[] = [{ role: "user", content: "Search for the fixture." }]
+      let turn = 0
+      await withRecordedTransport({
+        refresh: async () => assert.fail("no refresh expected"),
+        fetch: async (request) => {
+          try {
+            const incoming = JSON.parse(request.body!) as WireBody
+            const retrieval = incoming.tools?.some((tool) => tool.type === "web_search_preview")
+            const target = turn === 0 ? (retrieval ? gpt : first) : other(first)
+            const body = validateWire(request, target, turn === 0 ? "high" : "max", 256)
+            seen.push(body)
+            if (seen.length === 1) {
+              entered.resolve()
+              await release.promise
+              return upstreamReply(body, 10, { name: "WebSearch", arguments: '{"query":"fixture"}' })
+            }
+
+            if (retrieval) {
+              return Response.json({
+                id: "resp_search", model: gpt, created_at: 1,
+                output: [
+                  { type: "web_search_call", status: "completed", action: { type: "search", query: "fixture" } },
+                  { type: "message", content: [{ type: "output_text", text: "1. Fixture - https://example.com/fixture" }] },
+                ], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+              })
+            }
+
+            return upstreamReply(body, turn === 0 ? 11 : 12)
+          } catch (error) {
+            failures.push(error)
             entered.resolve()
-            await release.promise
-            return upstreamReply(body, 10, { name: "WebSearch", arguments: '{"query":"fixture"}' })
+            throw error
           }
-          if (retrieval) return Response.json({
-            id: "resp_search", model: gpt, created_at: 1,
-            output: [
-              { type: "web_search_call", status: "completed", action: { type: "search", query: "fixture" } },
-              { type: "message", content: [{ type: "output_text", text: "1. Fixture - https://example.com/fixture" }] },
-            ], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-          })
-          return upstreamReply(body, turn === 0 ? 11 : 12)
-        } catch (error) { failures.push(error); entered.resolve(); throw error }
-      },
-    }, async () => {
-      const payload: ClaudeMessagesPayload = { model: selector(first), max_tokens: 256, stream,
-        system: "Stable instruction.", messages, tools: searchTools, metadata: { user_id: "search-switch" } }
-      const original = structuredClone(payload)
-      const pending = post(app, payload).then((response) => readReply(response, stream))
-      await Promise.race([entered.promise, pending.then(() => assert.fail("request finished before the upstream barrier"))])
-      // An admitted decision keeps its retrieval backend and effort even when
-      // the next request's policy changes before the upstream response arrives.
-      runtimeState.thinkEffort = "max"
-      policy.webSearchBackend = "gpt-5.6-sol"
-      release.resolve()
-      const reply = await pending
-      assert.deepEqual(failures, [])
-      assert.deepEqual(payload, original)
-      assert.equal(seen.length, 3)
-      assert.ok(reply.content.some((block) => block.type === "server_tool_use"))
-      assert.ok(reply.content.some((block) => block.type === "web_search_tool_result"))
-      assert.equal(reply.usage.server_tool_use?.web_search_requests, 1)
-      messages.push({ role: "assistant", content: reply.content }, { role: "user", content: "Continue without another search." })
-      turn = 1
-      const next = { ...payload, model: selector(other(first)) }
-      const countBefore = seen.length
-      await assertCount(app, next, other(first))
-      assert.equal(seen.length, countBefore)
-      await readReply(await post(app, next), stream)
-      assert.deepEqual(failures, [])
-      assert.equal(seen.length, 4)
-      const history = wireTurns(seen.at(-1)!)
-      assert.ok(history.some((item) => item.text?.includes("answer-11")))
-      assert.ok(history.some((item) => item.text?.includes("reason-11")))
-      // Preserve existing translated replay: final answer text, not native
-      // bridge blocks or provider-signed search markers.
-      assert.equal(history.flatMap((item) => item.calls ?? []).length, 0)
+        },
+      }, async () => {
+        const payload: ClaudeMessagesPayload = { model: selector(first), max_tokens: 256, stream,
+          system: "Stable instruction.", messages, tools: searchTools, metadata: { user_id: "search-switch" } }
+        const original = structuredClone(payload)
+        const pending = post(app, payload).then((response) => readReply(response, stream))
+        await Promise.race([entered.promise, pending.then(() => assert.fail("request finished before the upstream barrier"))])
+        // An admitted decision keeps its retrieval backend and effort even when
+        // the next request's policy changes before the upstream response arrives.
+        runtimeState.thinkEffort = "max"
+        policy.webSearchBackend = "gpt-5.6-sol"
+        release.resolve()
+        const reply = await pending
+        assert.deepEqual(failures, [])
+        assert.deepEqual(payload, original)
+        assert.equal(seen.length, 3)
+        assert.ok(reply.content.some((block) => block.type === "server_tool_use"))
+        assert.ok(reply.content.some((block) => block.type === "web_search_tool_result"))
+        assert.equal(reply.usage.server_tool_use?.web_search_requests, 1)
+        messages.push({ role: "assistant", content: reply.content }, { role: "user", content: "Continue without another search." })
+        turn = 1
+        const next = { ...payload, model: selector(other(first)) }
+        const countBefore = seen.length
+        await assertCount(app, next, other(first))
+        assert.equal(seen.length, countBefore)
+        await readReply(await post(app, next), stream)
+        assert.deepEqual(failures, [])
+        assert.equal(seen.length, 4)
+        const history = wireTurns(seen.at(-1)!)
+        assert.ok(history.some((item) => item.text?.includes("answer-11")))
+        assert.ok(history.some((item) => item.text?.includes("reason-11")))
+        // Preserve existing translated replay: final answer text, not native
+        // bridge blocks or provider-signed search markers.
+        assert.equal(history.flatMap((item) => item.calls ?? []).length, 0)
+      })
     })
-  })
+  }
 }
 
 for (const stream of [false, true]) {
@@ -429,9 +500,17 @@ for (const stream of [false, true]) {
         try {
           const index = calls++
           const body = validateWire(request, index === 0 ? opus : "claude-sonnet-4.6", index === 0 ? "low" : "high", 256)
-          if (index === 0) { entered.resolve(); await release.promise }
+          if (index === 0) {
+            entered.resolve()
+            await release.promise
+          }
+
           return upstreamReply(body, index)
-        } catch (error) { failures.push(error); entered.resolve(); throw error }
+        } catch (error) {
+          failures.push(error)
+          entered.resolve()
+          throw error
+        }
       },
     }, async () => {
       const payload: ClaudeMessagesPayload = { model: "opus", max_tokens: 256, stream, messages: [{ role: "user", content: "First." }] }
@@ -452,50 +531,58 @@ for (const stream of [false, true]) {
   })
 }
 
-for (const model of [opus, gpt]) for (const stream of [false, true]) {
-  test(`switch with malformed effort still rejects before upstream, model=${model}, stream=${stream}`, async () => {
-    const app = createServer(config())
-    let calls = 0
-    await withRecordedTransport({ fetch: async () => { calls++; throw new Error("unexpected upstream") }, refresh: async () => {} }, async () => {
-      const response = await post(app, {
-        model: selector(model), max_tokens: 256, stream, output_config: { effort: "invalid" as "high" },
-        messages: [{ role: "user", content: "First." }, { role: "assistant", content: "Earlier model answered." },
-          { role: "system", content: [], output_config: { effort: "high" } }, { role: "user", content: "Continue." }],
-      })
-      assert.equal(response.status, 400)
-      assert.match(response.headers.get("content-type") ?? "", /application\/json/)
-      assert.equal((await response.json() as { error: { type: string } }).error.type, "invalid_request_error")
-    })
-    assert.equal(calls, 0)
-  })
-
-  test(`upstream unsupported effort stays an error after switching, model=${model}, stream=${stream}`, async () => {
-    const app = createServer(config())
-    let calls = 0
-    const failures: unknown[] = []
-    await withRecordedTransport({
-      refresh: async () => assert.fail("not an auth failure"),
-      fetch: async (request) => {
-        try {
-          validateWire(request, model, "max", 256)
-          calls++
-          return Response.json({ error: { code: "unsupported_value", message: "Fixture effort unsupported." } }, { status: 400 })
-        } catch (error) { failures.push(error); throw error }
-      },
-    }, async () => {
-      const response = await post(app, { model: selector(model), max_tokens: 256, stream, output_config: { effort: "max" },
-        messages: [{ role: "user", content: "First." }, { role: "assistant", content: "Earlier model answered." }, { role: "user", content: "Continue." }] })
-      if (stream) {
-        assert.equal(response.status, 200)
-        const text = await response.text()
-        assert.match(text, /event: error/)
-        assert.doesNotMatch(text, /event: message_stop/)
-      } else {
+for (const model of [opus, gpt]) {
+  for (const stream of [false, true]) {
+    test(`switch with malformed effort still rejects before upstream, model=${model}, stream=${stream}`, async () => {
+      const app = createServer(config())
+      let calls = 0
+      await withRecordedTransport({ fetch: async () => {
+        calls++
+        throw new Error("unexpected upstream")
+      }, refresh: async () => {} }, async () => {
+        const response = await post(app, {
+          model: selector(model), max_tokens: 256, stream, output_config: { effort: "invalid" as "high" },
+          messages: [{ role: "user", content: "First." }, { role: "assistant", content: "Earlier model answered." },
+            { role: "system", content: [], output_config: { effort: "high" } }, { role: "user", content: "Continue." }],
+        })
         assert.equal(response.status, 400)
-        assert.equal((await response.json() as { error: { code: string } }).error.code, "unsupported_value")
-      }
+        assert.match(response.headers.get("content-type") ?? "", /application\/json/)
+        assert.equal((await response.json() as { error: { type: string } }).error.type, "invalid_request_error")
+      })
+      assert.equal(calls, 0)
     })
-    assert.deepEqual(failures, [])
-    assert.equal(calls, 1, "do not retry using another model or effort")
-  })
+
+    test(`upstream unsupported effort stays an error after switching, model=${model}, stream=${stream}`, async () => {
+      const app = createServer(config())
+      let calls = 0
+      const failures: unknown[] = []
+      await withRecordedTransport({
+        refresh: async () => assert.fail("not an auth failure"),
+        fetch: async (request) => {
+          try {
+            validateWire(request, model, "max", 256)
+            calls++
+            return Response.json({ error: { code: "unsupported_value", message: "Fixture effort unsupported." } }, { status: 400 })
+          } catch (error) {
+            failures.push(error)
+            throw error
+          }
+        },
+      }, async () => {
+        const response = await post(app, { model: selector(model), max_tokens: 256, stream, output_config: { effort: "max" },
+          messages: [{ role: "user", content: "First." }, { role: "assistant", content: "Earlier model answered." }, { role: "user", content: "Continue." }] })
+        if (stream) {
+          assert.equal(response.status, 200)
+          const text = await response.text()
+          assert.match(text, /event: error/)
+          assert.doesNotMatch(text, /event: message_stop/)
+        } else {
+          assert.equal(response.status, 400)
+          assert.equal((await response.json() as { error: { code: string } }).error.code, "unsupported_value")
+        }
+      })
+      assert.deepEqual(failures, [])
+      assert.equal(calls, 1, "do not retry using another model or effort")
+    })
+  }
 }

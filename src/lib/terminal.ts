@@ -1,8 +1,14 @@
 import { sanitizeTerminalString } from "./redact"
 
 export const colorEnabled = (env: NodeJS.ProcessEnv = process.env, isTTY = Boolean(process.stdout.isTTY)): boolean => {
-  if (env.NO_COLOR !== undefined || env.FORCE_COLOR === "0") return false
-  if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR === "" || ["1", "2", "3", "true"].includes(env.FORCE_COLOR)
+  if (env.NO_COLOR !== undefined || env.FORCE_COLOR === "0") {
+    return false
+  }
+
+  if (env.FORCE_COLOR !== undefined) {
+    return env.FORCE_COLOR === "" || ["1", "2", "3", "true"].includes(env.FORCE_COLOR)
+  }
+
   return isTTY && env.TERM !== "dumb"
 }
 

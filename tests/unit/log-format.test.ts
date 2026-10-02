@@ -30,8 +30,10 @@ const readActiveLog = async (): Promise<string> => {
     if (content) {
       return content
     }
+
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
+
   throw new Error("log file was never written")
 }
 
@@ -49,7 +51,9 @@ test("console-only quiet scopes retain file evidence without suppressing other r
   let release!: () => void
   const pending = withoutConsoleLogging(async () => {
     log.info("quiet setup")
-    await new Promise<void>((resolve) => { release = resolve })
+    await new Promise<void>((resolve) => {
+      release = resolve
+    })
     log.error("quiet error")
     withoutLogging(() => log.info("fully suppressed"))
   })
@@ -309,8 +313,12 @@ test("debug logging reflects the current file log level", () => {
 test("flushLogs waits for queued writes without making logging synchronous", async (t) => {
   let release!: () => void
   let opened!: () => void
-  const waiting = new Promise<void>((resolve) => { release = resolve })
-  const entered = new Promise<void>((resolve) => { opened = resolve })
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const entered = new Promise<void>((resolve) => {
+    opened = resolve
+  })
   const realOpen = fs.open.bind(fs)
   const mockOpen = t.mock.method(fs, "open", async (...args: Parameters<typeof fs.open>) => {
     const handle = await realOpen(...args)
@@ -322,13 +330,16 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
         return append(...values)
       })
     }
+
     return handle
   })
   log.error("queued flush fixture")
   let flushed = false
   let flushing: Promise<void> | undefined
   try {
-    flushing = flushLogs().then(() => { flushed = true })
+    flushing = flushLogs().then(() => {
+      flushed = true
+    })
     await entered
     assert.equal(flushed, false)
     release()

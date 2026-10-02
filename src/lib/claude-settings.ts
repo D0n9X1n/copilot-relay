@@ -72,6 +72,7 @@ export async function applyClaudeConfig(
   if (!created && raw.trim().length === 0) {
     return { configPath, changed: false, created: false }
   }
+
   if (raw.trim().length > 0) {
     try {
       const value = JSON.parse(raw) as unknown
@@ -82,6 +83,7 @@ export async function applyClaudeConfig(
       ) {
         return { configPath, changed: false, created: false }
       }
+
       parsed = value
     } catch {
       // Refuse to overwrite a malformed file; bail without changes.
@@ -118,9 +120,11 @@ export async function applyClaudeConfig(
   if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
     env.ANTHROPIC_AUTH_TOKEN = "dummy"
   }
+
   if (contextWindow !== undefined && env.CLAUDE_CODE_MAX_CONTEXT_TOKENS === undefined) {
     env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(contextWindow)
   }
+
   if (input.maxOutputTokens !== undefined && env.CLAUDE_CODE_MAX_OUTPUT_TOKENS === undefined) {
     env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(input.maxOutputTokens)
   }

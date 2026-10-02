@@ -42,9 +42,11 @@ function hasUnsupportedPatternFeatures(pattern: string): boolean {
       ) {
         return true
       }
+
       index += 1
       continue
     }
+
     if (character === "[") {
       inCharacterClass = true
     } else if (character === "]") {
@@ -57,6 +59,7 @@ function hasUnsupportedPatternFeatures(pattern: string): boolean {
       return true
     }
   }
+
   return false
 }
 
@@ -64,6 +67,7 @@ function normalizeSchemaValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(normalizeSchemaValue)
   }
+
   return isRecord(value) ? normalizeResponsesToolSchema(value) : value
 }
 
@@ -81,6 +85,7 @@ export function normalizeResponsesToolSchema(
       ) {
         return []
       }
+
       if (schemaMapKeywords.has(key) && isRecord(value)) {
         return [[key, Object.fromEntries(
           Object.entries(value).map(([name, nested]) => [
@@ -89,9 +94,11 @@ export function normalizeResponsesToolSchema(
           ]),
         )]]
       }
+
       if (nestedSchemaKeywords.has(key)) {
         return [[key, normalizeSchemaValue(value)]]
       }
+
       return [[key, value]]
     }),
   )

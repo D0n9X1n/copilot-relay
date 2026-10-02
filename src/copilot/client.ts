@@ -31,8 +31,12 @@ export const getCopilotProviderContext = (
   config: ProxyConfig,
 ): CopilotProviderContext => ({
   baseUrl: config.copilotBaseUrl,
-  get token() { return config.copilotToken },
-  get tokenGeneration() { return config.copilotTokenGeneration ?? 0 },
+  get token() {
+    return config.copilotToken
+  },
+  get tokenGeneration() {
+    return config.copilotTokenGeneration ?? 0
+  },
   refreshToken: config.refreshCopilotToken,
   vsCodeVersion: config.vsCodeVersion,
 })
@@ -208,11 +212,15 @@ const logUpstreamLifecycle = (
 }
 
 const waitWithSignal = <T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
-  if (!signal) return pending
+  if (!signal) {
+    return pending
+  }
+
   if (signal.aborted) {
     void pending.catch(() => {})
     return Promise.reject(signal.reason)
   }
+
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
@@ -221,23 +229,41 @@ const waitWithSignal = <T>(pending: Promise<T>, signal: AbortSignal | undefined)
 }
 
 const isAuthRejection = async (response: Response, signal: AbortSignal | undefined): Promise<boolean> => {
-  if (response.status === 401) return true
-  if (response.status !== 403) return false
+  if (response.status === 401) {
+    return true
+  }
+
+  if (response.status !== 403) {
+    return false
+  }
+
   const reader = response.clone().body?.getReader()
-  if (!reader) return false
+  if (!reader) {
+    return false
+  }
+
   const decoder = new TextDecoder()
   let text = ""
   let size = 0
   try {
     for (;;) {
       const chunk = await waitWithSignal(reader.read(), signal)
-      if (chunk.done) return (text + decoder.decode()).trim().toLowerCase() === "forbidden"
+      if (chunk.done) {
+        return (text + decoder.decode()).trim().toLowerCase() === "forbidden"
+      }
+
       size += chunk.value.byteLength
-      if (size > 128) return false
+      if (size > 128) {
+        return false
+      }
+
       text += decoder.decode(chunk.value, { stream: true })
     }
   } catch (error) {
-    if (signal?.aborted) throw error
+    if (signal?.aborted) {
+      throw error
+    }
+
     return false
   } finally {
     // A tee branch's cancellation may wait for the other branch to finish.
@@ -315,6 +341,7 @@ export const fetchCopilot = async (
         )
         throw error
       }
+
       transientRetries++
       log.error(
         `${formatRequestId(options.requestId)}Copilot ${path} request failed; retrying (${transientRetries}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`,
@@ -339,11 +366,18 @@ export const fetchCopilot = async (
     } catch (error) {
       void response.body?.cancel().catch(() => {})
       const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
-      if (abortError) throw abortError
+      if (abortError) {
+        throw abortError
+      }
+
       log.error(`${formatRequestId(options.requestId)}Copilot token recovery failed; request not replayed`)
       throw new Error("Copilot token recovery failed; request not replayed.")
     }
-    if (!shouldRetryResponse(response) || transientRetries >= maxFetchAttempts - 1) return response
+
+    if (!shouldRetryResponse(response) || transientRetries >= maxFetchAttempts - 1) {
+      return response
+    }
+
     transientRetries++
     log.error(`${formatRequestId(options.requestId)}Copilot ${path} returned ${response.status}; retrying (${transientRetries}/${maxFetchAttempts}) upstream_request_id=${upstreamRequestId}`)
     markDiscardedResponse(response)

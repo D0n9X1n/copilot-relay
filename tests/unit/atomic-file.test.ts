@@ -33,6 +33,7 @@ const metadataFixture = async (t: import("node:test").TestContext, file: string,
     if (tracked(args[0])) {
       stat.ctimeMs = baseline.ctimeMs + drift(++calls)
     }
+
     return stat
   })
   return { baseline, calls: () => calls, tracked }
@@ -53,6 +54,7 @@ test("snapshots an absent nested file without creating directories and publishes
       assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
       assert.equal((await fs.stat(path.dirname(file))).mode & 0o777, 0o700)
     }
+
     assert.deepEqual(await fs.readdir(path.dirname(file)), ["config.yaml"])
   } finally {
     process.umask(previousUmask)
@@ -92,6 +94,7 @@ test("exclusive publication cannot clobber creation after the final absence chec
       raced = true
       await fs.writeFile(destination, "late creation\n", { flag: "wx" })
     }
+
     return realLink(source, destination)
   })
 
@@ -113,7 +116,10 @@ test("serializes cooperative writes and rejects the second stale snapshot", asyn
   ])
   assert.equal(results[0].status, "fulfilled")
   assert.equal(results[1].status, "rejected")
-  if (results[1].status === "rejected") assert.ok(results[1].reason instanceof FileConflictError)
+  if (results[1].status === "rejected") {
+    assert.ok(results[1].reason instanceof FileConflictError)
+  }
+
   assert.equal(await fs.readFile(file, "utf8"), "first write\n")
   assert.deepEqual(await fs.readdir(path.dirname(file)), ["settings.json"])
 })
@@ -157,6 +163,7 @@ test("failed temporary writes leave the original intact and remove partial bytes
         throw failure
       })
     }
+
     return handle
   })
 
@@ -197,7 +204,10 @@ test("persistent snapshot drift fails after three whole acquisition attempts", a
   const realRead = fs.readFile.bind(fs)
   let reads = 0
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-    if (metadata.tracked(args[0])) reads++
+    if (metadata.tracked(args[0])) {
+      reads++
+    }
+
     return realRead(...args)
   })
   await assert.rejects(readFileSnapshot(file), (error) => {
@@ -217,7 +227,11 @@ test("snapshot permission errors propagate without acquisition retries", async (
   const failure = Object.assign(new Error("synthetic permission denied"), { code: "EACCES" })
   let reads = 0
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-    if (path.basename(String(args[0])) === "settings.json") { reads++; throw failure }
+    if (path.basename(String(args[0])) === "settings.json") {
+      reads++
+      throw failure
+    }
+
     return realRead(...args)
   })
   await assert.rejects(readFileSnapshot(file), (error) => error === failure)
@@ -229,8 +243,13 @@ test("a non-regular target fails bounded acquisition without reading it", async 
   await fs.mkdir(file)
   const realStat = fs.lstat.bind(fs)
   let stats = 0
-  t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => { stats++; return realStat(...args) })
-  const read = t.mock.method(fs, "readFile", async () => { assert.fail("must not read a non-regular file") })
+  t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
+    stats++
+    return realStat(...args)
+  })
+  const read = t.mock.method(fs, "readFile", async () => {
+    assert.fail("must not read a non-regular file")
+  })
   await assert.rejects(readFileSnapshot(file), FileConflictError)
   assert.equal(stats, 1)
   assert.equal(read.mock.callCount(), 0)
@@ -252,6 +271,7 @@ for (const stableChange of [false, true]) {
       await writeFileSnapshot(snapshot, "replacement\n")
       assert.equal(await fs.readFile(file, "utf8"), "replacement\n")
     }
+
     assert.deepEqual(await fs.readdir(path.dirname(file)), ["settings.json"])
   })
 }
@@ -265,7 +285,11 @@ for (const duringPublish of [false, true]) {
     const realRead = fs.readFile.bind(fs)
     let removed = false
     t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-      if (!removed && path.basename(String(args[0])) === "settings.json") { removed = true; await fs.unlink(file) }
+      if (!removed && path.basename(String(args[0])) === "settings.json") {
+        removed = true
+        await fs.unlink(file)
+      }
+
       return realRead(...args)
     })
     if (snapshot) {
@@ -274,6 +298,7 @@ for (const duringPublish of [false, true]) {
     } else {
       await assert.rejects(readFileSnapshot(file), FileConflictError)
     }
+
     assert.deepEqual(await fs.readdir(path.dirname(file)), [])
   })
 }
@@ -290,6 +315,7 @@ test("replacement during an initial read still rejects", async (t) => {
       replaced = true
       await fs.rename(replacement, file)
     }
+
     return realRead(...args)
   })
   await assert.rejects(readFileSnapshot(file), FileConflictError)
@@ -303,7 +329,10 @@ test("ctime-only reacquisition cannot accept different bytes with matching metad
   const realRead = fs.readFile.bind(fs)
   let reads = 0
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-    if (path.basename(String(args[0])) === "settings.json" && ++reads > 1) return "modified\n"
+    if (path.basename(String(args[0])) === "settings.json" && ++reads > 1) {
+      return "modified\n"
+    }
+
     return realRead(...args)
   })
   await assert.rejects(readFileSnapshot(file), FileConflictError)

@@ -21,6 +21,7 @@ export const restart = defineCommand({
     if (stopped.length > 0) {
       log.info(`Stopped copilot-relay pid(s): ${stopped.join(", ")}`)
     }
+
     log.info("Starting copilot-relay")
 
     await startRelay(appConfig)

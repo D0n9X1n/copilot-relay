@@ -19,7 +19,10 @@ const { runtimeState } = await import("../../src/lib/state")
 const { createClaudeWebSearchExecution } = await import("../../src/claude/web-search")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 
 const makeConfig = (baseUrl: string): ProxyConfig => ({
   copilotBaseUrl: baseUrl, copilotToken: undefined, host: "127.0.0.1", port: 0,
@@ -52,7 +55,10 @@ const mockAuth = (t: import("node:test").TestContext, exchange: (init?: RequestI
   let exchanges = 0
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
-    if (url === "https://api.github.com/user") return Response.json({ login: "test" })
+    if (url === "https://api.github.com/user") {
+      return Response.json({ login: "test" })
+    }
+
     assert.equal(url, "https://api.github.com/copilot_internal/v2/token", "No device authorization or unexpected network call")
     exchanges++
     return exchange(init)
@@ -62,7 +68,9 @@ const mockAuth = (t: import("node:test").TestContext, exchange: (init?: RequestI
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -88,12 +96,17 @@ for (const status of [401, 403]) {
       assert.equal(config.copilotToken, "new-private-sentinel")
       const saved = JSON.parse(await fs.readFile(paths.copilotTokenPath, "utf8"))
       assert.equal(saved.token, "new-private-sentinel")
-      if (process.platform !== "win32") assert.equal((await fs.stat(paths.copilotTokenPath)).mode & 0o777, 0o600)
+      if (process.platform !== "win32") {
+        assert.equal((await fs.stat(paths.copilotTokenPath)).mode & 0o777, 0o600)
+      }
+
       const next = makeConfig(server.url)
       await setupProxyAuth(next)
       assert.equal(next.copilotToken, "new-private-sentinel")
       assert.equal(count(), 1)
-    } finally { await server.close() }
+    } finally {
+      await server.close()
+    }
   })
 }
 
@@ -109,7 +122,11 @@ for (const rejection of [
     await seed()
     const count = mockAuth(t, () => Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
     let attempts = 0
-    const server = await upstream((_req, res) => { attempts++; res.writeHead(rejection.status); res.end(rejection.body) })
+    const server = await upstream((_req, res) => {
+      attempts++
+      res.writeHead(rejection.status)
+      res.end(rejection.body)
+    })
     try {
       const config = makeConfig(server.url)
       await setupProxyAuth(config)
@@ -118,7 +135,9 @@ for (const rejection of [
       assert.equal(await response.text(), rejection.body)
       assert.equal(attempts, rejection.attempts)
       assert.equal(count(), rejection.exchanges)
-    } finally { await server.close() }
+    } finally {
+      await server.close()
+    }
   })
 }
 
@@ -129,7 +148,11 @@ test("exchange failure is redacted and never retried as transport or device auth
   t.mock.method(log, "info", (...args: unknown[]) => messages.push(args.join(" ")))
   t.mock.method(log, "error", (...args: unknown[]) => messages.push(args.join(" ")))
   let attempts = 0
-  const server = await upstream((_req, res) => { attempts++; res.writeHead(401); res.end("unauthorized") })
+  const server = await upstream((_req, res) => {
+    attempts++
+    res.writeHead(401)
+    res.end("unauthorized")
+  })
   try {
     const config = makeConfig(server.url)
     await setupProxyAuth(config)
@@ -138,7 +161,9 @@ test("exchange failure is redacted and never retried as transport or device auth
     assert.equal(attempts, 1)
     assert.equal(config.copilotToken, "old-private-sentinel")
     assert.doesNotMatch(messages.join("\n"), /old-private|new-private|github-private/)
-  } finally { await server.close() }
+  } finally {
+    await server.close()
+  }
 })
 
 test("late old-generation rejection reuses a byte-identical refreshed token", async (t) => {
@@ -151,8 +176,16 @@ test("late old-generation rejection reuses a byte-identical refreshed token", as
   let attempts = 0
   const server = await upstream(async (_req, res) => {
     const attempt = ++attempts
-    if (attempt === 1) { firstReceived.resolve(); await releaseFirst.promise }
-    if (attempt === 2) { secondReceived.resolve(); await releaseSecond.promise }
+    if (attempt === 1) {
+      firstReceived.resolve()
+      await releaseFirst.promise
+    }
+
+    if (attempt === 2) {
+      secondReceived.resolve()
+      await releaseSecond.promise
+    }
+
     res.writeHead(attempt <= 2 ? 401 : 200)
     res.end(attempt <= 2 ? "unauthorized" : "OK")
   })
@@ -171,7 +204,11 @@ test("late old-generation rejection reuses a byte-identical refreshed token", as
     assert.equal(count(), 1)
     assert.equal(attempts, 4)
     assert.equal(config.copilotTokenGeneration, 1)
-  } finally { releaseFirst.resolve(); releaseSecond.resolve(); await server.close() }
+  } finally {
+    releaseFirst.resolve()
+    releaseSecond.resolve()
+    await server.close()
+  }
 })
 
 for (const timedOut of [false, true]) {
@@ -179,7 +216,10 @@ for (const timedOut of [false, true]) {
     await seed()
     const exchange = deferred<Response>()
     const started = deferred<void>()
-    const count = mockAuth(t, () => { started.resolve(); return exchange.promise })
+    const count = mockAuth(t, () => {
+      started.resolve()
+      return exchange.promise
+    })
     const server = await upstream((req, res) => {
       const accepted = req.headers.authorization === "Bearer new-private-sentinel"
       res.writeHead(accepted ? 200 : 401)
@@ -195,7 +235,10 @@ for (const timedOut of [false, true]) {
       const rejected = assert.rejects(request, (error: unknown) => error instanceof HTTPError && error.response.status === (timedOut ? 504 : 499))
       await started.promise
       const another = fetchCopilot(getCopilotProviderContext(config), "/models", {})
-      if (!timedOut) controller.abort()
+      if (!timedOut) {
+        controller.abort()
+      }
+
       await rejected
       exchange.resolve(Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
       assert.equal(await (await another).text(), "OK")
@@ -238,9 +281,17 @@ for (const route of ["/chat/completions", "/responses"]) {
       const bodies: string[] = []
       const server = await upstream(async (req, res) => {
         let body = ""
-        for await (const chunk of req) body += String(chunk)
+        for await (const chunk of req) {
+          body += String(chunk)
+        }
+
         bodies.push(body)
-        if (bodies.length === 1) { res.writeHead(401); res.end("unauthorized"); return }
+        if (bodies.length === 1) {
+          res.writeHead(401)
+          res.end("unauthorized")
+          return
+        }
+
         res.writeHead(200, { "content-type": stream ? "text/event-stream" : "application/json" })
         res.end(stream ? 'data: {"ok":true}\n\ndata: [DONE]\n\n' : '{"ok":true}')
       })
@@ -253,7 +304,9 @@ for (const route of ["/chat/completions", "/responses"]) {
         assert.match(await response.text(), /"ok":true/)
         assert.deepEqual(bodies, [body, body])
         assert.equal(count(), 1)
-      } finally { await server.close() }
+      } finally {
+        await server.close()
+      }
     })
   }
 }
@@ -264,9 +317,17 @@ test("preflight recovers model discovery then validates both configured APIs", a
   const routes: string[] = []
   const server = await upstream(async (req, res) => {
     routes.push(req.url!)
-    if (req.headers.authorization === "Bearer old-private-sentinel") { res.writeHead(403); res.end("forbidden\n"); return }
+    if (req.headers.authorization === "Bearer old-private-sentinel") {
+      res.writeHead(403)
+      res.end("forbidden\n")
+      return
+    }
+
     let body = ""
-    for await (const chunk of req) body += String(chunk)
+    for await (const chunk of req) {
+      body += String(chunk)
+    }
+
     const model = body ? JSON.parse(body).model : undefined
     res.setHeader("content-type", "application/json")
     const reply = req.url === "/models" ? { data: [{ id: "gpt-6-astra" }, { id: "claude-opus-5" }] }
@@ -281,7 +342,10 @@ test("preflight recovers model discovery then validates both configured APIs", a
     await validateUpstream(config, "low")
     assert.equal(count(), 1)
     assert.deepEqual(routes, ["/models", "/models", "/responses", "/chat/completions"])
-  } finally { delete runtimeState.modelRouting; await server.close() }
+  } finally {
+    delete runtimeState.modelRouting
+    await server.close()
+  }
 })
 
 test("WebSearch shares authentication recovery without changing built-in tools", async (t) => {
@@ -289,9 +353,17 @@ test("WebSearch shares authentication recovery without changing built-in tools",
   const count = mockAuth(t, () => Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
   const server = await upstream(async (req, res) => {
     let body = ""
-    for await (const chunk of req) body += String(chunk)
+    for await (const chunk of req) {
+      body += String(chunk)
+    }
+
     assert.deepEqual(JSON.parse(body).tools, [{ type: "web_search_preview" }])
-    if (req.headers.authorization === "Bearer old-private-sentinel") { res.writeHead(401); res.end("unauthorized"); return }
+    if (req.headers.authorization === "Bearer old-private-sentinel") {
+      res.writeHead(401)
+      res.end("unauthorized")
+      return
+    }
+
     res.end(JSON.stringify({ id: "search", model: "gpt-6-astra", output: [{ type: "message", content: [{ type: "output_text", text: "1. Docs - https://example.com/docs" }] }] }))
   })
   try {
@@ -300,12 +372,16 @@ test("WebSearch shares authentication recovery without changing built-in tools",
     const search = await createClaudeWebSearchExecution(config, { model: "default", messages: [{ role: "user", content: "synthetic" }], max_tokens: 64 }, "public query")
     assert.equal(count(), 1)
     assert.equal(search.results[0]?.url, "https://example.com/docs")
-  } finally { await server.close() }
+  } finally {
+    await server.close()
+  }
 })
 
 test("valid successful streams are never replayed after their body fails", async (t) => {
   await seed()
-  const count = mockAuth(t, () => { throw new Error("unexpected refresh") })
+  const count = mockAuth(t, () => {
+    throw new Error("unexpected refresh")
+  })
   let attempts = 0
   const cut = deferred<void>()
   const server = await upstream(async (_req, res) => {
@@ -325,27 +401,40 @@ test("valid successful streams are never replayed after their body fails", async
     await assert.rejects(reader.read())
     assert.equal(attempts, 1)
     assert.equal(count(), 0)
-  } finally { cut.resolve(); await server.close() }
+  } finally {
+    cut.resolve()
+    await server.close()
+  }
 })
 
 test("incomplete forbidden body obeys original deadline without refreshing", async (t) => {
   await seed()
-  const count = mockAuth(t, () => { throw new Error("unexpected refresh") })
-  const server = await upstream((_req, res) => { res.writeHead(403); res.write("forbidden") })
+  const count = mockAuth(t, () => {
+    throw new Error("unexpected refresh")
+  })
+  const server = await upstream((_req, res) => {
+    res.writeHead(403)
+    res.write("forbidden")
+  })
   try {
     const config = makeConfig(server.url)
     await setupProxyAuth(config)
     await assert.rejects(fetchCopilot(getCopilotProviderContext(config), "/models", {}, { timeoutMs: 50 }),
       (error: unknown) => error instanceof HTTPError && error.response.status === 504)
     assert.equal(count(), 0)
-  } finally { await server.close() }
+  } finally {
+    await server.close()
+  }
 })
 
 test("shared exchange has a finite timeout and can recover after failure", async (t) => {
   await seed()
   let hung = true
   const count = mockAuth(t, (init) => {
-    if (!hung) return Response.json({ token: "new-private-sentinel", refresh_in: 86400 })
+    if (!hung) {
+      return Response.json({ token: "new-private-sentinel", refresh_in: 86400 })
+    }
+
     return new Promise<Response>((_resolve, reject) => {
       assert(init?.signal)
       init.signal.addEventListener("abort", () => reject(init.signal!.reason), { once: true })
@@ -353,7 +442,8 @@ test("shared exchange has a finite timeout and can recover after failure", async
   })
   const server = await upstream((req, res) => {
     const accepted = req.headers.authorization === "Bearer new-private-sentinel"
-    res.writeHead(accepted ? 200 : 401); res.end(accepted ? "OK" : "unauthorized")
+    res.writeHead(accepted ? 200 : 401)
+    res.end(accepted ? "OK" : "unauthorized")
   })
   try {
     const config = { ...makeConfig(server.url), upstreamTimeoutMs: 50 }
@@ -363,7 +453,9 @@ test("shared exchange has a finite timeout and can recover after failure", async
     hung = false
     assert.equal(await (await fetchCopilot(getCopilotProviderContext(config), "/models", {})).text(), "OK")
     assert.equal(count(), 2)
-  } finally { await server.close() }
+  } finally {
+    await server.close()
+  }
 })
 
 test("failed cache persistence keeps the old live token and removes temporary files", async (t) => {
@@ -371,7 +463,9 @@ test("failed cache persistence keeps the old live token and removes temporary fi
   mockAuth(t, () => Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
   const config = makeConfig("http://127.0.0.1:1")
   await setupProxyAuth(config)
-  t.mock.method(fs, "rename", async () => { throw new Error("synthetic cache failure") })
+  t.mock.method(fs, "rename", async () => {
+    throw new Error("synthetic cache failure")
+  })
   await assert.rejects(config.refreshCopilotToken!(config.copilotToken!, 0), /refresh failed/)
   assert.equal(config.copilotToken, "old-private-sentinel")
   assert.equal(JSON.parse(await fs.readFile(paths.copilotTokenPath, "utf8")).token, "old-private-sentinel")
@@ -382,7 +476,10 @@ test("auth and transient retry budgets are separate and finite", async (t) => {
   await seed()
   const count = mockAuth(t, () => Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
   let attempts = 0
-  const server = await upstream((_req, res) => { res.writeHead([503, 401, 503][attempts++]!); res.end("rejected") })
+  const server = await upstream((_req, res) => {
+    res.writeHead([503, 401, 503][attempts++]!)
+    res.end("rejected")
+  })
   try {
     const config = makeConfig(server.url)
     await setupProxyAuth(config)
@@ -391,5 +488,7 @@ test("auth and transient retry budgets are separate and finite", async (t) => {
     await response.text()
     assert.equal(attempts, 3)
     assert.equal(count(), 1)
-  } finally { await server.close() }
+  } finally {
+    await server.close()
+  }
 })

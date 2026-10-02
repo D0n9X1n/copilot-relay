@@ -35,6 +35,7 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
             reject(error ?? new Error("Missing startup exit code"))
             return
           }
+
           resolve({ code, output: stripVTControlCharacters(stdout + stderr) })
         })
         child.stdin?.end()

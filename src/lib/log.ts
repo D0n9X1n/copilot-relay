@@ -65,18 +65,27 @@ const escapedSecretForms = (value: string): Array<string> => {
 // Secrets stay in memory for this process's lifetime, just like URL-origin
 // policies: a response can echo a token after rotation replaced the active one.
 export const registerLogSecret = (value: string | undefined): void => {
-  if (!value || registeredLogSecrets.has(value)) return
+  if (!value || registeredLogSecrets.has(value)) {
+    return
+  }
+
   registeredLogSecrets.add(value)
   for (const form of escapedSecretForms(value)) {
-    for (const nested of escapedSecretForms(form)) logSecretForms.add(nested)
+    for (const nested of escapedSecretForms(form)) {
+      logSecretForms.add(nested)
+    }
   }
+
   const alternatives = [...logSecretForms].sort((left, right) => right.length - left.length)
     .map((form) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   logSecretPattern = new RegExp(alternatives.join("|"), "g")
 }
 
 const scrubLogSecrets = (value: string): string => {
-  if (!logSecretPattern) return value
+  if (!logSecretPattern) {
+    return value
+  }
+
   // inspect keeps its 4000-character string limit. A registered token can cross
   // that boundary, so redact its visible prefix only at inspect's explicit
   // truncation marker, before exact matches can replace a shorter token prefix.
@@ -92,6 +101,7 @@ const scrubLogSecrets = (value: string): string => {
           }
         }
       }
+
       return quote + (hiddenLength ? body.slice(0, -hiddenLength) + redactedSecret : body) + quote + suffix
     },
   )
@@ -99,10 +109,16 @@ const scrubLogSecrets = (value: string): string => {
 }
 
 const boundLogText = (value: string, maxBytes: number): string => {
-  if (Buffer.byteLength(value) <= maxBytes) return value
+  if (Buffer.byteLength(value) <= maxBytes) {
+    return value
+  }
+
   const bytes = Buffer.from(value)
   let end = maxBytes - Buffer.byteLength(truncatedMarker)
-  while ((bytes[end] & 0xc0) === 0x80) end -= 1
+  while ((bytes[end] & 0xc0) === 0x80) {
+    end -= 1
+  }
+
   return bytes.subarray(0, end).toString("utf8") + truncatedMarker
 }
 
@@ -111,7 +127,9 @@ export const isDebugLogging = (): boolean => currentLogLevel >= consolaLevelByNa
 // Logging stays fire-and-forget on the request path; teardown can explicitly
 // wait for in-flight writes before removing a temporary home or exiting.
 export const flushLogs = async (): Promise<void> => {
-  while (pendingLogWrites.size > 0) await Promise.all([...pendingLogWrites])
+  while (pendingLogWrites.size > 0) {
+    await Promise.all([...pendingLogWrites])
+  }
 }
 
 export const setLogLevel = (level: LogLevelName): void => {
@@ -171,13 +189,18 @@ const sameFile = (left: Stats, right: Stats): boolean =>
 // without following its final component, and operate on the handle on POSIX.
 const ensurePrivateDirectory = async (directory: string): Promise<void> => {
   await fs.mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error
+    }
   })
   const observed = await fs.lstat(directory)
   if (!observed.isDirectory() || observed.isSymbolicLink()) {
     throw new Error("Refusing an unsafe log directory")
   }
-  if (process.platform === "win32") return
+
+  if (process.platform === "win32") {
+    return
+  }
 
   const handle = await fs.open(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
   try {
@@ -185,6 +208,7 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
     if (!opened.isDirectory() || !sameFile(observed, opened)) {
       throw new Error("Log directory changed while opening")
     }
+
     await handle.chmod(0o700)
   } finally {
     await handle.close()
@@ -198,7 +222,10 @@ const ensureLogDirectory = async (): Promise<void> => {
 
 const appendPrivateLog = async (filePath: string, content: string): Promise<void> => {
   const observed = await fs.lstat(filePath).catch((error: unknown) => {
-    if (!isMissing(error)) throw error
+    if (!isMissing(error)) {
+      throw error
+    }
+
     return undefined
   })
   if (observed && (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1)) {
@@ -215,7 +242,11 @@ const appendPrivateLog = async (filePath: string, content: string): Promise<void
       || !sameFile(opened, current) || (observed && !sameFile(observed, opened))) {
       throw new Error("Log file changed while opening")
     }
-    if (process.platform !== "win32") await handle.chmod(0o600)
+
+    if (process.platform !== "win32") {
+      await handle.chmod(0o600)
+    }
+
     await handle.appendFile(content)
   } finally {
     await handle.close()
@@ -270,7 +301,10 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
   fn: T,
 ): T =>
   ((...args: Array<unknown>) => {
-    if (loggingSuppressed.getStore()) return
+    if (loggingSuppressed.getStore()) {
+      return
+    }
+
     const methodLevel = fileLevelByMethod[level] ?? consolaLevelByName.info
     const writesToFile = methodLevel <= currentLogLevel
     const quiet = consoleSuppressed.getStore() === true
@@ -296,6 +330,7 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
       pendingLogWrites.add(pending)
       void pending.then(() => pendingLogWrites.delete(pending))
     }
+
     return quiet ? undefined : fn(...rendered)
   }) as T
 
@@ -349,10 +384,16 @@ export const cleanupLogs = async (retentionDays: number): Promise<void> => {
       .map(async (entry) => {
         const filePath = `${paths.logsDir}/${entry.name}`
         const current = await fs.lstat(filePath).catch((error: unknown) => {
-          if (!isMissing(error)) throw error
+          if (!isMissing(error)) {
+            throw error
+          }
+
           return undefined
         })
-        if (!current?.isFile() || current.nlink !== 1) return
+        if (!current?.isFile() || current.nlink !== 1) {
+          return
+        }
+
         const fileDate = parseLogFileDate(entry.name)
         // Only the relay's legacy/dated names are ours. Service-manager stderr
         // files and saved diagnostics may share this directory but are not swept.

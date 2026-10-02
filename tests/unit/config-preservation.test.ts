@@ -44,10 +44,13 @@ const writeConfigFile = async (content: string): Promise<void> => {
   editTime += 2000
   await fs.utimes(paths.configPath, new Date(editTime), new Date(editTime))
 }
+
 const readConfigFile = (): Promise<string> => fs.readFile(paths.configPath, "utf8")
 const deferred = () => {
   let resolve!: () => void
-  const promise = new Promise<void>((done) => { resolve = done })
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 
@@ -61,9 +64,15 @@ const startWatcher = async (t: TestContext, onReload: (next: AppConfig) => void)
     return { unref() {} } as unknown as ReturnType<typeof setInterval>
   })
   const errors: unknown[][] = []
-  t.mock.method(log, "error", (...values: unknown[]) => { errors.push(values) })
+  t.mock.method(log, "error", (...values: unknown[]) => {
+    errors.push(values)
+  })
   let armed = false
-  watchAppConfig((next) => { if (armed) onReload(next) })
+  watchAppConfig((next) => {
+    if (armed) {
+      onReload(next)
+    }
+  })
   assert.ok(poll, "watchAppConfig must register its interval callback")
   await poll()
   armed = true
@@ -74,7 +83,9 @@ test.beforeEach(async () => {
   await fs.rm(paths.appDir, { force: true, recursive: true })
   await fs.mkdir(paths.appDir, { recursive: true })
 })
-test.after(async () => { await fs.rm(tempHome, { force: true, recursive: true }) })
+test.after(async () => {
+  await fs.rm(tempHome, { force: true, recursive: true })
+})
 
 for (const [key, value] of [
   ["claudeSetup", "no"],
@@ -135,6 +146,7 @@ test("startup appends every missing default without removing comments or unknown
   for (const key of Object.keys(completeValues)) {
     assert.equal(written.match(new RegExp(`^${key}:`, "gm"))?.length, 1, `${key} must be materialized once`)
   }
+
   assert.ok(!("custom_hint" in config), "unknown keys must remain inert")
   assert.deepEqual(await readAppConfig(), config)
   assert.equal(await readConfigFile(), written, "subsequent reads must be idempotent")
@@ -188,8 +200,10 @@ test("startup preserves a config symlink and appends only missing keys to its ta
       t.skip("Windows host does not permit file symlinks")
       return
     }
+
     throw error
   }
+
   await readAppConfig()
   assert.ok((await fs.lstat(paths.configPath)).isSymbolicLink())
   assert.equal(await fs.readlink(paths.configPath), linkTarget)
@@ -216,11 +230,16 @@ test("missing defaults are published atomically without corrupting an open reade
     } else {
       await readAppConfig()
     }
+
     assert.equal(await reader.readFile("utf8"), original)
   } finally {
     await reader.close()
   }
-  if (process.platform === "win32") await readAppConfig()
+
+  if (process.platform === "win32") {
+    await readAppConfig()
+  }
+
   assert.match(await readConfigFile(), /^webSearchBackend:/m)
   assert.deepEqual(await fs.readdir(paths.appDir), ["config.yaml"])
 })
@@ -237,6 +256,7 @@ test("startup refuses to publish defaults over a newer edit after its snapshot r
       edited = true
       await writeConfigFile(newest)
     }
+
     return bytes
   })
   await assert.rejects(readAppConfig(), /changed|conflict|concurrent/i)
@@ -253,7 +273,9 @@ test("generated config guidance identifies all restart-only settings", async () 
 test("hot reload applies a complete valid edit without rewriting the document", async (t) => {
   await writeConfigFile(completeDocument())
   let active = await readAppConfig()
-  const watcher = await startWatcher(t, (next) => { active = next })
+  const watcher = await startWatcher(t, (next) => {
+    active = next
+  })
   const edited = `# edited by the operator\n${completeDocument({
     claudeSetup: "false # still opted out",
     thinkEffort: "low",
@@ -291,6 +313,7 @@ test("hot reload retries an unchanged valid edit after snapshot verification fai
     if ((args[0] === paths.configPath || args[0] === resolvedPath) && ++configReads === 2) {
       throw Object.assign(new Error("Config file temporarily busy"), { code: "EBUSY" })
     }
+
     return realReadFile(...args)
   })
 
@@ -317,7 +340,10 @@ test("hot reload retries an unchanged valid edit after its callback throws", asy
   let active = previous
   let attempts = 0
   const watcher = await startWatcher(t, (next) => {
-    if (++attempts === 1) throw new Error("Runtime settings temporarily unavailable")
+    if (++attempts === 1) {
+      throw new Error("Runtime settings temporarily unavailable")
+    }
+
     active = next
   })
   const edited = completeDocument({ thinkEffort: "low" })
@@ -354,13 +380,23 @@ for (const [name, edited] of badReloads) {
     await writeConfigFile(completeDocument())
     const previous = await readAppConfig()
     let active = previous
-    const watcher = await startWatcher(t, (next) => { active = next })
-    if (edited === null) await fs.unlink(paths.configPath)
-    else await writeConfigFile(edited)
+    const watcher = await startWatcher(t, (next) => {
+      active = next
+    })
+    if (edited === null) {
+      await fs.unlink(paths.configPath)
+    } else {
+      await writeConfigFile(edited)
+    }
+
     await watcher.poll()
     assert.equal(active, previous, "partial edits must never replace the last good config")
-    if (edited === null) await assert.rejects(fs.stat(paths.configPath), { code: "ENOENT" })
-    else assert.equal(await readConfigFile(), edited)
+    if (edited === null) {
+      await assert.rejects(fs.stat(paths.configPath), { code: "ENOENT" })
+    } else {
+      assert.equal(await readConfigFile(), edited)
+    }
+
     const recovered = completeDocument({ thinkEffort: "low" })
     await writeConfigFile(recovered)
     await watcher.poll()
@@ -374,7 +410,9 @@ test("watcher reloads do not overlap or apply a stale read after a newer edit", 
   await writeConfigFile(completeDocument())
   await readAppConfig()
   const applied: AppConfig[] = []
-  const watcher = await startWatcher(t, (next) => { applied.push(next) })
+  const watcher = await startWatcher(t, (next) => {
+    applied.push(next)
+  })
   const readStarted = deferred()
   const releaseRead = deferred()
   const resolvedPath = await fs.realpath(paths.configPath)
@@ -383,7 +421,10 @@ test("watcher reloads do not overlap or apply a stale read after a newer edit", 
   let maxReadsInFlight = 0
   let pause = true
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-    if (args[0] !== paths.configPath && args[0] !== resolvedPath) return realReadFile(...args)
+    if (args[0] !== paths.configPath && args[0] !== resolvedPath) {
+      return realReadFile(...args)
+    }
+
     readsInFlight++
     maxReadsInFlight = Math.max(maxReadsInFlight, readsInFlight)
     try {
@@ -393,6 +434,7 @@ test("watcher reloads do not overlap or apply a stale read after a newer edit", 
         readStarted.resolve()
         await releaseRead.promise
       }
+
       return bytes
     } finally {
       readsInFlight--
@@ -410,6 +452,7 @@ test("watcher reloads do not overlap or apply a stale read after a newer edit", 
     releaseRead.resolve()
     await firstPoll
   }
+
   assert.equal(applied.length, 0, "the old snapshot must not become runtime config")
   await watcher.poll()
   assert.equal(applied.length, 1)

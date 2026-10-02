@@ -261,10 +261,13 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
   }
 
   const deviceCode = await getDeviceCode()
-  if (options.onDeviceCode) options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
-  else log.info(
-    `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
-  )
+  if (options.onDeviceCode) {
+    options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
+  } else {
+    log.info(
+      `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
+    )
+  }
 
   const githubToken = await pollAccessToken(deviceCode)
   await writeGitHubToken(githubToken)
@@ -293,7 +296,10 @@ export const setupProxyAuth = async (
   let githubToken = await ensureGitHubToken(options)
   let refreshInFlight: Promise<number> | undefined
   const applyCopilotToken = () => {
-    if (refreshInFlight) return refreshInFlight
+    if (refreshInFlight) {
+      return refreshInFlight
+    }
+
     refreshInFlight = (async () => {
       const tokenResponse = await getCopilotToken(
         githubToken,
@@ -304,12 +310,15 @@ export const setupProxyAuth = async (
         || !Number.isFinite(tokenResponse.refresh_in) || tokenResponse.refresh_in <= 0) {
         throw new Error("Copilot token exchange returned invalid credentials metadata.")
       }
+
       await writeStoredCopilotToken(tokenResponse)
       config.copilotToken = tokenResponse.token
       config.copilotTokenGeneration = (config.copilotTokenGeneration ?? 0) + 1
       scheduleCopilotTokenRefresh(tokenResponse.refresh_in)
       return tokenResponse.refresh_in
-    })().finally(() => { refreshInFlight = undefined })
+    })().finally(() => {
+      refreshInFlight = undefined
+    })
     return refreshInFlight
   }
 
@@ -372,8 +381,12 @@ export const setupProxyAuth = async (
       refreshIn = await applyCopilotToken()
     }
   }
+
   config.refreshCopilotToken = async (rejectedToken, generation) => {
-    if (config.copilotToken !== rejectedToken || (config.copilotTokenGeneration ?? 0) !== generation) return
+    if (config.copilotToken !== rejectedToken || (config.copilotTokenGeneration ?? 0) !== generation) {
+      return
+    }
+
     try {
       await applyCopilotToken()
     } catch {

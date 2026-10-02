@@ -29,13 +29,26 @@ export const models = defineCommand({
     let failure = "Invalid model check options"
     try {
       const positive = (value: string | undefined, fallback: number) => {
-        if (value === undefined) return fallback
+        if (value === undefined) {
+          return fallback
+        }
+
         const number = Number(value)
-        if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number <= 0 || number > 2_147_483) throw new Error("invalid option")
+        if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number <= 0 || number > 2_147_483) {
+          throw new Error("invalid option")
+        }
+
         return number
       }
-      if (!args.deep && (args.details || [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]].some((value) => value !== undefined))) throw new Error("deep required")
-      if (args.effort !== undefined && !isReasoningEffort(args.effort)) throw new Error("invalid effort")
+
+      if (!args.deep && (args.details || [args.model, args.effort, args["max-tokens"], args.timeout, args["total-timeout"]].some((value) => value !== undefined))) {
+        throw new Error("deep required")
+      }
+
+      if (args.effort !== undefined && !isReasoningEffort(args.effort)) {
+        throw new Error("invalid effort")
+      }
+
       const probeOptions = {
         maxTokens: positive(args["max-tokens"], 4096),
         timeoutMs: positive(args.timeout, 30) * 1000,
@@ -58,16 +71,21 @@ export const models = defineCommand({
         const catalog = await loadCopilotModelCatalog(config)
         return { config, catalog }
       }
+
       const { config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
-        if (args.model !== undefined && !catalog.models.has(args.model)) throw new Error("unknown model")
+        if (args.model !== undefined && !catalog.models.has(args.model)) {
+          throw new Error("unknown model")
+        }
+
         const entries = [...catalog.models].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
           .filter(([id]) => args.model === undefined || args.model === id)
         failure = "Could not complete model availability checks"
         process.exitCode = await probeModels(config, entries, probeOptions)
         return
       }
+
       const ids = [...catalog.models.keys()].sort().map(sanitizeTerminalString)
       console.log(scrubSensitiveUrls(ids.length ?
         `Upstream-advertised models (${ids.length}):\n${ids.join("\n")}`
@@ -82,6 +100,7 @@ export const models = defineCommand({
           : `HTTP ${error.response.status}`
         await error.response.body?.cancel().catch(() => {})
       }
+
       log.error(`${failure}: ${detail}`)
       process.exitCode = 1
     } finally {

@@ -43,6 +43,7 @@ const calculateToolCallsTokens = (
     tokens += constants.funcInit
     tokens += encoder.encode(JSON.stringify(toolCall)).length
   }
+
   tokens += constants.funcEnd
   return tokens
 }
@@ -61,6 +62,7 @@ const calculateContentPartsTokens = (
       tokens += encoder.encode(part.text).length
     }
   }
+
   return tokens
 }
 
@@ -78,7 +80,11 @@ const calculateMessageTokens = (
     if (typeof value === "string") {
       tokens += encoder.encode(value).length
     }
-    if (key === "name") tokens += tokensPerName
+
+    if (key === "name") {
+      tokens += tokensPerName
+    }
+
     if (key === "tool_calls") {
       tokens += calculateToolCallsTokens(
         value as Array<ToolCall>,
@@ -86,6 +92,7 @@ const calculateMessageTokens = (
         constants,
       )
     }
+
     if (key === "content" && Array.isArray(value)) {
       tokens += calculateContentPartsTokens(
         value as Array<ContentPart>,
@@ -93,6 +100,7 @@ const calculateMessageTokens = (
       )
     }
   }
+
   return tokens
 }
 
@@ -101,11 +109,15 @@ const calculateTokens = (
   encoder: Encoder,
   constants: ReturnType<typeof getModelConstants>,
 ): number => {
-  if (messages.length === 0) return 0
+  if (messages.length === 0) {
+    return 0
+  }
+
   let numTokens = 0
   for (const message of messages) {
     numTokens += calculateMessageTokens(message, encoder, constants)
   }
+
   numTokens += 3
   return numTokens
 }
@@ -113,7 +125,9 @@ const calculateTokens = (
 const getEncodeChatFunction = async (encoding: string): Promise<Encoder> => {
   if (encodingCache.has(encoding)) {
     const cached = encodingCache.get(encoding)
-    if (cached) return cached
+    if (cached) {
+      return cached
+    }
   }
 
   if (!isSupportedTokenizer(encoding)) {
@@ -162,7 +176,9 @@ const calculateParameterTokens = (
   const { encoder, constants } = context
   let tokens = constants.propKey
 
-  if (typeof prop !== "object" || prop === null) return tokens
+  if (typeof prop !== "object" || prop === null) {
+    return tokens
+  }
 
   const param = prop as {
     type?: string
@@ -183,14 +199,19 @@ const calculateParameterTokens = (
     }
   }
 
-  if (paramDesc.endsWith(".")) paramDesc = paramDesc.slice(0, -1)
+  if (paramDesc.endsWith(".")) {
+    paramDesc = paramDesc.slice(0, -1)
+  }
 
   const line = `${paramName}:${paramType}:${paramDesc}`
   tokens += encoder.encode(line).length
 
   const excludedKeys = new Set(["type", "description", "enum"])
   for (const propertyName of Object.keys(param)) {
-    if (excludedKeys.has(propertyName)) continue
+    if (excludedKeys.has(propertyName)) {
+      continue
+    }
+
     const propertyValue = param[propertyName]
     const propertyText =
       typeof propertyValue === "string" ? propertyValue : JSON.stringify(propertyValue)
@@ -205,7 +226,9 @@ const calculateParametersTokens = (
   encoder: Encoder,
   constants: ReturnType<typeof getModelConstants>,
 ): number => {
-  if (!parameters || typeof parameters !== "object") return 0
+  if (!parameters || typeof parameters !== "object") {
+    return 0
+  }
 
   const params = parameters as Record<string, unknown>
   let tokens = 0
@@ -241,11 +264,15 @@ const calculateToolTokens = (
   const func = tool.function
   const fName = func.name
   let fDesc = func.description || ""
-  if (fDesc.endsWith(".")) fDesc = fDesc.slice(0, -1)
+  if (fDesc.endsWith(".")) {
+    fDesc = fDesc.slice(0, -1)
+  }
+
   tokens += encoder.encode(`${fName}:${fDesc}`).length
   if (typeof func.parameters === "object" && func.parameters !== null) {
     tokens += calculateParametersTokens(func.parameters, encoder, constants)
   }
+
   return tokens
 }
 
@@ -258,6 +285,7 @@ export const numTokensForTools = (
   for (const tool of tools) {
     funcTokenCount += calculateToolTokens(tool, encoder, constants)
   }
+
   funcTokenCount += constants.funcEnd
   return funcTokenCount
 }
@@ -277,6 +305,7 @@ export const getTokenCount = async (
   if (payload.tools && payload.tools.length > 0) {
     inputTokens += numTokensForTools(payload.tools, encoder, constants)
   }
+
   const outputTokens = calculateTokens(outputMessages, encoder, constants)
 
   return { input: inputTokens, output: outputTokens }

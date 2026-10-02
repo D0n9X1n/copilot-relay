@@ -52,7 +52,10 @@ const startModels = async (
   let calls = 0
   const server = createServer(async (_request, response) => {
     calls++
-    if (wait) await wait()
+    if (wait) {
+      await wait()
+    }
+
     response.setHeader("content-type", "application/json")
     response.end(JSON.stringify(payload))
   })
@@ -113,9 +116,11 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
       assert.equal(await boundModelOutputTokens(config, model, maximum + 1), maximum)
       assert.equal(await boundModelOutputTokens(config, model, 16), 16)
     }
+
     for (const budget of [null, undefined, 0, -1, 1.5]) {
       assert.equal(await boundModelOutputTokens(config, "gpt-6-astra", budget), budget)
     }
+
     assert.equal(mock.calls(), 1)
   } finally {
     await mock.close()
@@ -140,7 +145,10 @@ test("deep probes restore process routing and catalog state after a failed respo
     assert.equal(runtimeState.upstreamBaseUrl, "before")
     assert.equal(process.listenerCount("SIGINT"), interrupts)
     assert.equal(process.listenerCount("SIGTERM"), terms)
-  } finally { delete runtimeState.modelRouting; await mock.close() }
+  } finally {
+    delete runtimeState.modelRouting
+    await mock.close()
+  }
 })
 
 for (const claudeUpstreamApi of ["auto", "messages"] as const) {
@@ -154,7 +162,10 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
     let reportedModel = id
     const upstream = createServer(async (request, response) => {
       let raw = ""
-      for await (const chunk of request) raw += chunk
+      for await (const chunk of request) {
+        raw += chunk
+      }
+
       requests.push({ path: request.url ?? "/", body: raw ? JSON.parse(raw) as Record<string, unknown> : {} })
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({
@@ -169,7 +180,9 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
     const config = { ...configFor(`http://127.0.0.1:${address.port}`), claudeUpstreamApi }
     config.modelCatalog = { baseUrl: config.copilotBaseUrl, models: new Map([[id, model]]) }
     const lines: string[] = []
-    t.mock.method(console, "log", (line: string) => { lines.push(line) })
+    t.mock.method(console, "log", (line: string) => {
+      lines.push(line)
+    })
     const options = { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 2000, effort: "high" as const }
     try {
       assert.equal(await probeModels(config, [[id, model]], options), 0, lines.join("\n"))
@@ -183,6 +196,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         assert.equal(await probeModels({ ...config, claudeUpstreamApi: mode }, [[id, model]], options), 2)
         assert.equal(requests.length, 1)
       }
+
       assert.match(lines.join("\n"), /SKIPPED.*Protocol policy conflict/)
 
       assert.equal(await probeModels(config, [[id, model]], { ...options, effort: "max" }), 2)
@@ -241,7 +255,9 @@ test("a changed upstream never reuses the previous provider's capacities", async
 
 test("a late catalog response cannot replace a newer provider's catalog", async () => {
   let release = () => {}
-  const waiting = new Promise<void>((resolve) => { release = resolve })
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
   const first = await startModels(modelCatalogPayload, () => waiting)
   const second = await startModels()
   const config = configFor(first.baseUrl)
@@ -295,7 +311,10 @@ const chunk = (
 })
 
 const streamOf = async function* (chunks: Array<ChatCompletionChunk>) {
-  for (const value of chunks) yield { data: JSON.stringify(value) }
+  for (const value of chunks) {
+    yield { data: JSON.stringify(value) }
+  }
+
   yield { data: "[DONE]" }
 }
 

@@ -267,9 +267,11 @@ export function translateResponsesToChatCompletion(
   if (response.status !== undefined && response.status !== "completed" && response.status !== "incomplete") {
     throw new HTTPError("Upstream response did not complete", new Response(JSON.stringify({ error: { code: "upstream_response_failed" } }), { status: 502 }))
   }
+
   if (response.status === "incomplete" && !["max_output_tokens", "content_filter"].includes(response.incomplete_details?.reason ?? "")) {
     throw new HTTPError("Upstream response incomplete", new Response(JSON.stringify({ error: { code: "upstream_response_incomplete" } }), { status: 502 }))
   }
+
   const assistantMessages = response.output.filter(
     (item): item is ResponsesMessageOutputItem => item.type === "message",
   )
@@ -337,8 +339,13 @@ export async function* translateResponsesStreamToChatCompletionStream(
 
   let completed = false
   for await (const rawEvent of responseStream) {
-    if (!rawEvent.data || rawEvent.data === "[DONE]") continue
-    if (completed) throw new Error("Copilot Responses stream emitted data after its terminal event.")
+    if (!rawEvent.data || rawEvent.data === "[DONE]") {
+      continue
+    }
+
+    if (completed) {
+      throw new Error("Copilot Responses stream emitted data after its terminal event.")
+    }
 
     const event = JSON.parse(rawEvent.data) as ResponsesStreamEnvelope
     if (!event || typeof event.type !== "string" || event.type === "error"
@@ -359,6 +366,7 @@ export async function* translateResponsesStreamToChatCompletionStream(
       if (chunk) {
         yield chunk
       }
+
       continue
     }
 
@@ -366,6 +374,7 @@ export async function* translateResponsesStreamToChatCompletionStream(
       for (const chunk of handleOutputItemDone(state, event)) {
         yield chunk
       }
+
       continue
     }
 
@@ -375,6 +384,7 @@ export async function* translateResponsesStreamToChatCompletionStream(
         yield createChunk(state, { delta: { reasoning_text: event.delta } })
         state.reasoningTextSent = true
       }
+
       continue
     }
 
@@ -397,6 +407,7 @@ export async function* translateResponsesStreamToChatCompletionStream(
         yield createRoleChunk(state)
         yield createChunk(state, { delta: { content } })
       }
+
       continue
     }
 
@@ -447,19 +458,28 @@ export async function* translateResponsesStreamToChatCompletionStream(
           },
         })
       }
+
       continue
     }
 
     if (event.type === "response.completed" || event.type === "response.incomplete") {
-      if (!event.response) throw new Error("Upstream terminal event is missing its response.")
+      if (!event.response) {
+        throw new Error("Upstream terminal event is missing its response.")
+      }
+
       const completion = translateResponsesToChatCompletion({
         ...event.response,
         status: event.type === "response.incomplete" ? "incomplete" : event.response.status ?? "completed",
         output: event.response.output ?? [],
       })
       for (const [output_index, item] of (event.response.output ?? []).entries()) {
-        if (item.type === "reasoning") continue
-        for (const chunk of handleOutputItemDone(state, { type: "response.output_item.done", output_index, item })) yield chunk
+        if (item.type === "reasoning") {
+          continue
+        }
+
+        for (const chunk of handleOutputItemDone(state, { type: "response.output_item.done", output_index, item })) {
+          yield chunk
+        }
       }
 
       const reasoningText = getResponsesReasoningText({
@@ -488,7 +508,11 @@ export async function* translateResponsesStreamToChatCompletionStream(
       completed = true
     }
   }
-  if (!completed) throw new Error("Copilot Responses stream ended without a terminal event.")
+
+  if (!completed) {
+    throw new Error("Copilot Responses stream ended without a terminal event.")
+  }
+
   yield { data: "[DONE]" }
 }
 
@@ -896,10 +920,21 @@ function getFinishReason(
   response: Pick<ResponsesApiResponse, "output" | "incomplete_details">,
   hasFunctionCalls: boolean,
 ): "stop" | "length" | "tool_calls" | "content_filter" {
-  if (response.output.some((item) => item.type === "message" && item.content.some((part) => part.type === "refusal"))) return "content_filter"
-  if (response.incomplete_details?.reason === "max_output_tokens") return "length"
-  if (response.incomplete_details?.reason === "content_filter") return "content_filter"
-  if (hasFunctionCalls) return "tool_calls"
+  if (response.output.some((item) => item.type === "message" && item.content.some((part) => part.type === "refusal"))) {
+    return "content_filter"
+  }
+
+  if (response.incomplete_details?.reason === "max_output_tokens") {
+    return "length"
+  }
+
+  if (response.incomplete_details?.reason === "content_filter") {
+    return "content_filter"
+  }
+
+  if (hasFunctionCalls) {
+    return "tool_calls"
+  }
 
   return "stop"
 }

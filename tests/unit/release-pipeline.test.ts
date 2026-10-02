@@ -65,6 +65,7 @@ test("test preload isolates static imports per child and cleans only owned tempo
         await assert.rejects(fs.access(owned), { code: "ENOENT" })
       }
     }
+
     assert.equal(homes.size, 2, "each test process owns a distinct home")
     assert.equal(await fs.readFile(path.join(inheritedHome, "keep"), "utf8"), "not owned by the bootstrap")
   } finally {
@@ -166,7 +167,10 @@ test("dependency lock pins the manifest and all platform-specific build dependen
   assert.deepEqual(lock.packages[""].dependencies, manifest.dependencies)
   assert.deepEqual(lock.packages[""].devDependencies, manifest.devDependencies)
   for (const [location, value] of Object.entries(lock.packages)) {
-    if (!location) continue
+    if (!location) {
+      continue
+    }
+
     const entry = value as { version: string; resolved: string; integrity: string; optionalDependencies?: Record<string, string> }
     assert.match(entry.version, /^\d+\./)
     assert.match(entry.resolved, /^https:\/\/registry\.npmjs\.org\//, location)
@@ -206,6 +210,7 @@ test("release graph validates tags then gates immutable publishers on every plat
       assert.ok(workflow.includes(`npm run ${gate}`), gate)
     }
   }
+
   assert.match(jobs.test, /actions\/download-artifact@v4/)
   assert.equal((jobs.test.match(/node scripts\/package-smoke\.mjs candidates\//g) ?? []).length, 2)
   assert.ok(jobs.test.indexOf("npm run build") < jobs.test.indexOf("node scripts/package-smoke.mjs"))
@@ -215,12 +220,14 @@ test("release graph validates tags then gates immutable publishers on every plat
     assert.match(jobs[id], /package-smoke\.mjs --verify/, id)
     assert.doesNotMatch(jobs[id], /npm (?:pack|run build|ci)|--clobber/, id)
   }
+
   for (const id of ["publish-npm", "publish-github"]) {
     assert.match(jobs[id], /dist\.integrity/)
     assert.match(jobs[id], /npm publish "\$tarball" --ignore-scripts/)
     assert.match(jobs[id], /E404/)
     assert.match(jobs[id], /sha512/)
   }
+
   assert.match(jobs["github-release"], /gh release download/)
   assert.match(jobs["github-release"], /cmp --/)
   assert.match(publish, /concurrency:\r?\n  group:.*(?:inputs\.tag|github\.ref_name)/)
@@ -251,9 +258,13 @@ const workflowRunBlock = (yaml: string, job: string): string => {
   assert.equal(starts.length, 1, `expected one shell block in ${job}`)
   const block: string[] = []
   for (const line of lines.slice(starts[0] + 1)) {
-    if (line && !line.startsWith("          ")) break
+    if (line && !line.startsWith("          ")) {
+      break
+    }
+
     block.push(line.slice(10))
   }
+
   assert.ok(block.length)
   return `${block.join("\n").trimEnd()}\n`
 }
@@ -284,19 +295,27 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     for (const directory of [home, bin, temporary, path.join(work, "candidates/npm"), path.join(work, "candidates/github")]) {
       await fs.mkdir(directory, { recursive: true })
     }
+
     const bashCandidates = process.platform === "win32" ? [
       path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git/bin/bash.exe"),
       path.join(process.env.ProgramW6432 ?? "C:\\Program Files", "Git/bin/bash.exe"),
     ] : ["/bin/bash", "/usr/bin/bash"]
     let bash: string | undefined
     for (const candidate of bashCandidates) {
-      if (await fs.access(candidate).then(() => true, () => false)) { bash = candidate; break }
+      if (await fs.access(candidate).then(() => true, () => false)) {
+        bash = candidate
+        break
+      }
     }
+
     assert.ok(bash, "Git Bash (Windows) or bash is required; publishing behavior is never skipped")
     const env: NodeJS.ProcessEnv = {}
     for (const [key, value] of Object.entries(process.env)) {
-      if (/^(?:SystemRoot|WINDIR|ComSpec|PATHEXT)$/i.test(key)) env[key] = value
+      if (/^(?:SystemRoot|WINDIR|ComSpec|PATHEXT)$/i.test(key)) {
+        env[key] = value
+      }
     }
+
     Object.assign(env, {
       HOME: home, USERPROFILE: home, TMPDIR: bashPath(temporary), TMP: temporary, TEMP: temporary,
       CONSOLA_LEVEL: "0", BASH_ENV: "", ENV: "", LANG: "C", LC_ALL: "C",
@@ -311,15 +330,29 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     for (const [index, name] of utilityNames.entries()) {
       await fs.writeFile(path.join(bin, name), `#!/bin/bash\nexec ${shellQuote(utilities[index])} "$@"\n`, { mode: 0o700 })
     }
+
     const version = scenario.version ?? fixtureVersion
     const tag = scenario.tag ?? `v${version}`
     const archive = fixtureBytes.toString("base64")
     const checksum = Buffer.from(fixtureChecksum).toString("base64")
     const assets: Record<string, string> = { [fixtureTarball]: archive, SHA256SUMS: checksum }
-    if (["different", "partial-different"].includes(scenario.release ?? "")) assets[fixtureTarball] = Buffer.from("different immutable bytes").toString("base64")
-    if (scenario.release === "missing-tarball") delete assets[fixtureTarball]
-    if (["missing-checksum", "partial-different"].includes(scenario.release ?? "")) delete assets.SHA256SUMS
-    if (scenario.release === "missing") { delete assets[fixtureTarball]; delete assets.SHA256SUMS }
+    if (["different", "partial-different"].includes(scenario.release ?? "")) {
+      assets[fixtureTarball] = Buffer.from("different immutable bytes").toString("base64")
+    }
+
+    if (scenario.release === "missing-tarball") {
+      delete assets[fixtureTarball]
+    }
+
+    if (["missing-checksum", "partial-different"].includes(scenario.release ?? "")) {
+      delete assets.SHA256SUMS
+    }
+
+    if (scenario.release === "missing") {
+      delete assets[fixtureTarball]
+      delete assets.SHA256SUMS
+    }
+
     const state = {
       sentinel: path.basename(work), tag, commit: fixtureCommit, head: scenario.head ?? fixtureCommit,
       registry: scenario.registry ?? "matching", release: scenario.release ?? "matching", assets,
@@ -335,6 +368,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
       await fs.writeFile(path.join(work, "candidates", directory, filename), fixtureBytes)
       await fs.writeFile(path.join(work, "candidates", directory, "SHA256SUMS"), fixtureChecksum)
     }
+
     // These fakes model CLI responses and record effects, not release decisions.
     // Any unexpected command fails closed; nothing delegates to installed npm/gh.
     await fs.writeFile(path.join(work, "mock-cli.cjs"), `
@@ -414,6 +448,7 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
         : `exec "$FIXTURE_NODE" "$FIXTURE_CLI" ${program} "$@"`
       await fs.writeFile(path.join(bin, program), `#!/bin/bash\n${command}\n`, { mode: 0o700 })
     }
+
     const original = await fs.readFile(publishWorkflow, "utf8")
     const yaml = mutation ? mutation(original) : original
     // Mutants exist only here, never in the working workflow.
@@ -421,7 +456,9 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     await fs.writeFile(copy, yaml)
     const script = path.join(work, "run.sh")
     await fs.writeFile(script, workflowRunBlock(await fs.readFile(copy, "utf8"), job))
-    let code = 0, stdout = "", stderr = ""
+    let code = 0
+    let stdout = ""
+    let stderr = ""
     try {
       // Bash's own PWD is already /c/... on Windows; use it for PATH rather
       // than a drive-letter colon, and avoid executable search via the host.
@@ -432,11 +469,17 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
       const failure = error as { code: number | string; stdout: string; stderr: string; killed?: boolean }
       assert.equal(failure.killed, false, `workflow fixture timed out: ${failure.stderr}`)
       assert.equal(typeof failure.code, "number", `bash did not execute: ${failure.stderr}`)
-      code = Number(failure.code); stdout = failure.stdout; stderr = failure.stderr
+      code = Number(failure.code)
+      stdout = failure.stdout
+      stderr = failure.stderr
     }
+
     assert.equal(await fs.readFile(env.FIXTURE_GUARD!, "utf8"), "offline guard active")
     const operations: OfflineOperation[] = (await fs.readFile(env.FIXTURE_LOG!, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line))
-    for (const operation of operations) assert.equal(operation.sentinel, state.sentinel, "only fixture CLI operations are allowed")
+    for (const operation of operations) {
+      assert.equal(operation.sentinel, state.sentinel, "only fixture CLI operations are allowed")
+    }
+
     return { code, stdout, stderr, operations,
       outputs: await fs.readFile(env.GITHUB_OUTPUT!, "utf8").catch(() => ""),
       assets: JSON.parse(await fs.readFile(env.FIXTURE_STATE!, "utf8")).assets as Record<string, string>,
@@ -483,15 +526,24 @@ test("offline validation and asset comparisons reject temporary fail-open mutati
   }> = [
     {
       job: "validate", scenario: { tag: "v1.2.4" }, guard: /^[ \t]+assert\.equal\(tag,.*\r?\n/m,
-      check: result => { assert.notEqual(result.code, 0, "tag mismatch must fail"); assert.equal(result.outputs, "") },
+      check: result => {
+        assert.notEqual(result.code, 0, "tag mismatch must fail")
+        assert.equal(result.outputs, "")
+      },
     },
     {
       job: "validate", scenario: { lockVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.version,.*\r?\n/m,
-      check: result => { assert.notEqual(result.code, 0, "lock mismatch must fail"); assert.equal(result.outputs, "") },
+      check: result => {
+        assert.notEqual(result.code, 0, "lock mismatch must fail")
+        assert.equal(result.outputs, "")
+      },
     },
     {
       job: "validate", scenario: { lockRootVersion: "1.2.4" }, guard: /^[ \t]+assert\.equal\(lock\.packages.*\r?\n/m,
-      check: result => { assert.notEqual(result.code, 0, "lock root mismatch must fail"); assert.equal(result.outputs, "") },
+      check: result => {
+        assert.notEqual(result.code, 0, "lock root mismatch must fail")
+        assert.equal(result.outputs, "")
+      },
     },
     ...(["publish-npm", "publish-github"] as const).map(job => ({
       job, scenario: { registry: "unavailable" as const }, guard: /^[ \t]+node -e .*E404.*\r?\n/m,
@@ -550,13 +602,18 @@ for (const [job, packageName, directory, registry] of [
       const result = await offlineWorkflow(job, { registry: behavior })
       assert.deepEqual(result.operations[0].args, ["view", `${packageName}@${fixtureVersion}`, "dist.integrity", "--json", `--registry=${registry}`])
       assert.ok(result.operations.every(op => op.program === "npm"), "actual workflow must reach only the fake npm")
-      if (behavior === "different") { assertRegistryRefused(result); return }
+      if (behavior === "different") {
+        assertRegistryRefused(result)
+        return
+      }
+
       if (behavior === "unavailable") {
         assert.notEqual(result.code, 0)
         assert.match(result.stderr, /lookup failed; refusing publication/)
         assert.equal(result.operations.length, 1)
         return
       }
+
       assert.equal(result.code, 0, result.stderr)
       if (behavior === "matching") {
         assert.match(result.stdout, /exact bytes; skipping/)
@@ -593,7 +650,9 @@ for (const behavior of ["different", "partial-different"] as const) {
     assert.ok(githubOperations(result).some(op => op.args[1] === "download"))
     assert.ok(githubOperations(result).every(op => op.args[0] === "api" || op.args[1] === "download"))
     assert.equal(result.assets[fixtureTarball], Buffer.from("different immutable bytes").toString("base64"))
-    if (behavior === "partial-different") assert.ok(!Object.hasOwn(result.assets, "SHA256SUMS"), "do not upload a missing checksum before comparing every existing asset")
+    if (behavior === "partial-different") {
+      assert.ok(!Object.hasOwn(result.assets, "SHA256SUMS"), "do not upload a missing checksum before comparing every existing asset")
+    }
   })
 }
 
@@ -639,6 +698,7 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
     for (const file of ["package.json", "tsconfig.json", "tsdown.config.ts", "config.default.yaml", "LICENSE", "README.md"]) {
       await fs.copyFile(path.join(root, file), path.join(project, file))
     }
+
     await fs.cp(path.join(root, "src"), path.join(project, "src"), { recursive: true })
     await fs.symlink(path.join(root, "node_modules"), path.join(project, "node_modules"), process.platform === "win32" ? "junction" : "dir")
     await execute(process.execPath, [path.join(root, "node_modules/tsdown/dist/run.mjs")], { cwd: project, timeout: 60_000 })
@@ -653,6 +713,7 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
       await fs.writeFile(path.join(directory, "SHA256SUMS"), `${digest}  ${filename}\n`)
       return path.join(directory, filename)
     }
+
     for (const name of ["copilot-relay", "@owner/copilot-relay"]) {
       const directory = await fs.mkdtemp(path.join(fixture, "candidate-"))
       await fs.writeFile(path.join(project, "package.json"), JSON.stringify({ ...manifest, name }, null, 2))

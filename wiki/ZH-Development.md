@@ -290,6 +290,45 @@ wiki 已发布或已验证。
 这些测试跑在普通单元测试套件里。一个会破坏发布的文档改动，会让 CI 失败，而不是让 wiki
 标签页失败。
 
+## 代码风格
+
+代码要写给下一位读者。`tests/unit/code-style.test.ts` 对 `src/`、`tests/`、`scripts/` 下的
+所有脚本以及根目录配置文件强制执行下列机械规则。它跑在普通单元测试套件里，违规会带着
+`file:line` 让 CI 失败。检查使用项目已依赖的 TypeScript 编译器 API 解析源码，不额外引入
+linter 依赖。
+
+| 强制规则 | 最接近的 ESLint 规则 |
+| --- | --- |
+| 每个 `if`、`else`、`for`、`while`、`do` 的主体都是带花括号的块；只有 `else if` 例外 | `curly: "all"` |
+| 非空的块以及 `switch`、类、接口、枚举的主体，其内容不与 `{` 或 `}` 同行 —— 不写 `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
+| `else`、`catch`、`finally` 紧接在上一个块的 `}` 所在行 | `@stylistic/brace-style: "1tbs"` |
+| 每行一条语句 —— 不写 `a(); b()` | `@stylistic/max-statements-per-line` |
+| 跨多行的块语句（`if`、循环、`try`、`switch`、函数）之后空一行 | `@stylistic/padding-line-between-statements`（`multiline-block-like`） |
+| 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
+| 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
+| Python：不写单行复合语句（包括 `case` 子句），不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
+
+这条花括号规则有意比 Google、Airbnb 和 Microsoft 的指南更严格 —— 它们都允许某些不加
+花括号的单行主体。它与 ESLint `curly` 的默认值以及
+[CERT C EXP19-C](https://wiki.sei.cmu.edu/confluence/display/c/EXP19-C.+Use+braces+for+the+body+of+an+if%2C+for%2C+or+while+statement)
+一致：不加花括号时，在单语句主体下新增的一行看起来受条件控制，实际上总会执行。Apple
+2014 年 TLS `goto fail` 漏洞就是这种形状，CERT 认为它“在很大程度上”源于没有遵循这条
+建议。Adam Langley 的[分析](https://www.imperialviolet.org/2014/02/22/applebug.html)更为
+谨慎：加了花括号，缩进同样可能误导人。所以花括号消除的是一种容易犯的错误，而不是所有
+误导性的排版。
+
+以下规则靠评审把关，不做机械检查：
+
+- 用空行分隔函数中的各个逻辑步骤，而不只是块之后。
+- 名字说明值是什么或做什么；布尔值读起来像判断；不用未经解释的缩写。改名绝不改变公开
+  API、配置键、错误码或协议字段。
+- 注释解释原因 —— 不变量、顺序约束或不明显的理由 —— 而不是复述下一行在做什么。改正
+  过时的注释，而不是再加新的。
+- 优先用提前返回代替深层嵌套；用 `if`/`else` 或小型查找表代替嵌套三元表达式。
+- 测试用空行分开准备、执行和断言；fixture 不能掩盖被测行为。
+
+纯格式提交要与改名和逻辑改动分开，评审者才能确认格式提交编译出的程序完全相同。
+
 ## 配置优先原则
 
 优先用配置而不是写死行为。如果某个行为可能因人而异，就把它加进

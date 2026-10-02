@@ -45,8 +45,10 @@ const readActiveLog = async (): Promise<string> => {
     if (content) {
       return content
     }
+
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
+
   throw new Error("log file was never written")
 }
 
@@ -59,7 +61,9 @@ test.beforeEach(async () => {
 
 test("diagnostic suppression covers both sinks and restores normal async logging", async () => {
   let release!: () => void
-  const waiting = new Promise<void>((resolve) => { release = resolve })
+  const waiting = new Promise<void>((resolve) => {
+    release = resolve
+  })
   const quiet = withoutLogging(async () => {
     log.error("PRIVATE_DIAGNOSTIC_ERROR")
     await waiting

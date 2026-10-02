@@ -65,7 +65,10 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     setLogLevel(nextConfig.logLevel)
     void cleanupLogs(nextConfig.logRetentionDays).catch(() => log.error("Log retention failed; existing logs retained."))
     void cleanupCaptures(nextConfig.logRetentionDays)
-    if (nextConfig.logLevel === "debug" && !runtimeState.debug) log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
+    if (nextConfig.logLevel === "debug" && !runtimeState.debug) {
+      log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
+    }
+
     runtimeState.debug = nextConfig.logLevel === "debug"
     runtimeState.thinkEffort = nextConfig.thinkEffort
     config.copilotBaseUrl = nextConfig.copilotBaseUrl
@@ -80,6 +83,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       opusModel: nextConfig.opusModel,
     }
   }
+
   applyRuntimeConfig(appConfig)
 
   log.info(`Log level: ${appConfig.logLevel}`)
@@ -94,6 +98,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     log.error("Startup preflight failed:", error)
     process.exit(1)
   }
+
   log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
 
   const server = await startServer(config)
@@ -146,6 +151,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       )
     }
   }
+
   const configWatcher = watchAppConfig((nextConfig) => {
     applyRuntimeConfig(nextConfig)
     log.info(
@@ -186,6 +192,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       forceClose.unref()
     }
   }
+
   process.once("SIGINT", shutdown)
   process.once("SIGTERM", shutdown)
 

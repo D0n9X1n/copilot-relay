@@ -59,7 +59,10 @@ const readCommandOutput = async (
     const emptyListeners = file === "lsof" && args.some((arg) => arg.startsWith("-iTCP:"))
       && typeof error === "object" && error !== null && "code" in error && error.code === 1
       && "stdout" in error && error.stdout === "" && "stderr" in error && error.stderr === ""
-    if (required && !emptyListeners) throw new RelayInspectionError()
+    if (required && !emptyListeners) {
+      throw new RelayInspectionError()
+    }
+
     // Failed queries can carry partial stdout; it is not verified identity.
     return ""
   }
@@ -78,6 +81,7 @@ const commandArgs = (command: string): Array<string> => {
   if (tokens.join(" ") !== command.trim().replace(/\s+(?=(?:[^"']*["'][^"']*["'])*[^"']*$)/g, " ")) {
     return []
   }
+
   return tokens.map((token) => token.replace(/^(["'])(.*)\1$/, "$2").replaceAll("\\", "/"))
 }
 
@@ -88,12 +92,19 @@ const isDaemonCommand = (value: string | undefined) => value === "start" || valu
 // The Node script argument of `node [--import tsx] <entry> start|restart`, or
 // undefined for any other argv shape.
 const nodeDaemonEntry = (args: Array<string>): string | undefined => {
-  if (!/^node(?:\.exe)?$/i.test(posix.basename(args[0] ?? ""))) return undefined
+  if (!/^node(?:\.exe)?$/i.test(posix.basename(args[0] ?? ""))) {
+    return undefined
+  }
+
   let index = 1
   // These documented loader forms are used for source checkouts. Do not skip
   // arbitrary Node switches: --eval/--print can merely quote a relay command.
-  if (args[index] === "--import" && args[index + 1] === "tsx") index += 2
-  else if (args[index] === "--import=tsx") index++
+  if (args[index] === "--import" && args[index + 1] === "tsx") {
+    index += 2
+  } else if (args[index] === "--import=tsx") {
+    index++
+  }
+
   const entry = args[index]
   return entry && isDaemonCommand(args[index + 1]) ? entry : undefined
 }
@@ -101,7 +112,10 @@ const nodeDaemonEntry = (args: Array<string>): string | undefined => {
 const resolveEntry = (entry: string, cwd: string | undefined): string | undefined => {
   const normalizedCwd = cwd?.replaceAll("\\", "/")
   const absolute = posix.isAbsolute(entry) || /^[A-Za-z]:\//.test(entry)
-  if (!absolute && !normalizedCwd) return undefined
+  if (!absolute && !normalizedCwd) {
+    return undefined
+  }
+
   return posix.normalize(absolute ? entry : `${normalizedCwd}/${entry}`)
 }
 
@@ -110,9 +124,15 @@ export const isRelayStartProcess = (command: string, cwd?: string): boolean => {
   if (/^copilot-relay(?:\.cmd|\.exe)?$/i.test(posix.basename(args[0] ?? ""))) {
     return isDaemonCommand(args[1])
   }
+
   const entry = nodeDaemonEntry(args)
-  if (!entry) return false
-  if (posix.basename(entry) === "copilot-relay") return true
+  if (!entry) {
+    return false
+  }
+
+  if (posix.basename(entry) === "copilot-relay") {
+    return true
+  }
 
   const resolved = resolveEntry(entry, cwd)
   // Exact package/check-out directory, not a substring in a parent directory.
@@ -135,9 +155,15 @@ const packagedEntryCandidate = (command: string, cwd?: string): string | undefin
 // can never become a relay or block `stop` on an unreadable directory.
 const packageEntryProof = async (entry: string): Promise<CommandProof> => {
   try {
-    if (!(await fs.stat(entry)).isFile()) return "nonrelay"
+    if (!(await fs.stat(entry)).isFile()) {
+      return "nonrelay"
+    }
+
     const canonical = (await fs.realpath(entry)).replaceAll("\\", "/")
-    if (!/\/(?:dist\/main\.js|src\/main\.ts)$/.test(canonical)) return "nonrelay"
+    if (!/\/(?:dist\/main\.js|src\/main\.ts)$/.test(canonical)) {
+      return "nonrelay"
+    }
+
     const manifest: unknown = JSON.parse(await fs.readFile(
       posix.join(posix.dirname(posix.dirname(canonical)), "package.json"), "utf8"))
     return typeof manifest === "object" && manifest !== null && "name" in manifest
@@ -166,23 +192,42 @@ interface FlatInvocation {
 // This describes a possible flattened POSIX invocation, never ownership. The
 // async verifier below must prove every ambiguous boundary against the filesystem.
 const flatInvocation = (command: string): FlatInvocation | undefined => {
-  if (process.platform === "win32" || /["'\r\n]/.test(command)) return undefined
+  if (process.platform === "win32" || /["'\r\n]/.test(command)) {
+    return undefined
+  }
+
   const spans = [...command.matchAll(/\S+/g)]
   const args = spans.map((span) => span[0])
   const joined = (start: number, end: number) => command.slice(spans[start].index,
     spans[end].index + spans[end][0].length)
   const nodeEnd = args.findIndex((_part, at) => posix.basename(joined(0, at)) === "node")
-  if (nodeEnd < 0) return undefined
+  if (nodeEnd < 0) {
+    return undefined
+  }
+
   const node = joined(0, nodeEnd)
   const earlierExecutables = args.slice(0, nodeEnd).map((_part, at) => joined(0, at))
   let start = nodeEnd + 1
-  if (args[start] === "--import" && args[start + 1] === "tsx") start += 2
-  else if (args[start] === "--import=tsx") start++
-  if (!args[start] || args[start].startsWith("-")) return undefined
+  if (args[start] === "--import" && args[start + 1] === "tsx") {
+    start += 2
+  } else if (args[start] === "--import=tsx") {
+    start++
+  }
+
+  if (!args[start] || args[start].startsWith("-")) {
+    return undefined
+  }
+
   const end = args.findIndex((arg, at) => at > start && (arg === "start" || arg === "restart"))
-  if (end < 0) return undefined
+  if (end < 0) {
+    return undefined
+  }
+
   const program = joined(start, end - 1)
-  if (!/(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(program)) return undefined
+  if (!/(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(program)) {
+    return undefined
+  }
+
   return {
     node, earlierExecutables, program,
     earlierPrograms: args.slice(start, end - 1).map((_part, at) => joined(start, start + at)),
@@ -190,45 +235,87 @@ const flatInvocation = (command: string): FlatInvocation | undefined => {
 }
 
 const verifyCommand = async (command: string, cwd: string | undefined): Promise<CommandProof> => {
-  if (isRelayStartProcess(command, cwd)) return "relay"
+  if (isRelayStartProcess(command, cwd)) {
+    return "relay"
+  }
+
   const packaged = packagedEntryCandidate(command, cwd)
-  if (packaged && (await packageEntryProof(packaged)) === "relay") return "relay"
+  if (packaged && (await packageEntryProof(packaged)) === "relay") {
+    return "relay"
+  }
+
   const flat = flatInvocation(command)
-  if (!flat) return "nonrelay"
-  if (!cwd) return "unknown"
+  if (!flat) {
+    return "nonrelay"
+  }
+
+  if (!cwd) {
+    return "unknown"
+  }
+
   const resolve = (value: string) => posix.resolve(cwd.replaceAll("\\", "/"), value)
   const absent = async (candidate: string): Promise<boolean> => {
-    try { await fs.stat(candidate); return false }
-    catch (error) {
-      if (isNodeErrno(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return true
+    try {
+      await fs.stat(candidate)
+      return false
+    } catch (error) {
+      if (isNodeErrno(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+        return true
+      }
+
       throw error
     }
   }
+
   try {
     // Any earlier executable/script/directory can own the remaining arguments.
     // Node also resolves extensionless scripts using .js/.json/.node suffixes.
     for (const candidate of flat.earlierExecutables) {
-      if (!(await absent(resolve(candidate)))) return "nonrelay"
-    }
-    for (const candidate of flat.earlierPrograms) {
-      for (const suffix of ["", ".js", ".json", ".node"]) {
-        if (!(await absent(resolve(candidate) + suffix))) return "nonrelay"
+      if (!(await absent(resolve(candidate)))) {
+        return "nonrelay"
       }
     }
+
+    for (const candidate of flat.earlierPrograms) {
+      for (const suffix of ["", ".js", ".json", ".node"]) {
+        if (!(await absent(resolve(candidate) + suffix))) {
+          return "nonrelay"
+        }
+      }
+    }
+
     if (flat.earlierExecutables.length) {
       const nodePath = resolve(flat.node)
-      if (!(await fs.stat(nodePath)).isFile()) return "unknown"
-      if (posix.basename(await fs.realpath(nodePath)) !== "node") return "unknown"
+      if (!(await fs.stat(nodePath)).isFile()) {
+        return "unknown"
+      }
+
+      if (posix.basename(await fs.realpath(nodePath)) !== "node") {
+        return "unknown"
+      }
     }
+
     const program = resolve(flat.program)
-    if (!(await fs.stat(program)).isFile()) return "unknown"
+    if (!(await fs.stat(program)).isFile()) {
+      return "unknown"
+    }
+
     const canonical = (await fs.realpath(program)).replaceAll("\\", "/")
-    if (!/(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(canonical)) return "unknown"
+    if (!/(?:^|\/)copilot-relay(?:-[A-Za-z0-9._-]+)?\/(?:dist\/main\.js|src\/main\.ts)$/.test(canonical)) {
+      return "unknown"
+    }
+
     const packagePath = posix.join(posix.dirname(posix.dirname(canonical)), "package.json")
-    if (!(await fs.stat(packagePath)).isFile()) return "unknown"
+    if (!(await fs.stat(packagePath)).isFile()) {
+      return "unknown"
+    }
+
     const manifest: unknown = JSON.parse(await fs.readFile(packagePath, "utf8"))
     if (typeof manifest !== "object" || manifest === null || !("name" in manifest)
-      || manifest.name !== "copilot-relay") return "unknown"
+      || manifest.name !== "copilot-relay") {
+      return "unknown"
+    }
+
     return "relay"
   } catch {
     return "unknown"
@@ -240,8 +327,14 @@ const processState = (pid: number): "alive" | "gone" | "unknown" => {
     process.kill(pid, 0)
     return "alive"
   } catch (error) {
-    if (isNodeErrno(error) && error.code === "ESRCH") return "gone"
-    if (isNodeErrno(error) && error.code === "EPERM") return "alive"
+    if (isNodeErrno(error) && error.code === "ESRCH") {
+      return "gone"
+    }
+
+    if (isNodeErrno(error) && error.code === "EPERM") {
+      return "alive"
+    }
+
     return "unknown"
   }
 }
@@ -275,7 +368,9 @@ export const readRelayPidFileEntry = async (): Promise<
 
     const address = new URL(getRelayBaseUrl(payload.host, payload.port))
     if (!address.hostname || address.username || address.password || address.pathname !== "/"
-      || address.search || address.hash) return undefined
+      || address.search || address.hash) {
+      return undefined
+    }
 
     return {
       host: payload.host,
@@ -304,19 +399,28 @@ const sameFile = (left: Stats, right: Stats): boolean =>
 const readPidSnapshot = async (): Promise<PidSnapshot | undefined> => {
   try {
     const before = await fs.lstat(paths.pidPath)
-    if (!before.isFile()) return undefined
+    if (!before.isFile()) {
+      return undefined
+    }
+
     const raw = await fs.readFile(paths.pidPath, "utf8")
     const stat = await fs.lstat(paths.pidPath)
     return sameFile(before, stat) ? { raw, stat } : undefined
   } catch (error) {
-    if (isNodeErrno(error) && error.code === "ENOENT") return undefined
+    if (isNodeErrno(error) && error.code === "ENOENT") {
+      return undefined
+    }
+
     throw error
   }
 }
 
 const pidFromContent = (raw: string | undefined): number | undefined => {
   const trimmed = raw?.trim()
-  if (!trimmed) return undefined
+  if (!trimmed) {
+    return undefined
+  }
+
   try {
     return parsePid(trimmed.startsWith("{") ? JSON.parse(trimmed).pid : trimmed)
   } catch {
@@ -327,11 +431,19 @@ const pidFromContent = (raw: string | undefined): number | undefined => {
 // Do not remove a replacement daemon's record after a slow discovery/stop.
 // The recheck is deliberately conservative, not an OS-wide compare-and-unlink.
 const clearPidSnapshot = async (expected: PidSnapshot | undefined): Promise<void> => {
-  if (!expected) return
+  if (!expected) {
+    return
+  }
+
   const current = await readPidSnapshot()
-  if (!current || current.raw !== expected.raw || !sameFile(current.stat, expected.stat)) return
+  if (!current || current.raw !== expected.raw || !sameFile(current.stat, expected.stat)) {
+    return
+  }
+
   await fs.unlink(paths.pidPath).catch((error: unknown) => {
-    if (!isNodeErrno(error) || error.code !== "ENOENT") throw error
+    if (!isNodeErrno(error) || error.code !== "ENOENT") {
+      throw error
+    }
   })
 }
 
@@ -360,7 +472,10 @@ export const clearRelayPidFile = async (
 ): Promise<void> => {
   const snapshot = await readPidSnapshot()
   const currentPid = pidFromContent(snapshot?.raw)
-  if (!options.force && currentPid !== undefined && currentPid !== pid) return
+  if (!options.force && currentPid !== undefined && currentPid !== pid) {
+    return
+  }
+
   await clearPidSnapshot(snapshot)
 }
 
@@ -465,7 +580,10 @@ type ProcessObservation =
 
 const observeProcess = async (pid: number): Promise<ProcessObservation> => {
   const state = processState(pid)
-  if (state !== "alive") return { state }
+  if (state !== "alive") {
+    return { state }
+  }
+
   const createdAt = await getProcessCreatedAt(pid)
   const command = await getProcessCommand(pid)
   const cwd = await getProcessCwd(pid)
@@ -476,6 +594,7 @@ const observeProcess = async (pid: number): Promise<ProcessObservation> => {
     || createdAt !== confirmedCreatedAt) {
     return { state: processState(pid) === "gone" ? "gone" : "unknown" }
   }
+
   return { state: "present", identity: { pid, command, cwd, createdAt } }
 }
 
@@ -484,16 +603,25 @@ type RelayObservation =
   | { state: "nonrelay" | "gone" | "unknown" }
 
 const observeRelay = async (pid: number): Promise<RelayObservation> => {
-  if (parsePid(pid) === undefined || pid === process.pid) return { state: "nonrelay" }
+  if (parsePid(pid) === undefined || pid === process.pid) {
+    return { state: "nonrelay" }
+  }
+
   const observed = await observeProcess(pid)
-  if (observed.state !== "present") return observed
+  if (observed.state !== "present") {
+    return observed
+  }
+
   const state = await verifyCommand(observed.identity.command, observed.identity.cwd)
   return state === "relay" ? { state, identity: observed.identity } : { state }
 }
 
 const isRelayPid = async (pid: number): Promise<boolean> => {
   const observed = await observeRelay(pid)
-  if (observed.state === "unknown") throw new RelayInspectionError(pid)
+  if (observed.state === "unknown") {
+    throw new RelayInspectionError(pid)
+  }
+
   return observed.state === "relay"
 }
 
@@ -502,10 +630,16 @@ const isRelayPid = async (pid: number): Promise<boolean> => {
 type RelayState = "same" | "gone" | "unknown"
 const inspectRelay = async (expected: RelayProcessIdentity): Promise<RelayState> => {
   const observed = await observeProcess(expected.pid)
-  if (observed.state !== "present") return observed.state
+  if (observed.state !== "present") {
+    return observed.state
+  }
+
   const current = observed.identity
   if (current.command !== expected.command || current.cwd !== expected.cwd
-    || current.createdAt !== expected.createdAt) return "gone"
+    || current.createdAt !== expected.createdAt) {
+    return "gone"
+  }
+
   // A flattened command needs the same filesystem proof on every observation.
   // Losing that proof cannot establish exit or authorize the next signal.
   return await verifyCommand(current.command, current.cwd) === "relay" ? "same" : "unknown"
@@ -562,19 +696,28 @@ const findRelayProcesses = async (
 ): Promise<Array<RelayProcessIdentity>> => {
   const candidates = new Set<number>()
   const storedPid = pidFromContent(snapshot?.raw)
-  if (storedPid) candidates.add(storedPid)
+  if (storedPid) {
+    candidates.add(storedPid)
+  }
 
   if (typeof config.port === "number" && Number.isInteger(config.port)
     && config.port > 0 && config.port <= 65_535) {
-    for (const pid of await getPortListenerPids(config.port)) candidates.add(pid)
+    for (const pid of await getPortListenerPids(config.port)) {
+      candidates.add(pid)
+    }
   }
 
   for (const { command, pid } of await getProcessList()) {
-    if (pid === process.pid) continue
+    if (pid === process.pid) {
+      continue
+    }
+
     // A recognizable inventory row is only a candidate; do not discard it when
     // its subsequent cwd/command/creation query is unavailable.
     if (isRelayStartProcess(command) || flatInvocation(command)
-      || isRelayStartProcess(command, "/copilot-relay") || packagedEntryCandidate(command)) candidates.add(pid)
+      || isRelayStartProcess(command, "/copilot-relay") || packagedEntryCandidate(command)) {
+      candidates.add(pid)
+    }
   }
 
   const relays: Array<RelayProcessIdentity> = []
@@ -585,9 +728,16 @@ const findRelayProcesses = async (
       await sleep(stopPollMs)
       observed = await observeRelay(pid)
     }
-    if (observed.state === "unknown") throw new RelayInspectionError(pid)
-    if (observed.state === "relay") relays.push(observed.identity)
+
+    if (observed.state === "unknown") {
+      throw new RelayInspectionError(pid)
+    }
+
+    if (observed.state === "relay") {
+      relays.push(observed.identity)
+    }
   }
+
   return relays.sort((left, right) => left.pid - right.pid)
 }
 
@@ -607,37 +757,56 @@ const waitForRelay = async (
     await sleep(stopPollMs)
     state = await inspectRelay(identity)
   }
+
   if (state === "unknown") {
     throw new RelayInspectionError(identity.pid)
   }
+
   return state
 }
 
 const stopProcess = async (identity: RelayProcessIdentity): Promise<boolean> => {
-  if (await waitForRelay(identity, "verified") === "gone") return false
+  if (await waitForRelay(identity, "verified") === "gone") {
+    return false
+  }
+
   const { pid } = identity
   log.info(`Stopping existing copilot-relay process pid=${pid}`)
   try {
     process.kill(pid, "SIGTERM")
   } catch (error) {
-    if (isNodeErrno(error) && error.code === "ESRCH") return false
+    if (isNodeErrno(error) && error.code === "ESRCH") {
+      return false
+    }
+
     throw error
   }
-  if (await waitForRelay(identity, "gone") === "gone") return true
+
+  if (await waitForRelay(identity, "gone") === "gone") {
+    return true
+  }
 
   // Recheck after the grace period. An unavailable query retries then fails;
   // it neither authorizes KILL nor turns a live process into a stopped result.
-  if (await waitForRelay(identity, "verified") === "gone") return true
+  if (await waitForRelay(identity, "verified") === "gone") {
+    return true
+  }
+
   log.error(`copilot-relay process pid=${pid} did not stop; forcing termination`)
   try {
     process.kill(pid, "SIGKILL")
   } catch (error) {
-    if (isNodeErrno(error) && error.code === "ESRCH") return true
+    if (isNodeErrno(error) && error.code === "ESRCH") {
+      return true
+    }
+
     throw error
   }
+
   if (await waitForRelay(identity, "gone") !== "gone") {
     throw new Error(`Could not stop copilot-relay process pid=${pid}`)
   }
+
   return true
 }
 
@@ -652,21 +821,31 @@ export const stopExistingRelay = async (
       relays = await findRelayProcesses(config, snapshot)
       break
     } catch (error) {
-      if (!(error instanceof RelayInspectionError) || Date.now() >= deadline) throw error
+      if (!(error instanceof RelayInspectionError) || Date.now() >= deadline) {
+        throw error
+      }
+
       await sleep(stopPollMs)
     }
   }
-  if (relays.length === 0) log.info("No existing copilot-relay instance found")
+
+  if (relays.length === 0) {
+    log.info("No existing copilot-relay instance found")
+  }
 
   const stopped: Array<number> = []
   for (const relay of relays) {
-    if (await stopProcess(relay)) stopped.push(relay.pid)
+    if (await stopProcess(relay)) {
+      stopped.push(relay.pid)
+    }
   }
+
   // Unknown identity is not proof of exit. Preserve a live PID's record even
   // when discovery could not verify it, or the PID was reused while stopping.
   const storedPid = pidFromContent(snapshot?.raw)
   if (storedPid === undefined || !isProcessAlive(storedPid)) {
     await clearPidSnapshot(snapshot)
   }
+
   return stopped
 }

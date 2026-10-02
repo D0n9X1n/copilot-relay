@@ -25,6 +25,7 @@ test("Responses incomplete output keeps budget exhaustion and filtering distinct
     })
     assert.equal(result.choices[0]?.finish_reason, expected)
   }
+
   assert.throws(() => translateResponsesToChatCompletion({
     id: "resp_partial", model: "gpt-6-astra", created_at: 1, status: "incomplete", output: [],
   }), /response incomplete/)

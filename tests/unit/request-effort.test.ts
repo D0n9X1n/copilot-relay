@@ -10,7 +10,9 @@ import { HTTPError } from "../../src/lib/error"
 import { runtimeState } from "../../src/lib/state"
 import { translateToOpenAI } from "../../src/claude/translate"
 
-test.afterEach(() => { delete runtimeState.thinkEffort })
+test.afterEach(() => {
+  delete runtimeState.thinkEffort
+})
 
 test("native and legacy request efforts are honored without mutating the default", () => {
   runtimeState.thinkEffort = "high"

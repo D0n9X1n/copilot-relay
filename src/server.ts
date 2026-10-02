@@ -55,12 +55,21 @@ const formatStatusLog = (
 // Parse an authority, not an arbitrary URL. WHATWG URL alone would also accept
 // userinfo, paths, escaped hostnames and shorthand/octal IPv4 spellings.
 const parseAuthority = (authority: string, protocol: string): URL | undefined => {
-  if (protocol !== "http:" && protocol !== "https:") return undefined
+  if (protocol !== "http:" && protocol !== "https:") {
+    return undefined
+  }
+
   const match = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::([0-9]+))?$/i.exec(authority)
-  if (!match || (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 65535))) return undefined
+  if (!match || (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 65535))) {
+    return undefined
+  }
+
   try {
     const url = new URL(`${protocol}//${authority}`)
-    if (isIPv4(url.hostname) && url.hostname !== match[1]) return undefined
+    if (isIPv4(url.hostname) && url.hostname !== match[1]) {
+      return undefined
+    }
+
     return url
   } catch {
     return undefined
@@ -129,6 +138,7 @@ export const createServer = (config: ProxyConfig) => {
       c.set("requestErrorMessage", message)
       return c.json({ error: { message } }, 403)
     }
+
     const origin = c.req.header("origin")
     if (origin !== undefined) {
       const match = /^(https?:)\/\/([^/?#]+)$/i.exec(origin)
@@ -139,6 +149,7 @@ export const createServer = (config: ProxyConfig) => {
         return c.json({ error: { message } }, 403)
       }
     }
+
     if (c.req.method === "POST"
       && (c.req.path === "/v1/messages" || c.req.path === "/v1/messages/count_tokens")
       && (incoming ? Boolean(incoming.headers["transfer-encoding"])
@@ -148,12 +159,20 @@ export const createServer = (config: ProxyConfig) => {
       c.set("requestErrorMessage", message)
       return c.json({ error: { message } }, 415)
     }
+
     await next()
   })
 
   app.use("/v1/*", async (c, next) => {
-    if (c.req.method !== "POST") { await next(); return }
-    if (!isReplayTransport()) cleanupCapturesIfDue()
+    if (c.req.method !== "POST") {
+      await next()
+      return
+    }
+
+    if (!isReplayTransport()) {
+      cleanupCapturesIfDue()
+    }
+
     const policy = snapshotProxyConfig(config)
     const runtime = snapshotRuntimeState()
     const trace = await RequestTrace.create(c.get("requestId"), c.req.raw, policy, runtime, !isReplayTransport() && isDebugLogging())
@@ -231,6 +250,7 @@ export const startServer = (config: ProxyConfig): Promise<ServerType> =>
       server.off("listening", onListening)
       reject(error)
     }
+
     const onListening = () => {
       server.off("error", onError)
       resolve(server)
