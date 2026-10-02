@@ -210,11 +210,16 @@ test("effort resolution distinguishes implicit default, explicit none, and unsup
   }
 })
 
-test("catalog parsing keeps missing and malformed arrays unknown, and explicit empty or false unsupported", async () => {
+// Copilot lists some models without effort support only by leaving reasoning_effort out of
+// supports; each such chat model rejected effort with invalid_reasoning_effort (#137).
+test("catalog parsing keeps missing and malformed metadata unknown; empty, false or an omitted key is unsupported", async () => {
   const rows = [
     { id: "absent" },
     { id: "empty", supported_endpoints: [], capabilities: { supports: { reasoning_effort: [] } } },
     { id: "false", capabilities: { supports: { reasoning_effort: false } } },
+    { id: "omitted-key", capabilities: { supports: { streaming: true, tool_calls: true } } },
+    { id: "null-effort", capabilities: { supports: { reasoning_effort: null } } },
+    { id: "null-supports", capabilities: { supports: null } },
     { id: "true", supported_endpoints: true, capabilities: { supports: { reasoning_effort: true } } },
     { id: "null-item", supported_endpoints: [null], capabilities: { supports: { reasoning_effort: [null] } } },
     { id: "mixed", supported_endpoints: ["/responses", 1], capabilities: { supports: { reasoning_effort: ["low", 1] } } },
@@ -230,7 +235,7 @@ test("catalog parsing keeps missing and malformed arrays unknown, and explicit e
   }, async () => {
     const catalog = await loadCopilotModelCatalog(configFor("absent"))
 
-    for (const id of ["absent", "true", "null-item", "mixed"]) {
+    for (const id of ["absent", "true", "null-item", "mixed", "null-effort", "null-supports"]) {
       assert.deepEqual(catalog.models.get(id), {})
     }
 
@@ -239,6 +244,7 @@ test("catalog parsing keeps missing and malformed arrays unknown, and explicit e
       reasoningEfforts: [],
     })
     assert.deepEqual(catalog.models.get("false"), { reasoningEfforts: [] })
+    assert.deepEqual(catalog.models.get("omitted-key"), { reasoningEfforts: [] })
     assert.deepEqual(catalog.models.get("future"), {
       supportedEndpoints: ["/future", "/responses"],
       reasoningEfforts: ["future-tier"],

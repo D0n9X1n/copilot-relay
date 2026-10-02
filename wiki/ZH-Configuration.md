@@ -172,7 +172,7 @@ copilot-relay models --deep --model claude-opus-5.5 --details
 | --- | --- |
 | `PASS` | 所选模型返回已完成的非空文本。不代表验证了工具、所有 effort 或答案正确性。 |
 | `INCOMPLETE` | 生成未完成。预算耗尽时的正数输出用量只能证明上游可达，不能当作完整回答。 |
-| `FAIL` | HTTP/认证/网络失败、超时、拒绝、异常输出、缺失或不匹配的模型 ID、已完成但为空的响应。 |
+| `FAIL` | HTTP/认证/网络失败、超时、拒绝、异常输出、缺失或不匹配的模型 ID、上游以 `model_not_supported` 拒绝的已列出模型、已完成但为空的响应。 |
 | `SKIPPED` | 目录元数据不支持 relay 所需的接口/effort、模型不是聊天模型，或 ID 不安全/不规范。 |
 | `NOT_TESTED` | 总期限耗尽或中断，当前探测被停止或后续探测未发起；不计为模型失败。 |
 
@@ -198,8 +198,10 @@ Messages handler、翻译、上游客户端、token 刷新和响应翻译。每�
 模型匹配会移除 relay 已知的 GPT context 后缀。仅在通过原生 `/v1/messages` 探测目录
 ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus-5-5`。仅在通过
 `/responses` 探测目录 ID `gpt-5.6-sol-fast` 时，还接受 `gpt-5.6-sol`：该目录项是
-`gpt-5.6-sol` 的 priority 服务层级，其回复报告基础模型。配置和 `--model` 仍使用目录
-拼写，其他不匹配（包括其他 `-fast` ID）仍失败。认证可刷新 token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
+`gpt-5.6-sol` 的 priority 服务层级，其回复报告基础模型。对于不带日期的目录 ID，还接受
+该 ID 加一个 `-YYYY-MM-DD` 快照日期，例如 `gpt-5.5` 对应的 `gpt-5.5-2026-04-23`；
+带日期的 ID 必须完全一致。配置和 `--model` 仍使用目录拼写，其他不匹配仍失败，包括其他
+`-fast` ID，以及上游改由其他模型应答的别名，例如由 `gpt-4.1-2025-04-14` 应答的 `gpt-4`。认证可刷新 token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
 探测，并把后续模型标为未测试。仅这些诊断调用会抑制共享流程的原始日志，正常 relay
 日志不受影响。
 
@@ -237,11 +239,14 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 `output_config: {"effort": "low"}` 仍会使用 `low`。请求字段缺失或为 null 时使用默认值。
 `thinking.budget_tokens` 不是 effort 档位，不会被换算成某个档位。格式不正确的显式
 effort 返回 `400`，不会静默改用默认值。若
-`capabilities.supports.reasoning_effort` 为 `false` 或合法的空列表，
-表示模型明确声明不支持 effort：省略隐式默认值，但显式请求（包括 `none`）在推理/SSE 前返回
-本地 HTTP 400 `relay_unsupported_effort`。已生效的消息级 effort 也算显式请求。
+`capabilities.supports.reasoning_effort` 为 `false` 或合法的空列表，或者格式正确的
+`supports` 对象省略了该键，表示模型不支持 effort：省略隐式默认值，但显式请求（包括
+`none`）在推理/SSE 前返回本地 HTTP 400 `relay_unsupported_effort`。Copilot 以最后
+一种方式列出 `gpt-4o`、`gpt-4.1`、`claude-haiku-4.5` 等较旧的聊天模型，它们都以
+`invalid_reasoning_effort` 拒绝任何 effort。已生效的消息级 effort 也算显式请求。
 原生历史会转发控制字段，因此待生效或带 `clear_at` 的 effort 控制同样被拒绝，
-不会静默丢弃。元数据缺失、为 true 或格式错误都表示未知，而不是不支持。
+不会静默丢弃。缺少 `supports` 对象，或 `reasoning_effort` 为 true、null 或格式错误时
+表示未知，而不是不支持。
 档位列表非空时，普通请求仍保留选定档位，上游拒绝仍是错误；relay 不会替换档位。
 
 可以在 Claude Code 会话中途切换 effort，无需清空历史。消息级 system `output_config`

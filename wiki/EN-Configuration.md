@@ -203,7 +203,7 @@ still a **new real probe**, not offline inspection of an earlier failure; see
 | --- | --- |
 | `PASS` | The selected model returned completed nonempty text. This is not tool coverage, all-effort coverage, or proof the answer is correct. |
 | `INCOMPLETE` | Generation did not finish. Positive reported output usage with budget exhaustion establishes reachability, not a completed answer. |
-| `FAIL` | HTTP/auth/network failure, timeout, refusal, unexpected output, missing/mismatched model, or empty completed response. |
+| `FAIL` | HTTP/auth/network failure, timeout, refusal, unexpected output, missing/mismatched model, a listed model that upstream rejects as `model_not_supported`, or empty completed response. |
 | `SKIPPED` | Advertised metadata excludes the required relay endpoint/effort or identifies a non-chat model, or the ID is unsafe/noncanonical. |
 | `NOT_TESTED` | The overall deadline or an interruption stopped the active probe or prevented a later probe; this is not a model failure. |
 
@@ -233,8 +233,12 @@ context suffix. Only for a native `/v1/messages` probe of catalog ID
 `claude-opus-5.5`, it also accepts the observed provider spelling `claude-opus-5-5`.
 Only for a `/responses` probe of catalog ID `gpt-5.6-sol-fast`, it also accepts
 `gpt-5.6-sol`: that catalog entry is the priority service tier of `gpt-5.6-sol`,
-and its replies report the base model. Keep the catalog spelling in config and
-`--model`; other mismatches, including other `-fast` IDs, still fail.
+and its replies report the base model. For an undated catalog ID it also accepts
+that ID plus one `-YYYY-MM-DD` snapshot date, such as `gpt-5.5-2026-04-23` for
+`gpt-5.5`; a dated ID must match exactly. Keep the catalog spelling in config and
+`--model`; other mismatches still fail, including other `-fast` IDs and aliases
+that upstream serves with another model, such as `gpt-4` answered by
+`gpt-4.1-2025-04-14`.
 Authentication can refresh tokens; the existing bounded retries may consume additional calls, but
 there is no new per-model retry loop. Ctrl+C aborts the active probe and marks
 remaining models not tested. Raw shared-pipeline logging is suppressed only for
@@ -282,13 +286,17 @@ For example, `output_config: {"effort": "low"}` uses `low` even when
 `thinkEffort: max`. Missing or null request fields use the fallback.
 `thinking.budget_tokens` is not an effort level and is not converted into one.
 Malformed explicit effort returns `400` rather than silently choosing the default.
-When `capabilities.supports.reasoning_effort` is `false` or a valid empty list,
-the model advertises no effort support: an implicit default is omitted, while an
-explicit request (including `none`) returns local HTTP 400
-`relay_unsupported_effort` before inference or SSE. Activated inline effort also
-counts as explicit. Native history forwards controls, so its pending or `clear_at`
-effort controls are rejected too rather than silently discarded. Missing, true
-or malformed metadata means unknown, not no support. With a nonempty tier list,
+When `capabilities.supports.reasoning_effort` is `false` or a valid empty list, or
+a well-formed `supports` object omits the key, the model advertises no effort
+support: an implicit default is omitted, while an explicit request (including
+`none`) returns local HTTP 400 `relay_unsupported_effort` before inference or
+SSE. Copilot lists older chat models such as `gpt-4o`, `gpt-4.1` and
+`claude-haiku-4.5` the last way, and each rejected any effort with
+`invalid_reasoning_effort`. Activated inline effort also counts as explicit.
+Native history forwards controls, so its pending or `clear_at` effort controls
+are rejected too rather than silently discarded. A missing `supports` object, or
+a `reasoning_effort` that is `true`, `null` or malformed, means unknown, not no
+support. With a nonempty tier list,
 normal requests keep the chosen level and upstream rejection remains an error;
 the relay does not substitute another level.
 
