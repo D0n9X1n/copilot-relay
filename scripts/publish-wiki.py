@@ -7,8 +7,11 @@ import sys
 from typing import NamedTuple
 
 PAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.md\Z")
+# A URL scheme, a protocol-relative URL or a same-page anchor; none names a wiki page.
 EXTERNAL = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*:|//|#)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+# A block quote or list item marker. List content starts one to four spaces after
+# the marker; with five or more, one space counts and the rest is indented code.
 CONTAINER = re.compile(r" {0,3}(?:(?P<quote>>)[ ]?|(?:[-+*]|\d{1,9}[.)])(?: {1,4}(?! )| (?= {4})))")
 DESTINATION = r"(?:<(?P<angle>[^<>\s]+)>|(?P<bare>[^\s()<>]+))"
 TITLE = r"(?:\"[^\"]*\"|'[^']*'|\([^)]*\))"
@@ -42,17 +45,24 @@ def reference_at(lines, index):
     label = REFERENCE_LABEL.match(first.content)
     if not first.block_start:
         return None
+
     if not label:
+        # A label may continue onto later lines. That form is not parsed here, so
+        # it is refused rather than silently missed.
         candidate = first.content
         for following in lines[index + 1:]:
             if following.scope != first.scope or following.new_container or not following.content:
                 break
+
             candidate += "\n" + following.content
             if re.match(r"\[(?:\\.|[^\\\[\]])+\]:", candidate):
                 raise ValueError("unsupported multiline reference label; use one line")
+
             if not re.fullmatch(r"\[(?:\\.|[^\\\[\]])*", candidate):
                 break
+
         return None
+
     line = first
     position = label.end()
     if position == len(line.content):
@@ -60,17 +70,21 @@ def reference_at(lines, index):
         if (index >= len(lines) or lines[index].scope != first.scope
                 or lines[index].new_container or not lines[index].content):
             raise ValueError("reference definition needs a destination on this or the next line")
+
         line = lines[index]
         position = 0
+
     match = REFERENCE_DESTINATION.match(line.content, position)
     if not match:
         raise ValueError("unsupported reference destination")
+
     start, end = match.span("angle" if match["angle"] is not None else "bare")
     tail = line.content[match.end():]
     protected_end = line.start + match.end()
     if tail.strip():
         if not tail[0].isspace() or not REFERENCE_TITLE.fullmatch(tail.strip()):
             raise ValueError("unsupported reference title; use one line")
+
         protected_end = line.start + len(line.content)
     elif index + 1 < len(lines):
         following = lines[index + 1]
@@ -78,9 +92,11 @@ def reference_at(lines, index):
             title = following.content.strip()
             if title.startswith(('"', "'", "(")) and not REFERENCE_TITLE.fullmatch(title):
                 raise ValueError("unsupported reference title; use one line")
+
             if REFERENCE_TITLE.fullmatch(title):
                 index += 1
                 protected_end = following.start + len(following.content)
+
     return Reference(line.start + start, line.start + end, protected_end, index)
 
 
@@ -91,6 +107,7 @@ def references(lines):
         if reference:
             yield reference
             index = reference.last_line
+
         index += 1
 
 
@@ -103,6 +120,7 @@ def inline_links(markdown):
         if character == "\\":
             position += 2
             continue
+
         if character == "[":
             labels.append(position)
         elif character == "]" and labels:
@@ -113,7 +131,9 @@ def inline_links(markdown):
                 position = match.end()
                 continue
         elif character == "\n" and re.match(r"[ \t\r]*\n", markdown[position + 1:]):
+            # A blank line ends the paragraph, so no label stays open across it.
             labels.clear()
+
         position += 1
 
 
@@ -127,7 +147,10 @@ def source_column(line, column):
     for index, character in enumerate(line):
         if expanded >= column:
             return index
+
+        # A tab advances to the next multiple of four, as expandtabs(4) does.
         expanded += 4 - expanded % 4 if character == "\t" else 1
+
     return len(line)
 
 
@@ -144,18 +167,24 @@ def block_lines(markdown):
     for raw in markdown.splitlines(keepends=True):
         original = raw.rstrip("\r\n")
         content = original.expandtabs(4)
+
+        # Strip the prefix of every container this line continues. A quote needs
+        # its ">" again; a list item needs its indentation unless the line is blank.
         continued = []
         for quote, width in containers:
             if quote:
                 prefix = re.match(r" {0,3}>[ ]?", content)
                 if not prefix:
                     break
+
                 content = content[prefix.end():]
             elif content.startswith(" " * width):
                 content = content[width:]
             elif content.strip():
                 break
+
             continued.append((quote, width))
+
         same_container = len(continued) == len(containers)
         containers = continued
         masked = False
@@ -164,9 +193,12 @@ def block_lines(markdown):
         if fence and same_container:
             masked = True
             match = FENCE.match(content)
-            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+            # The closing fence repeats the opening character, at least as often, and nothing else.
+            if (match and match[1][0] == fence[0] and len(match[1]) >= len(fence)
+                    and not match[2].strip()):
                 fence = None
         else:
+            # A fence also ends when its container does.
             fence = None
             while prefix := CONTAINER.match(content):
                 containers.append((prefix["quote"] is not None, 0 if prefix["quote"] else prefix.end()))
@@ -174,19 +206,24 @@ def block_lines(markdown):
                 paragraph = False
                 reference_stage = None
                 new_container = True
+
             scope = tuple(containers)
             indentation = len(content) - len(content.lstrip(" "))
             prose = content.lstrip(" ")
+            # A definition may continue on later lines: its destination, when the
+            # label line had none, and then its title.
             reference_continuation = reference_scope == scope and (
                 reference_stage == "destination" and bool(prose)
                 or reference_stage == "title" and bool(REFERENCE_TITLE.fullmatch(prose))
             )
             match = FENCE.match(content)
+            # A backtick fence's info string cannot itself contain a backtick.
             if match and (match[1][0] == "~" or "`" not in match[2]):
                 fence = match[1]
                 masked = True
             elif indentation >= 4 and not paragraph and not reference_continuation:
                 masked = True
+
         scope = tuple(containers)
         if masked or not content.strip():
             visible.append(blank(raw))
@@ -194,6 +231,7 @@ def block_lines(markdown):
             paragraph = False
             reference_stage = None
         else:
+            # Offsets index the original text, so the tab-expanded column is mapped back.
             column = len(original.expandtabs(4)) - len(content.lstrip(" "))
             start = source_column(original, column)
             prose = original[start:]
@@ -211,9 +249,12 @@ def block_lines(markdown):
             else:
                 reference_stage = None
                 # Indented code cannot interrupt an active paragraph. Blank lines,
-                # headings, fences and container changes establish block boundaries.
+                # headings, thematic breaks, fences and container changes establish
+                # block boundaries.
                 paragraph = not re.match(r"(?:#{1,6}(?:\s|$)|(?:=+|-+|(?:\*\s*){3,}|(?:_\s*){3,})$)", prose)
+
         offset += len(raw)
+
     return "".join(visible), lines
 
 
@@ -226,18 +267,24 @@ def outside_code(markdown):
     link_tails = {match.start("angle" if match["angle"] is not None else "bare"): match.end()
                   for match in inline_links(visible)}
     link_tails.update({reference.start: reference.protected_end for reference in definitions})
+
     result = list(visible)
     position = 0
     while position < len(visible):
         if position in link_tails:
             position = link_tails[position]
             continue
+
+        # A backslash-escaped backtick cannot open a code span.
         if visible[position] == "\\":
             position += 2
             continue
+
         if visible[position] != "`":
             position += 1
             continue
+
+        # A span closes at the next backtick run of exactly the same length.
         opening = re.match(r"`+", visible[position:])[0]
         remaining = visible[position + len(opening):]
         end = re.search(r"(?<!`)" + opening + r"(?!`)", remaining)
@@ -247,7 +294,9 @@ def outside_code(markdown):
             result[position:stop] = blank(visible[position:stop])
             position = stop
         else:
+            # Otherwise the opening run is literal text.
             position += len(opening)
+
     return "".join(result), definitions
 
 
@@ -262,26 +311,35 @@ def links(markdown):
 
 def transform(markdown):
     result = markdown
+    # Replaced from the end, so the offsets of earlier links stay valid.
     for start, end, target in reversed(list(links(markdown))):
+        # Wiki tab links omit ".md", and README.md is published as Home.
         if PAGE.fullmatch(target):
             target = "Home" if target == "README.md" else target[:-3]
             result = result[:start] + target + result[end:]
+
     return result
 
 
 def page_files(directory):
     if not directory.is_dir():
         raise ValueError(f"wiki directory does not exist: {directory}")
+
     pages = []
     for entry in sorted(directory.iterdir()):
+        # A wiki checkout's .git is the one entry exempt from the flat-tree rule.
         if entry.name == ".git":
             continue
+
         if entry.is_symlink() or entry.is_dir():
             raise ValueError(f"wiki must be flat, without symlinks: {entry}")
+
         if entry.suffix == ".md":
             if not PAGE.fullmatch(entry.name):
                 raise ValueError(f"unsupported wiki page name: {entry.name}")
+
             pages.append(entry)
+
     return pages
 
 
@@ -295,14 +353,18 @@ def verify(pages, source=False):
     forbidden = "Home.md" if source else "README.md"
     if required not in pages or forbidden in pages:
         raise ValueError(f"wiki must contain {required} and not {forbidden}")
+
     for name, body in pages.items():
         for _, _, target in links(body):
             if EXTERNAL.match(target):
                 continue
+
+            # Source links name a page file; published links drop its ".md".
             if source:
                 if not PAGE.fullmatch(target) or target not in pages:
                     raise ValueError(f"{name}: source links need an existing flat .md page, without anchors: {target}")
-            elif target.endswith(".md") or not PAGE.fullmatch(target + ".md") or target + ".md" not in pages:
+            elif (target.endswith(".md") or not PAGE.fullmatch(target + ".md")
+                    or target + ".md" not in pages):
                 raise ValueError(f"{name}: invalid or missing published page: {target}")
 
 
@@ -310,32 +372,43 @@ def build(source, destination):
     source, destination = source.resolve(), destination.resolve()
     if source == destination or source in destination.parents or destination in source.parents:
         raise ValueError("source and destination must not overlap")
+
     originals = read_pages(source)
     verify(originals, source=True)
     existing = page_files(destination)
-    if any(destination.iterdir()) and not (destination / ".git").exists() and not (destination / "Home.md").is_file():
+    # A build overwrites pages and deletes stale ones, so the destination must be
+    # empty, a wiki checkout or an earlier build.
+    if (any(destination.iterdir()) and not (destination / ".git").exists()
+            and not (destination / "Home.md").is_file()):
         raise ValueError("destination must be empty or an existing wiki checkout/build")
+
     pages = {"Home.md" if name == "README.md" else name: transform(body)
              for name, body in originals.items()}
     verify(pages)
     for name, body in pages.items():
+        # newline="" writes line endings unchanged, matching read_pages.
         (destination / name).write_text(body, encoding="utf-8", newline="")
+
     # Only old, top-level page files are ours to remove. Never remove directories.
     for page in existing:
         if page.name not in pages:
             page.unlink()
+
     return len(pages)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+
     build_parser = commands.add_parser("build", help="transform source into an existing flat wiki folder")
     build_parser.add_argument("source", type=Path)
     build_parser.add_argument("destination", type=Path)
+
     verify_parser = commands.add_parser("verify", help="check published links outside Markdown code")
     verify_parser.add_argument("directory", type=Path)
     args = parser.parse_args()
+
     try:
         if args.command == "build":
             count = build(args.source, args.destination)
@@ -347,6 +420,7 @@ def main():
     except (OSError, ValueError) as error:
         print(f"wiki {args.command} failed: {error}", file=sys.stderr)
         return 1
+
     return 0
 
 
