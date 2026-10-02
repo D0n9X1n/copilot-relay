@@ -400,7 +400,7 @@ const captureWithHttpCopilot = async (options: {
   const requests: HttpCopilotRequest[] = []
   let handlerError: unknown
   const upstream = createHttpServer((request, response) => {
-    void (async () => {
+    const recordAndRespond = async () => {
       let body = ""
       for await (const chunk of request) {
         body += String(chunk)
@@ -409,7 +409,9 @@ const captureWithHttpCopilot = async (options: {
       const recorded = { method: request.method ?? "GET", path: request.url ?? "/", body, headers: request.headers }
       requests.push(recorded)
       options.respond(recorded, response, requests.length)
-    })().catch((error: unknown) => {
+    }
+
+    void recordAndRespond().catch((error: unknown) => {
       handlerError = error
       response.destroy()
     })

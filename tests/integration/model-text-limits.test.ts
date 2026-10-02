@@ -176,10 +176,22 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
   })
 }
 
+const limitsFor = (model: string) => {
+  if (model === "gpt-6-astra") {
+    return astraLimits
+  }
+
+  if (model === "claude-opus-5.5") {
+    return opus55Limits
+  }
+
+  return opusLimits
+}
+
 for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
   for (const stream of [false, true]) {
     test(`${model} preserves full prompt/output limits with stream=${stream}`, async () => {
-      const limits = model === "gpt-6-astra" ? astraLimits : model === "claude-opus-5.5" ? opus55Limits : opusLimits
+      const limits = limitsFor(model)
       const input = textAtTokenLimit(limits.max_prompt_tokens)
       const output = textAtTokenLimit(limits.max_output_tokens)
       const requests: Array<{ path: string; body: Record<string, unknown> }> = []

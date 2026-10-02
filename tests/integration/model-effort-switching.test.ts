@@ -174,10 +174,17 @@ function wireTurns(body: WireBody): WireTurn[] {
     return [{ role: "user", text: body.input }]
   }
 
-  return (body.input ?? []).map((item) => item.type === "function_call"
-    ? { role: "assistant", calls: [{ id: item.call_id!, name: item.name!, arguments: item.arguments! }] }
-    : item.type === "function_call_output" ? { role: "tool", id: item.call_id, text: item.output }
-    : { role: item.role!, text: item.content })
+  return (body.input ?? []).map((item) => {
+    if (item.type === "function_call") {
+      return { role: "assistant", calls: [{ id: item.call_id!, name: item.name!, arguments: item.arguments! }] }
+    }
+
+    if (item.type === "function_call_output") {
+      return { role: "tool", id: item.call_id, text: item.output }
+    }
+
+    return { role: item.role!, text: item.content }
+  })
 }
 
 const semanticTurns = (turns: WireTurn[]) => turns.flatMap((turn) => [
@@ -276,12 +283,30 @@ function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
     }
 
     if (message.role === "user") {
-      return message.content.flatMap((block): Message[] => block.type === "tool_result"
-        ? [{ role: "tool", tool_call_id: block.tool_use_id, content: typeof block.content === "string" ? block.content : "" }]
-        : block.type === "text" ? [{ role: "user", content: block.text }] : [])
+      return message.content.flatMap((block): Message[] => {
+        if (block.type === "tool_result") {
+          return [{ role: "tool", tool_call_id: block.tool_use_id, content: typeof block.content === "string" ? block.content : "" }]
+        }
+
+        if (block.type === "text") {
+          return [{ role: "user", content: block.text }]
+        }
+
+        return []
+      })
     }
 
-    const content = message.content.flatMap((block) => block.type === "text" ? [block.text] : block.type === "thinking" ? [block.thinking] : [])
+    const content = message.content.flatMap((block) => {
+      if (block.type === "text") {
+        return [block.text]
+      }
+
+      if (block.type === "thinking") {
+        return [block.thinking]
+      }
+
+      return []
+    })
     const calls = message.content.filter((block) => block.type === "tool_use").map((block) => ({
       id: block.id, type: "function" as const, function: { name: modelName(model, block.name), arguments: JSON.stringify(block.input) },
     }))
@@ -415,13 +440,21 @@ for (const first of [opus, gpt]) {
       const searchTools = [...tools, { name: "WebSearch", input_schema: { type: "object" } }]
       const messages: ClaudeMessage[] = [{ role: "user", content: "Search for the fixture." }]
       let turn = 0
+      const expectedModel = (retrieval: boolean | undefined) => {
+        if (turn === 0) {
+          return retrieval ? gpt : first
+        }
+
+        return other(first)
+      }
+
       await withRecordedTransport({
         refresh: async () => assert.fail("no refresh expected"),
         fetch: async (request) => {
           try {
             const incoming = JSON.parse(request.body!) as WireBody
             const retrieval = incoming.tools?.some((tool) => tool.type === "web_search_preview")
-            const target = turn === 0 ? (retrieval ? gpt : first) : other(first)
+            const target = expectedModel(retrieval)
             const body = validateWire(request, target, turn === 0 ? "high" : "max", 256)
             seen.push(body)
             if (seen.length === 1) {
