@@ -79,7 +79,14 @@ export const models = defineCommand({
           throw new Error("unknown model")
         }
 
-        const entries = [...catalog.models].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        const entries = [...catalog.models]
+          .sort(([a], [b]) => {
+            if (a < b) {
+              return -1
+            }
+
+            return a > b ? 1 : 0
+          })
           .filter(([id]) => args.model === undefined || args.model === id)
         failure = "Could not complete model availability checks"
         process.exitCode = await probeModels(config, entries, probeOptions)
@@ -95,9 +102,12 @@ export const models = defineCommand({
       let detail = "Check configuration, authentication, and upstream connectivity."
       if (error instanceof HTTPError) {
         // The client wraps local aborts in synthetic HTTP responses.
-        detail = error.detail !== undefined ?
-            error.response.status === 504 ? "request timed out" : "request cancelled"
-          : `HTTP ${error.response.status}`
+        if (error.detail !== undefined) {
+          detail = error.response.status === 504 ? "request timed out" : "request cancelled"
+        } else {
+          detail = `HTTP ${error.response.status}`
+        }
+
         await error.response.body?.cancel().catch(() => {})
       }
 

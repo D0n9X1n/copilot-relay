@@ -127,11 +127,21 @@ export const hasVersionMismatch = (status: RelayStatus): boolean =>
  * every scripted caller that treats non-zero as broken. It is surfaced in the
  * text instead.
  */
-export const resolveExitCode = (status: RelayStatus): number =>
-  !status.running ? exitCodes.notRunning
-  : !status.health?.ok ? exitCodes.notUsable
-  : status.deep && !status.deep.ok ? exitCodes.notUsable
-  : exitCodes.running
+export const resolveExitCode = (status: RelayStatus): number => {
+  if (!status.running) {
+    return exitCodes.notRunning
+  }
+
+  if (!status.health?.ok) {
+    return exitCodes.notUsable
+  }
+
+  if (status.deep && !status.deep.ok) {
+    return exitCodes.notUsable
+  }
+
+  return exitCodes.running
+}
 
 const formatUptime = (startedAt: string | undefined): string => {
   if (!startedAt) {
@@ -252,13 +262,17 @@ export const renderStatus = (status: RelayStatus, color = false): Array<string> 
   // CLI that was invoked. Always shown when running: the case this exists for
   // is an upgrade the user believes landed, and a row that appears only on
   // mismatch would leave "did it even check?" unanswered. See #43.
-  lines.push(
-    status.daemonVersion === undefined ?
-      `  version    ${colorText("unknown", "muted", color)} (daemon predates version reporting — restart to report it)`
-    : hasVersionMismatch(status) ?
-      `  version    ${status.daemonVersion} — ${colorText("MISMATCH", "warning", color)}, ${status.version} is installed`
-    : `  version    ${status.daemonVersion}`,
-  )
+  if (status.daemonVersion === undefined) {
+    lines.push(
+      `  version    ${colorText("unknown", "muted", color)} (daemon predates version reporting — restart to report it)`,
+    )
+  } else if (hasVersionMismatch(status)) {
+    lines.push(
+      `  version    ${status.daemonVersion} — ${colorText("MISMATCH", "warning", color)}, ${status.version} is installed`,
+    )
+  } else {
+    lines.push(`  version    ${status.daemonVersion}`)
+  }
 
   lines.push(`  listening  ${status.baseUrl}`)
 
@@ -335,11 +349,13 @@ const probe = async (
   }
 }
 
-const describeError = (error: unknown): string =>
-  error instanceof Error ?
-    error.name === "TimeoutError" ? "timed out"
-    : error.message
-  : String(error)
+const describeError = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.name === "TimeoutError" ? "timed out" : error.message
+  }
+
+  return String(error)
+}
 
 /**
  * Probes /healthz, which also reports the daemon's own version.
