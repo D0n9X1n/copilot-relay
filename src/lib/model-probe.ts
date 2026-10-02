@@ -203,30 +203,42 @@ export async function probeModels(
         row.sent = true
         let trace: RequestTrace | undefined
         let completedFetch = false
-        try {
-          const { response, body } = await withoutLogging(() => withTraceObserver((value) => {
-            trace = value
-          }, async () => {
-            const response = await app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              signal,
-              body: JSON.stringify({
-                model: id,
-                stream: false,
-                max_tokens: maxTokens,
-                ...(effort !== undefined && { output_config: { effort } }),
-                messages: [{ role: "user", content: "Reply with OK only." }],
-              }),
-            }))
-            const body: unknown = await response.json().catch(() => undefined)
-            return { response, body }
+
+        const observeTrace = (value: RequestTrace) => {
+          trace = value
+        }
+
+        const sendProbe = async () => {
+          const response = await app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              model: id,
+              stream: false,
+              max_tokens: maxTokens,
+              ...(effort !== undefined && { output_config: { effort } }),
+              messages: [{ role: "user", content: "Reply with OK only." }],
+            }),
           }))
+          const body: unknown = await response.json().catch(() => undefined)
+          return { response, body }
+        }
+
+        try {
+          const { response, body } = await withoutLogging(() => withTraceObserver(observeTrace, sendProbe))
           completedFetch = true
           row.status = "FAIL"
           if (signal.aborted) {
-            row.status = controller.signal.aborted || total.aborted ? "NOT_TESTED" : "FAIL"
-            row.detail = controller.signal.aborted ? "cancelled" : total.aborted ? "total-deadline" : "probe-timeout"
+            if (controller.signal.aborted) {
+              row.status = "NOT_TESTED"
+              row.detail = "cancelled"
+            } else if (total.aborted) {
+              row.status = "NOT_TESTED"
+              row.detail = "total-deadline"
+            } else {
+              row.detail = "probe-timeout"
+            }
           } else if (!response.ok) {
             row.detail = httpCategory(response.status)
             const code = record(body) && record(body.error) ? body.error.code : undefined
@@ -263,8 +275,16 @@ export async function probeModels(
             }
           }
         } catch {
-          row.status = controller.signal.aborted || total.aborted ? "NOT_TESTED" : "FAIL"
-          row.detail = controller.signal.aborted ? "cancelled" : total.aborted ? "total-deadline" : signal.aborted ? "probe-timeout" : "network-or-invalid-response"
+          if (controller.signal.aborted) {
+            row.status = "NOT_TESTED"
+            row.detail = "cancelled"
+          } else if (total.aborted) {
+            row.status = "NOT_TESTED"
+            row.detail = "total-deadline"
+          } else {
+            row.status = "FAIL"
+            row.detail = signal.aborted ? "probe-timeout" : "network-or-invalid-response"
+          }
         }
 
         row.latency = Math.round(performance.now() - started)
@@ -345,5 +365,9 @@ export async function probeModels(
     console.log("Use --details for request evidence; another deep run consumes usage.")
   }
 
-  return controller.signal.aborted ? 130 : results.length > 0 && results.every((row) => row.status === "PASS") ? 0 : 2
+  if (controller.signal.aborted) {
+    return 130
+  }
+
+  return results.length > 0 && results.every((row) => row.status === "PASS") ? 0 : 2
 }

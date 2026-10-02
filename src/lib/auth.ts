@@ -294,29 +294,32 @@ export const setupProxyAuth = async (
   options: AuthOptions = {},
 ): Promise<ProxyAuthSession> => {
   let githubToken = await ensureGitHubToken(options)
+
+  const exchangeCopilotToken = async () => {
+    const tokenResponse = await getCopilotToken(
+      githubToken,
+      config.vsCodeVersion,
+      AbortSignal.timeout(config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : 180_000),
+    )
+    if (typeof tokenResponse.token !== "string" || !tokenResponse.token.trim()
+      || !Number.isFinite(tokenResponse.refresh_in) || tokenResponse.refresh_in <= 0) {
+      throw new Error("Copilot token exchange returned invalid credentials metadata.")
+    }
+
+    await writeStoredCopilotToken(tokenResponse)
+    config.copilotToken = tokenResponse.token
+    config.copilotTokenGeneration = (config.copilotTokenGeneration ?? 0) + 1
+    scheduleCopilotTokenRefresh(tokenResponse.refresh_in)
+    return tokenResponse.refresh_in
+  }
+
   let refreshInFlight: Promise<number> | undefined
   const applyCopilotToken = () => {
     if (refreshInFlight) {
       return refreshInFlight
     }
 
-    refreshInFlight = (async () => {
-      const tokenResponse = await getCopilotToken(
-        githubToken,
-        config.vsCodeVersion,
-        AbortSignal.timeout(config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : 180_000),
-      )
-      if (typeof tokenResponse.token !== "string" || !tokenResponse.token.trim()
-        || !Number.isFinite(tokenResponse.refresh_in) || tokenResponse.refresh_in <= 0) {
-        throw new Error("Copilot token exchange returned invalid credentials metadata.")
-      }
-
-      await writeStoredCopilotToken(tokenResponse)
-      config.copilotToken = tokenResponse.token
-      config.copilotTokenGeneration = (config.copilotTokenGeneration ?? 0) + 1
-      scheduleCopilotTokenRefresh(tokenResponse.refresh_in)
-      return tokenResponse.refresh_in
-    })().finally(() => {
+    refreshInFlight = exchangeCopilotToken().finally(() => {
       refreshInFlight = undefined
     })
     return refreshInFlight

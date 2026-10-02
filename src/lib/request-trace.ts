@@ -145,6 +145,30 @@ export const withRequestTrace = <T>(trace: RequestTrace, run: () => T): T => tra
 export const getRequestTrace = (): RequestTrace | undefined => traceContext.getStore()
 export const isReplayTransport = (): boolean => transportContext.getStore() !== undefined
 
+const unwrapResponse = (payload: Record<string, any>): Record<string, any> => {
+  if (record(payload.response)) {
+    return payload.response
+  }
+
+  if (record(payload.message)) {
+    return payload.message
+  }
+
+  return payload
+}
+
+const findUsage = (payload: Record<string, any>, response: Record<string, any>): Record<string, any> | undefined => {
+  if (record(payload.usage)) {
+    return payload.usage
+  }
+
+  if (record(response.usage)) {
+    return response.usage
+  }
+
+  return undefined
+}
+
 class OutcomeObserver {
   private decoder = new TextDecoder()
   private pending = ""
@@ -206,7 +230,7 @@ class OutcomeObserver {
       return
     }
 
-    const value = record(payload.response) ? payload.response : record(payload.message) ? payload.message : payload
+    const value = unwrapResponse(payload)
     const id = this.metadataValue(value.id)
     if (id) {
       this.fields.message_id = id
@@ -251,7 +275,7 @@ class OutcomeObserver {
       this.fields.error = "upstream_error"
     }
 
-    const usage = record(payload.usage) ? payload.usage : record(value.usage) ? value.usage : undefined
+    const usage = findUsage(payload, value)
     if (usage) {
       for (const [target, input] of [
         ["input_tokens", usage.input_tokens ?? usage.prompt_tokens],
@@ -479,6 +503,7 @@ export class RequestTrace {
       this.resolveFinished = resolve
     })
     const { modelCatalog, upstreamBaseUrl: _base, ...policy } = runtime
+    const catalog = modelCatalog ?? config.modelCatalog
     const nativeMode = (config as ProxyConfig & { claudeUpstreamApi?: string }).claudeUpstreamApi
     this.manifest = {
       format: 1, relayVersion: appVersion, requestId, ownerPid: process.pid,
@@ -488,8 +513,11 @@ export class RequestTrace {
       request: emptyBody("client-request.bin", request.body ? "pending" : "absent"),
       exchanges: [], refreshes: [],
       config: { host: config.host, port: config.port, upstreamTimeoutMs: config.upstreamTimeoutMs, vsCodeVersion: config.vsCodeVersion, webSearchBackend: config.webSearchBackend, ...(nativeMode && { claudeUpstreamApi: nativeMode }) },
-      runtime: { ...policy, models: modelCatalog ? [...modelCatalog.models.entries()] : config.modelCatalog ? [...config.modelCatalog.models.entries()] : undefined,
-        catalogCurrent: (modelCatalog ?? config.modelCatalog)?.baseUrl === config.copilotBaseUrl },
+      runtime: {
+        ...policy,
+        models: catalog ? [...catalog.models.entries()] : undefined,
+        catalogCurrent: catalog?.baseUrl === config.copilotBaseUrl,
+      },
 
     }
     const abort = () => {
