@@ -7,10 +7,11 @@ import { log } from "~/lib/log"
 import { sanitizeTerminalString } from "~/lib/redact"
 import {
   getRequestReasoningEffort,
-  resolveReasoningEffort,
   normalizeCopilotModelId,
 } from "~/lib/models"
-import { boundModelOutputTokens, getCachedCopilotModel } from "~/copilot/models"
+import { boundModelOutputTokens, getCachedCopilotModel, resolveModelReasoningEffort } from "~/copilot/models"
+import { requireCopilotEndpoint } from "~/copilot/endpoint"
+import { markDiscardedResponse } from "~/lib/request-trace"
 import { collectChatCompletionStream, normalizeChatCompletionStream } from "~/copilot/stream"
 import {
   createCopilotRequestSignal,
@@ -26,7 +27,6 @@ import type {
 
 import {
   buildResponsesRequestPayload,
-  shouldUseResponsesApiForModel,
   translateResponsesStreamToChatCompletionStream,
   translateResponsesToChatCompletion,
   type ResponsesApiResponse,
@@ -57,22 +57,6 @@ interface CreateChatCompletionsOptions {
 
 const maxUserLength = 64
 
-export const sanitizeReasoningEffortForModel = (
-  _modelId: string,
-  reasoningEffort: ChatCompletionsPayload["reasoning_effort"],
-): ChatCompletionsPayload["reasoning_effort"] => {
-  return reasoningEffort ?? undefined
-}
-
-const getRequestedReasoningEffort = (
-  payload: ChatCompletionsPayload,
-): ChatCompletionsPayload["reasoning_effort"] => {
-  return sanitizeReasoningEffortForModel(
-    payload.model,
-    resolveReasoningEffort(getRequestReasoningEffort(payload)),
-  )
-}
-
 export const sanitizeUserIdentifier = (
   user: string | null | undefined,
 ): string | undefined => {
@@ -94,8 +78,6 @@ type ChatCompletionsRequestPayload = Omit<
 const buildRequestPayload = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsRequestPayload => {
-  const requestedReasoningEffort = getRequestedReasoningEffort(payload)
-
   if (
     !usesMaxCompletionTokens(payload.model)
     || payload.max_tokens === null
@@ -103,7 +85,6 @@ const buildRequestPayload = (
   ) {
     const sanitizedPayload = {
       ...payload,
-      reasoning_effort: requestedReasoningEffort,
       user: sanitizeUserIdentifier(payload.user),
     }
 
@@ -116,7 +97,6 @@ const buildRequestPayload = (
     ...payload,
     max_tokens: undefined,
     max_completion_tokens: payload.max_tokens,
-    reasoning_effort: requestedReasoningEffort,
     user: sanitizeUserIdentifier(payload.user),
   }
 }
@@ -197,11 +177,21 @@ export const createChatCompletions = async (
   const requestedModel = options.requestedModel ?? payload.model
   const requestedThinkEffort =
     options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "unset"
-  const reasoningEffort = getRequestedReasoningEffort(payload)
   const requestedThinking = options.requestedThinking ?? "none"
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
   const upstreamModelId = normalizeCopilotModelId(payload.model)
   const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens)
+  const selection = requireCopilotEndpoint(config, upstreamModelId)
+
+  if (selection.endpoint === "/v1/messages") {
+    throw new Error("Native Messages requires its native payload adapter.")
+  }
+
+  const reasoningEffort = resolveModelReasoningEffort(
+    config,
+    upstreamModelId,
+    getRequestReasoningEffort(payload),
+  )
   const nonStreamingLimit =
     getCachedCopilotModel(config, upstreamModelId)?.limits?.max_non_streaming_output_tokens
   // Some models allow their largest output only over SSE. Buffer that upstream
@@ -223,13 +213,17 @@ export const createChatCompletions = async (
     max_tokens: maxTokens,
     stream: bufferResponse ? true : payload.stream,
   }
-  const useResponsesApi = shouldUseResponsesApiForModel(upstreamPayload.model)
+  const useResponsesApi = selection.endpoint === "/responses"
   const compatiblePayload =
     useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(upstreamPayload)
   const provider = getCopilotProviderContext(config)
   const enableVision = messagesIncludeImage(compatiblePayload.messages)
   const initiator = isAgentInitiator(compatiblePayload.messages)
   const requestPayload = buildRequestPayload(compatiblePayload)
+
+  // Undefined only when the model advertises no effort support and none was requested.
+  const effectiveEffortLabel = requestPayload.reasoning_effort ?? "omitted"
+
   log.info(
     sanitizeTerminalString([
       "Model request",
@@ -239,7 +233,7 @@ export const createChatCompletions = async (
       `upstream_model=${compatiblePayload.model}`,
       `requested_think_effort=${requestedThinkEffort}`,
       `requested_thinking=${requestedThinking}`,
-      `effective_think_effort=${requestPayload.reasoning_effort ?? "unset"}`,
+      `effective_think_effort=${effectiveEffortLabel}`,
     ].join(" ")),
   )
   // Choose the Copilot API surface after model routing, because aliases can
@@ -276,8 +270,12 @@ export const createChatCompletions = async (
   )
 
   if (!response.ok) {
-    if (await shouldRetryWithResponses(response, signal, options.timeoutMs)) {
-      return completeResponse(await createResponses(provider, compatiblePayload, {
+    if (selection.responsesFallback && await shouldRetryWithResponses(response, signal, options.timeoutMs)) {
+      // The failed attempt must settle before its replacement can finish capture/replay.
+      markDiscardedResponse(response)
+      await response.body?.cancel()
+
+      return completeResponse(await createResponses(provider, upstreamPayload, {
         vision: enableVision,
         initiator,
         requestId: options.requestId,
@@ -321,9 +319,7 @@ async function createResponses(
     timeoutMs?: number
   },
 ) {
-  const reasoningEffort = getRequestedReasoningEffort(
-    payload,
-  ) as ResponsesReasoningEffort | undefined
+  const reasoningEffort = payload.reasoning_effort as ResponsesReasoningEffort | undefined
   const requestPayload = buildResponsesRequestPayload(payload, reasoningEffort)
 
   const response = await fetchCopilot(

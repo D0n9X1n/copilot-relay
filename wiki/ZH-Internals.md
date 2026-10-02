@@ -33,6 +33,7 @@ src/
     client.ts                 认证 HTTP 客户端、重试、计时
     chat.ts                   chat 抽象、路由、think effort
     models.ts                 按上游地址隔离的模型目录和 token 限制
+    endpoint.ts               目录驱动的接口选择与协议策略
     responses.ts              Responses API 翻译、prompt_cache_key
     native.ts                 原生 Claude 传输及签名 WebSearch 历史
     stream.ts                 共用聚合逻辑与完整流校验
@@ -131,6 +132,9 @@ Claude 占位 token 保护。
 base URL、超时、协议模式、搜索后端、effort 和目录视图。后续异步调用使用该请求作用域，
 而非可变的全局状态。Token 和 generation getter 刻意保持实时，让重试使用刷新后的
 凭据。该快照所选上游需要重新发现时，可更新自己的目录，不会切换到重载后的新策略。
+接入阶段完成发现后，`pinCopilotModelCatalog` 为所有阶段固定该目录引用，即使发现
+结果中没有目标模型也一样。输出预算处理不能在 SSE 开始后重新发现并改变能力；
+token 计数仍完全本地，不会固定或刷新推理目录。
 
 ### 翻译后的历史
 
@@ -186,19 +190,33 @@ WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直�
 
 ## 原生 Messages、chat 与 Responses
 
-`src/copilot/chat.ts` 是 routes 和启动 preflight 共用的内部 chat 抽象。它应用模型
-路由、think effort 和请求日志，并为配置的 GPT 系模型选择 Copilot `/responses`。
+`src/copilot/chat.ts` 为 routes 与启动 preflight 发送已解析好的上游 ID。
+`src/copilot/endpoint.ts` 的 `selectCopilotEndpoint` 通过 `getCachedCopilotModel`
+读取当前提供方的 `supported_endpoints`，探测和真实请求共用该选择器。固定的旧偏好
+只用于多接口选择和元数据缺失，不再是不断扩大的模型白名单。
+`requireCopilotEndpoint` 在接入阶段、SSE 之前，把固定的不支持原因变成本地错误。
+Claude 的显式协议策略优先；选择结果还指明是否允许仅针对特定错误码的
+`/chat/completions` 到 `/responses` 恢复。被恢复的失败正文会标为 discarded 并取消，
+让捕获/replay 记录一致的调用顺序。
 
-`src/copilot/responses.ts` 在 Copilot Responses API 与 chat-completion 风格结果之间
-翻译。它之所以存在，是因为默认模型 `gpt-6-astra`、此前默认的 `gpt-5.6-sol` 以及
-`gpt-5.5`/`gpt-5.6` 系列的其余成员在上游走 `/responses`。Claude 默认走经翻译的
-`/chat/completions` 路径。
+`src/copilot/models.ts` 的 `resolveModelReasoningEffort` 区分显式请求与配置默认值。
+`translateToOpenAI` 传递 `getClaudeTurnEffort().requested`，适配器只解析一次，Chat
+和 Responses builder 都不会重新添加已刻意省略的值。目录的 `reasoning_effort: false`
+转换为 `reasoningEfforts: []`；格式错误的接口/档位数组保持未知，不会过滤成权威的
+空数组。捕获/replay 使用已有数组字段，无需新格式。探测的 `route_source` 和白名单
+接口详情说明选择过程，不会打印原始元数据。用户策略见[配置说明](ZH-Configuration.md)。
+
+`src/copilot/responses.ts` 为任意选中的兼容模型翻译 Copilot Responses 与
+chat-completion 风格结果。检索仍是独立的 Responses `web_search_preview` 操作；
+决策/最终阶段使用共享适配器，但仅支持 Chat 的搜索后端会产生结构化搜索失败，
+不会把普通聊天伪装成检索。能力缺失保持未验证，不代表支持内置搜索。
 
 ### 原生 Claude 边界
 
 `src/copilot/native.ts` 的 `shouldUseNativeMessages` 仅作用于路由后以 `claude-` 开头
 的 ID。`auto` 要求当前上游目录公布 `/v1/messages` 支持，`messages` 强制原生，
-`chat-completions` 保留翻译。最后一项仍是默认值，非 Claude 模型的选择规则不变。
+`chat-completions` 固定 Chat 翻译。最后一项仍是默认值；非 Claude 模型不受该
+Claude 专属设置影响，按目录选择翻译接口。
 
 `createNativeMessages` 保留消息/block 结构、签名 thinking 与 redacted-thinking block、
 缓存标记、原位置的 system 角色/控制字段及原生响应元数据，不经过 chat 扁平化。

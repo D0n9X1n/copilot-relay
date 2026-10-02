@@ -131,10 +131,12 @@ opusModel: claude-opus-5.5
 `src/lib/models.ts` 负责这个映射，同时校验允许的 `thinkEffort` 默认值：`low`、
 `medium`、`high`、`xhigh`、`max`。
 
-模型走哪个上游 **API** 和跑哪个模型是两个问题。`gpt-6-astra`、`gpt-5.6-sol` 以及
-`gpt-5.5`/`gpt-5.6` 系列走 Copilot `/responses`。Claude 模型默认走 `/chat/completions`；
-设置 `claudeUpstreamApi: auto` 可在当前目录公布支持时选择原生 `/v1/messages`，
-`messages` 则强制选择原生路径。非 Claude 路由不受影响。所有路径都公开 Claude Messages
+模型走哪个上游 **API** 和跑哪个模型是两个问题。`src/copilot/endpoint.ts` 从当前
+提供方目录选择公布的 Chat 或 Responses 接口；两者都可用或元数据缺失时，保留
+已有偏好。新增兼容模型 ID 不需要修改名称名单。Claude 默认固定走
+`/chat/completions`；`claudeUpstreamApi: auto` 优先选择已公布的原生 `/v1/messages`，
+否则按目录选择翻译接口，`messages` 则强制原生。该 Claude 专属设置不改变非 Claude
+选择规则。所有路径都公开 Claude Messages
 响应，但原生签名历史与旧 chat bridge 历史不能透明互换。原生错误和拒答不会触发隐蔽
 回退。选择方法见[配置说明](ZH-Configuration.md)，历史与缓存边界见[内部实现](ZH-Internals.md)。
 
@@ -151,7 +153,8 @@ opusModel: claude-opus-5.5
 | `src/claude/tool-names.ts` | 把 Claude 工具名规范化成 Copilot 可接受的名字，并在响应里映射回来。 |
 | `src/copilot/client.ts` | 底层 Copilot HTTP 客户端：必需 header、bearer token、耗时日志、瞬时 5xx 重试。 |
 | `src/copilot/chat.ts` | 供 routes 和启动 preflight 共用的内部 chat 抽象。应用模型路由与 think effort。 |
-| `src/copilot/models.ts` | 保留发现的 context、输入和输出限制，按上游隔离，并约束输出预算。 |
+| `src/copilot/models.ts` | 按提供方保留能力/限制、固定接入请求的目录、解析可选 effort 并约束输出预算。 |
+| `src/copilot/endpoint.ts` | 共用目录驱动的接口选择、显式协议策略及有界回退许可。 |
 | `src/copilot/responses.ts` | 在 Copilot Responses API 与 chat-completion 风格结果之间翻译。 |
 | `src/copilot/native.ts` | 原生 Claude Messages、签名历史、终止结果及原生 WebSearch bridge 续接。 |
 | `src/lib/request-trace.ts` | 请求级正文捕获、有序上游/刷新记录及完成元数据。 |

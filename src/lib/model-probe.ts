@@ -1,4 +1,4 @@
-import type { CopilotModel } from "~/copilot/models"
+import { advertisesNoReasoningEffort, type CopilotModel } from "~/copilot/models"
 import type { ProxyConfig } from "~/lib/config"
 import { log, withoutConsoleLogging, withoutLogging } from "~/lib/log"
 import { RequestTrace, withTraceObserver, type RequestDiagnostic } from "~/lib/request-trace"
@@ -16,8 +16,7 @@ import { isReasoningEffort, normalizeCopilotModelId, type ReasoningEffort } from
 import { scrubSensitiveUrls } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
 import { createServer } from "~/server"
-import { shouldUseResponsesApiForModel } from "~/copilot/responses"
-import { shouldUseNativeMessages } from "~/copilot/native"
+import { copilotEndpoints, selectCopilotEndpoint } from "~/copilot/endpoint"
 
 export interface ModelProbeOptions {
   maxTokens: number
@@ -44,6 +43,25 @@ const httpCategory = (status: number): string => {
   if (status === 499) return "cancelled"
   if (status === 504) return "upstream-timeout-or-HTTP-504"
   return `HTTP-${status}`
+}
+
+// Print only known endpoint constants: catalog strings are untrusted and can contain
+// secrets, so anything unrecognized is reported only as a count.
+const summarizeAdvertisedEndpoints = (supportedEndpoints: string[] | undefined) => {
+  if (supportedEndpoints === undefined) {
+    return { advertisedEndpoints: "unknown", unknownEndpoints: 0 }
+  }
+
+  if (supportedEndpoints.length === 0) {
+    return { advertisedEndpoints: "none", unknownEndpoints: 0 }
+  }
+
+  const knownEndpoints = copilotEndpoints.filter((endpoint) => supportedEndpoints.includes(endpoint))
+  const unknownEndpoints = supportedEndpoints.filter(
+    (endpoint) => !copilotEndpoints.some((known) => known === endpoint),
+  ).length
+
+  return { advertisedEndpoints: knownEndpoints.join(",") || "none-compatible", unknownEndpoints }
 }
 
 const settleDiagnostic = async (trace: RequestTrace): Promise<void> => {
@@ -98,16 +116,26 @@ export async function probeModels(
     runtimeState.modelCatalog = config.modelCatalog
     runtimeState.upstreamBaseUrl = config.copilotBaseUrl
     for (const [id, model] of entries) {
-      const efforts = ["none", "low", "medium", "high", "xhigh", "max"].filter((effort) => model.reasoningEfforts?.includes(effort))
-      const effort = options.effort ?? efforts.find(isReasoningEffort) ?? "low"
+      const recognizedEfforts = ["none", "low", "medium", "high", "xhigh", "max"].filter(
+        (effort) => model.reasoningEfforts?.includes(effort),
+      )
+      // Probe the lowest advertised tier, send no effort to a model that advertises no
+      // effort support, and fall back to "low" (marked unverified) when metadata is missing.
+      const defaultProbeEffort = advertisesNoReasoningEffort(model)
+        ? undefined
+        : recognizedEfforts.find(isReasoningEffort) ?? "low"
+      const effort = options.effort ?? defaultProbeEffort
+
       const maxTokens = Math.min(
         options.maxTokens,
         model.limits?.max_output_tokens ?? options.maxTokens,
         model.limits?.max_non_streaming_output_tokens ?? options.maxTokens,
       )
       const timeoutMs = Math.min(options.timeoutMs, config.upstreamTimeoutMs > 0 ? config.upstreamTimeoutMs : Infinity)
-      const endpoint = shouldUseNativeMessages(config, id) ? "/v1/messages"
-        : shouldUseResponsesApiForModel(id) ? "/responses" : "/chat/completions"
+      const selection = selectCopilotEndpoint(config, id)
+      const endpoint = selection.endpoint ?? "none"
+      const { advertisedEndpoints, unknownEndpoints } = summarizeAdvertisedEndpoints(model.supportedEndpoints)
+
       const row: ProbeResult = {
         id: safeId(id, config.copilotToken) ? id : "[unsupported ID]",
         status: "NOT_TESTED",
@@ -117,21 +145,22 @@ export async function probeModels(
         latency: 0,
         detail: "",
         maxTokens,
-        effort,
+        effort: effort ?? "omitted",
+        routeSource: selection.endpoint ? selection.source : "unavailable",
+        advertisedEndpoints,
+        unknownEndpoints,
         unverified: model.reasoningEfforts === undefined || model.supportedEndpoints === undefined,
       }
+
       if (controller.signal.aborted || total.aborted) {
         row.detail = controller.signal.aborted ? "cancelled" : "total-deadline"
       } else if (!safeId(id, config.copilotToken) || normalizeCopilotModelId(id) !== id) {
         row.status = "SKIPPED"
         row.detail = "unsafe-or-noncanonical-id"
-      } else if (model.type !== undefined && model.type !== "chat") {
+      } else if (!selection.endpoint) {
         row.status = "SKIPPED"
-        row.detail = "unsupported-model-type"
-      } else if (model.supportedEndpoints && !model.supportedEndpoints.includes(endpoint)) {
-        row.status = "SKIPPED"
-        row.detail = "unsupported-relay-endpoint"
-      } else if (model.reasoningEfforts && !model.reasoningEfforts.includes(effort)) {
+        row.detail = selection.reason
+      } else if (effort !== undefined && model.reasoningEfforts && !model.reasoningEfforts.includes(effort)) {
         row.status = "SKIPPED"
         row.detail = "unsupported-effort"
       } else {
@@ -144,9 +173,15 @@ export async function probeModels(
         try {
           const { response, body } = await withoutLogging(() => withTraceObserver((value) => { trace = value }, async () => {
             const response = await app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
-              method: "POST", headers: { "content-type": "application/json" }, signal,
-              body: JSON.stringify({ model: id, stream: false, max_tokens: maxTokens,
-                output_config: { effort }, messages: [{ role: "user", content: "Reply with OK only." }],
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              signal,
+              body: JSON.stringify({
+                model: id,
+                stream: false,
+                max_tokens: maxTokens,
+                ...(effort !== undefined && { output_config: { effort } }),
+                messages: [{ role: "user", content: "Reply with OK only." }],
               }),
             }))
             const body: unknown = await response.json().catch(() => undefined)

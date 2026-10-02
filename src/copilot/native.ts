@@ -1,15 +1,27 @@
 import { events } from "fetch-event-stream"
 
-import type { ClaudeMessage, ClaudeMessagesPayload, ClaudeResponse, ClaudeStreamEventData } from "~/claude/types"
+import type {
+  ClaudeMessage,
+  ClaudeMessagesPayload,
+  ClaudeResponse,
+  ClaudeStreamEventData,
+  ClaudeTool,
+} from "~/claude/types"
 import { validateClaudeMessages } from "~/claude/translate"
 import { getClaudeTurnEffort } from "~/claude/utils"
 import { createClaudeWebSearchExecution, createClaudeWebSearchResponse, hasClaudeWebSearch, isClaudeWebSearchTool, isClaudeWebSearchToolName } from "~/claude/web-search"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getRequestReasoningEffort, resolveReasoningEffort } from "~/lib/models"
+import { getRequestReasoningEffort } from "~/lib/models"
 import { sanitizeTerminalString } from "~/lib/redact"
-import { boundModelOutputTokens, getCachedCopilotModel } from "./models"
+import {
+  advertisesNoReasoningEffort,
+  boundModelOutputTokens,
+  getCachedCopilotModel,
+  resolveModelReasoningEffort,
+} from "./models"
+import { selectCopilotEndpoint } from "./endpoint"
 import { createCopilotRequestSignal, fetchCopilot, getCopilotProviderContext, readCopilotText } from "./client"
 
 type NativeBlock = Record<string, unknown> & { type: string; id?: string; name?: string; text?: string; thinking?: string; signature?: string; input?: Record<string, unknown> }
@@ -69,10 +81,26 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
 }
 
 export function shouldUseNativeMessages(config: ProxyConfig, model: string): boolean {
-  if (!model.startsWith("claude-")) return false
-  const mode = config.claudeUpstreamApi ?? "chat-completions"
-  if (mode === "chat-completions") return false
-  return mode === "messages" || getCachedCopilotModel(config, model)?.supportedEndpoints?.includes("/v1/messages") === true
+  return selectCopilotEndpoint(config, model).endpoint === "/v1/messages"
+}
+
+export function validateNativeModelEffort(
+  config: ProxyConfig,
+  model: string,
+  payload: ClaudeMessagesPayload,
+): void {
+  resolveModelReasoningEffort(config, model, getRequestReasoningEffort(payload))
+
+  if (!advertisesNoReasoningEffort(getCachedCopilotModel(config, model))) {
+    return
+  }
+
+  // Native history forwards pending controls too; checking only the active turn loses intent.
+  for (const message of payload.messages) {
+    if (message.role === "system") {
+      resolveModelReasoningEffort(config, model, getRequestReasoningEffort(message))
+    }
+  }
 }
 
 export function validateNativeMessages(payload: ClaudeMessagesPayload): void {
@@ -84,34 +112,97 @@ export function validateNativeMessages(payload: ClaudeMessagesPayload): void {
   normalizeNativeHistory(payload.messages)
 }
 
-export async function createNativeMessages(config: ProxyConfig, payload: ClaudeMessagesPayload, options: NativeOptions): Promise<Response> {
-  validateNativeMessages(payload)
-  const maxTokens = await boundModelOutputTokens(config, payload.model, payload.max_tokens)
-  const limit = getCachedCopilotModel(config, payload.model)?.limits?.max_non_streaming_output_tokens
-  const stream = payload.stream || (limit !== undefined && typeof maxTokens === "number" && maxTokens > limit)
-  const body = {
-    ...payload, messages: normalizeNativeHistory(payload.messages), max_tokens: maxTokens, stream: Boolean(stream),
-    output_config: { ...payload.output_config, effort: resolveReasoningEffort(getRequestReasoningEffort(payload)) },
-    reasoning_effort: undefined,
-    tools: payload.tools?.map((tool) => isClaudeWebSearchTool(tool) ? {
-      ...tool, type: undefined,
-      input_schema: tool.input_schema ?? { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
-    } : tool),
+// The relay executes WebSearch itself, so upstream receives an ordinary client tool.
+const toNativeTool = (tool: ClaudeTool) => {
+  if (!isClaudeWebSearchTool(tool)) {
+    return tool
   }
+
+  return {
+    ...tool,
+    type: undefined,
+    input_schema: tool.input_schema ?? {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  }
+}
+
+export async function createNativeMessages(
+  config: ProxyConfig,
+  payload: ClaudeMessagesPayload,
+  options: NativeOptions,
+): Promise<Response> {
+  validateNativeMessages(payload)
+
+  const maxTokens = await boundModelOutputTokens(config, payload.model, payload.max_tokens)
+
+  validateNativeModelEffort(config, payload.model, payload)
+
+  const effort = resolveModelReasoningEffort(config, payload.model, getRequestReasoningEffort(payload))
+  const nonStreamingLimit = getCachedCopilotModel(config, payload.model)?.limits?.max_non_streaming_output_tokens
+
+  // Some models allow their largest output only over SSE; JSON callers receive a collected message.
+  const exceedsNonStreamingLimit = nonStreamingLimit !== undefined
+    && typeof maxTokens === "number"
+    && maxTokens > nonStreamingLimit
+
+  // JSON serialization drops undefined values: a no-effort model gets no effort key,
+  // and gets output_config only when the client sent one.
+  const outputConfig = effort === undefined && payload.output_config == null
+    ? undefined
+    : { ...payload.output_config, effort }
+
+  const body = {
+    ...payload,
+    messages: normalizeNativeHistory(payload.messages),
+    max_tokens: maxTokens,
+    stream: Boolean(payload.stream || exceedsNonStreamingLimit),
+    output_config: outputConfig,
+    reasoning_effort: undefined,
+    tools: payload.tools?.map(toNativeTool),
+  }
+
   const headers: Record<string, string> = {
-    "content-type": "application/json", accept: body.stream ? "text/event-stream" : "application/json",
+    "content-type": "application/json",
+    accept: body.stream ? "text/event-stream" : "application/json",
     "anthropic-version": options.headers?.get("anthropic-version") ?? "2023-06-01",
   }
   const beta = options.headers?.get("anthropic-beta")
-  if (beta) headers["anthropic-beta"] = beta
-  log.info(sanitizeTerminalString(`request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${getClaudeTurnEffort(body).effective}`))
-  const response = await fetchCopilot(getCopilotProviderContext(config), "/v1/messages", {
-    method: "POST", headers, body: JSON.stringify(body),
-  }, { requestId: options.requestId, signal: options.signal, timeoutMs: config.upstreamTimeoutMs, initiator: payload.messages.some((message) => message.role === "assistant") ? "agent" : "user" })
-  if (!response.ok) {
-    const detail = await readCopilotText(response, options.signal, config.upstreamTimeoutMs)
-    throw new HTTPError("Native upstream request failed", new Response(detail, { status: response.status, headers: { "content-type": response.headers.get("content-type") ?? "application/json" } }))
+
+  if (beta) {
+    headers["anthropic-beta"] = beta
   }
+
+  const effortLabel = effort === undefined ? "omitted" : getClaudeTurnEffort(body).effective
+
+  log.info(sanitizeTerminalString(
+    `request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${effortLabel}`,
+  ))
+
+  const response = await fetchCopilot(getCopilotProviderContext(config), "/v1/messages", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  }, {
+    requestId: options.requestId,
+    signal: options.signal,
+    timeoutMs: config.upstreamTimeoutMs,
+    initiator: payload.messages.some((message) => message.role === "assistant") ? "agent" : "user",
+  })
+
+  if (!response.ok) {
+    // The decoded text no longer matches upstream framing headers, so keep only its type.
+    const detail = await readCopilotText(response, options.signal, config.upstreamTimeoutMs)
+    const contentType = response.headers.get("content-type") ?? "application/json"
+
+    throw new HTTPError("Native upstream request failed", new Response(detail, {
+      status: response.status,
+      headers: { "content-type": contentType },
+    }))
+  }
+
   return response
 }
 

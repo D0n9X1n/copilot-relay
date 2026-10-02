@@ -36,6 +36,7 @@ src/
     client.ts                 authenticated HTTP client, retries, timing
     chat.ts                   chat abstraction, routing, think effort
     models.ts                 provider-scoped model catalog and token limits
+    endpoint.ts               catalog-driven endpoint choice and protocol policy
     responses.ts              Responses API translation, prompt_cache_key
     native.ts                 native Claude transport and signed WebSearch history
     stream.ts                 shared accumulation and complete-stream validation
@@ -146,6 +147,10 @@ request. Subsequent async passes use that request scope rather than mutable
 process globals. Token and generation getters deliberately stay live so retries
 see refreshed credentials. Discovery needed for that snapshot's provider can
 update its own catalog without switching the turn to newly reloaded policy.
+After admission discovery, `pinCopilotModelCatalog` fixes that catalog reference
+for all passes, even if the target was absent from discovery. Output bounding
+cannot rediscover and change capabilities after SSE starts; token counting remains
+local and never pins or refreshes the inference catalog.
 
 ### Translated history
 
@@ -215,21 +220,41 @@ maintenance cost with no test covering it.
 
 ## Native Messages, chat and Responses
 
-`src/copilot/chat.ts` is the internal chat abstraction used by both routes and
-startup preflight. It applies model routing, think effort, and request logging,
-and chooses Copilot `/responses` for configured GPT-style models.
+`src/copilot/chat.ts` sends already-resolved upstream IDs for routes and startup
+preflight. `selectCopilotEndpoint` in `src/copilot/endpoint.ts` reads the current
+provider's `supported_endpoints` through `getCachedCopilotModel`; probes and normal
+requests share it. The frozen legacy preference breaks ties and handles missing
+metadata, not an expanding allowlist. `requireCopilotEndpoint` turns fixed
+unsupported reasons into local errors at admission before SSE. Claude's explicit
+protocol policy takes precedence; the selection includes whether the narrowly
+coded `/chat/completions` to `/responses` recovery is allowed. Failed recovered
+bodies are marked discarded and cancelled so capture/replay records the same
+exchange order.
+
+`resolveModelReasoningEffort` in `src/copilot/models.ts` distinguishes an explicit
+request from a configured default. `translateToOpenAI` carries
+`getClaudeTurnEffort().requested`; the adapter resolves once, and neither the Chat
+nor Responses builder reinstates a deliberately omitted value. Catalog
+`reasoning_effort: false` becomes `reasoningEfforts: []`; malformed endpoint/tier
+arrays stay unknown instead of being filtered into authoritative empty arrays.
+These existing array fields round-trip through capture/replay without a new format.
+The probe's `route_source` and allowlisted endpoint details expose this decision
+without printing raw metadata. See [Configuration](EN-Configuration.md) for policy.
 
 `src/copilot/responses.ts` translates between the Copilot Responses API and
-chat-completion-like results. It exists because the default `gpt-6-astra`, the
-previous `gpt-5.6-sol` default, and the `gpt-5.5`/`gpt-5.6` family use `/responses`
-upstream. Claude uses the translated `/chat/completions` path by default.
+chat-completion-like results for any selected compatible model. Retrieval remains
+a distinct Responses `web_search_preview` operation; decision/final passes use
+the shared adapters, but a chat-only search backend produces a structured failed
+search instead of ordinary chat masquerading as retrieval. Missing capabilities
+remain unverified, not proof of built-in search support.
 
 ### Native Claude boundary
 
 `shouldUseNativeMessages` in `src/copilot/native.ts` applies only to routed IDs
 starting with `claude-`. `auto` requires advertised `/v1/messages` support from
 the current provider's catalog, `messages` forces native, and `chat-completions`
-keeps translation. The last is still the default; non-Claude selection is unchanged.
+pins Chat translation. The last is still the default; non-Claude models use the
+catalog-driven translated selector regardless of this Claude-only setting.
 
 `createNativeMessages` preserves message/block structure, signed thinking and
 redacted-thinking blocks, cache markers, in-place system roles/controls and native

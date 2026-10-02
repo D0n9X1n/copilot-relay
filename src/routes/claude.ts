@@ -43,8 +43,19 @@ import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
 import { createCopilotRequestSignal } from "~/copilot/client"
-import { ensureCopilotModelCatalog, getCachedCopilotModel } from "~/copilot/models"
-import { handleNativeMessages, shouldUseNativeMessages, validateNativeMessages } from "~/copilot/native"
+import {
+  ensureCopilotModelCatalog,
+  getCachedCopilotModel,
+  pinCopilotModelCatalog,
+  resolveModelReasoningEffort,
+} from "~/copilot/models"
+import { requireCopilotEndpoint } from "~/copilot/endpoint"
+import {
+  handleNativeMessages,
+  shouldUseNativeMessages,
+  validateNativeMessages,
+  validateNativeModelEffort,
+} from "~/copilot/native"
 
 export const claudeRoutes = new Hono<ProxyEnv>()
 
@@ -531,9 +542,23 @@ claudeRoutes.post("/messages", async (c) => {
     }
     validateClaudeMessages(claudePayload.messages, true)
     if (config.claudeUpstreamApi !== "auto") validate()
+
+    // Discover, then pin, then select: every later pass reuses the capabilities that
+    // admitted this request, and capability errors stay HTTP 400 before SSE opens.
     await ensureCopilotModelCatalog(config, upstreamModel)
     requestSignal?.throwIfAborted()
+    pinCopilotModelCatalog(config)
+
+    const selection = requireCopilotEndpoint(config, upstreamModel)
+
     validate()
+
+    // Validation only: each adapter resolves the effort it actually sends.
+    if (selection.endpoint === "/v1/messages") {
+      validateNativeModelEffort(config, upstreamModel, claudePayload)
+    } else {
+      resolveModelReasoningEffort(config, upstreamModel, getClaudeTurnEffort(claudePayload).requested)
+    }
   } catch (error) {
     if (!(error instanceof HTTPError)) throw error
     c.set("requestErrorMessage", error.message)

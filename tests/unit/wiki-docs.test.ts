@@ -323,6 +323,23 @@ test("both troubleshooting guides distinguish probe evidence from private replay
   }
 })
 
+test("routing documentation covers catalog selection and explicit no-effort capabilities in both languages", () => {
+  const requiredTerms = ["supported_endpoints", "/responses", "/chat/completions", "reasoning_effort", "route_source"]
+
+  for (const prefix of ["EN", "ZH"]) {
+    for (const suffix of ["Configuration", "Internals", "Logging-Troubleshooting"]) {
+      const name = `${prefix}-${suffix}.md`
+      const page = readPage(name)
+
+      for (const term of requiredTerms) {
+        assert(page.includes(term), `${name} must explain ${term}`)
+      }
+    }
+
+    assert(readPage(`${prefix}-Architecture.md`).includes("src/copilot/endpoint.ts"))
+  }
+})
+
 test("README stays a concise feature overview and quick start with valid Wiki links", () => {
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
   assert(body.split("\n").length <= 80)
