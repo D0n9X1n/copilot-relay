@@ -196,6 +196,7 @@ export async function probeModels(
           if (row.status === "FAIL") row.detail = failureFromEvidence(row, row.diagnostic)
         }
       }
+      if (!safeId(id, config.copilotToken)) row.id = "[unsupported ID]"
       results.push(row)
       for (const line of renderProbeRow(row, width, color, columns)) console.log(scrubSensitiveUrls(line))
       if (options.details) {

@@ -15,6 +15,8 @@ for (const [env, tty, expected] of [
   [{ FORCE_COLOR: "1" }, false, true], [{ FORCE_COLOR: "0" }, true, false],
   [{ FORCE_COLOR: "1", NO_COLOR: "1" }, true, false],
   [{ TERM: "dumb" }, true, false],
+  [{ FORCE_COLOR: "false" }, true, false], [{ FORCE_COLOR: "no" }, true, false],
+  [{ FORCE_COLOR: "" }, false, true],
 ] as const) {
   test(`terminal color policy ${JSON.stringify(env)} tty=${tty}`, () => {
     assert.equal(colorEnabled(env, tty), expected)

@@ -542,11 +542,16 @@ claudeRoutes.post("/messages", async (c) => {
       trace.recordFailure("local-validation")
     }
     log.error(`request_id=${requestId} ${error.message}`)
-    // Detach upstream error bytes before handler settlement cancels unconsumed upstream bodies.
+    // Decoded error bytes need fresh framing and must survive upstream-body cleanup.
+    const headers = new Headers()
+    for (const name of ["content-type", "retry-after", "x-request-id", "x-github-request-id", "x-copilot-service-request-id"]) {
+      const value = error.response.headers.get(name)
+      if (value !== null) headers.set(name, value)
+    }
     return new Response(await error.response.arrayBuffer(), {
       status: error.response.status,
       statusText: error.response.statusText,
-      headers: error.response.headers,
+      headers,
     })
   }
   if (claudePayload.stream) {

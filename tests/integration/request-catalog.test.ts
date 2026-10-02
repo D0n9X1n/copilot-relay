@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
+import { createServer as createHttpServer } from "node:http"
+import { gzipSync } from "node:zlib"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -14,7 +16,7 @@ process.env.CONSOLA_LEVEL = "0"
 
 const { snapshotProxyConfig } = await import("../../src/lib/config")
 const { boundModelOutputTokens, ensureCopilotModelCatalog, loadCopilotModelCatalog } = await import("../../src/copilot/models")
-const { createServer } = await import("../../src/server")
+const { createServer, startServer } = await import("../../src/server")
 const { normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
 const { RequestTrace, withRecordedTransport, withRequestTrace, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
@@ -38,6 +40,42 @@ test.afterEach(() => {
   delete runtimeState.upstreamBaseUrl
   delete runtimeState.modelRouting
   delete runtimeState.thinkEffort
+})
+
+test("compressed catalog errors preserve decoded bytes without stale framing headers", async () => {
+  const body = { error: { message: "catalog rate limit" } }
+  const compressed = gzipSync(JSON.stringify(body))
+  const upstream = createHttpServer((_request, response) => {
+    response.writeHead(429, { "content-type": "application/json", "content-encoding": "gzip", "content-length": String(compressed.length), "retry-after": "10", "x-github-request-id": "catalog-fixture-id" })
+    response.end(compressed)
+  })
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
+  const upstreamAddress = upstream.address()
+  assert(upstreamAddress && typeof upstreamAddress !== "string")
+  const config = configFor(`http://127.0.0.1:${upstreamAddress.port}`)
+  config.modelCatalog = { baseUrl: providerA, models: new Map([[model, {}]]) }
+  const relay = await startServer(config)
+  const address = relay.address()
+  assert(address && typeof address !== "string")
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Fixture" }] }),
+      signal: AbortSignal.timeout(5000),
+    })
+    assert.equal(response.status, 429)
+    assert.equal(response.headers.get("content-encoding"), null)
+    assert.equal(response.headers.get("retry-after"), "10")
+    assert.equal(response.headers.get("x-github-request-id"), "catalog-fixture-id")
+    assert.match(response.headers.get("x-copilot-relay-request-id") ?? "", /^[a-f0-9-]{36}$/)
+    assert.deepEqual(await response.json(), body)
+  } finally {
+    for (const server of [relay, upstream]) {
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()))
+      if ("closeAllConnections" in server) server.closeAllConnections()
+      await closed
+    }
+  }
 })
 
 for (const status of [400, 401, 429]) {

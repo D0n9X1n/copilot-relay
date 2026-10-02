@@ -135,8 +135,8 @@ copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
 TTY 输出中，PASS 为绿色、FAIL 为红色、INCOMPLETE 为黄色，SKIPPED/NOT_TESTED
 使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
 策略。文字状态始终是判断依据，颜色不会改变退出码。管道和 dumb 终端默认无颜色；
-`NO_COLOR` 或 `FORCE_COLOR=0` 禁用 ANSI，正值 `FORCE_COLOR` 可明确启用，
-`NO_COLOR` 优先。`status --json` 始终不带颜色。
+`NO_COLOR` 或 `FORCE_COLOR=0` 禁用 ANSI；`FORCE_COLOR=1`（也接受 `2`、`3`、
+`true` 或空值）可明确启用。`NO_COLOR` 优先。`status --json` 始终不带颜色。
 
 深度命令的常规启动消息保留在日志文件中，不再挤占表格；必要的登录提示和启动错误
 仍可见。不会打印探测响应文本、工具参数或原始异常。未通过的探测显示生成的

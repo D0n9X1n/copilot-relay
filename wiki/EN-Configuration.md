@@ -158,8 +158,9 @@ TTY output uses green for PASS, red for FAIL, yellow for INCOMPLETE and muted
 SKIPPED/NOT_TESTED labels. `status` and `status --deep` use the same policy for
 health, upstream checks and version mismatches. Text labels remain authoritative;
 color never changes an exit code. Pipes and dumb terminals default to plain text;
-`NO_COLOR` or `FORCE_COLOR=0` disables ANSI, and a positive `FORCE_COLOR` enables
-it explicitly. `NO_COLOR` takes precedence. `status --json` is always uncolored.
+`NO_COLOR` or `FORCE_COLOR=0` disables ANSI; `FORCE_COLOR=1` (also `2`, `3`, `true`
+or an empty value) enables it explicitly. `NO_COLOR` takes precedence.
+`status --json` is always uncolored.
 
 Routine deep-command setup messages stay in the log file rather than cluttering
 the table; required sign-in instructions and setup errors remain visible. Probe

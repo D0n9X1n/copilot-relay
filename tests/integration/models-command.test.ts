@@ -366,6 +366,20 @@ test("deep details retain upstream HTTP failures instead of relabeling them as l
   assert.equal(f.requests.filter((request) => request.method === "POST").length, 2)
 })
 
+test("a model ID matching a refreshed token is never printed", async (t) => {
+  let attempts = 0
+  const f = await fixture(t, async (req, res) => {
+    if (req.method === "GET") return respond(res, { data: [{ id: newToken }] })
+    const body = await requestBody(req)
+    if (++attempts === 1) return respond(res, {}, 401)
+    respond(res, probeReply(body))
+  }, { deep: true })
+  const result = await f.run(["models", "--deep", "--details"])
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /\[unsupported ID\]/)
+  assert.doesNotMatch(result.output, /new-private-token-sentinel/)
+})
+
 test("deep details distinguish failed token refresh from generic internal errors", async (t) => {
   const f = await fixture(t, (req, res) => req.method === "GET" ? respond(res, deepCatalog) : respond(res, {}, 401), { deep: true, failRefresh: true })
   const result = await f.run(["models", "--deep", "--model", "claude-opus-5.5", "--details"])
