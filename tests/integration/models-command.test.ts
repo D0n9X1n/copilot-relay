@@ -576,7 +576,23 @@ for (const logLevel of ["info", "debug"] as const) {
 
     // Only debug logging records a capture, so only it can offer an offline replay.
     if (logLevel === "debug") {
-      assert.match(result.stdout, new RegExp(`Offline replay: copilot-relay replay ${id}`))
+      // The details wait at most 1 s for the capture to settle, so on slow storage they print
+      // capture=pending (#132). The command still exits only after the capture is written, so
+      // the capture replays once the command returns, whichever state the details showed.
+      const capture = result.stdout.match(/capture=([a-z]+)/)?.[1]
+      assert.ok(capture === "complete" || capture === "pending", `unexpected capture=${capture}`)
+
+      if (capture === "complete") {
+        assert.match(result.stdout, new RegExp(`Offline replay: copilot-relay replay ${id}`))
+      } else {
+        assert.match(result.stdout, /Replay unavailable: capture is not complete\./)
+        assert.doesNotMatch(result.stdout, /Offline replay:/)
+      }
+
+      const replayed = await harness.run(["replay", id])
+
+      assert.equal(replayed.code, 0, replayed.output)
+      assert.match(replayed.stdout, /^MATCH$/m)
     } else {
       assert.match(result.stdout, /capture=off/)
       assert.doesNotMatch(result.stdout, /Offline replay:/)
