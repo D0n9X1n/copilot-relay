@@ -494,6 +494,99 @@ for (const capability of [false, []]) {
   })
 }
 
+// gpt-6.1-sol advertises none but rejects it with HTTP 400 invalid_request_body (#126), and the
+// relay never sends none on its own, so the implicit probe uses the lowest real tier instead.
+test("deep CLI probes the lowest advertised tier above none, and none only when it is the sole tier", async (t) => {
+  const catalog = {
+    data: [
+      {
+        id: "none-and-low",
+        supported_endpoints: ["/responses"],
+        capabilities: { type: "chat", supports: { reasoning_effort: ["none", "low", "medium"] } },
+      },
+      {
+        id: "none-only",
+        supported_endpoints: ["/responses"],
+        capabilities: { type: "chat", supports: { reasoning_effort: ["none"] } },
+      },
+    ],
+  }
+  const sent = new Map<string, unknown>()
+
+  const harness = await fixture(
+    t,
+    async (req, res) => {
+      if (req.method === "GET") {
+        return respond(res, catalog)
+      }
+
+      const body = await requestBody(req)
+      sent.set(body.model, body.reasoning?.effort)
+
+      if (body.model === "none-and-low" && body.reasoning?.effort === "none") {
+        return respond(res, { error: { code: "invalid_request_body", message: "none is not supported" } }, 400)
+      }
+
+      respond(res, probeReply(body))
+    },
+    { deep: true, logLevel: "info" }
+  )
+
+  const result = await harness.run(["models", "--deep", "--details"])
+
+  assert.equal(result.code, 0, result.output)
+  assert.match(result.stdout, /Summary: 2 passed/)
+  assert.equal(sent.get("none-and-low"), "low")
+  assert.equal(sent.get("none-only"), "none")
+
+  // An explicit none is still the user's request and is sent as asked.
+  const explicit = await harness.run(["models", "--deep", "--model", "none-and-low", "--effort", "none"])
+
+  assert.equal(explicit.code, 2)
+  assert.equal(sent.get("none-and-low"), "none")
+})
+
+// The catalog's gpt-5.6-sol-fast is the priority service tier of gpt-5.6-sol: its /responses
+// reply reports model gpt-5.6-sol with service_tier priority (#126). Only that exact pair is
+// accepted; a -fast suffix is not stripped in general.
+test("deep CLI accepts gpt-5.6-sol reported for gpt-5.6-sol-fast and no other -fast pair", async (t) => {
+  const catalog = {
+    data: ["gpt-5.6-sol-fast", "gpt-6-sol-fast"].map((id) => ({
+      id,
+      supported_endpoints: ["/responses"],
+      capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } },
+    })),
+  }
+  let reportedModel = ""
+
+  const harness = await fixture(
+    t,
+    async (req, res) => {
+      if (req.method === "GET") {
+        return respond(res, catalog)
+      }
+
+      const body = await requestBody(req)
+      respond(res, probeReply(body, { model: reportedModel, service_tier: "priority" }))
+    },
+    { deep: true, logLevel: "info" }
+  )
+
+  for (const [id, reported, code] of [
+    ["gpt-5.6-sol-fast", "gpt-5.6-sol", 0],
+    ["gpt-5.6-sol-fast", "gpt-5.6", 2],
+    ["gpt-5.6-sol-fast", "gpt-5.6-sol-preview", 2],
+    ["gpt-6-sol-fast", "gpt-6-sol", 2],
+  ] as const) {
+    reportedModel = reported
+    const result = await harness.run(["models", "--deep", "--details", "--model", id])
+
+    assert.equal(result.code, code, `${id} reported as ${reported}: ${result.output}`)
+    // The relay's 1M context suffix may follow a known GPT ID; the match ignores it.
+    assert.match(result.stdout, new RegExp(`reported=${reported.replaceAll(".", "\\.")}(?:\\[1m\\])? `))
+  }
+})
+
 test("deep details distinguish unavailable endpoints without leaking catalog strings", async (t) => {
   const catalog = {
     data: [

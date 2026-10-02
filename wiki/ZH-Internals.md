@@ -227,12 +227,23 @@ Claude 专属设置影响，按目录选择翻译接口。
 `message_stop`。错误或提前 EOF 不会被当作成功；也不会改走其他 API 来绕过原生
 错误/拒答。
 
-`src/lib/model-probe.ts` 的 `runDeepModelProbes` 将返回模型与准确的目录选择比较。
-除原有的 GPT context 后缀规范化之外，只有一项已观察到的原生拼写例外：接口为
-`/v1/messages`，所选 ID 为 `claude-opus-5.5`，返回 `claude-opus-5-5`。这不是通用
-标点规范化，也不是新增目录别名；`claude-opus-5-5-preview`、`claude-opus-5` 及其他
-不匹配仍失败。配置和发现保留目录 ID，`SENT/REPORTED` 保留两种实际拼写。接受该 ID
-仍需通过正常的完整文本/终止检查；不能只因为模型匹配就把拒答当作 `PASS`。
+`src/lib/model-probe.ts` 的 `probeModels` 将返回模型与准确的目录选择比较。
+除原有的 GPT context 后缀规范化之外，有两项已观察到的例外，每项都是精确配对：
+
+- 原生拼写：接口为 `/v1/messages`，所选 ID 为 `claude-opus-5.5`，返回
+  `claude-opus-5-5`。
+- Priority 层级（`solFastPriorityTier`）：接口为 `/responses`，所选 ID 为
+  `gpt-5.6-sol-fast`，返回 `gpt-5.6-sol`。目录将该项命名为 "GPT-5.6 Sol Fast"，
+  实际回复报告 `model: gpt-5.6-sol` 及 `service_tier: priority`。
+
+两者都不是通用标点规范化、`-fast` 剥离或新增目录别名；`claude-opus-5-5-preview`、
+`claude-opus-5`、报告为 `gpt-6-sol` 的 `gpt-6-sol-fast` 及其他不匹配仍失败。配置和
+发现保留目录 ID，`SENT/REPORTED` 保留两种实际拼写。接受仍需通过正常的完整文本/终止
+检查；不能只因为模型匹配就把拒答当作 `PASS`。
+
+隐式探测 effort 为高于 `none` 的公布最低档。仅当 `none` 是唯一公布的档位时才探测它：
+relay 自身从不发送 `none`，而 `gpt-6.1-sol` 公布了它却以 HTTP 400
+`invalid_request_body` 拒绝。显式的 `--effort none` 仍按请求发送。
 
 ### 工具 schema 兼容性
 

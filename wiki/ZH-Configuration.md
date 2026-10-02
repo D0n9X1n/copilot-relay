@@ -189,15 +189,17 @@ Messages handler、翻译、上游客户端、token 刷新和响应翻译。每�
 | `--model` | 默认测试全部公布的 ID；指定值必须准确匹配目录。需要 `--deep`。 |
 | `--details` | 显示每次探测的安全证据及捕获/replay 可用性。需要 `--deep`，不会增加探测或重试次数。 |
 | `--max-tokens` | 每次 4096，并受目录中的输出上限及原生非流式输出上限约束。 |
-| `--effort` | 按 `none`、`low`、`medium`、`high`、`xhigh`、`max` 选择公布的最低档；无元数据时使用标为未验证的 `low`。明确不支持 effort 时省略该字段（`effort=omitted`）；目录不支持的显式覆盖值会跳过。 |
+| `--effort` | 按 `low`、`medium`、`high`、`xhigh`、`max` 选择高于 `none` 的公布最低档；仅当 `none` 是唯一公布的档位时才使用它，因为 relay 自身从不发送 `none`，且部分模型公布了它却拒绝它。无元数据时使用标为未验证的 `low`。明确不支持 effort 时省略该字段（`effort=omitted`）；目录不支持的显式覆盖值会跳过。 |
 | `--timeout` | 每个模型 30 秒，同时不超过正数的 `upstreamTimeoutSeconds`。 |
 | `--total-timeout` | 探测阶段总计 300 秒；目录查询和认证发生在此预算之前。 |
 
 数字选项只接受不超过 2,147,483 的正整数；所有探测选项都需要 `--deep`。即使配置禁用
 上游超时，深度测试仍有自己的期限。缺少接口元数据会标为未验证，而非视为支持证据。
 模型匹配会移除 relay 已知的 GPT context 后缀。仅在通过原生 `/v1/messages` 探测目录
-ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus-5-5`。配置和
-`--model` 仍使用目录拼写，其他不匹配仍失败。认证可刷新 token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
+ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus-5-5`。仅在通过
+`/responses` 探测目录 ID `gpt-5.6-sol-fast` 时，还接受 `gpt-5.6-sol`：该目录项是
+`gpt-5.6-sol` 的 priority 服务层级，其回复报告基础模型。配置和 `--model` 仍使用目录
+拼写，其他不匹配（包括其他 `-fast` ID）仍失败。认证可刷新 token，现有的有界重试可能产生额外调用，但不会新增逐模型重试循环。Ctrl+C 会中止当前
 探测，并把后续模型标为未测试。仅这些诊断调用会抑制共享流程的原始日志，正常 relay
 日志不受影响。
 
