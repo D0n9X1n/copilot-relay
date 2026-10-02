@@ -14,9 +14,9 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
   test(`start rejects thinkEffort=${effort} before auth or config write-back`, async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-start-effort-"))
     const configPath = path.join(home, ".copilot-relay", "config.yaml")
-    const original = `thinkEffort: ${effort}\nclaudeSetup: false\n`
+    const originalConfig = `thinkEffort: ${effort}\nclaudeSetup: false\n`
     await fs.mkdir(path.dirname(configPath), { recursive: true })
-    await fs.writeFile(configPath, original)
+    await fs.writeFile(configPath, originalConfig)
     const script = `
       globalThis.fetch = async () => { throw new Error("NETWORK_ACCESS_FORBIDDEN"); };
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, "start"];
@@ -44,7 +44,7 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
       assert.match(result.output, /Invalid thinkEffort/)
       assert.match(result.output, /Valid values: low, medium, high, xhigh, max/)
       assert.doesNotMatch(result.output, /NETWORK_ACCESS_FORBIDDEN|Running upstream preflight|Default think effort: none/)
-      assert.equal(await fs.readFile(configPath, "utf8"), original)
+      assert.equal(await fs.readFile(configPath, "utf8"), originalConfig)
       await assert.rejects(fs.stat(path.join(home, ".copilot-relay", "copilot-relay.pid")), { code: "ENOENT" })
     } finally {
       await fs.rm(home, { recursive: true, force: true })

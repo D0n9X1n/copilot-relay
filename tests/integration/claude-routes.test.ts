@@ -628,11 +628,11 @@ for (const model of ["default", "opus"]) {
 
           const payload = { model, stream, max_tokens: 16, system: "Stable fixture instructions.", metadata: { user_id: "session-effort-switch" }, output_config: { effort: "low" }, messages }
           const original = structuredClone(payload)
-          const count = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
+          const countResponse = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
             method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
           }))
-          assert.equal(count.status, 200)
-          assert((await count.json() as { input_tokens: number }).input_tokens > 0)
+          assert.equal(countResponse.status, 200)
+          assert((await countResponse.json() as { input_tokens: number }).input_tokens > 0)
           const requestCount = mock.requests.length
           const response = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
@@ -713,17 +713,17 @@ for (const model of ["default", "opus"]) {
             assert.equal(body.reasoning_effort ?? body.reasoning?.effort, expected)
           }
 
-          const next = await app.fetch(new Request("http://localhost/v1/messages", {
+          const followUp = await app.fetch(new Request("http://localhost/v1/messages", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Reply OK only." }] }),
           }))
-          assert.equal(next.status, 200)
-          await next.text()
-          const nextBody = mock.requests.at(-1)?.body as {
+          assert.equal(followUp.status, 200)
+          await followUp.text()
+          const followUpBody = mock.requests.at(-1)?.body as {
             reasoning_effort?: string; reasoning?: { effort?: string }
           }
-          assert.equal(nextBody.reasoning_effort ?? nextBody.reasoning?.effort, "low")
+          assert.equal(followUpBody.reasoning_effort ?? followUpBody.reasoning?.effort, "low")
         } finally {
           await mock.close()
         }
@@ -814,9 +814,9 @@ test("rejects invalid request effort before SSE or upstream calls", async () => 
       { output_config: "high" },
       { reasoning_effort: "" },
     ]) {
-      for (const path of ["/v1/messages", "/v1/messages/count_tokens"]) {
+      for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
         for (const stream of [false, true]) {
-          const response = await app.fetch(new Request(`http://localhost${path}`, {
+          const response = await app.fetch(new Request(`http://localhost${route}`, {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({
               model: "opus", stream, max_tokens: 16,
@@ -945,9 +945,9 @@ for (const stream of [false, true]) {
         if (stream) {
           const events = (await response.text()).split("\n")
             .filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6)))
-          const json = events.filter((event) => event.delta?.type === "input_json_delta")
+          const inputJson = events.filter((event) => event.delta?.type === "input_json_delta")
             .map((event) => event.delta.partial_json).join("")
-          assert.deepEqual(JSON.parse(json), args)
+          assert.deepEqual(JSON.parse(inputJson), args)
           assert.equal(events.filter((event) => event.type === "message_stop").length, 1)
         } else {
           const result = await response.json() as { content: Array<{ type: string; input?: unknown }> }
@@ -1316,8 +1316,8 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
         method: "POST",
       }))
 
-    const first = makeRequest("first request waits upstream")
-    const second = makeRequest("second request should still forward", true)
+    const firstResponse = makeRequest("first request waits upstream")
+    const secondResponse = makeRequest("second request should still forward", true)
 
     await withTimeout(
       secondRequestArrived,
@@ -1325,13 +1325,13 @@ test("POST /v1/messages forwards concurrent requests without waiting for earlier
       "Second request was not forwarded while the first upstream response was pending",
     )
 
-    const secondBody = await (await second).json() as {
+    const secondBody = await (await secondResponse).json() as {
       content: Array<{ text?: string }>
     }
     assert.equal(secondBody.content[0]?.text, "OK 2")
 
     releaseFirstResponse()
-    const firstBody = await (await first).json() as {
+    const firstBody = await (await firstResponse).json() as {
       content: Array<{ text?: string }>
     }
     assert.equal(firstBody.content[0]?.text, "OK 1")

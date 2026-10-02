@@ -48,20 +48,20 @@ async function fixture(t: import("node:test").TestContext) {
     }
 
     const tools = body.tools ?? []
-    const search = tools.some((tool: { function?: { name?: string } }) => tool.function?.name === "WebSearch")
+    const offersWebSearch = tools.some((tool: { function?: { name?: string } }) => tool.function?.name === "WebSearch")
     const hasToolResult = body.messages.some((message: { role: string }) => message.role === "tool")
-    const call = tools.length && !hasToolResult ? {
-      id: "call_echo", type: "function", function: { name: search ? "WebSearch" : "echo", arguments: search ? '{"query":"public docs"}' : '{"value":"OK"}' },
+    const toolCall = tools.length && !hasToolResult ? {
+      id: "call_echo", type: "function", function: { name: offersWebSearch ? "WebSearch" : "echo", arguments: offersWebSearch ? '{"query":"public docs"}' : '{"value":"OK"}' },
     } : undefined
-    const message = call ? { role: "assistant", content: null, tool_calls: [call] } : { role: "assistant", content: "OK" }
-    const finish = call ? "tool_calls" : "stop"
+    const message = toolCall ? { role: "assistant", content: null, tool_calls: [toolCall] } : { role: "assistant", content: "OK" }
+    const finishReason = toolCall ? "tool_calls" : "stop"
     const usage = { prompt_tokens: 40, completion_tokens: 8, total_tokens: 48 }
     if (body.stream) {
       res.setHeader("content-type", "text/event-stream")
-      const delta = call ? { role: "assistant", tool_calls: [{ index: 0, ...call }] } : message
-      res.end(`data: ${JSON.stringify({ id: "chat_opus55", model: body.model, created: 1, choices: [{ index: 0, delta, finish_reason: finish }], usage })}\n\ndata: [DONE]\n\n`)
+      const delta = toolCall ? { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] } : message
+      res.end(`data: ${JSON.stringify({ id: "chat_opus55", model: body.model, created: 1, choices: [{ index: 0, delta, finish_reason: finishReason }], usage })}\n\ndata: [DONE]\n\n`)
     } else {
-      res.end(JSON.stringify({ id: "chat_opus55", model: body.model, created: 1, choices: [{ index: 0, message, finish_reason: finish }], usage }))
+      res.end(JSON.stringify({ id: "chat_opus55", model: body.model, created: 1, choices: [{ index: 0, message, finish_reason: finishReason }], usage }))
     }
   })
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
@@ -87,9 +87,9 @@ async function fixture(t: import("node:test").TestContext) {
 for (const stream of [false, true]) {
   for (const effort of [undefined, "low", "medium", "high", "xhigh", "max"]) {
     test(`Opus 5.5 default route preserves effort=${effort ?? "default"} stream=${stream}`, async (t) => {
-      const f = await fixture(t)
+      const relay = await fixture(t)
       runtimeState.thinkEffort = "max"
-      const response = await f.send({ stream, ...(effort && { output_config: { effort } }) })
+      const response = await relay.send({ stream, ...(effort && { output_config: { effort } }) })
       assert.equal(response.status, 200)
       const text = await response.text()
       assert.match(text, /claude-opus-5\.5/)
@@ -99,18 +99,18 @@ for (const stream of [false, true]) {
         assert.equal(JSON.parse(text).content[0].text, "OK")
       }
 
-      assert.equal(f.requests.length, 1)
-      assert.equal(f.requests[0]?.path, "/chat/completions")
-      assert.equal(f.requests[0]?.body.model, "claude-opus-5.5")
-      assert.equal(f.requests[0]?.body.reasoning_effort, effort ?? "max")
-      assert.equal(f.requests[0]?.body.max_tokens, 4096)
+      assert.equal(relay.requests.length, 1)
+      assert.equal(relay.requests[0]?.path, "/chat/completions")
+      assert.equal(relay.requests[0]?.body.model, "claude-opus-5.5")
+      assert.equal(relay.requests[0]?.body.reasoning_effort, effort ?? "max")
+      assert.equal(relay.requests[0]?.body.max_tokens, 4096)
     })
   }
 
   test(`Opus 5.5 automatic tool choice and continuation stream=${stream}`, async (t) => {
-    const f = await fixture(t)
+    const relay = await fixture(t)
     const tools = [{ name: "echo", input_schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } }]
-    const response = await f.send({ stream, tools })
+    const response = await relay.send({ stream, tools })
     assert.equal(response.status, 200)
     const text = await response.text()
     assert.match(text, /call_echo/)
@@ -119,24 +119,24 @@ for (const stream of [false, true]) {
       assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
     }
 
-    const follow = await f.send({ tools, messages: [
+    const continuation = await relay.send({ tools, messages: [
       { role: "user", content: "Echo OK" },
       { role: "assistant", content: [{ type: "tool_use", id: "call_echo", name: "echo", input: { value: "OK" } }] },
       { role: "user", content: [{ type: "tool_result", tool_use_id: "call_echo", content: "OK" }] },
     ] })
-    assert.equal(follow.status, 200)
-    assert.equal((await follow.json() as { content: Array<{ text: string }> }).content[0]?.text, "OK")
-    const messages = f.requests[1]?.body.messages
-    assert(messages.some((message: { role: string; tool_call_id?: string }) => message.role === "tool" && message.tool_call_id === "call_echo"))
-    assert.equal(messages.at(-1)?.role, "user")
-    assert.equal(f.requests[1]?.body.model, "claude-opus-5.5")
+    assert.equal(continuation.status, 200)
+    assert.equal((await continuation.json() as { content: Array<{ text: string }> }).content[0]?.text, "OK")
+    const upstreamMessages = relay.requests[1]?.body.messages
+    assert(upstreamMessages.some((message: { role: string; tool_call_id?: string }) => message.role === "tool" && message.tool_call_id === "call_echo"))
+    assert.equal(upstreamMessages.at(-1)?.role, "user")
+    assert.equal(relay.requests[1]?.body.model, "claude-opus-5.5")
   })
 }
 
 for (const stream of [false, true]) {
   test(`Opus 5.5 WebSearch returns to the Opus route stream=${stream}`, async (t) => {
-    const f = await fixture(t)
-    const response = await f.send({ stream, output_config: { effort: "low" }, tools: [{ name: "WebSearch", input_schema: { type: "object" } }] })
+    const relay = await fixture(t)
+    const response = await relay.send({ stream, output_config: { effort: "low" }, tools: [{ name: "WebSearch", input_schema: { type: "object" } }] })
     assert.equal(response.status, 200)
     const text = await response.text()
     assert.match(text, /web_search_tool_result/)
@@ -148,20 +148,20 @@ for (const stream of [false, true]) {
       assert.equal(JSON.parse(text).model, "claude-opus-5.5")
     }
 
-    assert.deepEqual(f.requests.map((request) => request.path), ["/chat/completions", "/responses", "/chat/completions"])
-    assert.equal(f.requests[2]?.body.model, "claude-opus-5.5")
-    assert.equal(f.requests[2]?.body.reasoning_effort, "low")
-    assert.equal(f.requests[2]?.body.messages.at(-1)?.role, "user")
+    assert.deepEqual(relay.requests.map((request) => request.path), ["/chat/completions", "/responses", "/chat/completions"])
+    assert.equal(relay.requests[2]?.body.model, "claude-opus-5.5")
+    assert.equal(relay.requests[2]?.body.reasoning_effort, "low")
+    assert.equal(relay.requests[2]?.body.messages.at(-1)?.role, "user")
   })
 }
 
 for (const type of ["tool", "any"]) {
   test(`Opus 5.5 preserves upstream rejection for forced ${type} selection`, async (t) => {
-    const f = await fixture(t)
-    const response = await f.send({ tools: [{ name: "echo", input_schema: { type: "object" } }], tool_choice: { type, ...(type === "tool" && { name: "echo" }) } })
+    const relay = await fixture(t)
+    const response = await relay.send({ tools: [{ name: "echo", input_schema: { type: "object" } }], tool_choice: { type, ...(type === "tool" && { name: "echo" }) } })
     assert.equal(response.status, 400)
     assert.match(await response.text(), /not supported for this model/)
-    assert.equal(f.requests.length, 1)
-    assert.deepEqual(f.requests[0]?.body.tool_choice, type === "any" ? "required" : { type: "function", function: { name: "echo" } })
+    assert.equal(relay.requests.length, 1)
+    assert.deepEqual(relay.requests[0]?.body.tool_choice, type === "any" ? "required" : { type: "function", function: { name: "echo" } })
   })
 }

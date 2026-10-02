@@ -432,7 +432,7 @@ for (const endpoint of ["/chat/completions", "/responses"] as const) {
 
 test("provider reload cannot change an admitted Responses search final pass", async () => {
   const id = "future-chat-model"
-  const root = configFor(id, {
+  const config = configFor(id, {
     supportedEndpoints: ["/responses"],
     reasoningEfforts: ["low"],
     limits: {
@@ -441,11 +441,11 @@ test("provider reload cannot change an admitted Responses search final pass", as
       max_output_tokens: 64,
     },
   })
-  root.webSearchBackend = id
+  config.webSearchBackend = id
   runtimeState.modelRouting = { gptModel: id, opusModel: id }
   runtimeState.thinkEffort = "low"
 
-  const app = createServer(root)
+  const app = createServer(config)
   const sent: Array<{ path: string; body: Record<string, any> }> = []
 
   await withRecordedTransport({
@@ -455,9 +455,9 @@ test("provider reload cannot change an admitted Responses search final pass", as
 
       if (sent.length === 1) {
         // Reload after admission, while the decision stream still owns the old snapshot.
-        root.copilotBaseUrl = "https://new-provider.invalid"
-        root.modelCatalog = {
-          baseUrl: root.copilotBaseUrl,
+        config.copilotBaseUrl = "https://new-provider.invalid"
+        config.modelCatalog = {
+          baseUrl: config.copilotBaseUrl,
           models: new Map([[id, {
             supportedEndpoints: ["/chat/completions"],
             reasoningEfforts: [],
@@ -530,7 +530,7 @@ test("provider reload cannot change an admitted Responses search final pass", as
 
   assert.equal(sent[0].body.max_output_tokens, 64)
   assert.equal(sent[2].body.max_output_tokens, 64)
-  assert.equal(root.copilotBaseUrl, "https://new-provider.invalid")
+  assert.equal(config.copilotBaseUrl, "https://new-provider.invalid")
 })
 
 const fallbackEndpointCases = [
@@ -730,9 +730,9 @@ test("catalog Responses preserves cache key and prefix across appended turns and
     reasoningEfforts: ["low", "high"],
   })
   const sent: Array<Record<string, any>> = []
-  const first = [{ role: "user" as const, content: "First turn" }]
-  const next = [
-    ...first,
+  const firstHistory = [{ role: "user" as const, content: "First turn" }]
+  const appendedHistory = [
+    ...firstHistory,
     { role: "assistant" as const, content: "OK" },
     { role: "user" as const, content: "Next turn" },
   ]
@@ -746,7 +746,7 @@ test("catalog Responses preserves cache key and prefix across appended turns and
     },
     refresh: async () => {},
   }, async () => {
-    for (const [messages, effort] of [[first, "low"], [next, "high"]] as const) {
+    for (const [messages, effort] of [[firstHistory, "low"], [appendedHistory, "high"]] as const) {
       const response = await post(config, {
         messages,
         output_config: { effort },
