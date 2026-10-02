@@ -80,6 +80,11 @@ def terminate(process):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # macOS reports EPERM, not ESRCH, for a group whose leader has exited but is not yet
+            # reaped. Only a leader that is still running and cannot be signalled is a failure.
+            if process.poll() is None:
+                raise
     if process.poll() is None:
         process.kill()
     try:

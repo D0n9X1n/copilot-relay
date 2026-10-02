@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Origin: D0n9X1n/SonicTerm scripts/release-issues_tests.py; see LICENSE-SonicTerm.
 """Offline release provenance tests use real Git histories and a fake gh process."""
+import errno
 import importlib.util
 import json
 import os
@@ -488,6 +489,51 @@ class ProvenanceTests(unittest.TestCase):
                     with self.assertRaises(error):
                         release.capture([sys.executable, "-c", source], timeout, cap)
                 self.assertEqual(cleanup.call_count, 0 if error is None and os.name == "nt" else 1)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cleanup")
+    def test_cleanup_ignores_eperm_once_the_child_has_exited(self):
+        # The child is reaped first, so EPERM can only mean the group has nothing left to signal.
+        child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        child.wait()
+        refused = PermissionError(errno.EPERM, "Operation not permitted")
+
+        with patch.object(release.os, "killpg", side_effect=refused):
+            release.terminate(child)
+
+        self.assertEqual(child.returncode, 0)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cleanup")
+    def test_cleanup_reraises_eperm_while_the_child_runs(self):
+        # A live child that cannot be signalled is a real failure, not one to ignore.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        refused = PermissionError(errno.EPERM, "Operation not permitted")
+
+        with patch.object(release.os, "killpg", side_effect=refused):
+            with self.assertRaises(PermissionError):
+                release.terminate(child)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cleanup")
+    def test_capture_keeps_its_error_when_cleanup_meets_eperm(self):
+        # capture() decodes only after the child has exited; cleanup must not replace that error.
+        source = "import sys; sys.stdout.buffer.write(bytes([255]))"
+        refused = PermissionError(errno.EPERM, "Operation not permitted")
+
+        with patch.object(release.os, "killpg", side_effect=refused):
+            with self.assertRaises(UnicodeDecodeError):
+                release.capture([sys.executable, "-c", source], 5, 4096)
+
+    @unittest.skipUnless(sys.platform == "darwin" and hasattr(os, "waitid"), "macOS group signalling after exit")
+    def test_cleanup_tolerates_an_exited_unreaped_group_on_macos(self):
+        # macOS answers EPERM, not ESRCH, when the group's only member has exited but is not yet
+        # reaped: the window that failed a macOS CI leg. waitid(WNOWAIT) holds that state open.
+        child = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+
+        release.terminate(child)
+
+        self.assertEqual(child.returncode, 0)
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group lifecycle assertion")
     def test_timeout_reaps_descendant_holding_pipe(self):
