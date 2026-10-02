@@ -39,6 +39,17 @@ npm run build
 元数据，不调用真实 GitHub API。CI 的六条腿都安装 Python 3.12。Python 只是开发和发布
 依赖，运行中继本身不需要 Python。
 
+离线 release-pipeline 测试还要求 PATH 中有 Bash、`jq`、`mkdir`、`cp`、`mktemp`、`rm`、
+`basename`、`cmp`、`grep`，以及支持从标准输入读取归档的 `tar`。Windows 的 Git Bash
+提供 shell 和 Unix 工具；如果缺少 `jq`，需要单独安装。Windows 的 BSD tar 和 Git 的
+GNU tar 均受支持：`package-smoke.mjs` 通过 stdin 列出并解压同一份已校验字节，
+把解压目录设为子进程工作目录，而不是传入带 Windows 盘符的归档路径参数。
+
+发布来源收集仍受输出大小和超时限制。在 Windows 上，子进程已退出且两个捕获管道
+都已读取完毕时，不再调用 `taskkill`；异常或未完成的捕获仍执行尽力而为的进程树清理。
+不保证清理已脱离且关闭捕获管道的后代进程。POSIX 仍清理进程组；通过 `setsid`
+创建新会话的后代进程可以脱离该进程组。
+
 纯逻辑优先写单元测试 —— 配置校验、模型路由、token 计数启发式、Claude/Copilot 协议
 边界情况。只有当 Hono 路由或 mock 上游行为本身属于契约的一部分时，才用集成测试。
 
