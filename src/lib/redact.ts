@@ -60,6 +60,7 @@ const parseHttpUrl = (value: string): URL | undefined => {
   } catch {
     return undefined
   }
+
   return parsed.protocol === "http:" || parsed.protocol === "https:" ?
       parsed
     : undefined
@@ -179,11 +180,14 @@ export const scrubSensitiveUrls = (text: string): string => {
           break
         }
       }
+
       if (authorityEnd !== segment.length) {
         return `${prefix}${parsed.origin}${redactedMarker}`
       }
+
       prefix += segment
     }
+
     return prefix
   })
 }

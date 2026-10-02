@@ -46,8 +46,10 @@ const readActiveLog = async (): Promise<string> => {
     if (content) {
       return content
     }
+
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
+
   throw new Error("log file was never written")
 }
 
@@ -73,6 +75,7 @@ const startMockUpstream = async (
   if (address === null || typeof address === "string") {
     throw new Error("mock upstream did not bind a port")
   }
+
   return {
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -249,6 +252,7 @@ test("redacts canonicalized and fragment-dropped variants", async () => {
   for (const sentinel of ["CANON_SENTINEL", "FRAG_SENTINEL"]) {
     assert.ok(!output.includes(sentinel), `leaked ${sentinel}:\n${output}`)
   }
+
   assert.ok(output.includes("[redacted]"))
   assert.ok(output.includes("502"))
 })
@@ -275,6 +279,7 @@ test("keeps redacting the old base url after a new one is registered", async () 
   for (const sentinel of ["OLD_SECRET", "NEW_SECRET"]) {
     assert.ok(!output.includes(sentinel), `leaked ${sentinel}:\n${output}`)
   }
+
   // Both origins survive as origins, so the entry still says which gateway.
   assert.ok(output.includes("https://old-gateway.test.invalid[redacted]"))
   assert.ok(output.includes("https://new-gateway.test.invalid[redacted]"))

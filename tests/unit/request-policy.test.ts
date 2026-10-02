@@ -18,8 +18,14 @@ const { shouldUseNativeMessages } = await import("../../src/copilot/native")
 const { withRecordedTransport } = await import("../../src/lib/request-trace")
 const { flushLogs } = await import("../../src/lib/log")
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
-test.afterEach(() => { delete runtimeState.modelRouting; delete runtimeState.thinkEffort })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
+test.afterEach(() => {
+  delete runtimeState.modelRouting
+  delete runtimeState.thinkEffort
+})
 
 test("request policy stays fixed across a concurrent config reload", async () => {
   runtimeState.modelRouting = { gptModel: "gpt-before", opusModel: "opus-before" }
@@ -40,7 +46,10 @@ test("frozen request policy still reads refreshed credentials from the provider"
   const source = {
     host: "127.0.0.1", port: 0, copilotBaseUrl: "http://provider-before.invalid",
     copilotToken: "fixture-old", copilotTokenGeneration: 1, upstreamTimeoutMs: 3000, vsCodeVersion: "test",
-    refreshCopilotToken: async () => { source.copilotToken = "fixture-new"; source.copilotTokenGeneration++ },
+    refreshCopilotToken: async () => {
+      source.copilotToken = "fixture-new"
+      source.copilotTokenGeneration++
+    },
   }
   const snapshot = snapshotProxyConfig(source)
   source.copilotBaseUrl = "http://provider-after.invalid"
@@ -70,7 +79,9 @@ test("catalog assurance preserves optional discovery and refreshes before native
       discoveries++
       return Response.json({ data: [{ id: model, supported_endpoints: ["/v1/messages"], capabilities: { limits } }] })
     },
-    refresh: async () => { throw new Error("Unexpected credential refresh") },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
   }, async () => {
     // Embedders without preflight must not trigger discovery.
     await ensureCopilotModelCatalog(config, model)

@@ -144,11 +144,18 @@ const formatUptime = (startedAt: string | undefined): string => {
   }
 
   const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m`
+  }
+
   if (seconds < 86_400) {
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
   }
+
   return `${Math.floor(seconds / 86_400)}d ${Math.floor((seconds % 86_400) / 3600)}h`
 }
 
@@ -423,6 +430,7 @@ export const checkDeep = async (
       if (body.content.length > 0) {
         return { ms: result.ms, ok: true }
       }
+
       // Reasoning can consume the probe's entire budget before visible text.
       if (
         body.type === "message"
@@ -439,6 +447,7 @@ export const checkDeep = async (
         }
       }
     }
+
     return { detail: "empty response", ms: result.ms, ok: false }
   } catch (error) {
     return { detail: describeError(error), ok: false }
@@ -535,12 +544,19 @@ export const status = defineCommand({
     try {
       result = await collectStatus({ deep: Boolean(args.deep) })
     } catch (error) {
-      if (!(error instanceof StatusConfigError) && !(error instanceof RelayInspectionError)) throw error
+      if (!(error instanceof StatusConfigError) && !(error instanceof RelayInspectionError)) {
+        throw error
+      }
+
       const diagnostic = error instanceof RelayInspectionError
         ? "Could not verify relay process state; status is unknown."
         : sanitizeTerminalString(error.message)
-      if (args.json) console.log(JSON.stringify({ error: diagnostic, configPath: paths.configPath }))
-      else console.error(diagnostic)
+      if (args.json) {
+        console.log(JSON.stringify({ error: diagnostic, configPath: paths.configPath }))
+      } else {
+        console.error(diagnostic)
+      }
+
       process.exitCode = exitCodes.notUsable
       return
     }

@@ -25,6 +25,7 @@ test("configured effort choices exclude none without removing request-level supp
     assert.equal(isConfiguredReasoningEffort(effort), true)
     assert.equal(isReasoningEffort(effort), true)
   }
+
   assert.equal(isConfiguredReasoningEffort("none"), false)
   assert.equal(isReasoningEffort("none"), true)
 })
@@ -180,6 +181,7 @@ test("accepts every valid reasoning effort tier and rejects the rest", () => {
   for (const effort of ["none", "low", "medium", "high", "xhigh", "max"]) {
     assert.equal(isReasoningEffort(effort), true)
   }
+
   for (const value of ["", "ultra", "maximum", "MAX", 5, null, undefined, {}]) {
     assert.equal(isReasoningEffort(value), false)
   }

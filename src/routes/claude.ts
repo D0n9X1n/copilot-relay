@@ -89,9 +89,18 @@ const getClaudeRequestedThinking = (
 }
 
 const emptyStreamBlock = (block: ClaudeAssistantContentBlock): ClaudeAssistantContentBlock => {
-  if (block.type === "text") return { ...block, text: "" }
-  if (block.type === "thinking") return { ...block, thinking: "" }
-  if (block.type === "tool_use" || block.type === "server_tool_use") return { ...block, input: {} }
+  if (block.type === "text") {
+    return { ...block, text: "" }
+  }
+
+  if (block.type === "thinking") {
+    return { ...block, thinking: "" }
+  }
+
+  if (block.type === "tool_use" || block.type === "server_tool_use") {
+    return { ...block, input: {} }
+  }
+
   return block
 }
 
@@ -265,6 +274,7 @@ const handleClaudeMessageRequest = async (
       requestId, signal: requestSignal, headers: requestHeaders,
     }, writeEvent)
   }
+
   const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
   const decisionPayload =
     shouldLetModelDecideWebSearch ?
@@ -283,6 +293,7 @@ const handleClaudeMessageRequest = async (
   if (shouldLetModelDecideWebSearch && !canStreamWebSearchDecision) {
     openAIPayload.stream = false
   }
+
   const response = await createChatCompletions(config, openAIPayload, {
     client: "claude",
     requestedModel: claudePayload.model,
@@ -358,7 +369,10 @@ const handleClaudeMessageRequest = async (
       const decisionUsage = translateToClaude(effectiveResponse, toolNameMapper).usage
       searchResponse.usage.input_tokens += decisionUsage.input_tokens
       searchResponse.usage.output_tokens += decisionUsage.output_tokens
-      if (decisionUsage.cache_read_input_tokens !== undefined) searchResponse.usage.cache_read_input_tokens = (searchResponse.usage.cache_read_input_tokens ?? 0) + decisionUsage.cache_read_input_tokens
+      if (decisionUsage.cache_read_input_tokens !== undefined) {
+        searchResponse.usage.cache_read_input_tokens = (searchResponse.usage.cache_read_input_tokens ?? 0) + decisionUsage.cache_read_input_tokens
+      }
+
       const siblingResponse = translateToClaude({
         ...effectiveResponse,
         choices: effectiveResponse.choices.map((choice) => ({
@@ -413,19 +427,23 @@ const handleClaudeMessageRequest = async (
       }
     } else {
       claudeResponse = translateToClaude(effectiveResponse, toolNameMapper)
-      if (streamedBeforeDecision) claudeResponse.content = claudeResponse.content.flatMap((block): ClaudeAssistantContentBlock[] => {
-        if (block.type === "text") {
-          const text = block.text.slice(preambleText.length)
-          preambleText = ""
-          return text ? [{ ...block, text }] : []
-        }
-        if (block.type === "thinking") {
-          const thinking = block.thinking.slice(preambleThinking.length)
-          preambleThinking = ""
-          return thinking ? [{ ...block, thinking }] : []
-        }
-        return [block]
-      })
+      if (streamedBeforeDecision) {
+        claudeResponse.content = claudeResponse.content.flatMap((block): ClaudeAssistantContentBlock[] => {
+          if (block.type === "text") {
+            const text = block.text.slice(preambleText.length)
+            preambleText = ""
+            return text ? [{ ...block, text }] : []
+          }
+
+          if (block.type === "thinking") {
+            const thinking = block.thinking.slice(preambleThinking.length)
+            preambleThinking = ""
+            return thinking ? [{ ...block, thinking }] : []
+          }
+
+          return [block]
+        })
+      }
     }
 
     if (writeEvent) {
@@ -489,6 +507,7 @@ const handleClaudeMessageRequest = async (
     if (rawEvent.data === "[DONE]") {
       break
     }
+
     if (!rawEvent.data) {
       continue
     }
@@ -537,11 +556,17 @@ claudeRoutes.post("/messages", async (c) => {
     getRequestReasoningEffort(claudePayload)
     const upstreamModel = translateModelName(claudePayload.model)
     const validate = () => {
-      if (shouldUseNativeMessages(config, upstreamModel)) validateNativeMessages(claudePayload)
-      else validateClaudeMessages(claudePayload.messages)
+      if (shouldUseNativeMessages(config, upstreamModel)) {
+        validateNativeMessages(claudePayload)
+      } else {
+        validateClaudeMessages(claudePayload.messages)
+      }
     }
+
     validateClaudeMessages(claudePayload.messages, true)
-    if (config.claudeUpstreamApi !== "auto") validate()
+    if (config.claudeUpstreamApi !== "auto") {
+      validate()
+    }
 
     // Discover, then pin, then select: every later pass reuses the capabilities that
     // admitted this request, and capability errors stay HTTP 400 before SSE opens.
@@ -560,25 +585,33 @@ claudeRoutes.post("/messages", async (c) => {
       resolveModelReasoningEffort(config, upstreamModel, getClaudeTurnEffort(claudePayload).requested)
     }
   } catch (error) {
-    if (!(error instanceof HTTPError)) throw error
+    if (!(error instanceof HTTPError)) {
+      throw error
+    }
+
     c.set("requestErrorMessage", error.message)
     const trace = c.get("requestTrace")
     if (error.response.status === 400 && trace?.manifest.exchanges.length === 0) {
       trace.recordFailure("local-validation")
     }
+
     log.error(`request_id=${requestId} ${error.message}`)
     // Decoded error bytes need fresh framing and must survive upstream-body cleanup.
     const headers = new Headers()
     for (const name of ["content-type", "retry-after", "x-request-id", "x-github-request-id", "x-copilot-service-request-id"]) {
       const value = error.response.headers.get(name)
-      if (value !== null) headers.set(name, value)
+      if (value !== null) {
+        headers.set(name, value)
+      }
     }
+
     return new Response(await error.response.arrayBuffer(), {
       status: error.response.status,
       statusText: error.response.statusText,
       headers,
     })
   }
+
   if (claudePayload.stream) {
     const trace = c.get("requestTrace")
     trace?.deferHandler()
@@ -602,9 +635,15 @@ claudeRoutes.post("/messages", async (c) => {
         )
       } catch (error) {
         log.error(`request_id=${requestId} Error during Claude stream request:`, error)
-        if (error instanceof UpstreamToolInputError) trace?.recordFailure("invalid-tool-input")
+        if (error instanceof UpstreamToolInputError) {
+          trace?.recordFailure("invalid-tool-input")
+        }
+
         const errorEvent = translateErrorToClaudeErrorEvent(error)
-        if (errorEvent.type === "error") errorEvent.error.message += ` (request_id=${requestId})`
+        if (errorEvent.type === "error") {
+          errorEvent.error.message += ` (request_id=${requestId})`
+        }
+
         await writeEvent(errorEvent)
       } finally {
         trace?.handlerSettled()
@@ -634,7 +673,10 @@ claudeRoutes.post("/messages", async (c) => {
     }
 
     if (error instanceof HTTPError) {
-      if (error instanceof UpstreamToolInputError) c.get("requestTrace")?.recordFailure("invalid-tool-input")
+      if (error instanceof UpstreamToolInputError) {
+        c.get("requestTrace")?.recordFailure("invalid-tool-input")
+      }
+
       const text = await error.response.text().catch(() => "")
       c.set("requestErrorMessage", error.detail ?? text.slice(0, 240))
       return new Response(text, {
@@ -659,7 +701,10 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
       // Controls affect native execution, not local advisory token counting.
       // Copy only system messages; real Messages requests retain their controls.
       messages: claudePayload.messages.map((message) => {
-        if (message.role !== "system") return message
+        if (message.role !== "system") {
+          return message
+        }
+
         const { output_config: _outputConfig, clear_at: _clearAt, ...textMessage } = message
         return textMessage
       }),
@@ -687,6 +732,7 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
           tool.name.startsWith("mcp__"),
         )
       }
+
       if (!hasDiscoveredTokenizer && !mcpToolExist && effectiveModelId.startsWith("claude")) {
         tokenCount.input += 346
       }
@@ -705,6 +751,7 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
       c.set("requestErrorMessage", error.message)
       return error.response
     }
+
     return c.json({ input_tokens: 1 })
   }
 })

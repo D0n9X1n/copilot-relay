@@ -19,7 +19,10 @@ const originalExecFile = childProcess.execFile
 const originalKill = process.kill
 const discoveryCalls: Array<{ file: string; args: string[] }> = []
 const signalCalls: Array<Parameters<typeof process.kill>> = []
-const fakeExecFile = () => { throw new Error("Real process discovery is forbidden") }
+const fakeExecFile = () => {
+  throw new Error("Real process discovery is forbidden")
+}
+
 Object.defineProperty(fakeExecFile, promisify.custom, {
   value: async (file: string, args: string[]) => {
     discoveryCalls.push({ file, args })
@@ -31,6 +34,7 @@ process.kill = (...args) => {
   signalCalls.push(args)
   throw new Error("Real signals are forbidden")
 }
+
 syncBuiltinESMExports()
 
 const { checkDeep, hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
@@ -90,7 +94,9 @@ test("status JSON command stays uncolored even when color is forced", async (t) 
   await fs.mkdir(paths.appDir, { recursive: true })
   await fs.writeFile(paths.configPath, "port: 4199\n")
   const output: string[] = []
-  t.mock.method(console, "log", (value: unknown) => { output.push(String(value)) })
+  t.mock.method(console, "log", (value: unknown) => {
+    output.push(String(value))
+  })
   const originalForce = process.env.FORCE_COLOR
   const originalExit = process.exitCode
   process.env.FORCE_COLOR = "1"
@@ -104,8 +110,12 @@ test("status JSON command stays uncolored even when color is forced", async (t) 
     assert.equal(process.exitCode, 1)
     assert.equal(value.config.port, 4199)
   } finally {
-    if (originalForce === undefined) delete process.env.FORCE_COLOR
-    else process.env.FORCE_COLOR = originalForce
+    if (originalForce === undefined) {
+      delete process.env.FORCE_COLOR
+    } else {
+      process.env.FORCE_COLOR = originalForce
+    }
+
     process.exitCode = originalExit
     await fs.rm(paths.configPath, { force: true })
   }
@@ -254,8 +264,12 @@ for (const [status, body, detail] of [
 
 for (const [name, response, detail] of [
   ["invalid JSON", () => new Response("not JSON"), "empty response"],
-  ["network failure", () => { throw new Error("fetch failed") }, "fetch failed"],
-  ["timeout", () => { throw new DOMException("timeout", "TimeoutError") }, "timed out"],
+  ["network failure", () => {
+    throw new Error("fetch failed")
+  }, "fetch failed"],
+  ["timeout", () => {
+    throw new DOMException("timeout", "TimeoutError")
+  }, "timed out"],
 ] as const) {
   test(`deep probe rejects ${name}`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => response())
@@ -311,6 +325,7 @@ test("renders uptime across ranges and degrades safely", () => {
     } else {
       status.startedAt = startedAt
     }
+
     assert.match(render(status), expected)
   }
 })
@@ -648,6 +663,7 @@ test("hides copilot base url path, query and fragment in text output", () => {
   for (const sentinel of sentinels) {
     assert.ok(!out.includes(sentinel), `status text leaked ${sentinel}`)
   }
+
   // The origin survives: it answers "which gateway is this talking to".
   assert.ok(out.includes("https://gateway.example"))
   assert.match(out, /copilotBaseUrl\s+https:\/\/gateway\.example \(path/)

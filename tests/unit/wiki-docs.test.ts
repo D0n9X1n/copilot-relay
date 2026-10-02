@@ -168,6 +168,7 @@ test("paired architecture guides use Mermaid for overview, request, and lifecycl
       assert.ok(body.includes("SIGTERM"))
       assert.ok(body.includes("closeIdleConnections"))
     }
+
     assert.ok(architecture.includes("`findRelayOnPort`"))
     assert.ok(architecture.includes("`findRelayProcessIds`"))
   }
@@ -189,14 +190,21 @@ test("no tracked file points at the removed docs/ tree", () => {
       const absolute = path.join(directory, entry.name)
 
       if (entry.isDirectory()) {
-        if (!skipDirectories.has(entry.name)) walk(absolute)
+        if (!skipDirectories.has(entry.name)) {
+          walk(absolute)
+        }
+
         continue
       }
 
-      if (!/\.(ts|js|md|yaml|yml|json)$/.test(entry.name)) continue
+      if (!/\.(ts|js|md|yaml|yml|json)$/.test(entry.name)) {
+        continue
+      }
 
       const relative = path.relative(repoRoot, absolute)
-      if (relative === path.join("tests", "unit", "wiki-docs.test.ts")) continue
+      if (relative === path.join("tests", "unit", "wiki-docs.test.ts")) {
+        continue
+      }
 
       const lines = fs.readFileSync(absolute, "utf8").split("\n")
 
@@ -344,8 +352,13 @@ test("README stays a concise feature overview and quick start with valid Wiki li
   const body = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
   assert(body.split("\n").length <= 80)
   assert.doesNotMatch(body, /\bv\d+\.\d+\.\d+\b/, "README describes current features, not release-version requirements")
-  for (const required of ["## Features", "## Quick start", "copilot-relay auth", "copilot-relay start", "models --deep", "Wiki"]) assert(body.includes(required))
-  for (const match of body.matchAll(/\]\((wiki\/[^)#]+)\)/g)) assert(fs.existsSync(path.join(repoRoot, match[1]!)))
+  for (const required of ["## Features", "## Quick start", "copilot-relay auth", "copilot-relay start", "models --deep", "Wiki"]) {
+    assert(body.includes(required))
+  }
+
+  for (const match of body.matchAll(/\]\((wiki\/[^)#]+)\)/g)) {
+    assert(fs.existsSync(path.join(repoRoot, match[1]!)))
+  }
 })
 
 test("Configuration documents live model discovery and simple updates", () => {

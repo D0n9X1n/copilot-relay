@@ -172,7 +172,9 @@ for (const id of skippedModels) {
 
             return reply(request)
           },
-          refresh: async () => { throw new Error("Unexpected refresh") },
+          refresh: async () => {
+            throw new Error("Unexpected refresh")
+          },
         }, async () => {
           const response = await post(config, { stream, output_config: { effort: "low" } })
           await assertReply(response, id, stream)
@@ -207,7 +209,9 @@ for (const id of skippedModels) {
           sent.push(request)
           return reply(request)
         },
-        refresh: async () => { throw new Error("Unexpected refresh") },
+        refresh: async () => {
+          throw new Error("Unexpected refresh")
+        },
       }, () => validateUpstream(config, "low"))
 
       const sentSummary = sent.map((request) => {
@@ -391,7 +395,9 @@ for (const endpoint of ["/chat/completions", "/responses"] as const) {
       // then performs the refresh in its place, so this one must never be called.
       const config: ProxyConfig = {
         ...configFor(id, { type: "chat", supportedEndpoints: [endpoint], reasoningEfforts: ["low"] }),
-        refreshCopilotToken: async () => { throw new Error("Recorded refresh was bypassed") },
+        refreshCopilotToken: async () => {
+          throw new Error("Recorded refresh was bypassed")
+        },
       }
       const sent: RecordedRequest[] = []
       let refreshes = 0
@@ -407,7 +413,9 @@ for (const endpoint of ["/chat/completions", "/responses"] as const) {
 
           return reply(request)
         },
-        refresh: async () => { refreshes++ },
+        refresh: async () => {
+          refreshes++
+        },
       }, async () => {
         const response = await post(config, { stream, output_config: { effort: "low" } })
         await assertReply(response, id, stream)
@@ -557,8 +565,12 @@ for (const mode of [undefined, "chat-completions", "auto"] as const) {
             }
 
             const response = new Response(new ReadableStream({
-              start(controller) { controller.enqueue(errorBytes) },
-              cancel() { cancelled = true },
+              start(controller) {
+                controller.enqueue(errorBytes)
+              },
+              cancel() {
+                cancelled = true
+              },
             }), { status: 400, headers: { "content-type": "application/json" } })
 
             // Isolate cancellation from tee behavior; real HTTP capture/replay tests cover tees.

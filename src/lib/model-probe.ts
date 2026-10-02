@@ -37,11 +37,26 @@ const safeId = (id: unknown, token?: string): id is string =>
   && !(token && id.includes(token)) && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(id)
 
 const httpCategory = (status: number): string => {
-  if (status === 401) return "authentication-rejected"
-  if (status === 403) return "access-denied"
-  if (status === 429) return "rate-limited"
-  if (status === 499) return "cancelled"
-  if (status === 504) return "upstream-timeout-or-HTTP-504"
+  if (status === 401) {
+    return "authentication-rejected"
+  }
+
+  if (status === 403) {
+    return "access-denied"
+  }
+
+  if (status === 429) {
+    return "rate-limited"
+  }
+
+  if (status === 499) {
+    return "cancelled"
+  }
+
+  if (status === 504) {
+    return "upstream-timeout-or-HTTP-504"
+  }
+
   return `HTTP-${status}`
 }
 
@@ -67,7 +82,9 @@ const summarizeAdvertisedEndpoints = (supportedEndpoints: string[] | undefined) 
 const settleDiagnostic = async (trace: RequestTrace): Promise<void> => {
   // The response must be consumed first; slow capture storage must not hold the CLI open.
   let timer: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<void>((resolve) => { timer = setTimeout(resolve, 1000) })
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, 1000)
+  })
   try {
     await Promise.race([trace.finished, deadline])
   } finally {
@@ -76,14 +93,27 @@ const settleDiagnostic = async (trace: RequestTrace): Promise<void> => {
 }
 
 const failureFromEvidence = (row: ProbeResult, diagnostic: RequestDiagnostic): string => {
-  if (["probe-timeout", "cancelled", "total-deadline"].includes(row.detail)) return row.detail
-  if (diagnostic.refreshes.includes("failure")) return "refresh-failed"
-  if (diagnostic.failure === "invalid-tool-input" || diagnostic.failure === "local-validation") return diagnostic.failure
+  if (["probe-timeout", "cancelled", "total-deadline"].includes(row.detail)) {
+    return row.detail
+  }
+
+  if (diagnostic.refreshes.includes("failure")) {
+    return "refresh-failed"
+  }
+
+  if (diagnostic.failure === "invalid-tool-input" || diagnostic.failure === "local-validation") {
+    return diagnostic.failure
+  }
+
   const lastExchange = diagnostic.exchanges.findLast((exchange) => !exchange.discarded)
   if (lastExchange?.error && ["HTTP-500", "network-or-invalid-response"].includes(row.detail)) {
     return lastExchange.error === "SyntaxError" ? "malformed-response" : "transport-error"
   }
-  if (diagnostic.failure === "internal-error" || row.detail === "network-or-invalid-response") return "unknown-error"
+
+  if (diagnostic.failure === "internal-error" || row.detail === "network-or-invalid-response") {
+    return "unknown-error"
+  }
+
   return row.detail
 }
 
@@ -111,7 +141,10 @@ export async function probeModels(
   const columns = Math.max(40, process.stdout.columns || 80)
   const width = probeColumnWidth(entries.map(([id]) => safeId(id, config.copilotToken) ? id : "[unsupported ID]"), columns)
   const color = colorEnabled()
-  if (entries.length) console.log(renderProbeHeader(width))
+  if (entries.length) {
+    console.log(renderProbeHeader(width))
+  }
+
   try {
     runtimeState.modelCatalog = config.modelCatalog
     runtimeState.upstreamBaseUrl = config.copilotBaseUrl
@@ -171,7 +204,9 @@ export async function probeModels(
         let trace: RequestTrace | undefined
         let completedFetch = false
         try {
-          const { response, body } = await withoutLogging(() => withTraceObserver((value) => { trace = value }, async () => {
+          const { response, body } = await withoutLogging(() => withTraceObserver((value) => {
+            trace = value
+          }, async () => {
             const response = await app.fetch(new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
               method: "POST",
               headers: { "content-type": "application/json" },
@@ -195,19 +230,26 @@ export async function probeModels(
           } else if (!response.ok) {
             row.detail = httpCategory(response.status)
             const code = record(body) && record(body.error) ? body.error.code : undefined
-            if (code === "upstream_response_failed") row.detail = "upstream-response-failed"
+            if (code === "upstream_response_failed") {
+              row.detail = "upstream-response-failed"
+            }
+
             if (code === "upstream_response_incomplete") {
               row.status = "INCOMPLETE"
               row.detail = "upstream-response-incomplete"
             }
-            if (code === "unsupported_api_for_model") row.detail = "unsupported-api"
+
+            if (code === "unsupported_api_for_model") {
+              row.detail = "unsupported-api"
+            }
           } else if (!record(body) || !Array.isArray(body.content)) {
             row.detail = "malformed-response"
           } else {
             row.reported = safeId(body.model, config.copilotToken) ? body.model : "unreported"
             const nativeOpusSpelling = endpoint === "/v1/messages" && id === "claude-opus-5.5" && row.reported === "claude-opus-5-5"
-            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling) row.detail = "model-mismatch"
-            else if (body.stop_reason === "max_tokens") {
+            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling) {
+              row.detail = "model-mismatch"
+            } else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"
               const tokens = record(body.usage) ? body.usage.output_tokens : undefined
               row.detail = typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? "reachable-output-budget-exhausted" : "output-budget-exhausted-usage-unreported"
@@ -216,47 +258,92 @@ export async function probeModels(
             } else if (body.content.some((part: unknown) => record(part) && part.type === "text" && typeof part.text === "string" && part.text.trim())) {
               row.status = "PASS"
               row.detail = "completed-text"
-            } else row.detail = "empty-completed-response"
+            } else {
+              row.detail = "empty-completed-response"
+            }
           }
         } catch {
           row.status = controller.signal.aborted || total.aborted ? "NOT_TESTED" : "FAIL"
           row.detail = controller.signal.aborted ? "cancelled" : total.aborted ? "total-deadline" : signal.aborted ? "probe-timeout" : "network-or-invalid-response"
         }
+
         row.latency = Math.round(performance.now() - started)
         if (trace) {
-          if (completedFetch) await settleDiagnostic(trace)
+          if (completedFetch) {
+            await settleDiagnostic(trace)
+          }
+
           row.diagnostic = trace.diagnosticSnapshot()
           // The trace knows every attempted credential, including tokens refreshed during this probe.
-          if (row.reported !== "-" && !row.diagnostic.reportedModel) row.reported = "unreported"
-          if (row.status === "FAIL") row.detail = failureFromEvidence(row, row.diagnostic)
+          if (row.reported !== "-" && !row.diagnostic.reportedModel) {
+            row.reported = "unreported"
+          }
+
+          if (row.status === "FAIL") {
+            row.detail = failureFromEvidence(row, row.diagnostic)
+          }
         }
       }
-      if (!safeId(id, config.copilotToken)) row.id = "[unsupported ID]"
+
+      if (!safeId(id, config.copilotToken)) {
+        row.id = "[unsupported ID]"
+      }
+
       results.push(row)
-      for (const line of renderProbeRow(row, width, color, columns)) console.log(scrubSensitiveUrls(line))
+      for (const line of renderProbeRow(row, width, color, columns)) {
+        console.log(scrubSensitiveUrls(line))
+      }
+
       if (options.details) {
-        for (const line of renderProbeDetails(row, row.diagnostic)) console.log(line)
+        for (const line of renderProbeDetails(row, row.diagnostic)) {
+          console.log(line)
+        }
       } else if (row.status !== "PASS" && row.diagnostic) {
         console.log(`  request_id=${row.diagnostic.requestId}`)
       }
-      if (row.status !== "PASS" && row.sent) withoutConsoleLogging(() => log.info(
-        `request_id=${row.diagnostic?.requestId ?? "unknown"} model_probe model=${row.id} status=${row.status} reason=${row.detail}`,
-      ))
+
+      if (row.status !== "PASS" && row.sent) {
+        withoutConsoleLogging(() => log.info(
+          `request_id=${row.diagnostic?.requestId ?? "unknown"} model_probe model=${row.id} status=${row.status} reason=${row.detail}`,
+        ))
+      }
     }
   } finally {
     for (const key of ["modelRouting", "modelCatalog", "upstreamBaseUrl"] as const) {
-      if (saved[key] === undefined) delete runtimeState[key]
+      if (saved[key] === undefined) {
+        delete runtimeState[key]
+      }
     }
-    if (saved.modelRouting !== undefined) runtimeState.modelRouting = saved.modelRouting
-    if (saved.modelCatalog !== undefined) runtimeState.modelCatalog = saved.modelCatalog
-    if (saved.upstreamBaseUrl !== undefined) runtimeState.upstreamBaseUrl = saved.upstreamBaseUrl
+
+    if (saved.modelRouting !== undefined) {
+      runtimeState.modelRouting = saved.modelRouting
+    }
+
+    if (saved.modelCatalog !== undefined) {
+      runtimeState.modelCatalog = saved.modelCatalog
+    }
+
+    if (saved.upstreamBaseUrl !== undefined) {
+      runtimeState.upstreamBaseUrl = saved.upstreamBaseUrl
+    }
+
     process.off("SIGINT", interrupt)
     process.off("SIGTERM", interrupt)
   }
+
   console.log(`\n${renderProbeSummary(results)}`)
-  if (results.some((row) => row.unverified)) console.log("* Effort or endpoint metadata is unverified.")
+  if (results.some((row) => row.unverified)) {
+    console.log("* Effort or endpoint metadata is unverified.")
+  }
+
   const hints = new Set(results.filter((row) => row.status !== "PASS").map((row) => probeHint(row.detail)).filter(Boolean))
-  for (const hint of hints) console.log(hint)
-  if (!options.details && results.some((row) => row.status !== "PASS" && row.sent)) console.log("Use --details for request evidence; another deep run consumes usage.")
+  for (const hint of hints) {
+    console.log(hint)
+  }
+
+  if (!options.details && results.some((row) => row.status !== "PASS" && row.sent)) {
+    console.log("Use --details for request evidence; another deep run consumes usage.")
+  }
+
   return controller.signal.aborted ? 130 : results.length > 0 && results.every((row) => row.status === "PASS") ? 0 : 2
 }

@@ -33,17 +33,26 @@ const snapshotRoots = new WeakMap<ProxyConfig, ProxyConfig>()
 export const snapshotProxyConfig = (config: ProxyConfig): ProxyConfig => {
   const snapshot = {
     ...config,
-    get copilotToken() { return config.copilotToken },
-    get copilotTokenGeneration() { return config.copilotTokenGeneration },
+    get copilotToken() {
+      return config.copilotToken
+    },
+    get copilotTokenGeneration() {
+      return config.copilotTokenGeneration
+    },
   }
   snapshotRoots.set(snapshot, snapshotRoots.get(config) ?? config)
   return snapshot
 }
 
 export const publishCopilotModelCatalog = (config: ProxyConfig, catalog: CopilotModelCatalog): void => {
-  if (config.copilotBaseUrl === catalog.baseUrl) config.modelCatalog = catalog
+  if (config.copilotBaseUrl === catalog.baseUrl) {
+    config.modelCatalog = catalog
+  }
+
   const root = snapshotRoots.get(config)
-  if (root?.copilotBaseUrl === catalog.baseUrl) root.modelCatalog = catalog
+  if (root?.copilotBaseUrl === catalog.baseUrl) {
+    root.modelCatalog = catalog
+  }
 }
 
 export const readProxyConfig = (config: AppConfig): ProxyConfig => ({

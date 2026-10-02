@@ -133,11 +133,15 @@ export function translateChunkToClaudeEvents(
   }
 
   for (const toolCall of delta.tool_calls ?? []) {
-    if (!Number.isSafeInteger(toolCall.index) || toolCall.index < 0) throw new Error("Invalid upstream tool index.")
+    if (!Number.isSafeInteger(toolCall.index) || toolCall.index < 0) {
+      throw new Error("Invalid upstream tool index.")
+    }
+
     const previous = state.toolCalls[toolCall.index]
     if (!previous && (!toolCall.id || !toolCall.function?.name)) {
       throw new Error("Upstream tool arguments arrived before their tool identity.")
     }
+
     const current = previous ?? {
       id: toolCall.id!, name: toolNameMapper.toClaude(toolCall.function!.name!), claudeBlockIndex: -1, arguments: "",
     }
@@ -145,6 +149,7 @@ export function translateChunkToClaudeEvents(
       || (toolCall.function?.name && toolNameMapper.toClaude(toolCall.function.name) !== current.name))) {
       throw new Error("Upstream tool identity changed during streaming.")
     }
+
     current.arguments = (current.arguments ?? "") + (toolCall.function?.arguments ?? "")
     state.toolCalls[toolCall.index] = current
   }

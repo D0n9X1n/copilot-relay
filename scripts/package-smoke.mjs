@@ -17,18 +17,26 @@ const execute = promisify(execFile)
 const tarBytes = (args, bytes, cwd) => new Promise((resolve, reject) => {
   let inputError
   const child = execFile("tar", args, { cwd }, (error, stdout) => {
-    if (error || inputError) reject(error ?? inputError)
-    else resolve(stdout)
+    if (error || inputError) {
+      reject(error ?? inputError)
+    } else {
+      resolve(stdout)
+    }
   })
   // A rejecting tar may close stdin early; wait for its exit/stderr rather than
   // letting EPIPE escape as an unhandled event.
-  child.stdin.on("error", (error) => { inputError = error })
+  child.stdin.on("error", (error) => {
+    inputError = error
+  })
   child.stdin.end(bytes)
 })
 const root = fileURLToPath(new URL("../", import.meta.url))
 const argv = process.argv.slice(2)
 const verifyOnly = argv[0] === "--verify"
-if (verifyOnly) argv.shift()
+if (verifyOnly) {
+  argv.shift()
+}
+
 const [directory, name, version] = argv
 assert.equal(argv.length, 3, "Usage: package-smoke.mjs [--verify] <directory> <package-name> <version>")
 assert.match(name, /^(?:@[a-z0-9][a-z0-9-]*\/)?copilot-relay$/)
@@ -39,6 +47,7 @@ assert.deepEqual((await fs.readdir(directory)).sort(), ["SHA256SUMS", filename].
 for (const file of [candidate, path.resolve(directory, "SHA256SUMS")]) {
   assert.ok((await fs.lstat(file)).isFile(), "candidate assets must be regular files, not symlinks")
 }
+
 const bytes = await fs.readFile(candidate)
 const checksum = createHash("sha256").update(bytes).digest("hex")
 assert.equal(await fs.readFile(path.join(directory, "SHA256SUMS"), "utf8"), `${checksum}  ${filename}\n`, "candidate checksum mismatch")
@@ -57,6 +66,7 @@ try {
   for (const entry of entries.trim().split(/\r?\n/)) {
     assert.ok(entry.startsWith("package/") && !entry.includes("\\") && !entry.split("/").includes(".."), "unsafe archive member")
   }
+
   await tarBytes(["-xzf", "-"], bytes, unpacked)
   const installed = path.join(unpacked, "package")
   const manifest = JSON.parse(await fs.readFile(path.join(installed, "package.json"), "utf8"))
@@ -75,7 +85,10 @@ try {
     const lock = JSON.parse(await fs.readFile(path.join(root, "package-lock.json"), "utf8"))
     assert.deepEqual(manifest.dependencies, lock.packages[""].dependencies)
     for (const [location, dependency] of Object.entries(lock.packages)) {
-      if (!location || dependency.dev) continue
+      if (!location || dependency.dev) {
+        continue
+      }
+
       assert.ok(location.startsWith("node_modules/") && !location.split("/").includes(".."))
       const source = path.join(root, location)
       const actual = JSON.parse(await fs.readFile(path.join(source, "package.json"), "utf8"))
@@ -83,12 +96,16 @@ try {
       await fs.mkdir(path.dirname(path.join(installed, location)), { recursive: true })
       await fs.cp(source, path.join(installed, location), { recursive: true, dereference: true })
     }
+
     const env = { ...process.env, HOME: home, USERPROFILE: home, CI: "true", FORCE_COLOR: "0", CONSOLA_LEVEL: "3" }
     delete env.NO_COLOR
     // Do not carry credentials or a developer's preload/proxy into the child.
     for (const key of Object.keys(env)) {
-      if (/TOKEN|SECRET|PASSWORD|API_KEY|PROXY/i.test(key) || ["NODE_OPTIONS", "NODE_PATH"].includes(key)) delete env[key]
+      if (/TOKEN|SECRET|PASSWORD|API_KEY|PROXY/i.test(key) || ["NODE_OPTIONS", "NODE_PATH"].includes(key)) {
+        delete env[key]
+      }
     }
+
     const guard = path.join(installed, "smoke-guard.mjs")
     await fs.writeFile(guard, `
       import fs from "node:fs/promises";
@@ -139,7 +156,10 @@ try {
     const requests = []
     upstream = createServer(async (request, response) => {
       let body = ""
-      for await (const chunk of request) body += chunk
+      for await (const chunk of request) {
+        body += chunk
+      }
+
       const payload = body ? JSON.parse(body) : {}
       requests.push(`${request.method} ${request.url}`)
       response.setHeader("content-type", "application/json")
@@ -160,9 +180,15 @@ try {
           choices: [{ index: 0, message: { role: "assistant", content: "offline smoke" }, finish_reason: "stop" }],
           usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
         }))
-      } else { response.statusCode = 500; response.end("Unexpected smoke upstream path") }
+      } else {
+        response.statusCode = 500
+        response.end("Unexpected smoke upstream path")
+      }
     })
-    await new Promise((resolve, reject) => { upstream.once("error", reject); upstream.listen(0, "127.0.0.1", resolve) })
+    await new Promise((resolve, reject) => {
+      upstream.once("error", reject)
+      upstream.listen(0, "127.0.0.1", resolve)
+    })
     const upstreamPort = upstream.address().port
     assert.notEqual(upstreamPort, 4142)
     env.SMOKE_UPSTREAM_PORT = String(upstreamPort)
@@ -179,14 +205,27 @@ try {
     }), { mode: 0o600 })
     child = fork(entry, ["start"], { cwd: installed, env, execArgv: ["--import", pathToFileURL(guard).href], silent: true })
     let output = ""
-    child.stdout.on("data", (chunk) => { output += chunk.toString() })
-    child.stderr.on("data", (chunk) => { output += chunk.toString() })
+    child.stdout.on("data", (chunk) => {
+      output += chunk.toString()
+    })
+    child.stderr.on("data", (chunk) => {
+      output += chunk.toString()
+    })
     childExit = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })))
     const port = await new Promise((resolve, reject) => {
       const deadline = setTimeout(() => reject(new Error("packaged server did not listen within 15s")), 15_000)
-      child.once("error", (error) => { clearTimeout(deadline); reject(error) })
-      child.once("exit", (code) => { clearTimeout(deadline); reject(new Error(`packaged server exited early (${code}): ${output}`)) })
-      child.once("message", (message) => { clearTimeout(deadline); resolve(message.port) })
+      child.once("error", (error) => {
+        clearTimeout(deadline)
+        reject(error)
+      })
+      child.once("exit", (code) => {
+        clearTimeout(deadline)
+        reject(new Error(`packaged server exited early (${code}): ${output}`))
+      })
+      child.once("message", (message) => {
+        clearTimeout(deadline)
+        resolve(message.port)
+      })
     })
     assert.ok(Number.isInteger(port) && port > 0 && port !== 4142)
     const base = `http://127.0.0.1:${port}`
@@ -210,6 +249,7 @@ try {
       assert.equal(response.status, 200)
       assert.match(JSON.stringify(await response.json()), /offline smoke/)
     }
+
     assert.ok(requests.includes("POST /responses"))
     assert.ok(requests.includes("POST /chat/completions"))
     await assert.rejects(fs.access(path.join(home, ".claude")), { code: "ENOENT" })
@@ -219,16 +259,21 @@ try {
   }
 } finally {
   if (child && child.exitCode === null && child.signalCode === null) {
-    if (child.connected) child.send("shutdown")
+    if (child.connected) {
+      child.send("shutdown")
+    }
+
     // Only the child this script forked can be terminated. No pid-file lookup,
     // global process scan, or installed stop/restart command is ever involved.
     const deadline = setTimeout(() => child.kill("SIGKILL"), 3000)
     await childExit
     clearTimeout(deadline)
   }
+
   if (upstream) {
     upstream.closeAllConnections()
     await new Promise((resolve) => upstream.close(resolve))
   }
+
   await fs.rm(work, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 }

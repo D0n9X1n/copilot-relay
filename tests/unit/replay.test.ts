@@ -32,7 +32,10 @@ const fixture = async () => {
   return { id, directory, manifest, save }
 }
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 
 test("request IDs resolve only the private captures date tree", async () => {
   const f = await fixture()
@@ -40,16 +43,36 @@ test("request IDs resolve only the private captures date tree", async () => {
 })
 
 for (const [name, mutate] of [
-  ["unsupported format", (m: CaptureManifest) => { (m as unknown as { format: number }).format = 999 }],
-  ["unsafe request path", (m: CaptureManifest) => { m.path = "//PRIVATE_HOST/v1/messages" }],
-  ["path traversal", (m: CaptureManifest) => { m.request.file = "../client-request.bin" }],
-  ["unexpected basename", (m: CaptureManifest) => { m.request.file = "copilot_token.json" }],
-  ["wrong byte count", (m: CaptureManifest) => { m.request.bytes++ }],
-  ["wrong chunk total", (m: CaptureManifest) => { m.request.chunks = [1] }],
-  ["negative chunk", (m: CaptureManifest) => { m.request.chunks = [-1, m.request.bytes + 1] }],
-  ["invalid policy", (m: CaptureManifest) => { m.config.upstreamTimeoutMs = -1 }],
-  ["invalid routing", (m: CaptureManifest) => { m.runtime.modelRouting = { gptModel: "", opusModel: "opus" } }],
-  ["invalid catalog", (m: CaptureManifest) => { m.runtime.models = [["bad", { limits: { max_output_tokens: -1 } }]] }],
+  ["unsupported format", (m: CaptureManifest) => {
+    (m as unknown as { format: number }).format = 999
+  }],
+  ["unsafe request path", (m: CaptureManifest) => {
+    m.path = "//PRIVATE_HOST/v1/messages"
+  }],
+  ["path traversal", (m: CaptureManifest) => {
+    m.request.file = "../client-request.bin"
+  }],
+  ["unexpected basename", (m: CaptureManifest) => {
+    m.request.file = "copilot_token.json"
+  }],
+  ["wrong byte count", (m: CaptureManifest) => {
+    m.request.bytes++
+  }],
+  ["wrong chunk total", (m: CaptureManifest) => {
+    m.request.chunks = [1]
+  }],
+  ["negative chunk", (m: CaptureManifest) => {
+    m.request.chunks = [-1, m.request.bytes + 1]
+  }],
+  ["invalid policy", (m: CaptureManifest) => {
+    m.config.upstreamTimeoutMs = -1
+  }],
+  ["invalid routing", (m: CaptureManifest) => {
+    m.runtime.modelRouting = { gptModel: "", opusModel: "opus" }
+  }],
+  ["invalid catalog", (m: CaptureManifest) => {
+    m.runtime.models = [["bad", { limits: { max_output_tokens: -1 } }]]
+  }],
 ] as const) {
   test(`rejects ${name} before handling a request`, async () => {
     const f = await fixture()
@@ -68,11 +91,17 @@ for (const item of ["meta.json", "client-request.bin", "directory"] as const) {
     const original = item === "directory" ? f.directory : path.join(f.directory, item)
     const destination = `${original}.real`
     await fs.rename(original, destination)
-    try { await fs.symlink(destination, original, item === "directory" ? "junction" : "file") }
-    catch (error) {
-      if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") { t.skip("File symlinks require Windows developer mode"); return }
+    try {
+      await fs.symlink(destination, original, item === "directory" ? "junction" : "file")
+    } catch (error) {
+      if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+        t.skip("File symlinks require Windows developer mode")
+        return
+      }
+
       throw error
     }
+
     assert.equal((await replayCapture(f.directory)).verdict, "MALFORMED")
   })
 }

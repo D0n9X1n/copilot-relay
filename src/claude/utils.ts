@@ -10,14 +10,17 @@ export const isEffortOnlyControl = (control: unknown): control is { effort: Conf
 export function getClaudeTurnEffort(payload: Pick<ClaudeMessagesPayload, "messages" | "output_config" | "reasoning_effort">) {
   let requested = getRequestReasoningEffort(payload)
   let pending: ConfiguredReasoningEffort | undefined
-  if (Array.isArray(payload.messages)) for (const message of payload.messages) {
-    if (message?.role === "system" && message.clear_at === undefined && isEffortOnlyControl(message.output_config)) {
-      pending = message.output_config.effort
-    } else if (message?.role === "user" && pending !== undefined) {
-      requested = pending
-      pending = undefined
+  if (Array.isArray(payload.messages)) {
+    for (const message of payload.messages) {
+      if (message?.role === "system" && message.clear_at === undefined && isEffortOnlyControl(message.output_config)) {
+        pending = message.output_config.effort
+      } else if (message?.role === "user" && pending !== undefined) {
+        requested = pending
+        pending = undefined
+      }
     }
   }
+
   return { requested, effective: resolveReasoningEffort(requested) }
 }
 
@@ -46,16 +49,21 @@ export function mapOpenAIStopReasonToClaude(
  */
 export function parseUpstreamToolInput(toolName: string, argumentsText: string | undefined): Record<string, unknown> {
   const text = argumentsText ?? ""
-  if (!text.trim()) return {}
+  if (!text.trim()) {
+    return {}
+  }
+
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     throw invalidUpstreamToolInput(toolName, "is not valid JSON")
   }
+
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw invalidUpstreamToolInput(toolName, "is not a JSON object")
   }
+
   return parsed as Record<string, unknown>
 }
 

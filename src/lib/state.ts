@@ -19,4 +19,5 @@ export const snapshotRuntimeState = (): RuntimeState => {
   const state = getRuntimeState()
   return { ...state, ...(state.modelRouting && { modelRouting: { ...state.modelRouting } }) }
 }
+
 export const withRuntimeState = <T>(state: RuntimeState, run: () => T): T => requestState.run(state, run)

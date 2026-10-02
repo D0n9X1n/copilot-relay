@@ -43,30 +43,57 @@ const toolResult = (id: string, content: unknown) => ({
 function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
   const generatedResults = new Set<ClaudeMessage>()
   const restored = messages.flatMap((message): ClaudeMessage[] => {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) return [message]
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      return [message]
+    }
+
     const content = message.content as NativeBlock[]
     const index = content.findIndex((block) => block.type === "server_tool_use" && block.name === "web_search")
-    if (index < 0) return [message]
+    if (index < 0) {
+      return [message]
+    }
+
     const placeholder = content[index]
     if (!placeholder.id?.startsWith(bridgePrefix) || placeholder.id.length > 2048) {
       throw invalidRequest("This native route cannot replay unrecognized bridge search history. Use its original chat route.")
     }
+
     let metadata: unknown
-    try { metadata = JSON.parse(Buffer.from(placeholder.id.slice(bridgePrefix.length), "base64url").toString("utf8")) } catch { throw invalidRequest("Invalid bridge search history.") }
-    if (!Array.isArray(metadata) || metadata.length !== 4) throw invalidRequest("Invalid bridge search history.")
+    try {
+      metadata = JSON.parse(Buffer.from(placeholder.id.slice(bridgePrefix.length), "base64url").toString("utf8"))
+    } catch {
+      throw invalidRequest("Invalid bridge search history.")
+    }
+
+    if (!Array.isArray(metadata) || metadata.length !== 4) {
+      throw invalidRequest("Invalid bridge search history.")
+    }
+
     const [id, name, count, position] = metadata
     if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)
       || typeof name !== "string" || !isClaudeWebSearchToolName(name)
       || !Number.isSafeInteger(count) || count <= index || count > content.length
-      || position !== index || !valid(placeholder.input)) throw invalidRequest("Invalid bridge search history.")
+      || position !== index || !valid(placeholder.input)) {
+      throw invalidRequest("Invalid bridge search history.")
+    }
+
     const result = content[count]
-    if (!result || result.type !== "web_search_tool_result" || result.tool_use_id !== placeholder.id) throw invalidRequest("Incomplete bridge search history.")
+    if (!result || result.type !== "web_search_tool_result" || result.tool_use_id !== placeholder.id) {
+      throw invalidRequest("Incomplete bridge search history.")
+    }
+
     const decision = content.slice(0, count).map((block, at) => at === index ? { ...block, type: "tool_use", id, name } : block)
-    if (decision.some((block) => block.type === "server_tool_use")) throw invalidRequest("Invalid bridge decision boundary.")
+    if (decision.some((block) => block.type === "server_tool_use")) {
+      throw invalidRequest("Invalid bridge decision boundary.")
+    }
+
     const results: ClaudeMessage = { role: "user", content: [toolResult(id, result.content)] }
     generatedResults.add(results)
     const turns: ClaudeMessage[] = [{ ...message, content: decision } as ClaudeMessage, results]
-    if (content.length > count + 1) turns.push({ ...message, content: content.slice(count + 1) } as ClaudeMessage)
+    if (content.length > count + 1) {
+      turns.push({ ...message, content: content.slice(count + 1) } as ClaudeMessage)
+    }
+
     return turns
   })
   const combined: ClaudeMessage[] = []
@@ -75,8 +102,11 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
     if (previous && generatedResults.has(previous) && previous.role === "user" && message.role === "user") {
       const content = typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content
       combined[combined.length - 1] = { ...message, content: [...(previous.content as Exclude<typeof previous.content, string>), ...content] }
-    } else combined.push(message)
+    } else {
+      combined.push(message)
+    }
   }
+
   return combined
 }
 
@@ -109,6 +139,7 @@ export function validateNativeMessages(payload: ClaudeMessagesPayload): void {
     || payload.tool_choice?.type === "tool" && isClaudeWebSearchToolName(payload.tool_choice.name ?? ""))) {
     throw invalidRequest("Native bridge-managed WebSearch requires automatic tool choice.")
   }
+
   normalizeNativeHistory(payload.messages)
 }
 
@@ -208,46 +239,97 @@ export async function createNativeMessages(
 
 function* blockEvents(block: NativeBlock, index: number): Generator<NativeEvent> {
   const start = { ...block }
-  if (block.type === "text") start.text = ""
-  if (block.type === "thinking") { start.thinking = ""; delete start.signature }
-  if (block.type === "tool_use") start.input = {}
-  yield { type: "content_block_start", index, content_block: start }
-  if (block.type === "text" && block.text) yield { type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } }
-  if (block.type === "thinking") {
-    if (block.thinking) yield { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: block.thinking } }
-    if (block.signature) yield { type: "content_block_delta", index, delta: { type: "signature_delta", signature: block.signature } }
+  if (block.type === "text") {
+    start.text = ""
   }
-  if (block.type === "tool_use") yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input ?? {}) } }
+
+  if (block.type === "thinking") {
+    start.thinking = ""
+    delete start.signature
+  }
+
+  if (block.type === "tool_use") {
+    start.input = {}
+  }
+
+  yield { type: "content_block_start", index, content_block: start }
+  if (block.type === "text" && block.text) {
+    yield { type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } }
+  }
+
+  if (block.type === "thinking") {
+    if (block.thinking) {
+      yield { type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: block.thinking } }
+    }
+
+    if (block.signature) {
+      yield { type: "content_block_delta", index, delta: { type: "signature_delta", signature: block.signature } }
+    }
+  }
+
+  if (block.type === "tool_use") {
+    yield { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input ?? {}) } }
+  }
+
   yield { type: "content_block_stop", index }
 }
 
 async function* nativeEvents(response: Response): AsyncGenerator<NativeEvent> {
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
     const message: unknown = await response.json()
-    if (!valid(message) || !Array.isArray(message.content) || !message.stop_reason) throw new Error("Invalid native message response.")
+    if (!valid(message) || !Array.isArray(message.content) || !message.stop_reason) {
+      throw new Error("Invalid native message response.")
+    }
+
     const complete = message as NativeResponse
     yield { type: "message_start", message: { ...complete, content: [], stop_reason: null } }
-    for (const [index, block] of complete.content.entries()) yield* blockEvents(block, index)
+    for (const [index, block] of complete.content.entries()) {
+      yield* blockEvents(block, index)
+    }
+
     yield { type: "message_delta", delta: { stop_reason: complete.stop_reason, stop_sequence: complete.stop_sequence, stop_details: complete.stop_details }, usage: complete.usage }
     yield { type: "message_stop" }
     return
   }
+
   let terminal = false
   let stopped = false
   for await (const event of events(response)) {
-    if (!event.data || event.data === "[DONE]") continue
-    if (stopped) throw new Error("Native upstream emitted events after message_stop.")
+    if (!event.data || event.data === "[DONE]") {
+      continue
+    }
+
+    if (stopped) {
+      throw new Error("Native upstream emitted events after message_stop.")
+    }
+
     const value: unknown = JSON.parse(event.data)
-    if (!valid(value) || typeof value.type !== "string") throw new Error("Invalid native stream event.")
-    if (value.type === "error") throw new Error("Native upstream stream failed.")
-    if (value.type === "message_delta" && valid(value.delta) && typeof value.delta.stop_reason === "string") terminal = true
+    if (!valid(value) || typeof value.type !== "string") {
+      throw new Error("Invalid native stream event.")
+    }
+
+    if (value.type === "error") {
+      throw new Error("Native upstream stream failed.")
+    }
+
+    if (value.type === "message_delta" && valid(value.delta) && typeof value.delta.stop_reason === "string") {
+      terminal = true
+    }
+
     if (value.type === "message_stop") {
-      if (!terminal) throw new Error("Native stream stopped without a completion outcome.")
+      if (!terminal) {
+        throw new Error("Native stream stopped without a completion outcome.")
+      }
+
       stopped = true
     }
+
     yield value as NativeEvent
   }
-  if (!stopped) throw new Error("Native upstream stream ended without message_stop.")
+
+  if (!stopped) {
+    throw new Error("Native upstream stream ended without message_stop.")
+  }
 }
 
 async function collectNative(response: Response, onEvent?: (event: NativeEvent) => Promise<void>): Promise<NativeResponse> {
@@ -257,40 +339,80 @@ async function collectNative(response: Response, onEvent?: (event: NativeEvent) 
   let openIndex: number | undefined
   for await (const event of nativeEvents(response)) {
     if (event.type === "message_start") {
-      if (message || !event.message) throw new Error("Invalid native message start.")
+      if (message || !event.message) {
+        throw new Error("Invalid native message start.")
+      }
+
       message = { ...event.message, content: blocks }
     } else if (event.type === "content_block_start") {
-      if (!message || message.stop_reason || openIndex !== undefined || event.index !== blocks.length || !event.content_block) throw new Error("Invalid native content index.")
+      if (!message || message.stop_reason || openIndex !== undefined || event.index !== blocks.length || !event.content_block) {
+        throw new Error("Invalid native content index.")
+      }
+
       openIndex = event.index
       blocks.push(structuredClone(event.content_block))
     } else if (event.type === "content_block_delta") {
       const block = event.index === undefined ? undefined : blocks[event.index]
-      if (openIndex === undefined || openIndex !== event.index || !block || !event.delta) throw new Error("Native delta targeted a closed or missing content block.")
+      if (openIndex === undefined || openIndex !== event.index || !block || !event.delta) {
+        throw new Error("Native delta targeted a closed or missing content block.")
+      }
+
       const delta = event.delta
-      if (delta.type === "text_delta" && typeof delta.text === "string") block.text = (block.text ?? "") + delta.text
-      if (delta.type === "thinking_delta" && typeof delta.thinking === "string") block.thinking = (block.thinking ?? "") + delta.thinking
-      if (delta.type === "signature_delta" && typeof delta.signature === "string") block.signature = (block.signature ?? "") + delta.signature
-      if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") inputs.set(event.index!, (inputs.get(event.index!) ?? "") + delta.partial_json)
+      if (delta.type === "text_delta" && typeof delta.text === "string") {
+        block.text = (block.text ?? "") + delta.text
+      }
+
+      if (delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+        block.thinking = (block.thinking ?? "") + delta.thinking
+      }
+
+      if (delta.type === "signature_delta" && typeof delta.signature === "string") {
+        block.signature = (block.signature ?? "") + delta.signature
+      }
+
+      if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+        inputs.set(event.index!, (inputs.get(event.index!) ?? "") + delta.partial_json)
+      }
     } else if (event.type === "content_block_stop") {
-      if (openIndex === undefined || openIndex !== event.index) throw new Error("Invalid native content stop.")
+      if (openIndex === undefined || openIndex !== event.index) {
+        throw new Error("Invalid native content stop.")
+      }
+
       openIndex = undefined
     } else if (event.type === "message_delta") {
-      if (!message || openIndex !== undefined) throw new Error("Native completion arrived before content was closed.")
-      if (event.delta) Object.assign(message, event.delta)
-      if (event.usage) message.usage = { ...message.usage, ...event.usage }
+      if (!message || openIndex !== undefined) {
+        throw new Error("Native completion arrived before content was closed.")
+      }
+
+      if (event.delta) {
+        Object.assign(message, event.delta)
+      }
+
+      if (event.usage) {
+        message.usage = { ...message.usage, ...event.usage }
+      }
     }
+
     await onEvent?.(event)
   }
-  if (!message?.stop_reason || openIndex !== undefined) throw new Error("Incomplete native response.")
+
+  if (!message?.stop_reason || openIndex !== undefined) {
+    throw new Error("Incomplete native response.")
+  }
+
   if (message.stop_reason !== "tool_use") {
     message.content = blocks.filter((block) => block.type !== "tool_use")
   } else {
     for (const [index, input] of inputs) {
       const parsed: unknown = JSON.parse(input)
-      if (!valid(parsed)) throw new Error("Native tool input must be an object.")
+      if (!valid(parsed)) {
+        throw new Error("Native tool input must be an object.")
+      }
+
       blocks[index].input = parsed
     }
   }
+
   return message
 }
 
@@ -310,24 +432,51 @@ export async function handleNativeMessages(
       decisionDelta = { ...event, delta: { ...decisionDelta?.delta, ...event.delta }, usage: { ...decisionDelta?.usage, ...event.usage } }
       return
     }
-    if (event.type === "message_stop") return
-    if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && heldFrom === undefined) heldFrom = event.index
-    if (heldFrom === undefined) await write(event as ClaudeStreamEventData)
+
+    if (event.type === "message_stop") {
+      return
+    }
+
+    if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && heldFrom === undefined) {
+      heldFrom = event.index
+    }
+
+    if (heldFrom === undefined) {
+      await write(event as ClaudeStreamEventData)
+    }
   } : undefined)
   const searches = canSearch && message.stop_reason === "tool_use" ? message.content.filter((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? "")) : []
-  if (searches.length > 1) throw new Error("Multiple bridge-managed searches in one turn are unsupported.")
+  if (searches.length > 1) {
+    throw new Error("Multiple bridge-managed searches in one turn are unsupported.")
+  }
+
   if (searches.length === 0) {
-    if (!write) return message as ClaudeResponse
-    if (heldFrom !== undefined) for (const [index, block] of message.content.entries()) {
-      if (index < heldFrom) continue
-      for (const event of blockEvents(block, index)) await write(event as ClaudeStreamEventData)
+    if (!write) {
+      return message as ClaudeResponse
     }
+
+    if (heldFrom !== undefined) {
+      for (const [index, block] of message.content.entries()) {
+        if (index < heldFrom) {
+          continue
+        }
+
+        for (const event of blockEvents(block, index)) {
+          await write(event as ClaudeStreamEventData)
+        }
+      }
+    }
+
     await write({ ...decisionDelta, type: "message_delta", delta: { ...decisionDelta?.delta, stop_reason: message.stop_reason }, usage: message.usage } as ClaudeStreamEventData)
     await write({ type: "message_stop" })
     return
   }
+
   const searchCall = searches[0]
-  if (!searchCall.id || !searchCall.name || typeof searchCall.input?.query !== "string" || !searchCall.input.query.trim()) throw new Error("Invalid native search call.")
+  if (!searchCall.id || !searchCall.name || typeof searchCall.input?.query !== "string" || !searchCall.input.query.trim()) {
+    throw new Error("Invalid native search call.")
+  }
+
   const search = await createClaudeWebSearchExecution(config, { ...payload, messages: normalizeNativeHistory(payload.messages) }, searchCall.input.query, { ...options, signal })
   const searchMessage = createClaudeWebSearchResponse(search)
   const searchPosition = message.content.indexOf(searchCall)
@@ -340,17 +489,27 @@ export async function handleNativeMessages(
   const combined = [...displayDecision, resultBlock]
   if (write) {
     for (const [index, block] of combined.entries()) {
-      if (index < (heldFrom ?? message.content.length)) continue
-      for (const event of blockEvents(block, index)) await write(event as ClaudeStreamEventData)
+      if (index < (heldFrom ?? message.content.length)) {
+        continue
+      }
+
+      for (const event of blockEvents(block, index)) {
+        await write(event as ClaudeStreamEventData)
+      }
     }
   }
+
   if (siblings || search.results.length === 0) {
     const complete = { ...message, content: combined, stop_reason: siblings ? "tool_use" : "end_turn", usage } as ClaudeResponse
-    if (!write) return complete
+    if (!write) {
+      return complete
+    }
+
     await write({ type: "message_delta", delta: { stop_reason: complete.stop_reason }, usage })
     await write({ type: "message_stop" })
     return
   }
+
   const follow = await createNativeMessages(config, {
     ...request, messages: [...request.messages, { role: "assistant", content: message.content } as ClaudeMessage, { role: "user", content: [result] }],
   }, { ...options, signal })
@@ -358,17 +517,39 @@ export async function handleNativeMessages(
   // Replay only withheld tool blocks; earlier text has already reached the client.
   let finalHeldFrom: number | undefined
   const final = await collectNative(follow, write ? async (event) => {
-    if (event.type === "message_start" || event.type === "message_delta" || event.type === "message_stop") return
-    if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && finalHeldFrom === undefined) finalHeldFrom = event.index
-    if (finalHeldFrom === undefined) await write({ ...event, ...(event.index !== undefined && { index: offset + event.index }) } as ClaudeStreamEventData)
+    if (event.type === "message_start" || event.type === "message_delta" || event.type === "message_stop") {
+      return
+    }
+
+    if (event.type === "content_block_start" && event.content_block?.type === "tool_use" && finalHeldFrom === undefined) {
+      finalHeldFrom = event.index
+    }
+
+    if (finalHeldFrom === undefined) {
+      await write({ ...event, ...(event.index !== undefined && { index: offset + event.index }) } as ClaudeStreamEventData)
+    }
   } : undefined)
-  if (final.content.some((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))) throw new Error("Repeated bridge-managed search is unsupported.")
-  usage = mergeUsage(usage, final.usage)
-  if (!write) return { ...final, content: [...combined, ...final.content], usage } as ClaudeResponse
-  if (finalHeldFrom !== undefined) for (const [index, block] of final.content.entries()) {
-    if (index < finalHeldFrom) continue
-    for (const event of blockEvents(block, offset + index)) await write(event as ClaudeStreamEventData)
+  if (final.content.some((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))) {
+    throw new Error("Repeated bridge-managed search is unsupported.")
   }
+
+  usage = mergeUsage(usage, final.usage)
+  if (!write) {
+    return { ...final, content: [...combined, ...final.content], usage } as ClaudeResponse
+  }
+
+  if (finalHeldFrom !== undefined) {
+    for (const [index, block] of final.content.entries()) {
+      if (index < finalHeldFrom) {
+        continue
+      }
+
+      for (const event of blockEvents(block, offset + index)) {
+        await write(event as ClaudeStreamEventData)
+      }
+    }
+  }
+
   await write({ type: "message_delta", delta: { stop_reason: final.stop_reason, stop_sequence: final.stop_sequence, ...("stop_details" in final && { stop_details: final.stop_details }) }, usage } as ClaudeStreamEventData)
   await write({ type: "message_stop" })
 }

@@ -130,13 +130,17 @@ test("invalid effort reload reports an error, keeps runtime settings, and can re
   let active = await readAppConfig()
   const complete = await readConfigFile()
   const errors: string[] = []
-  t.mock.method(log, "error", (...values: unknown[]) => { errors.push(values.join(" ")) })
+  t.mock.method(log, "error", (...values: unknown[]) => {
+    errors.push(values.join(" "))
+  })
   let poll: (() => void | Promise<void>) | undefined
   t.mock.method(globalThis, "setInterval", (callback: () => void | Promise<void>) => {
     poll = callback
     return { unref() {} } as unknown as ReturnType<typeof setInterval>
   })
-  watchAppConfig((next) => { active = next })
+  watchAppConfig((next) => {
+    active = next
+  })
   assert.ok(poll)
   await poll()
 

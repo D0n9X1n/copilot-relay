@@ -46,12 +46,16 @@ async function fakeUpstream(t: TestContext) {
   const server = createHttpServer(async (request, response) => {
     requests.push(request.url ?? "")
     let body = ""
-    for await (const chunk of request) body += String(chunk)
+    for await (const chunk of request) {
+      body += String(chunk)
+    }
+
     response.setHeader("content-type", "application/json")
     if (request.url === "/models") {
       response.end(JSON.stringify({ data: [{ id: "claude-opus-5.5" }] }))
       return
     }
+
     const sent = JSON.parse(body) as { model: string }
     response.end(JSON.stringify({
       id: "chat_admission", created: 1, model: sent.model,
@@ -102,6 +106,7 @@ test("rejects mismatched and malformed Host headers rather than trusting forward
     }))
     assert.equal(response.status, 403, host)
   }
+
   for (const host of ["127.1", "2130706433", "0x7f000001", "127.000.000.001"]) {
     const response = await app.fetch(new Request("http://127.0.0.1/healthz", { headers: { host } }))
     assert.equal(response.status, 403, `noncanonical IPv4 Host ${host}`)
@@ -155,6 +160,7 @@ test("rejects unexpected, opaque and malformed browser Origins before body parsi
     assert.equal(response.status, 403, origin)
     assert.equal(request.bodyUsed, false, origin)
   }
+
   assert.deepEqual(upstream.requests, [])
 })
 
@@ -177,6 +183,7 @@ test("same-origin and absent-Origin clients work without permissive CORS", async
     const body = await response.json() as { content: Array<{ type: string; text: string }> }
     assert.deepEqual(body.content, [{ type: "text", text: "OK" }])
   }
+
   assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, 5)
 })
 
@@ -202,12 +209,16 @@ test("body-bearing inference POSTs require application/json before parsing or up
         method: "POST", headers: contentType ? { "content-type": contentType } : {}, body: payload,
       })
       // Request supplies text/plain for strings. Remove it to also pin absence.
-      if (contentType === undefined) request.headers.delete("content-type")
+      if (contentType === undefined) {
+        request.headers.delete("content-type")
+      }
+
       const response = await app.fetch(request)
       assert.equal(response.status, 415, `${route}: ${contentType}`)
       assert.equal(request.bodyUsed, false)
     }
   }
+
   assert.deepEqual(upstream.requests, [])
 })
 
@@ -228,6 +239,7 @@ test("JSON media types with parameters and casing remain compatible without CORS
       await response.json()
     }
   }
+
   assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, 3)
 })
 
@@ -245,9 +257,12 @@ test("cheap GET/HEAD and unsupported-route contracts do not acquire a JSON requi
       }))
       assert.equal(response.status, 200, `${method} ${route}`)
       assert.equal(response.headers.get("access-control-allow-origin"), null)
-      if (method === "HEAD" || route === "/api/hello") assert.equal(await response.text(), "")
+      if (method === "HEAD" || route === "/api/hello") {
+        assert.equal(await response.text(), "")
+      }
     }
   }
+
   for (const [route, method, body] of [
     ["/unknown", "POST", "not JSON"],
     ["/v1/messages", "GET", undefined],
@@ -259,6 +274,7 @@ test("cheap GET/HEAD and unsupported-route contracts do not acquire a JSON requi
     assert.equal(response.status, 500)
     assert.deepEqual(await response.json(), { error: { message: "Unsupported Claude API route" } })
   }
+
   // A truly absent body is the route's concern, not a media-type rejection.
   const empty = await withoutLogging(() => app.fetch(new Request("http://localhost/v1/messages", { method: "POST" })))
   assert.equal(empty.status, 500)
@@ -302,6 +318,7 @@ test("isolated model probes use an admitted local authority for zero and nonzero
     })
     assert.equal(result, 0, `port ${port}`)
   }
+
   assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, 2)
 })
 

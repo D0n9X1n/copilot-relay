@@ -17,7 +17,10 @@ const { runtimeState } = await import("../../src/lib/state")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { getLogPath } = await import("../../src/lib/paths")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
-test.after(async () => { await flushLogs(); await fs.rm(tempHome, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(tempHome, { recursive: true, force: true })
+})
 
 interface CapturedRequest {
   body: unknown
@@ -29,6 +32,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   for await (const chunk of request) {
     body += String(chunk)
   }
+
   return body ? JSON.parse(body) as unknown : undefined
 }
 
@@ -206,14 +210,21 @@ test("info logs show requested and effective effort without normal request paylo
         try {
           contents = await fs.readFile(getLogPath(), "utf8")
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error
+          }
         }
+
         summary = contents.split("\n").find(
           (line) => line.includes(`request_id=${id}`) && line.includes(" info Model request "),
         )
-        if (summary) break
+        if (summary) {
+          break
+        }
+
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
+
       assert.ok(summary, "No info-level model summary was written")
       assert.match(summary, new RegExp(`requested_think_effort=${effort ?? "unset"}\\b`))
       assert.match(summary, new RegExp(`effective_think_effort=${expected}\\b`))
@@ -222,6 +233,7 @@ test("info logs show requested and effective effort without normal request paylo
       assert.doesNotMatch(contents, /ROUTING_SECRET_SENTINEL/)
       assert.doesNotMatch(contents, /PRIVATE_PROMPT_SENTINEL|PRIVATE_TOOL_SENTINEL|Full request payload/)
     }
+
     assert.doesNotMatch(
       JSON.stringify(infoCalls.mock.calls.map((call) => call.arguments)),
       /PRIVATE_PROMPT_SENTINEL|PRIVATE_TOOL_SENTINEL|Full request payload/,

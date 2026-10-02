@@ -65,15 +65,27 @@ export const renderProbeHeader = (width: number): string =>
 
 const wrap = (text: string, width: number): string[] => {
   const lines: string[] = []
-  for (let index = 0; index < text.length; index += width) lines.push(text.slice(index, index + width))
+  for (let index = 0; index < text.length; index += width) {
+    lines.push(text.slice(index, index + width))
+  }
+
   return lines
 }
 
 const probeTime = (row: ProbeRow): string => {
-  if (!row.sent) return "-"
+  if (!row.sent) {
+    return "-"
+  }
+
   const seconds = row.latency / 1000
-  if (seconds < 1000) return `${seconds.toFixed(1)}s`
-  if (seconds < 3600) return `${(seconds / 60).toFixed(1)}m`
+  if (seconds < 1000) {
+    return `${seconds.toFixed(1)}s`
+  }
+
+  if (seconds < 3600) {
+    return `${(seconds / 60).toFixed(1)}m`
+  }
+
   return `${(seconds / 3600).toFixed(1)}h`
 }
 
@@ -92,7 +104,10 @@ export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, col
 }
 
 export const renderProbeSummary = (rows: ProbeRow[]): string => {
-  if (!rows.length) return "Summary: no models to test"
+  if (!rows.length) {
+    return "Summary: no models to test"
+  }
+
   const labels: Record<ProbeStatus, string> = { PASS: "passed", FAIL: "failed", INCOMPLETE: "incomplete", SKIPPED: "skipped", NOT_TESTED: "not tested" }
   return "Summary: " + (Object.keys(labels) as ProbeStatus[]).flatMap((status) => {
     const count = rows.filter((row) => row.status === status).length
@@ -121,15 +136,36 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
   for (const exchange of diagnostic.exchanges) {
     lines.push(`  route=${exchange.path} upstream_http=${exchange.status ?? "unknown"} response=${exchange.responseState ?? "unknown"}${exchange.discarded ? " discarded=yes" : ""}`)
     lines.push(`  upstream_request_id=${exchange.upstreamRequestId ?? "unknown"}`)
-    if (exchange.providerRequestId) lines.push(`  provider_request_id=${exchange.providerRequestId}`)
-    if (exchange.model && exchange.model !== row.reported) lines.push(`  upstream_model=${exchange.model}`)
-    if (exchange.messageId) lines.push(`  message_id=${exchange.messageId}`)
+    if (exchange.providerRequestId) {
+      lines.push(`  provider_request_id=${exchange.providerRequestId}`)
+    }
+
+    if (exchange.model && exchange.model !== row.reported) {
+      lines.push(`  upstream_model=${exchange.model}`)
+    }
+
+    if (exchange.messageId) {
+      lines.push(`  message_id=${exchange.messageId}`)
+    }
+
     const outcome = exchange.stopReason ?? exchange.finishReason ?? exchange.responseStatus
-    if (outcome || exchange.error) lines.push(`  outcome=${outcome ?? "unknown"}${exchange.error ? ` transport=${exchange.error}` : ""}`)
-    if (exchange.refusalCategory) lines.push(`  refusal_category=${exchange.refusalCategory}`)
-    if (exchange.incompleteReason) lines.push(`  incomplete_reason=${exchange.incompleteReason}`)
+    if (outcome || exchange.error) {
+      lines.push(`  outcome=${outcome ?? "unknown"}${exchange.error ? ` transport=${exchange.error}` : ""}`)
+    }
+
+    if (exchange.refusalCategory) {
+      lines.push(`  refusal_category=${exchange.refusalCategory}`)
+    }
+
+    if (exchange.incompleteReason) {
+      lines.push(`  incomplete_reason=${exchange.incompleteReason}`)
+    }
   }
-  if (diagnostic.refreshes.length) lines.push(`  refresh=${diagnostic.refreshes.join(",")}`)
+
+  if (diagnostic.refreshes.length) {
+    lines.push(`  refresh=${diagnostic.refreshes.join(",")}`)
+  }
+
   lines.push(`  capture=${diagnostic.capture.state}`)
   if (diagnostic.capture.state === "complete") {
     lines.push(`  Offline replay: copilot-relay replay ${diagnostic.requestId}`)
@@ -138,6 +174,7 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
   } else {
     lines.push("  Replay unavailable: capture is not complete.")
   }
+
   return lines
 }
 

@@ -51,17 +51,30 @@ const resolveTarget = async (filePath: string, remainingLinks = 40): Promise<str
   try {
     return await fs.realpath(filePath)
   } catch (error) {
-    if (!isMissing(error)) throw error
+    if (!isMissing(error)) {
+      throw error
+    }
+
     const entry = await fs.lstat(filePath).catch((cause: unknown) => {
-      if (!isMissing(cause)) throw cause
+      if (!isMissing(cause)) {
+        throw cause
+      }
+
       return undefined
     })
     if (entry?.isSymbolicLink()) {
-      if (remainingLinks === 0) throw new Error("Too many symbolic links")
+      if (remainingLinks === 0) {
+        throw new Error("Too many symbolic links")
+      }
+
       return resolveTarget(path.resolve(path.dirname(filePath), await fs.readlink(filePath)), remainingLinks - 1)
     }
+
     const parent = path.dirname(filePath)
-    if (parent === filePath) throw error
+    if (parent === filePath) {
+      throw error
+    }
+
     return path.join(await resolveTarget(parent, remainingLinks), path.basename(filePath))
   }
 }
@@ -70,13 +83,19 @@ const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
   const requestedPath = path.resolve(filePath)
   const resolvedPath = await resolveTarget(requestedPath)
   const before = await fs.lstat(resolvedPath).catch((error: unknown) => {
-    if (!isMissing(error)) throw error
+    if (!isMissing(error)) {
+      throw error
+    }
+
     return undefined
   })
   if (!before) {
     return { requestedPath, resolvedPath, raw: null, mode: 0o600, identity: null }
   }
-  if (!before.isFile()) throw new FileConflictError()
+
+  if (!before.isFile()) {
+    throw new FileConflictError()
+  }
 
   let raw: string
   let after: Stats
@@ -84,19 +103,26 @@ const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
     raw = await fs.readFile(resolvedPath, "utf8")
     after = await fs.lstat(resolvedPath)
   } catch (error) {
-    if (isMissing(error)) throw new FileConflictError()
+    if (isMissing(error)) {
+      throw new FileConflictError()
+    }
+
     throw error
   }
+
   const snapshot = { requestedPath, resolvedPath, raw, mode: before.mode & 0o777, identity: identityOf(before) }
   if (!after.isFile() || before.mode !== after.mode || await resolveTarget(requestedPath) !== resolvedPath) {
     throw new FileConflictError()
   }
+
   if (!sameIdentity(snapshot.identity, identityOf(after))) {
     if (sameReadContent(snapshot, { ...snapshot, identity: identityOf(after) })) {
       throw new MetadataReadConflictError(snapshot)
     }
+
     throw new FileConflictError()
   }
+
   return snapshot
 }
 
@@ -120,14 +146,26 @@ export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> 
   for (let attempt = 1; ; attempt++) {
     try {
       const snapshot = await readStableSnapshot(filePath)
-      if (firstRead && !sameReadContent(firstRead, snapshot)) throw new FileConflictError()
+      if (firstRead && !sameReadContent(firstRead, snapshot)) {
+        throw new FileConflictError()
+      }
+
       return snapshot
     } catch (error) {
-      if (!(error instanceof MetadataReadConflictError)) throw error
+      if (!(error instanceof MetadataReadConflictError)) {
+        throw error
+      }
+
       // The internal retry error holds file bytes; never expose it to callers
       // that may log the error object (settings can contain credentials).
-      if (attempt >= 3) throw new FileConflictError()
-      if (firstRead && !sameReadContent(firstRead, error.snapshot)) throw new FileConflictError()
+      if (attempt >= 3) {
+        throw new FileConflictError()
+      }
+
+      if (firstRead && !sameReadContent(firstRead, error.snapshot)) {
+        throw new FileConflictError()
+      }
+
       firstRead ??= error.snapshot
     }
   }
@@ -157,11 +195,15 @@ const publish = async (snapshot: FileSnapshot, content: string): Promise<void> =
   try {
     try {
       await handle.writeFile(content, "utf8")
-      if (process.platform !== "win32") await handle.chmod(snapshot.mode)
+      if (process.platform !== "win32") {
+        await handle.chmod(snapshot.mode)
+      }
+
       await handle.sync()
     } finally {
       await handle.close()
     }
+
     await assertUnchanged(snapshot)
     if (snapshot.raw === null) {
       // link publishes complete bytes exclusively; rename would overwrite a file
@@ -169,7 +211,10 @@ const publish = async (snapshot: FileSnapshot, content: string): Promise<void> =
       try {
         await fs.link(temporaryPath, snapshot.resolvedPath)
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new FileConflictError()
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw new FileConflictError()
+        }
+
         throw error
       }
     } else {
@@ -187,6 +232,8 @@ export const writeFileSnapshot = async (snapshot: FileSnapshot, content: string)
   try {
     await current
   } finally {
-    if (pendingWrites.get(snapshot.resolvedPath) === current) pendingWrites.delete(snapshot.resolvedPath)
+    if (pendingWrites.get(snapshot.resolvedPath) === current) {
+      pendingWrites.delete(snapshot.resolvedPath)
+    }
   }
 }

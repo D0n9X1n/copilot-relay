@@ -14,14 +14,22 @@ const { runtimeState } = await import("../../src/lib/state")
 const { opus55Limits } = await import("../fixtures/model-limits")
 
 const { flushLogs } = await import("../../src/lib/log")
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
-test.afterEach(() => { delete runtimeState.thinkEffort })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
+test.afterEach(() => {
+  delete runtimeState.thinkEffort
+})
 
 async function fixture(t: import("node:test").TestContext) {
   const requests: Array<{ path: string; body: Record<string, any> }> = []
   const upstream = createHttpServer(async (req, res) => {
     let raw = ""
-    for await (const chunk of req) raw += chunk
+    for await (const chunk of req) {
+      raw += chunk
+    }
+
     const body = JSON.parse(raw)
     requests.push({ path: req.url!, body })
     res.setHeader("content-type", "application/json")
@@ -30,6 +38,7 @@ async function fixture(t: import("node:test").TestContext) {
       res.end(JSON.stringify({ error: { message: 'tool_choice: type "tool" and "any" are not supported for this model.' } }))
       return
     }
+
     if (req.url === "/responses") {
       res.end(JSON.stringify({ id: "resp_search", model: body.model, status: "completed", output: [
         { type: "web_search_call", status: "completed" },
@@ -37,6 +46,7 @@ async function fixture(t: import("node:test").TestContext) {
       ], usage: { input_tokens: 20, output_tokens: 10 } }))
       return
     }
+
     const tools = body.tools ?? []
     const search = tools.some((tool: { function?: { name?: string } }) => tool.function?.name === "WebSearch")
     const hasToolResult = body.messages.some((message: { role: string }) => message.role === "tool")
@@ -83,8 +93,12 @@ for (const stream of [false, true]) {
       assert.equal(response.status, 200)
       const text = await response.text()
       assert.match(text, /claude-opus-5\.5/)
-      if (stream) assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
-      else assert.equal(JSON.parse(text).content[0].text, "OK")
+      if (stream) {
+        assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+      } else {
+        assert.equal(JSON.parse(text).content[0].text, "OK")
+      }
+
       assert.equal(f.requests.length, 1)
       assert.equal(f.requests[0]?.path, "/chat/completions")
       assert.equal(f.requests[0]?.body.model, "claude-opus-5.5")
@@ -92,6 +106,7 @@ for (const stream of [false, true]) {
       assert.equal(f.requests[0]?.body.max_tokens, 4096)
     })
   }
+
   test(`Opus 5.5 automatic tool choice and continuation stream=${stream}`, async (t) => {
     const f = await fixture(t)
     const tools = [{ name: "echo", input_schema: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } }]
@@ -100,7 +115,10 @@ for (const stream of [false, true]) {
     const text = await response.text()
     assert.match(text, /call_echo/)
     assert.match(text, /tool_use/)
-    if (stream) assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+    if (stream) {
+      assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+    }
+
     const follow = await f.send({ tools, messages: [
       { role: "user", content: "Echo OK" },
       { role: "assistant", content: [{ type: "tool_use", id: "call_echo", name: "echo", input: { value: "OK" } }] },
@@ -124,8 +142,12 @@ for (const stream of [false, true]) {
     assert.match(text, /web_search_tool_result/)
     assert.match(text, /https:\/\/example.com\/docs/)
     assert.match(text, /claude-opus-5\.5/)
-    if (stream) assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
-    else assert.equal(JSON.parse(text).model, "claude-opus-5.5")
+    if (stream) {
+      assert.equal((text.match(/event: message_stop/g) ?? []).length, 1)
+    } else {
+      assert.equal(JSON.parse(text).model, "claude-opus-5.5")
+    }
+
     assert.deepEqual(f.requests.map((request) => request.path), ["/chat/completions", "/responses", "/chat/completions"])
     assert.equal(f.requests[2]?.body.model, "claude-opus-5.5")
     assert.equal(f.requests[2]?.body.reasoning_effort, "low")

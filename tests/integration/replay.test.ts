@@ -47,13 +47,16 @@ const fixture = async (options: {
   refresh?: "success" | "failure" | "cancelled"
 } = {}) => {
   const directory = await fs.mkdtemp(path.join(home, "capture-"))
-  const config = { host: "localhost", port: 0, copilotBaseUrl: baseUrl, copilotToken: "fixture-not-a-credential", upstreamTimeoutMs: 1000, vsCodeVersion: "test", modelCatalog: options.runtime?.modelCatalog, refreshCopilotToken: async () => { throw new Error("Actual refresh is forbidden") } }
+  const config = { host: "localhost", port: 0, copilotBaseUrl: baseUrl, copilotToken: "fixture-not-a-credential", upstreamTimeoutMs: 1000, vsCodeVersion: "test", modelCatalog: options.runtime?.modelCatalog, refreshCopilotToken: async () => {
+    throw new Error("Actual refresh is forbidden")
+  } }
   const runtime: RuntimeState = { modelRouting: { gptModel: "gpt-test", opusModel: "claude-test" }, thinkEffort: "low", upstreamBaseUrl: baseUrl, ...options.runtime }
   const payload = JSON.stringify(options.payload ?? clientPayload)
   const writeBody = async (file: string, bytes: Uint8Array): Promise<CapturedBody> => {
     await fs.writeFile(path.join(directory, file), bytes)
     return { file, bytes: bytes.length, chunks: [bytes.length], state: "complete" }
   }
+
   const manifest: CaptureManifest = {
     format: 1, relayVersion: "0.4.0", requestId,
     method: "POST", path: "/v1/messages", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
@@ -87,10 +90,15 @@ const fixture = async (options: {
       }
     },
     refresh: async () => {
-      if (!options.refresh) throw new Error("Unexpected fixture refresh")
+      if (!options.refresh) {
+        throw new Error("Unexpected fixture refresh")
+      }
+
       const error = options.refresh === "cancelled" ? "AbortError" : "Error"
       manifest.refreshes.push({ order: ++operation, outcome: options.refresh, ...(options.refresh !== "success" && { error }) })
-      if (options.refresh !== "success") throw Object.assign(new Error("Recorded refresh failed"), { name: error })
+      if (options.refresh !== "success") {
+        throw Object.assign(new Error("Recorded refresh failed"), { name: error })
+      }
     },
   }, async () => {
     const response = await createServer(config).fetch(new Request("http://localhost/v1/messages", { method: "POST", headers: manifest.headers, body: payload }))
@@ -130,12 +138,17 @@ for (const outcome of ["success", "failure", "cancelled"] as const) {
 
 test("preserves recorded transport error names and retry order", async () => {
   const f = await fixture({ respond: (_request, attempt) => {
-    if (attempt === 1) throw new TypeError("PRIVATE_TRANSPORT_ERROR")
+    if (attempt === 1) {
+      throw new TypeError("PRIVATE_TRANSPORT_ERROR")
+    }
+
     return Response.json(chatResponse())
   } })
   assert.equal(f.manifest.exchanges[0].error, "TypeError")
   assert.equal((await replayCapture(f.directory)).verdict, "MATCH")
-  const timedOut = await fixture({ respond: () => { throw new DOMException("PRIVATE_TIMEOUT", "TimeoutError") } })
+  const timedOut = await fixture({ respond: () => {
+    throw new DOMException("PRIVATE_TIMEOUT", "TimeoutError")
+  } })
   assert.equal(timedOut.manifest.status, 504)
   assert.equal(timedOut.requests.length, 1)
   assert.equal((await replayCapture(timedOut.directory)).verdict, "MATCH")
@@ -221,8 +234,11 @@ const runCli = async (target: string) => {
       env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1", FORCE_COLOR: "0" },
     }, (error, stdout, stderr) => {
       const code = error ? error.code : 0
-      if (error?.killed || typeof code !== "number") reject(error)
-      else resolve({ code, output: stdout + stderr })
+      if (error?.killed || typeof code !== "number") {
+        reject(error)
+      } else {
+        resolve({ code, output: stdout + stderr })
+      }
     })
   })
 }
@@ -269,11 +285,17 @@ for (const stream of [false, true]) {
   test(`normalizes only bridge-generated WebSearch IDs (${stream ? "SSE" : "JSON"}) and keeps tool references bijective`, async () => {
     let chat = 0
     const f = await fixture({ payload: { ...clientPayload, stream, tools: [{ name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }] }, respond: (request) => {
-      if (request.path === "/responses") return Response.json({ status: "completed", output: [], usage: { input_tokens: 2, output_tokens: 1 } })
+      if (request.path === "/responses") {
+        return Response.json({ status: "completed", output: [], usage: { input_tokens: 2, output_tokens: 1 } })
+      }
+
       chat++
       const message = { role: "assistant", content: null, tool_calls: [{ id: "call_provider_search", type: "function", function: { name: "WebSearch", arguments: '{"query":"PRIVATE_QUERY"}' } }] }
       const response = { ...chatResponse(), choices: [{ index: 0, message, finish_reason: "tool_calls" }] }
-      if (!stream) return Response.json(response)
+      if (!stream) {
+        return Response.json(response)
+      }
+
       return new Response(`data: ${JSON.stringify({ ...response, choices: [{ index: 0, delta: { ...message, tool_calls: message.tool_calls.map((call, index) => ({ ...call, index })) }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } })
     } })
     assert.equal(chat, 1)
@@ -298,7 +320,10 @@ for (const stream of [false, true]) {
 test("provider IDs stay significant even when upstream JSON escapes their characters", async () => {
   const providerId = `msg_${"a".repeat(32)}`
   const f = await fixture({ payload: { ...clientPayload, tools: [{ name: "WebSearch" }] }, respond: (request) => {
-    if (request.path === "/responses") return new Response(JSON.stringify({ id: providerId, status: "completed", output: [] }).replace("a".repeat(32), "\\u0061".repeat(32)), { headers: { "content-type": "application/json" } })
+    if (request.path === "/responses") {
+      return new Response(JSON.stringify({ id: providerId, status: "completed", output: [] }).replace("a".repeat(32), "\\u0061".repeat(32)), { headers: { "content-type": "application/json" } })
+    }
+
     return Response.json({ ...chatResponse(), choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "provider-call", type: "function", function: { name: "WebSearch", arguments: '{"query":"test"}' } }] }, finish_reason: "tool_calls" }] })
   } })
   assert.equal(JSON.parse(f.response).id, providerId)
@@ -323,8 +348,14 @@ test("complete captures replay the current handler without network, sockets, or 
   const f = await fixture()
   assert.equal(JSON.parse(f.response).content[0].text, "PRIVATE_RESPONSE")
   let networkCalls = 0
-  t.mock.method(globalThis, "fetch", () => { networkCalls++; throw new Error("Network forbidden") })
-  t.mock.method(net.Socket.prototype, "connect", () => { networkCalls++; throw new Error("Socket forbidden") })
+  t.mock.method(globalThis, "fetch", () => {
+    networkCalls++
+    throw new Error("Network forbidden")
+  })
+  t.mock.method(net.Socket.prototype, "connect", () => {
+    networkCalls++
+    throw new Error("Socket forbidden")
+  })
   runtimeState.modelRouting = { gptModel: "WRONG_AMBIENT_MODEL", opusModel: "WRONG_AMBIENT_MODEL" }
   runtimeState.thinkEffort = "max"
   try {
@@ -371,16 +402,25 @@ const captureWithHttpCopilot = async (options: {
   const upstream = createHttpServer((request, response) => {
     void (async () => {
       let body = ""
-      for await (const chunk of request) body += String(chunk)
+      for await (const chunk of request) {
+        body += String(chunk)
+      }
+
       const recorded = { method: request.method ?? "GET", path: request.url ?? "/", body, headers: request.headers }
       requests.push(recorded)
       options.respond(recorded, response, requests.length)
-    })().catch((error: unknown) => { handlerError = error; response.destroy() })
+    })().catch((error: unknown) => {
+      handlerError = error
+      response.destroy()
+    })
   })
   try {
     await withinDeadline(new Promise<void>((resolve, reject) => {
       upstream.once("error", reject)
-      upstream.listen(0, "127.0.0.1", () => { upstream.off("error", reject); resolve() })
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject)
+        resolve()
+      })
     }), "Mock Copilot listen")
     const address = upstream.address()
     assert.ok(address && typeof address === "object")
@@ -388,7 +428,9 @@ const captureWithHttpCopilot = async (options: {
       host: "127.0.0.1", port: 0, copilotBaseUrl: `http://127.0.0.1:${address.port}`,
       copilotToken: "fake-capture-token-before", copilotTokenGeneration: 0,
       upstreamTimeoutMs: 2_000, vsCodeVersion: "test", claudeUpstreamApi: "chat-completions",
-      refreshCopilotToken: async () => { throw new Error("Unexpected capture refresh") },
+      refreshCopilotToken: async () => {
+        throw new Error("Unexpected capture refresh")
+      },
     }
     const runtime: RuntimeState = {
       modelRouting: { gptModel: "gpt-test", opusModel: "claude-test" },
@@ -419,7 +461,10 @@ const captureWithHttpCopilot = async (options: {
       .map(async (date) => {
         const directory = path.join(root, date.name, recorded.requestId!)
         return await fs.stat(directory).then(() => directory, (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined
+          if (error.code === "ENOENT") {
+            return undefined
+          }
+
           throw error
         })
       }))).filter((directory): directory is string => directory !== undefined)
@@ -441,11 +486,15 @@ const captureWithHttpCopilot = async (options: {
       assert.equal(exchange.upstreamRequestId, requests[index].headers["x-request-id"])
       // A real GET /models has no body; RequestTrace may omit its empty file.
       const body = await fs.readFile(path.join(directory, exchange.request.file)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT" && exchange.request.bytes === 0) return Buffer.alloc(0)
+        if (error.code === "ENOENT" && exchange.request.bytes === 0) {
+          return Buffer.alloc(0)
+        }
+
         throw error
       })
       assert.ok(isDeepStrictEqual(body, Buffer.from(requests[index].body)), `Captured upstream request ${index} changed`)
     }
+
     return { ...recorded, requestId: recorded.requestId, directory, manifest, requests }
   } finally {
     setLogLevel("info")
@@ -454,6 +503,7 @@ const captureWithHttpCopilot = async (options: {
       upstream.closeAllConnections()
       await withinDeadline(closed, "Mock Copilot close")
     }
+
     await withinDeadline(flushCaptures(), "Capture teardown flush")
     await withinDeadline(flushLogs(), "Capture log flush")
   }
@@ -475,13 +525,20 @@ test("captured relay stream errors keep their request ID during offline replay",
 
 const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<ReturnType<typeof captureWithHttpCopilot>>, outcome = "end_turn") => {
   let forbiddenCalls = 0
-  const forbidden = () => { forbiddenCalls++; throw new Error("NETWORK_OR_AUTH_FORBIDDEN") }
+  const forbidden = () => {
+    forbiddenCalls++
+    throw new Error("NETWORK_OR_AUTH_FORBIDDEN")
+  }
+
   t.mock.method(globalThis, "fetch", forbidden)
   t.mock.method(net.Socket.prototype, "connect", forbidden)
   t.mock.method(net.Server.prototype, "listen", forbidden)
   const readFile = fs.readFile.bind(fs)
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
-    if (/(?:config\.yaml|copilot_token\.json|github_token)$/.test(String(args[0]))) forbidden()
+    if (/(?:config\.yaml|copilot_token\.json|github_token)$/.test(String(args[0]))) {
+      forbidden()
+    }
+
     return readFile(...args)
   })
   try {
@@ -496,6 +553,7 @@ const assertRealCaptureReplaysOffline = async (t: TestContext, capture: Awaited<
   } finally {
     t.mock.restoreAll()
   }
+
   const result = await runCli(capture.requestId)
   assert.ok(!/PRIVATE_|fake-capture-token|NETWORK_OR_AUTH_FORBIDDEN/.test(result.output), "CLI exposed capture content or attempted network/auth")
   assert.equal(result.code, 0, result.output)
@@ -643,6 +701,7 @@ for (const stream of [false, true]) {
       assert.deepEqual(response.usage, { input_tokens: 7, output_tokens: 3 })
       assert.ok(response.content[0].text === "PRIVATE_RESPONSE", "Chat JSON lost response text")
     }
+
     await assertRealCaptureReplaysOffline(t, capture)
   })
 }
@@ -683,7 +742,9 @@ for (const stream of [false, true]) {
     }
     const capture = await captureWithHttpCopilot({
       payload,
-      configure: (config) => { config.claudeUpstreamApi = "messages" },
+      configure: (config) => {
+        config.claudeUpstreamApi = "messages"
+      },
       respond: (_request, response) => {
         response.writeHead(200, { "content-type": stream ? "text/event-stream" : "application/json" })
         response.end(upstream)
@@ -703,6 +764,7 @@ for (const stream of [false, true]) {
       assert.equal(outcome?.cache_read_input_tokens, usage.cache_read_input_tokens)
       assert.equal(outcome?.cache_creation_input_tokens, usage.cache_creation_input_tokens)
     }
+
     if (stream) {
       const events = capturedEvents(capture.response)
       const signatures = events.flatMap((event) => event.type === "content_block_delta" && event.index === 0 && event.delta.type === "signature_delta" ? [event.delta.signature] : [])
@@ -720,6 +782,7 @@ for (const stream of [false, true]) {
       assert.deepEqual(response.usage, usage)
       assert.equal(response.stop_reason, "end_turn")
     }
+
     await assertRealCaptureReplaysOffline(t, capture)
   })
 }

@@ -358,7 +358,10 @@ for (const symlinked of [false, true]) {
       const target = symlinked ? path.join(path.dirname(configPath), "managed.json") : configPath
       const original = `${JSON.stringify({ theme: "dark", permissions: { allow: ["Read"] } })}\n`
       await fs.writeFile(target, original, { mode: 0o640 })
-      if (symlinked) await fs.symlink("managed.json", configPath)
+      if (symlinked) {
+        await fs.symlink("managed.json", configPath)
+      }
+
       const input = { baseUrl: "http://relay.test.invalid", configPath, gptModel: "gpt-6-astra" }
       const reader = await fs.open(target, "r")
       try {
@@ -369,11 +372,16 @@ for (const symlinked of [false, true]) {
         } else {
           assert.equal((await applyClaudeConfig(input)).changed, true)
         }
+
         assert.equal(await reader.readFile("utf8"), original, "an open reader must never see a truncated/replaced payload")
       } finally {
         await reader.close()
       }
-      if (process.platform === "win32") assert.equal((await applyClaudeConfig(input)).changed, true)
+
+      if (process.platform === "win32") {
+        assert.equal((await applyClaudeConfig(input)).changed, true)
+      }
+
       const settings = await readSettings(configPath)
       assert.equal(settings.theme, "dark")
       assert.deepEqual(settings.permissions, { allow: ["Read"] })
@@ -383,9 +391,11 @@ for (const symlinked of [false, true]) {
         assert.equal(await fs.readlink(configPath), "managed.json")
         assert.deepEqual(await readSettings(target), settings)
       }
+
       if (process.platform !== "win32") {
         assert.equal((await fs.stat(target)).mode & 0o777, 0o640)
       }
+
       assert.deepEqual((await fs.readdir(path.dirname(configPath))).sort(),
         symlinked ? ["managed.json", "settings.json"] : ["settings.json"])
     })
@@ -407,6 +417,7 @@ test("does not overwrite a concurrent settings edit made after its snapshot read
         edited = true
         await realWrite(configPath, replacement)
       }
+
       return bytes
     })
 
@@ -428,7 +439,10 @@ test("preserves settings when publication fails and removes its temporary file",
     const resolvedPath = await fs.realpath(configPath)
     const failure = Object.assign(new Error("synthetic rename failure"), { code: "EIO" })
     t.mock.method(fs, "rename", async (source: string, destination: string) => {
-      if (destination === configPath || destination === resolvedPath) throw failure
+      if (destination === configPath || destination === resolvedPath) {
+        throw failure
+      }
+
       return realRename(source, destination)
     })
 

@@ -31,6 +31,7 @@ const seedLog = async (fileName: string, mtime?: Date): Promise<string> => {
   if (mtime) {
     await fs.utimes(filePath, mtime, mtime)
   }
+
   return filePath
 }
 

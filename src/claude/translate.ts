@@ -76,14 +76,24 @@ export function translateToOpenAI(
 }
 
 export function validateClaudeMessages(messages: ClaudeMessage[], native = false): void {
-  if (!Array.isArray(messages)) throw invalidMessage("Messages must be an array.")
+  if (!Array.isArray(messages)) {
+    throw invalidMessage("Messages must be an array.")
+  }
+
   for (const message of messages) {
-    if (!message || !["user", "assistant", "system"].includes(message.role)) throw invalidMessage("Unsupported message role.")
-    if (message.role !== "system") continue
+    if (!message || !["user", "assistant", "system"].includes(message.role)) {
+      throw invalidMessage("Unsupported message role.")
+    }
+
+    if (message.role !== "system") {
+      continue
+    }
+
     const control = message.output_config
     if (!native && (message.clear_at !== undefined || control !== undefined && !isEffortOnlyControl(control))) {
       throw invalidMessage("Translated system controls support only output_config.effort with low, medium, high, xhigh, or max; other controls require the native Messages route.")
     }
+
     if (typeof message.content !== "string" && (!Array.isArray(message.content)
       || message.content.some((block) => !block || block.type !== "text" || typeof block.text !== "string"))) {
       throw invalidMessage("System message content must contain only text.")
@@ -104,7 +114,10 @@ function translateClaudeMessagesToOpenAI(
       case "assistant":
         return handleAssistantMessage(message, toolNameMapper)
       case "system":
-        if (message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) return []
+        if (message.output_config !== undefined && (typeof message.content === "string" ? message.content.length === 0 : message.content.every((block) => block.text.length === 0))) {
+          return []
+        }
+
         return handleSystemPrompt(message.content)
       default:
         throw invalidMessage("Unsupported message role.")
@@ -227,9 +240,11 @@ const normalizeFinalAssistantPrefill = (
       break
     }
   }
+
   if (lastAssistantIndex < 0) {
     return messages
   }
+
   if (lastAssistantIndex !== messages.length - 1) {
     return messages
   }
@@ -253,6 +268,7 @@ const normalizeFinalAssistantPrefill = (
   } else {
     nextMessages.pop()
   }
+
   return nextMessages
 }
 
@@ -356,6 +372,7 @@ function translateClaudeToolChoiceToOpenAI(
           function: { name: toolNameMapper.toOpenAI(claudeToolChoice.name) },
         }
       }
+
       return undefined
     }
     case "none": {

@@ -50,7 +50,10 @@ const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0
 
 export function parseModelTokenLimits(value: unknown): ModelTokenLimits | undefined {
-  if (!isRecord(value)) return undefined
+  if (!isRecord(value)) {
+    return undefined
+  }
+
   const context = value.max_context_window_tokens
   const prompt = value.max_prompt_tokens
   const output = value.max_output_tokens
@@ -68,6 +71,7 @@ export function parseModelTokenLimits(value: unknown): ModelTokenLimits | undefi
   ) {
     return undefined
   }
+
   return {
     max_context_window_tokens: context,
     max_prompt_tokens: prompt,
@@ -134,7 +138,9 @@ export async function loadCopilotModelCatalog(
 ): Promise<CopilotModelCatalog> {
   const provider = getCopilotProviderContext(config)
   const pending = pendingCatalogs.get(config)
-  if (pending?.baseUrl === provider.baseUrl) return pending.promise
+  if (pending?.baseUrl === provider.baseUrl) {
+    return pending.promise
+  }
 
   const promise = (async () => {
     const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
@@ -145,6 +151,7 @@ export async function loadCopilotModelCatalog(
     if (!response.ok) {
       throw new HTTPError("Failed to validate upstream models", response)
     }
+
     const payload = await readCopilotJson<unknown>(
       response,
       signal,
@@ -153,9 +160,13 @@ export async function loadCopilotModelCatalog(
     if (!isRecord(payload) || !Array.isArray(payload.data)) {
       throw new Error("Copilot /models returned an invalid model catalog.")
     }
+
     const models = new Map<string, CopilotModel>()
     for (const model of payload.data) {
-      if (!isRecord(model) || typeof model.id !== "string" || !model.id) continue
+      if (!isRecord(model) || typeof model.id !== "string" || !model.id) {
+        continue
+      }
+
       const capabilities = isRecord(model.capabilities) ? model.capabilities : undefined
       const limits = parseModelTokenLimits(capabilities?.limits)
       const supports = isRecord(capabilities?.supports) ? capabilities.supports : undefined
@@ -172,18 +183,27 @@ export async function loadCopilotModelCatalog(
         ...(reasoningEfforts !== undefined && { reasoningEfforts }),
       })
     }
+
     const catalog = { baseUrl: provider.baseUrl, models }
     publishCopilotModelCatalog(config, catalog)
     const state = getRuntimeState()
-    if (state.upstreamBaseUrl === provider.baseUrl) state.modelCatalog = catalog
-    if (runtimeState.upstreamBaseUrl === provider.baseUrl) runtimeState.modelCatalog = catalog
+    if (state.upstreamBaseUrl === provider.baseUrl) {
+      state.modelCatalog = catalog
+    }
+
+    if (runtimeState.upstreamBaseUrl === provider.baseUrl) {
+      runtimeState.modelCatalog = catalog
+    }
+
     return catalog
   })()
   pendingCatalogs.set(config, { baseUrl: provider.baseUrl, promise })
   try {
     return await promise
   } finally {
-    if (pendingCatalogs.get(config)?.promise === promise) pendingCatalogs.delete(config)
+    if (pendingCatalogs.get(config)?.promise === promise) {
+      pendingCatalogs.delete(config)
+    }
   }
 }
 
@@ -219,10 +239,14 @@ export async function boundModelOutputTokens(
 ): Promise<number | null | undefined> {
   await ensureCopilotModelCatalog(config, model)
   const limits = getCachedCopilotModel(config, model)?.limits
-  if (!limits || !isPositiveInteger(requested)) return requested
+  if (!limits || !isPositiveInteger(requested)) {
+    return requested
+  }
+
   const bounded = Math.min(requested, limits.max_output_tokens)
   if (bounded !== requested) {
     log.info(`Model output budget: model=${model} requested=${requested} effective=${bounded}`)
   }
+
   return bounded
 }

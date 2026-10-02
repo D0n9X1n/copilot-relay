@@ -17,10 +17,15 @@ const { translateChunkToClaudeEvents } = await import("../../src/claude/stream")
 type ChatCompletionChunk = import("../../src/copilot/types").ChatCompletionChunk
 type ClaudeStreamState = import("../../src/claude/types").ClaudeStreamState
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 
 async function* events(...values: unknown[]) {
-  for (const value of values) yield { data: typeof value === "string" ? value : JSON.stringify(value) }
+  for (const value of values) {
+    yield { data: typeof value === "string" ? value : JSON.stringify(value) }
+  }
 }
 
 for (const [reason, expected] of [["max_output_tokens", "length"], ["content_filter", "content_filter"]] as const) {
@@ -28,8 +33,11 @@ for (const [reason, expected] of [["max_output_tokens", "length"], ["content_fil
     const response = { id: "resp_terminal", model: "gpt-6-astra", created_at: 1, status: "incomplete", incomplete_details: { reason }, output: [], usage: { input_tokens: 100, output_tokens: 5, total_tokens: 105 } }
     const output = []
     for await (const event of translateResponsesStreamToChatCompletionStream(events({ type: "response.incomplete", response }))) {
-      if (event.data && event.data !== "[DONE]") output.push(JSON.parse(event.data))
+      if (event.data && event.data !== "[DONE]") {
+        output.push(JSON.parse(event.data))
+      }
     }
+
     assert.equal(output.at(-1)?.choices[0]?.finish_reason, expected)
     assert.equal(output.at(-1)?.usage.prompt_tokens, 100)
   })
@@ -47,7 +55,9 @@ test("incomplete Responses function calls cannot become tool-use completion", ()
 for (const type of ["response.failed", "error"]) {
   test(`Responses ${type} terminal fails rather than silently disappearing`, async () => {
     await assert.rejects(async () => {
-      for await (const event of translateResponsesStreamToChatCompletionStream(events({ type, response: { id: "resp_failed", model: "gpt-6-astra", created_at: 1, status: "failed", output: [] }, error: { message: "fixture failure" } }))) void event
+      for await (const event of translateResponsesStreamToChatCompletionStream(events({ type, response: { id: "resp_failed", model: "gpt-6-astra", created_at: 1, status: "failed", output: [] }, error: { message: "fixture failure" } }))) {
+        void event
+      }
     })
   })
 }
@@ -72,9 +82,16 @@ test("interleaved tool arguments never target a closed Claude content block", ()
     { ...base, choices: [{ index: 0, logprobs: null, finish_reason: "tool_calls", delta: {} }] },
   ]
   const closed = new Set<number>()
-  for (const chunk of chunks) for (const event of translateChunkToClaudeEvents(chunk, state)) {
-    if (event.type === "content_block_stop") closed.add(event.index)
-    if (event.type === "content_block_delta") assert.equal(closed.has(event.index), false, `delta for closed block ${event.index}`)
+  for (const chunk of chunks) {
+    for (const event of translateChunkToClaudeEvents(chunk, state)) {
+      if (event.type === "content_block_stop") {
+        closed.add(event.index)
+      }
+
+      if (event.type === "content_block_delta") {
+        assert.equal(closed.has(event.index), false, `delta for closed block ${event.index}`)
+      }
+    }
   }
 })
 
@@ -107,10 +124,19 @@ for (const stream of [false, true]) {
     let calls = 0
     const result = await withoutLogging(() => withRecordedTransport({ fetch: async (request) => {
       calls++
-      if (request.path === "/responses") return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Source https://example.com/reference" }] }], usage: { input_tokens: 50, output_tokens: 2, input_tokens_details: { cached_tokens: 40 } } })
-      if (calls === 3) return Response.json({ ...base, choices: [{ index: 0, message: { role: "assistant", content: "Answer" }, finish_reason: "stop" }], usage: { prompt_tokens: 200, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 180 } } })
+      if (request.path === "/responses") {
+        return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Source https://example.com/reference" }] }], usage: { input_tokens: 50, output_tokens: 2, input_tokens_details: { cached_tokens: 40 } } })
+      }
+
+      if (calls === 3) {
+        return Response.json({ ...base, choices: [{ index: 0, message: { role: "assistant", content: "Answer" }, finish_reason: "stop" }], usage: { prompt_tokens: 200, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 180 } } })
+      }
+
       const usage = { prompt_tokens: 100, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 90 } }
-      if (!stream) return Response.json({ ...base, choices: [{ index: 0, message: { role: "assistant", content: "Checking", tool_calls }, finish_reason: "tool_calls" }], usage })
+      if (!stream) {
+        return Response.json({ ...base, choices: [{ index: 0, message: { role: "assistant", content: "Checking", tool_calls }, finish_reason: "tool_calls" }], usage })
+      }
+
       return new Response([
         { ...base, choices: [{ index: 0, delta: { content: "Checking" }, finish_reason: null }] },
         { ...base, choices: [{ index: 0, delta: { tool_calls: tool_calls.map((call, index) => ({ ...call, index })) }, finish_reason: null }] },
@@ -149,7 +175,10 @@ for (const stream of [false, true]) {
       fetch: async (request) => {
         paths.push(request.path)
         assert.equal(request.path, "/chat/completions")
-        if (!stream) return Response.json({ ...base, choices: [{ index: 0, message, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 1 } })
+        if (!stream) {
+          return Response.json({ ...base, choices: [{ index: 0, message, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 1 } })
+        }
+
         return new Response([
           { ...base, choices: [{ index: 0, delta: { ...message, tool_calls: message.tool_calls.map((call, index) => ({ ...call, index })) }, finish_reason: null }] },
           { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },

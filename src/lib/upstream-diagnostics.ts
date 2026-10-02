@@ -69,6 +69,7 @@ const collectSuspiciousSchemaKeys = (
         break
       }
     }
+
     return keys
   }
 
@@ -82,10 +83,12 @@ const collectSuspiciousSchemaKeys = (
       if (!keys.includes(nextPath)) {
         keys.push(nextPath)
       }
+
       if (keys.length >= maxDiagnosticItems) {
         break
       }
     }
+
     collectSuspiciousSchemaKeys(nestedValue, nextPath, keys)
     if (keys.length >= maxDiagnosticItems) {
       break

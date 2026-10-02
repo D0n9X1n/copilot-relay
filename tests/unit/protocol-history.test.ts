@@ -19,8 +19,13 @@ const { flushLogs } = await import("../../src/lib/log")
 type ClaudeMessage = import("../../src/claude/types").ClaudeMessage
 type ClaudeMessagesPayload = import("../../src/claude/types").ClaudeMessagesPayload
 
-test.after(async () => { await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
-test.afterEach(() => { delete runtimeState.modelRouting })
+test.after(async () => {
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
+test.afterEach(() => {
+  delete runtimeState.modelRouting
+})
 
 test("mid-conversation operator text keeps its role without assistant continuation", () => {
   const payload = translateToOpenAI({
@@ -97,6 +102,7 @@ test("redundant inline effort preserves system text and effective effort", async
     })
     assert.equal(called, true)
   }
+
   const pending = translateToOpenAI({ ...payload, messages: [{ role: "system", content: "Use the next effort.", output_config: { effort: "high" } }] })
   assert.equal(pending.reasoning_effort, "low")
   for (const output_config of [{ effort: "low", format: {} }, { effort: "none" }, { effort: "ultra" }, {}, null, []]) {
@@ -157,7 +163,10 @@ test("shared upstream client preserves an already resolved non-Opus target", asy
   const models: string[] = []
   const upstream = createServer(async (request, response) => {
     let body = ""
-    for await (const chunk of request) body += chunk
+    for await (const chunk of request) {
+      body += chunk
+    }
+
     const payload = JSON.parse(body)
     models.push(payload.model)
     response.setHeader("content-type", "application/json")
@@ -201,7 +210,10 @@ for (const stream of [false, true]) {
         { role: "unexpected", content: "Hi" },
         { role: "system", content: [{ type: "image" }] },
       ]
-      await withRecordedTransport({ fetch: async () => { upstreamCalls++; throw new Error("Unexpected upstream") }, refresh: async () => {} }, async () => {
+      await withRecordedTransport({ fetch: async () => {
+        upstreamCalls++
+        throw new Error("Unexpected upstream")
+      }, refresh: async () => {} }, async () => {
         for (const message of messages) {
           const response = await app.fetch(new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ model: "opus", max_tokens: 32, stream, messages: [{ role: "user", content: "Hello" }, message] }),
@@ -215,10 +227,14 @@ for (const stream of [false, true]) {
       assert.equal(upstreamCalls, 0)
     })
   }
+
   test(`forced native search returns HTTP400 before ${stream ? "SSE" : "JSON"}`, async () => {
     let upstreamCalls = 0
     const app = createRelay({ host: "localhost", port: 0, copilotBaseUrl: "https://fixture.invalid", copilotToken: "fixture", vsCodeVersion: "test", upstreamTimeoutMs: 1000, claudeUpstreamApi: "messages" })
-    await withRecordedTransport({ fetch: async () => { upstreamCalls++; throw new Error("Unexpected upstream") }, refresh: async () => {} }, async () => {
+    await withRecordedTransport({ fetch: async () => {
+      upstreamCalls++
+      throw new Error("Unexpected upstream")
+    }, refresh: async () => {} }, async () => {
       for (const tool_choice of [{ type: "any" }, { type: "tool", name: "WebSearch" }]) {
         const response = await app.fetch(new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
           model: "opus", max_tokens: 32, stream, messages: [{ role: "user", content: "Hi" }], tools: [{ name: "WebSearch", input_schema: { type: "object" } }], tool_choice,

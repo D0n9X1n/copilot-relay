@@ -82,6 +82,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   for await (const chunk of request) {
     body += String(chunk)
   }
+
   return body ? JSON.parse(body) as unknown : undefined
 }
 
@@ -312,7 +313,10 @@ for (const source of ["annotation", "action", "text", "call-unreported"] as cons
       text: "Text fallback - https://example.com/fallback",
       ...(source === "annotation" && { annotations: [{ type: "url_citation", title: "Actual source", url: "https://example.com/source" }] }),
     }] }]
-    if (source === "call-unreported") output.unshift({ type: "web_search_call" })
+    if (source === "call-unreported") {
+      output.unshift({ type: "web_search_call" })
+    }
+
     await withSearchResponses([{ status: 200, body: JSON.stringify({ id: "resp_sources", status: "completed", output }) }], async (baseUrl) => {
       const search = await createClaudeWebSearchExecution(createConfig(baseUrl), payload, "public query")
       assert.equal(search.results[0]?.url, `https://example.com/${source === "text" || source === "call-unreported" ? "fallback" : "source"}`)
@@ -330,7 +334,9 @@ for (const source of ["annotation", "action", "text", "call-unreported"] as cons
 
 test("WebSearch logs bounded metadata with tool correlation and no response content", async () => {
   const messages: string[] = []
-  log.setReporters([{ log: (entry) => { messages.push(entry.args.join(" ")) } }])
+  log.setReporters([{ log: (entry) => {
+    messages.push(entry.args.join(" "))
+  } }])
   setLogLevel("info")
   const requestId = "c11bb174-4235-4c3e-b284-18a78bd44e82"
   const body = JSON.stringify({ id: "resp_evidence", model: "PRIVATE_UPSTREAM_MODEL", status: "incomplete",
@@ -357,21 +363,30 @@ test("WebSearch logs bounded metadata with tool correlation and no response cont
         assert(message.length < 1600)
         assert.doesNotMatch(message, /[\r\n\x1b]|PRIVATE_/)
       }
+
       let file = ""
       for (let attempt = 0; attempt < 50; attempt++) {
         file = await fs.readFile(getLogPath(), "utf8").catch(() => "")
-        if (file.includes(`tool_use_id=${tool.id}`)) break
+        if (file.includes(`tool_use_id=${tool.id}`)) {
+          break
+        }
+
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
+
       assert.match(file, /upstream_response_id=resp_evidence/)
       assert.doesNotMatch(file, /PRIVATE_/)
     })
-  } finally { setLogLevel("error") }
+  } finally {
+    setLogLevel("error")
+  }
 })
 
 test("WebSearch omits hostile metadata and distinguishes missing usage from zero", async () => {
   const messages: string[] = []
-  log.setReporters([{ log: (entry) => { messages.push(entry.args.join(" ")) } }])
+  log.setReporters([{ log: (entry) => {
+    messages.push(entry.args.join(" "))
+  } }])
   setLogLevel("info")
   try {
     await withSearchResponses([{ status: 200, body: JSON.stringify({
@@ -389,7 +404,9 @@ test("WebSearch omits hostile metadata and distinguishes missing usage from zero
       assert.match(summary, /input_tokens=unknown output_tokens=unknown reasoning_tokens=0/)
       assert.doesNotMatch(messages.join("\n"), /PRIVATE_/)
     })
-  } finally { setLogLevel("error") }
+  } finally {
+    setLogLevel("error")
+  }
 })
 
 const startHangingMockCopilot = async () => {

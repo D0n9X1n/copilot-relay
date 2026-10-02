@@ -79,12 +79,15 @@ export const resolveWebSearchStreamDecision = async (
       done = true
       break
     }
+
     if (!raw.data) {
       continue
     }
 
     const chunk = JSON.parse(raw.data) as ChatCompletionChunk
-    if (!chunk || !Array.isArray(chunk.choices)) throw new Error("Invalid upstream chat stream chunk.")
+    if (!chunk || !Array.isArray(chunk.choices)) {
+      throw new Error("Invalid upstream chat stream chunk.")
+    }
 
     buffered.push(chunk)
 
@@ -115,11 +118,13 @@ export const resolveWebSearchStreamDecision = async (
       if (done) {
         return
       }
+
       while (true) {
         const next = await iterator.next()
         if (next.done) {
           return
         }
+
         yield next.value
       }
     },
@@ -141,11 +146,16 @@ export const resolveWebSearchStreamDecision = async (
     if (raw.data === "[DONE]") {
       break
     }
+
     if (!raw.data) {
       continue
     }
+
     const chunk = JSON.parse(raw.data) as ChatCompletionChunk
-    if (!chunk || !Array.isArray(chunk.choices)) throw new Error("Invalid upstream chat stream chunk.")
+    if (!chunk || !Array.isArray(chunk.choices)) {
+      throw new Error("Invalid upstream chat stream chunk.")
+    }
+
     buffered.push(chunk)
   }
 

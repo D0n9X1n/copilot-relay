@@ -47,10 +47,17 @@ export function getRequestReasoningEffort(request: {
     if (typeof outputConfig !== "object" || Array.isArray(outputConfig)) {
       throw invalidRequestEffort("Invalid output_config: expected an object.")
     }
-    if ("effort" in outputConfig) nativeEffort = outputConfig.effort
+
+    if ("effort" in outputConfig) {
+      nativeEffort = outputConfig.effort
+    }
   }
+
   const requested = nativeEffort ?? request.reasoning_effort
-  if (requested === undefined || requested === null) return undefined
+  if (requested === undefined || requested === null) {
+    return undefined
+  }
+
   if (!isReasoningEffort(requested)) {
     const field = nativeEffort !== undefined && nativeEffort !== null ?
         "output_config.effort" : "reasoning_effort"
@@ -58,6 +65,7 @@ export function getRequestReasoningEffort(request: {
       `Invalid ${field}: expected none, low, medium, high, xhigh, or max.`,
     )
   }
+
   return requested
 }
 
@@ -78,7 +86,9 @@ export const normalizeClaudeModelId = (
   contextWindowTokens?: number,
 ): string => {
   const normalized = normalizeOneMillionContextModel(model)
-  if (!normalized) return model
+  if (!normalized) {
+    return model
+  }
 
   const catalog = getRuntimeState().modelCatalog
   contextWindowTokens ??=

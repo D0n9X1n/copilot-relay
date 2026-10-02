@@ -30,6 +30,7 @@ const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
   for await (const chunk of request) {
     body += String(chunk)
   }
+
   return body ? JSON.parse(body) as unknown : undefined
 }
 
@@ -179,7 +180,9 @@ test("fresh default preflight probes Opus 5.5 without a context alias", async ()
     const opus = mock.requests[2]?.body as { model: string; reasoning_effort: string }
     assert.equal(opus.model, "claude-opus-5.5")
     assert.equal(opus.reasoning_effort, "max")
-  } finally { await mock.close() }
+  } finally {
+    await mock.close()
+  }
 })
 
 for (const claudeUpstreamApi of ["auto", "messages"] as const) {
@@ -199,7 +202,9 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         messages: [{ role: "user", content: "Reply with OK only." }],
         output_config: { effort: "high" },
       })
-    } finally { await mock.close() }
+    } finally {
+      await mock.close()
+    }
   })
 }
 
@@ -217,7 +222,9 @@ for (const failure of [
         port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3", claudeUpstreamApi: "auto",
       }, "high"), failure.expected)
       assert.deepEqual(mock.requests.map((request) => request.path), ["/models", "/responses", "/v1/messages"])
-    } finally { await mock.close() }
+    } finally {
+      await mock.close()
+    }
   })
 }
 

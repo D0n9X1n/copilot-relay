@@ -13,7 +13,11 @@ const { flushLogs, log } = await import("../../src/lib/log")
 const { paths, formatLogDate } = await import("../../src/lib/paths")
 const config = { host: "127.0.0.1", port: 0, copilotBaseUrl: "https://fixture.invalid", copilotToken: "PRIVATE_CREDENTIAL", upstreamTimeoutMs: 1000, vsCodeVersion: "test" }
 
-test.after(async () => { await flushCaptures(); await flushLogs(); await fs.rm(home, { recursive: true, force: true }) })
+test.after(async () => {
+  await flushCaptures()
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
 
 test("full captures preserve large bodies but exclude credential headers", async () => {
   const request = new Request("http://localhost/v1/messages", { method: "POST", headers: { authorization: "Bearer CLIENT_SECRET", "content-type": "application/json" }, body: JSON.stringify({ content: "x".repeat(12000) }) })
@@ -34,12 +38,16 @@ test("full captures preserve large bodies but exclude credential headers", async
   assert.equal((await fs.readFile(path.join(dir, "client-request.bin"), "utf8")), requestBody)
   assert.equal((await fs.readFile(path.join(dir, "upstream-1-request.bin"), "utf8")), requestBody)
   assert.doesNotMatch(JSON.stringify(meta), /CLIENT_SECRET|UPSTREAM_SECRET|PRIVATE_CREDENTIAL|authorization/i)
-  if (process.platform !== "win32") assert.equal((await fs.stat(path.join(dir, "meta.json"))).mode & 0o777, 0o600)
+  if (process.platform !== "win32") {
+    assert.equal((await fs.stat(path.join(dir, "meta.json"))).mode & 0o777, 0o600)
+  }
 })
 
 test("diagnostic snapshots expose safe settled outcomes without bodies or capture files", async () => {
   const observed: Array<Awaited<ReturnType<typeof RequestTrace.create>>> = []
-  const trace = await withTraceObserver((value) => { observed.push(value) }, () => RequestTrace.create(
+  const trace = await withTraceObserver((value) => {
+    observed.push(value)
+  }, () => RequestTrace.create(
     "10000000-0000-4000-8000-000000000017", new Request("http://localhost/v1/messages"), config, {}, false,
   ))
   trace.protectCredential("ROTATED_PRIVATE_CREDENTIAL")
@@ -67,7 +75,9 @@ test("diagnostic snapshots expose safe settled outcomes without bodies or captur
 
 test("trace observers are request-scoped and cannot consume a response", async () => {
   const seen: string[][] = [[], []]
-  await Promise.all(seen.map((ids, index) => withTraceObserver((trace) => { ids.push(trace.requestId) }, async () => {
+  await Promise.all(seen.map((ids, index) => withTraceObserver((trace) => {
+    ids.push(trace.requestId)
+  }, async () => {
     await Promise.resolve()
     const trace = await RequestTrace.create(`10000000-0000-4000-8000-00000000002${index}`, new Request("http://localhost/v1/messages"), config, {}, false)
     trace.handlerSettled()
@@ -86,7 +96,9 @@ test("diagnostics distinguish pending, complete and incomplete private captures"
   assert.equal(complete.diagnosticSnapshot().capture.state, "complete")
 
   const incomplete = await RequestTrace.create("10000000-0000-4000-8000-000000000023", new Request("http://localhost/v1/messages"), config, {}, true)
-  const response = incomplete.captureResponse(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("partial")) } })))
+  const response = incomplete.captureResponse(new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode("partial"))
+  } })))
   incomplete.handlerSettled()
   await response.body!.cancel()
   await incomplete.finished
@@ -100,13 +112,17 @@ test("nondebug observations create no capture directory", async () => {
   await trace.finished
   assert.equal(trace.captureDirectory, undefined)
   const dates = await fs.readdir(path.join(paths.appDir, "captures")).catch(() => [])
-  for (const date of dates) assert(!(await fs.readdir(path.join(paths.appDir, "captures", date))).includes(trace.requestId))
+  for (const date of dates) {
+    assert(!(await fs.readdir(path.join(paths.appDir, "captures", date))).includes(trace.requestId))
+  }
 })
 
 test("refresh failures are recorded without credentials or a fabricated retry", async () => {
   const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000003", new Request("http://localhost/v1/messages"), config, {}, true)
   await withRequestTrace(trace, async () => {
-    await assert.rejects(recordedRefresh(async () => { throw new Error("PRIVATE_REFRESH_DETAIL") }))
+    await assert.rejects(recordedRefresh(async () => {
+      throw new Error("PRIVATE_REFRESH_DETAIL")
+    }))
   })
   trace.handlerSettled()
   await trace.captureResponse(new Response("{}", { headers: { "content-type": "application/json" } })).text()
@@ -125,7 +141,9 @@ const finishTrace = async (trace: Awaited<ReturnType<typeof RequestTrace.create>
 
 test("metadata and completion logs omit query strings and echoed current or refreshed credentials", async (t) => {
   const lines: string[] = []
-  t.mock.method(log, "info", (...values: unknown[]) => { lines.push(values.join(" ")) })
+  t.mock.method(log, "info", (...values: unknown[]) => {
+    lines.push(values.join(" "))
+  })
   const request = new Request("http://localhost/v1/messages?secret=PRIVATE_QUERY", { headers: {
     authorization: "Bearer CLIENT_SECRET", "x-request-id": "CLIENT_SECRET",
   } })
@@ -161,13 +179,20 @@ test("capture appends refuse a replaced body file without touching its symlink t
   await fs.writeFile(outside, "untouched", { mode: 0o644 })
   const bodyFile = path.join(trace.captureDirectory!, "client-response.bin")
   const reader = trace.captureResponse(new Response(new ReadableStream<Uint8Array>({
-    start(controller) { controller.enqueue(Buffer.from("first")); controller.enqueue(Buffer.from("second")); controller.close() },
+    start(controller) {
+      controller.enqueue(Buffer.from("first"))
+      controller.enqueue(Buffer.from("second"))
+      controller.close()
+    },
   }))).body!.getReader()
   await reader.read()
   await (trace as unknown as { queue: Promise<void> }).queue
   await fs.unlink(bodyFile)
   await fs.symlink(outside, bodyFile)
-  t.after(async () => { await fs.unlink(bodyFile).catch(() => {}); await fs.unlink(outside) })
+  t.after(async () => {
+    await fs.unlink(bodyFile).catch(() => {})
+    await fs.unlink(outside)
+  })
   assert.equal(Buffer.from((await reader.read()).value!).toString(), "second")
   await reader.read()
   trace.handlerSettled()
@@ -181,7 +206,9 @@ test("client cancellation settles capture and prevents subsequent upstream work"
   const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000007", new Request("http://localhost/v1/messages"), config, {}, true)
   let upstreamCancelled = false
   await withRequestTrace(trace, () => recordedFetch({ path: "/v1/messages", method: "POST", headers: {}, upstreamRequestId: "fixture-id" }, async () => new Response(new ReadableStream({
-    cancel() { upstreamCancelled = true },
+    cancel() {
+      upstreamCancelled = true
+    },
   }))))
   const response = trace.captureResponse(new Response(new ReadableStream()))
   await response.body!.cancel()
@@ -192,7 +219,10 @@ test("client cancellation settles capture and prevents subsequent upstream work"
   assert.equal(trace.manifest.exchanges[0].response?.state, "cancelled")
   assert.equal(trace.manifest.captureState, "incomplete")
   let calls = 0
-  await assert.rejects(withRequestTrace(trace, () => recordedFetch({ path: "/responses", method: "POST", headers: {}, upstreamRequestId: "late-id" }, async () => { calls++; return Response.json({}) })))
+  await assert.rejects(withRequestTrace(trace, () => recordedFetch({ path: "/responses", method: "POST", headers: {}, upstreamRequestId: "late-id" }, async () => {
+    calls++
+    return Response.json({})
+  })))
   assert.equal(calls, 0)
 })
 
@@ -214,7 +244,9 @@ test("capture retention preserves another process's pending capture and unrelate
   await fs.writeFile(path.join(foreign, "notes.txt"), "not relay data")
   await cleanupCaptures(3)
   assert.equal(await fs.stat(complete).then(() => true, () => false), false)
-  for (const directory of [active, unknown, foreign]) assert.equal((await fs.stat(directory)).isDirectory(), true)
+  for (const directory of [active, unknown, foreign]) {
+    assert.equal((await fs.stat(directory)).isDirectory(), true)
+  }
 })
 
 test("capture retention rejects a symlinked root without removing target records", { skip: process.platform === "win32" }, async () => {
@@ -238,7 +270,9 @@ test("capture retention rejects a symlinked root without removing target records
 test("handler completion cancels an unconsumed upstream body before final capture flush", async () => {
   const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000008", new Request("http://localhost/v1/messages"), config, {}, true)
   let cancelled = false
-  await withRequestTrace(trace, () => recordedFetch({ path: "/responses", method: "POST", headers: {}, upstreamRequestId: "unused" }, async () => new Response(new ReadableStream({ cancel() { cancelled = true } }))))
+  await withRequestTrace(trace, () => recordedFetch({ path: "/responses", method: "POST", headers: {}, upstreamRequestId: "unused" }, async () => new Response(new ReadableStream({ cancel() {
+    cancelled = true
+  } }))))
   const meta = await finishTrace(trace)
   assert.equal(cancelled, true)
   assert.equal(meta.exchanges[0].response.state, "cancelled")

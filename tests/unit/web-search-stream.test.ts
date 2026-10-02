@@ -21,6 +21,7 @@ const sse = (chunks: Array<unknown>): AsyncIterable<{ data?: string }> => ({
     for (const chunk of chunks) {
       yield { data: JSON.stringify(chunk) }
     }
+
     yield { data: "[DONE]" }
   },
 })

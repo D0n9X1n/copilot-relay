@@ -31,7 +31,10 @@ if (isMainThread) {
     const { default: consola } = await import("consola")
     consola.level = 0
   } finally {
-    if (inheritedLevel === undefined) delete process.env.CONSOLA_LEVEL
-    else process.env.CONSOLA_LEVEL = inheritedLevel
+    if (inheritedLevel === undefined) {
+      delete process.env.CONSOLA_LEVEL
+    } else {
+      process.env.CONSOLA_LEVEL = inheritedLevel
+    }
   }
 }

@@ -69,7 +69,10 @@ test("streams a zero-argument tool call as an empty JSON object and completes", 
   const partials = events.flatMap((event) => event.type === "content_block_delta" && event.delta.type === "input_json_delta"
     ? [event.delta.partial_json] : [])
   assert.deepEqual(partials, ["{}", '{"text":"hi"}'])
-  for (const partial of partials) assert.equal(typeof JSON.parse(partial), "object")
+  for (const partial of partials) {
+    assert.equal(typeof JSON.parse(partial), "object")
+  }
+
   assert.equal(events.at(-1)?.type, "message_stop")
 })
 
@@ -83,7 +86,12 @@ test("streams whitespace-only tool arguments as an empty JSON object", () => {
 test("invalid streamed tool arguments surface a client-safe error naming the tool", async () => {
   const { translateErrorToClaudeErrorEvent } = await import("../../src/claude/stream")
   let caught: unknown
-  try { toolStream([{ name: "noop", argumentDeltas: ['{"secret":'] }]) } catch (error) { caught = error }
+  try {
+    toolStream([{ name: "noop", argumentDeltas: ['{"secret":'] }])
+  } catch (error) {
+    caught = error
+  }
+
   const event = translateErrorToClaudeErrorEvent(caught)
   assert.deepEqual(event, { type: "error", error: { type: "api_error",
     message: 'Upstream returned tool input for "noop" that is not valid JSON.' } })

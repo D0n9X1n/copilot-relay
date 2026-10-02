@@ -186,7 +186,12 @@ for (const [argumentsText, reason] of [["{\"text\":", "is not valid JSON"], ["[1
   test(`invalid tool arguments ${argumentsText} map to a 502 naming the tool`, async () => {
     const { UpstreamToolInputError } = await import("../../src/claude/utils")
     let caught: unknown
-    try { translateToClaude(toolCallResponse(argumentsText)) } catch (error) { caught = error }
+    try {
+      translateToClaude(toolCallResponse(argumentsText))
+    } catch (error) {
+      caught = error
+    }
+
     assert.ok(caught instanceof UpstreamToolInputError)
     assert.equal(caught.message, `Upstream returned tool input for "noop" that ${reason}.`)
     assert.equal(caught.response.status, 502)

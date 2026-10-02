@@ -43,6 +43,7 @@ const findDynamicSrcImportOffsets = (code: string): Array<number> => {
         offsets.push(node.getStart(parsed))
       }
     }
+
     ts.forEachChild(node, visit)
   }
 
@@ -93,6 +94,7 @@ const findTopLevelSilenceAssignments = (
     if (!ts.isExpressionStatement(statement)) {
       continue
     }
+
     const { expression } = statement
     if (
       ts.isBinaryExpression(expression)
@@ -154,10 +156,12 @@ const findHoistedSrcSpecifiers = (code: string): Array<string> => {
     if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) {
       return []
     }
+
     const specifier = statement.moduleSpecifier
     if (!specifier || !ts.isStringLiteral(specifier)) {
       return []
     }
+
     return specifier.text.startsWith(srcSpecifierPrefix) ? [specifier.text] : []
   })
 }

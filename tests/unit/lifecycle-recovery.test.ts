@@ -19,13 +19,19 @@ const originalKill = process.kill
 let commandOutput: (file: string, args: string[]) => Promise<string> = async () => {
   throw new Error("Process discovery is not enabled for this test")
 }
-const fakeExecFile = () => { throw new Error("Unexpected callback execFile") }
+
+const fakeExecFile = () => {
+  throw new Error("Unexpected callback execFile")
+}
+
 Object.defineProperty(fakeExecFile, promisify.custom, {
   value: async (file: string, args: string[]) => ({ stdout: await commandOutput(file, args), stderr: "" }),
 })
 childProcess.execFile = fakeExecFile as unknown as typeof childProcess.execFile
 syncBuiltinESMExports()
-process.kill = () => { throw new Error("Real signals are forbidden") }
+process.kill = () => {
+  throw new Error("Real signals are forbidden")
+}
 
 const { clearRelayPidFile, findRelayOnPort, findRelayProcessIds, readRelayPidFileEntry, stopExistingRelay } =
   await import("../../src/lib/lifecycle")
@@ -40,7 +46,9 @@ test.after(async () => {
   syncBuiltinESMExports()
   await fs.rm(home, { recursive: true, force: true })
 })
-test.beforeEach(async () => { await fs.rm(paths.pidPath, { force: true }) })
+test.beforeEach(async () => {
+  await fs.rm(paths.pidPath, { force: true })
+})
 
 for (const raw of ['{"pid":', '{not-json', '900001junk']) {
   test(`clears malformed PID content without throwing: ${raw}`, async () => {
@@ -108,47 +116,70 @@ function inventory(t: TestContext, processes: FakeProcess[]) {
       return processes.filter((p) => p.alive && (!hooks.listed || hooks.listed.includes(p.pid)))
         .map((p) => `${p.pid}\t${p.command}`).join("\n")
     }
+
     if ((file === "lsof" && args.some((arg) => arg.startsWith("-iTCP:")))
       || (file === "powershell.exe" && args.join(" ").includes("Get-NetTCPConnection"))) {
       hooks.onListeners?.()
       return (hooks.listeners ?? []).join("\n")
     }
+
     const pid = file === "powershell.exe"
       ? Number(args.join(" ").match(/ProcessId\s*=\s*(\d+)/)?.[1])
       : Number(args[args.indexOf("-p") + 1])
     const p = processes.find((candidate) => candidate.pid === pid && candidate.alive)
-    if (!p) return ""
+    if (!p) {
+      return ""
+    }
+
     if (file === "lsof" && args.includes("cwd")) {
       hooks.beforeQuery?.(p, "cwd")
       return `n${p.cwd}\n`
     }
+
     if (file === "ps" || file === "powershell.exe") {
       if (args.includes("command=") || args.join(" ").includes("CommandLine")) {
         hooks.beforeQuery?.(p, "command")
         hooks.beforeInspect?.(p)
         return p.command
       }
+
       if (args.includes("lstart=") || args.join(" ").includes("CreationDate")) {
         hooks.beforeQuery?.(p, "createdAt")
         return p.startedAt
       }
     }
+
     unexpected.push(`${file} ${args.join(" ")}`)
     return ""
   }
+
   process.kill = (pid, signal) => {
     const p = processes.find((candidate) => candidate.pid === pid && candidate.alive)
-    if (!p) throw Object.assign(new Error("synthetic ESRCH"), { code: "ESRCH" })
+    if (!p) {
+      throw Object.assign(new Error("synthetic ESRCH"), { code: "ESRCH" })
+    }
+
     if (signal !== 0) {
       signals.push([pid, signal])
-      if (hooks.onSignal) hooks.onSignal(p, signal)
-      else p.alive = false
+      if (hooks.onSignal) {
+        hooks.onSignal(p, signal)
+      } else {
+        p.alive = false
+      }
     }
+
     return true
   }
+
   t.after(() => {
-    commandOutput = async () => { throw new Error("Process discovery is not enabled for this test") }
-    process.kill = () => { throw new Error("Real signals are forbidden") }
+    commandOutput = async () => {
+      throw new Error("Process discovery is not enabled for this test")
+    }
+
+    process.kill = () => {
+      throw new Error("Real signals are forbidden")
+    }
+
     assert.deepEqual(unexpected, [])
   })
   return { commands, signals, hooks }
@@ -165,8 +196,11 @@ test("stop rechecks the selected process identity immediately before SIGTERM", a
   const fixture = inventory(t, [p])
   let inspections = 0
   fixture.hooks.beforeInspect = (process) => {
-    if (++inspections > 1) process.command = "node /opt/other-app/server.js"
+    if (++inspections > 1) {
+      process.command = "node /opt/other-app/server.js"
+    }
   }
+
   const stopped = await stopExistingRelay({ port: 45001 })
   assert.deepEqual(fixture.signals, [])
   assert.deepEqual(stopped, [])
@@ -187,9 +221,13 @@ test("stop does not SIGKILL a reused PID with the same relay command", async (t)
   const p = relay()
   const fixture = inventory(t, [p])
   fixture.hooks.onSignal = (process, signal) => {
-    if (signal === "SIGTERM") process.startedAt = "Tue Sep 29 12:01:00 2026"
-    else process.alive = false
+    if (signal === "SIGTERM") {
+      process.startedAt = "Tue Sep 29 12:01:00 2026"
+    } else {
+      process.alive = false
+    }
   }
+
   // Advance past each grace window without sleeping or real signals.
   let clock = 0
   t.mock.method(Date, "now", () => (clock += 6_000))
@@ -217,12 +255,19 @@ for (const source of ["pid", "listener", "global"] as const) {
       const fixture = inventory(t, [p])
       fixture.hooks.listed = source === "global" ? [p.pid] : []
       fixture.hooks.listeners = source === "listener" ? [p.pid] : []
-      if (source === "pid") await savePid(p)
+      if (source === "pid") {
+        await savePid(p)
+      }
+
       const original = await fs.readFile(paths.pidPath, "utf8").catch(() => undefined)
       let queries = 0
       fixture.hooks.beforeQuery = (_process, queried) => {
-        if (queried === field) { queries++; throw new Error("synthetic initial inspection failure") }
+        if (queried === field) {
+          queries++
+          throw new Error("synthetic initial inspection failure")
+        }
       }
+
       fastStopClock(t)
       await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify.*900001/)
       assert.ok(queries > 1)
@@ -236,9 +281,17 @@ for (const boundary of ["global", "listener"] as const) {
   test(`unavailable initial ${boundary} discovery fails rather than claiming no relay`, async (t) => {
     const fixture = inventory(t, [])
     let attempts = 0
-    const unavailable = () => { attempts++; throw new Error("synthetic discovery failure") }
-    if (boundary === "global") fixture.hooks.onList = async () => unavailable()
-    else fixture.hooks.onListeners = unavailable
+    const unavailable = () => {
+      attempts++
+      throw new Error("synthetic discovery failure")
+    }
+
+    if (boundary === "global") {
+      fixture.hooks.onList = async () => unavailable()
+    } else {
+      fixture.hooks.onListeners = unavailable
+    }
+
     fastStopClock(t)
     await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify/)
     assert.ok(attempts > 1)
@@ -251,8 +304,11 @@ test("transient initial inspection is retried before a relay is stopped", async 
   const fixture = inventory(t, [p])
   let attempts = 0
   fixture.hooks.beforeQuery = (_process, field) => {
-    if (field === "command" && ++attempts === 1) throw new Error("synthetic transient discovery failure")
+    if (field === "command" && ++attempts === 1) {
+      throw new Error("synthetic transient discovery failure")
+    }
   }
+
   fastStopClock(t)
   assert.deepEqual(await stopExistingRelay({ port: 45001 }), [p.pid])
   assert.ok(attempts > 1)
@@ -288,6 +344,7 @@ for (const field of ["command", "createdAt", "cwd"] as const) {
         })
       }
     }
+
     fastStopClock(t)
     await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify.*900001/)
     assert.ok(unavailableQueries > 1, "unknown inspection must be retried during the grace period")
@@ -301,13 +358,19 @@ test("stop retries a transient post-TERM inspection failure before verified esca
   const p = relay()
   const fixture = inventory(t, [p])
   let failedOnce = false
-  fixture.hooks.onSignal = (process, signal) => { if (signal === "SIGKILL") process.alive = false }
+  fixture.hooks.onSignal = (process, signal) => {
+    if (signal === "SIGKILL") {
+      process.alive = false
+    }
+  }
+
   fixture.hooks.beforeQuery = (_process, field) => {
     if (field === "command" && fixture.signals.length > 0 && !failedOnce) {
       failedOnce = true
       throw new Error("synthetic transient query failure")
     }
   }
+
   fastStopClock(t)
   assert.deepEqual(await stopExistingRelay({ port: 45001 }), [p.pid])
   assert.equal(failedOnce, true)
@@ -325,6 +388,7 @@ test("stop refuses KILL when inspection becomes unavailable after the grace-peri
       throw new Error("synthetic failure immediately before KILL")
     }
   }
+
   let clock = 0
   t.mock.method(Date, "now", () => (clock += 6_000))
   await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify.*900001/)
@@ -337,8 +401,11 @@ test("stop refuses TERM when a selected identity becomes unavailable", async (t)
   const fixture = inventory(t, [p])
   let commandQueries = 0
   fixture.hooks.beforeQuery = (_process, field) => {
-    if (field === "command" && ++commandQueries > 1) throw new Error("synthetic pre-TERM inspection failure")
+    if (field === "command" && ++commandQueries > 1) {
+      throw new Error("synthetic pre-TERM inspection failure")
+    }
   }
+
   fastStopClock(t)
   await assert.rejects(stopExistingRelay({ port: 45001 }), /Could not verify.*900001/)
   assert.ok(commandQueries > 2)
@@ -349,7 +416,10 @@ test("stop preserves a PID record created after discovery began", async (t) => {
   const p = relay()
   const fixture = inventory(t, [p])
   const replacement = JSON.stringify({ pid: 900_002, host: "127.0.0.3", port: 45002 })
-  fixture.hooks.onList = async () => { await fs.writeFile(paths.pidPath, replacement) }
+  fixture.hooks.onList = async () => {
+    await fs.writeFile(paths.pidPath, replacement)
+  }
+
   await stopExistingRelay({ port: 45001 })
   assert.equal(await fs.readFile(paths.pidPath, "utf8"), replacement)
 })
@@ -364,6 +434,7 @@ test("stop preserves a concurrently replaced PID file even with identical bytes"
     await fs.writeFile(replacementPath, original)
     await fs.rename(replacementPath, paths.pidPath)
   }
+
   await stopExistingRelay({ port: 45001 })
   assert.equal(await fs.readFile(paths.pidPath, "utf8"), original)
 })
@@ -393,10 +464,17 @@ const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile
   const file = (value: unknown) => {
     const name = String(value)
     const entry = entries.get(name)
-    if (!entry) throw Object.assign(new Error("synthetic missing file"), { code: "ENOENT" })
-    if (entry.denied) throw Object.assign(new Error("synthetic denied file"), { code: "EACCES" })
+    if (!entry) {
+      throw Object.assign(new Error("synthetic missing file"), { code: "ENOENT" })
+    }
+
+    if (entry.denied) {
+      throw Object.assign(new Error("synthetic denied file"), { code: "EACCES" })
+    }
+
     return { name, entry }
   }
+
   t.mock.method(fs, "stat", async (value: unknown) => {
     const { name, entry } = file(value)
     return { ...example, ino: [...entries.keys()].indexOf(name) + 1,
@@ -408,7 +486,10 @@ const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile
   })
   t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
     const name = String(args[0])
-    if (name.startsWith(home + path.sep)) return readFile(...args)
+    if (name.startsWith(home + path.sep)) {
+      return readFile(...args)
+    }
+
     const { entry } = file(name)
     return entry.content ?? "synthetic entrypoint"
   })
@@ -488,12 +569,24 @@ for (const reason of ["denied", "directory", "foreign canonical path", "foreign 
   test(`filesystem proof remains unknown for ${reason}`, { skip: process.platform === "win32" }, async (t) => {
     const entry = "/workspace/Space Folder/copilot-relay/dist/main.js"
     const files = proofFiles(entry)
-    if (reason === "denied") files.set("/workspace/Space", { kind: "file", denied: true })
-    if (reason === "directory") files.set(entry, { kind: "directory" })
-    if (reason === "foreign canonical path") files.set(entry, { kind: "file", canonical: "/foreign/main.js" })
-    if (reason === "foreign package") files.set("/workspace/Space Folder/copilot-relay/package.json", {
-      kind: "file", content: JSON.stringify({ name: "foreign-worker" }),
-    })
+    if (reason === "denied") {
+      files.set("/workspace/Space", { kind: "file", denied: true })
+    }
+
+    if (reason === "directory") {
+      files.set(entry, { kind: "directory" })
+    }
+
+    if (reason === "foreign canonical path") {
+      files.set(entry, { kind: "file", canonical: "/foreign/main.js" })
+    }
+
+    if (reason === "foreign package") {
+      files.set("/workspace/Space Folder/copilot-relay/package.json", {
+        kind: "file", content: JSON.stringify({ name: "foreign-worker" }),
+      })
+    }
+
     await mockProcessFiles(t, files)
     const p = { ...relay(), command: `node ${entry} start` }
     const fixture = inventory(t, [p])
@@ -512,8 +605,11 @@ test("filesystem proof is repeated before TERM when an earlier directory entrypo
   const fixture = inventory(t, [p])
   let commands = 0
   fixture.hooks.beforeQuery = (_process, field) => {
-    if (field === "command" && ++commands > 1) files.set("/workspace/Space", { kind: "directory" })
+    if (field === "command" && ++commands > 1) {
+      files.set("/workspace/Space", { kind: "directory" })
+    }
   }
+
   fastStopClock(t)
   await assert.rejects(stopExistingRelay({}), /Could not verify.*900001/)
   assert.deepEqual(fixture.signals, [])
@@ -523,7 +619,12 @@ test("status reports an initial unknown port candidate instead of claiming no re
   const p = relay()
   const fixture = inventory(t, [p])
   fixture.hooks.listeners = [p.pid]
-  fixture.hooks.beforeQuery = (_process, field) => { if (field === "command") throw new Error("synthetic unavailable status") }
+  fixture.hooks.beforeQuery = (_process, field) => {
+    if (field === "command") {
+      throw new Error("synthetic unavailable status")
+    }
+  }
+
   await assert.rejects(findRelayOnPort({ host: "127.0.0.1", port: 45001 }), /Could not verify/)
   assert.equal(fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")), false)
   assert.deepEqual(fixture.signals, [])
@@ -535,13 +636,25 @@ test("status command exits 2 with a fixed diagnostic for initial inspection fail
   const p = relay()
   const fixture = inventory(t, [p])
   fixture.hooks.listeners = [p.pid]
-  fixture.hooks.beforeQuery = (_process, field) => { if (field === "createdAt") throw new Error("untrusted inspection detail") }
+  fixture.hooks.beforeQuery = (_process, field) => {
+    if (field === "createdAt") {
+      throw new Error("untrusted inspection detail")
+    }
+  }
+
   await fs.writeFile(paths.configPath, "port: 45001\nlogLevel: error\n")
   const exitCode = process.exitCode
   const messages: string[] = []
-  t.mock.method(console, "error", (value: unknown) => { messages.push(String(value)) })
-  t.mock.method(console, "log", (value: unknown) => { messages.push(String(value)) })
-  t.after(async () => { process.exitCode = exitCode; await fs.rm(paths.configPath, { force: true }) })
+  t.mock.method(console, "error", (value: unknown) => {
+    messages.push(String(value))
+  })
+  t.mock.method(console, "log", (value: unknown) => {
+    messages.push(String(value))
+  })
+  t.after(async () => {
+    process.exitCode = exitCode
+    await fs.rm(paths.configPath, { force: true })
+  })
 
   await runCommand(status, { rawArgs: [] })
 
@@ -578,7 +691,9 @@ test("stop continues after valid-config log cleanup refuses a symlinked log dire
     await fs.rm(paths.configPath, { force: true })
   })
   const warnings: unknown[][] = []
-  t.mock.method(log, "error", (...values: unknown[]) => { warnings.push(values) })
+  t.mock.method(log, "error", (...values: unknown[]) => {
+    warnings.push(values)
+  })
   const p = relay()
   const fixture = inventory(t, [p])
 
@@ -599,7 +714,9 @@ const cwd = fileURLToPath(new URL("../../", import.meta.url))
 for (const command of ["status", "restart", "stop"] as const) {
   test(`${command} handles invalid config without unsafe process or network access`, async (t) => {
     const childHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-lifecycle-cli-"))
-    t.after(async () => { await fs.rm(childHome, { recursive: true, force: true }) })
+    t.after(async () => {
+      await fs.rm(childHome, { recursive: true, force: true })
+    })
     const appDir = path.join(childHome, ".copilot-relay")
     const configPath = path.join(appDir, "config.yaml")
     const original = "not a valid config line\n"
@@ -645,7 +762,10 @@ for (const command of ["status", "restart", "stop"] as const) {
         env: { ...process.env, HOME: childHome, USERPROFILE: childHome, FORCE_COLOR: "0" },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
-        if (error?.killed || typeof code !== "number") return reject(error)
+        if (error?.killed || typeof code !== "number") {
+          return reject(error)
+        }
+
         resolve({ code, output: stripVTControlCharacters(stdout + stderr) })
       })
       child.stdin?.end()
@@ -655,7 +775,9 @@ for (const command of ["status", "restart", "stop"] as const) {
     assert.match(result.output, /config/i)
     assert.match(result.output, command === "stop" ? /SIGNALS=\[\[900001,"SIGTERM"\]\]/ : /SIGNALS=\[\]/)
     assert.equal(result.code, command === "status" ? 2 : command === "restart" ? 1 : 0, result.output)
-    if (command === "status") assert.doesNotMatch(result.output, /process\s+not running/)
+    if (command === "status") {
+      assert.doesNotMatch(result.output, /process\s+not running/)
+    }
   })
 }
 
@@ -698,9 +820,18 @@ for (const [platform, root, command] of versionRuntimes) {
   for (const reason of ["foreign package", "missing package.json", "missing entrypoint", "unreadable package.json"] as const) {
     test(`a ${platform} version-directory runtime with ${reason} is not a relay`, async (t) => {
       const files = runtimeFiles(root, reason === "foreign package" ? "some-other-app" : "copilot-relay")
-      if (reason === "missing package.json") files.delete(`${root}/package.json`)
-      if (reason === "missing entrypoint") files.delete(`${root}/dist/main.js`)
-      if (reason === "unreadable package.json") files.set(`${root}/package.json`, { kind: "file", denied: true })
+      if (reason === "missing package.json") {
+        files.delete(`${root}/package.json`)
+      }
+
+      if (reason === "missing entrypoint") {
+        files.delete(`${root}/dist/main.js`)
+      }
+
+      if (reason === "unreadable package.json") {
+        files.set(`${root}/package.json`, { kind: "file", denied: true })
+      }
+
       await mockProcessFiles(t, files)
       const p = { ...relay(), command, cwd: "/" }
       await savePid(p)
