@@ -134,6 +134,22 @@ const parseStringArray = (value: unknown): string[] | undefined => {
   return value
 }
 
+// Copilot marks a model without effort support either with reasoning_effort: false or by leaving
+// the key out of a well-formed supports object; every chat model it lists that way rejected effort
+// with invalid_reasoning_effort (#137). A missing supports object, true, null or a malformed value
+// stays unknown.
+const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): string[] | undefined => {
+  if (supports === undefined) {
+    return undefined
+  }
+
+  if (supports.reasoning_effort === false || !Object.hasOwn(supports, "reasoning_effort")) {
+    return []
+  }
+
+  return parseStringArray(supports.reasoning_effort)
+}
+
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
 ): Promise<CopilotModelCatalog> {
@@ -177,9 +193,7 @@ export async function loadCopilotModelCatalog(
       const limits = parseModelTokenLimits(capabilities?.limits)
       const supports = isRecord(capabilities?.supports) ? capabilities.supports : undefined
       const supportedEndpoints = parseStringArray(model.supported_endpoints)
-      const reasoningEfforts = supports?.reasoning_effort === false
-        ? []
-        : parseStringArray(supports?.reasoning_effort)
+      const reasoningEfforts = parseReasoningEfforts(supports)
 
       models.set(model.id, {
         ...(limits && { limits }),

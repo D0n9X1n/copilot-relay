@@ -455,13 +455,14 @@ for (const endpoint of ["/chat/completions", "/responses"]) {
   })
 }
 
-for (const capability of [false, []]) {
-  test(`deep CLI omits effort for explicit non-reasoning capability ${JSON.stringify(capability)}`, async (t) => {
+// Copilot also signals no effort support by leaving reasoning_effort out of supports (#137).
+for (const supports of [{ reasoning_effort: false }, { reasoning_effort: [] }, { streaming: true, tool_calls: true }]) {
+  test(`deep CLI omits effort for non-reasoning supports ${JSON.stringify(supports)}`, async (t) => {
     const catalog = {
       data: [{
         id: "plain-chat",
         supported_endpoints: ["/chat/completions"],
-        capabilities: { type: "chat", supports: { reasoning_effort: capability } },
+        capabilities: { type: "chat", supports },
       }],
     }
 

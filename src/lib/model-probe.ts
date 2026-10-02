@@ -99,6 +99,32 @@ const settleDiagnostic = async (trace: RequestTrace): Promise<void> => {
   }
 }
 
+const datedSnapshot = /^(.+)-\d{4}-\d{2}-\d{2}$/
+
+// Whether a probe reply names the catalog ID the probe selected. Beyond the relay's known GPT
+// context suffix, each accepted difference is an exact provider behavior seen in live replies.
+const reportsSelectedModel = (endpoint: string, id: string, reported: string): boolean => {
+  if (normalizeCopilotModelId(reported) === id) {
+    return true
+  }
+
+  // The native Messages endpoint reports this model with a hyphen where the catalog ID has a dot.
+  if (endpoint === "/v1/messages" && id === "claude-opus-5.5" && reported === "claude-opus-5-5") {
+    return true
+  }
+
+  // The catalog's gpt-5.6-sol-fast is the priority service tier of gpt-5.6-sol; its Responses
+  // reply reports the base model (#126).
+  if (endpoint === "/responses" && id === "gpt-5.6-sol-fast" && normalizeCopilotModelId(reported) === "gpt-5.6-sol") {
+    return true
+  }
+
+  // Copilot answers some undated IDs with a dated snapshot of the same model: gpt-5.5 reported
+  // gpt-5.5-2026-04-23 (#137). A dated request must match exactly, and an alias served by
+  // another model is still a mismatch.
+  return !datedSnapshot.test(id) && datedSnapshot.exec(reported)?.[1] === id
+}
+
 const failureFromEvidence = (row: ProbeResult, diagnostic: RequestDiagnostic): string => {
   if (["probe-timeout", "cancelled", "total-deadline"].includes(row.detail)) {
     return row.detail
@@ -285,6 +311,10 @@ export async function probeModels(
             if (code === "unsupported_api_for_model") {
               row.detail = "unsupported-api"
             }
+
+            if (code === "model_not_supported") {
+              row.detail = "model-not-supported"
+            }
           } else if (!record(body) || !Array.isArray(body.content)) {
             row.detail = "malformed-response"
           } else {
@@ -293,19 +323,7 @@ export async function probeModels(
             // Content entries that are not objects are skipped, not treated as blocks.
             row.reported = safeId(body.model, config.copilotToken) ? body.model : "unreported"
 
-            // The native Messages endpoint reports this model with a hyphen where the catalog ID
-            // has a dot; that is the same model, not a mismatch.
-            const nativeOpusSpelling = endpoint === "/v1/messages"
-              && id === "claude-opus-5.5"
-              && row.reported === "claude-opus-5-5"
-
-            // The catalog's gpt-5.6-sol-fast is the priority service tier of gpt-5.6-sol; its
-            // Responses reply reports the base model (#126). Only this exact pair is accepted.
-            const solFastPriorityTier = endpoint === "/responses"
-              && id === "gpt-5.6-sol-fast"
-              && normalizeCopilotModelId(row.reported) === "gpt-5.6-sol"
-
-            if (normalizeCopilotModelId(row.reported) !== id && !nativeOpusSpelling && !solFastPriorityTier) {
+            if (!reportsSelectedModel(endpoint, id, row.reported)) {
               row.detail = "model-mismatch"
             } else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"

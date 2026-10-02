@@ -312,14 +312,16 @@ for (const endpoint of ["/chat/completions", "/responses", "/v1/messages"] as co
   }
 }
 
-// Both protocols must omit the configured default for a no-effort model and say so.
+// Both protocols must omit the configured default for a no-effort model and say so. Copilot also
+// signals no effort support by leaving reasoning_effort out of supports (#137).
 const noEffortPreflightCases = [
-  { id: "plain-chat", endpoint: "/chat/completions", claudeUpstreamApi: undefined },
-  { id: "claude-plain", endpoint: "/v1/messages", claudeUpstreamApi: "auto" },
+  { id: "plain-chat", endpoint: "/chat/completions", claudeUpstreamApi: undefined, supports: { reasoning_effort: false } },
+  { id: "claude-plain", endpoint: "/v1/messages", claudeUpstreamApi: "auto", supports: { reasoning_effort: false } },
+  { id: "legacy-chat", endpoint: "/chat/completions", claudeUpstreamApi: undefined, supports: { streaming: true, tool_calls: true } },
 ] as const
 
-for (const { id, endpoint, claudeUpstreamApi } of noEffortPreflightCases) {
-  test(`preflight sends no effort to an explicit no-effort model on ${endpoint} and logs it as omitted`, async (t) => {
+for (const { id, endpoint, claudeUpstreamApi, supports } of noEffortPreflightCases) {
+  test(`preflight sends no effort to no-effort model ${id} on ${endpoint} and logs it as omitted`, async (t) => {
     const config = { ...configFor(id, {}), claudeUpstreamApi }
     const infoLines: string[] = []
     let rejectTarget = false
@@ -338,7 +340,7 @@ for (const { id, endpoint, claudeUpstreamApi } of noEffortPreflightCases) {
               {
                 id,
                 supported_endpoints: [endpoint],
-                capabilities: { type: "chat", supports: { reasoning_effort: false } },
+                capabilities: { type: "chat", supports },
               },
               { id: "claude-fixture", supported_endpoints: ["/chat/completions"] },
             ] })

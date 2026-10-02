@@ -41,6 +41,7 @@ const reasonLabels: Record<string, string> = {
   "no-advertised-endpoint": "No advertised route",
   "protocol-policy-conflict": "Protocol policy conflict",
   "unsupported-api": "Unsupported API",
+  "model-not-supported": "Model not supported",
   "unsupported-effort": "Unsupported effort",
   "unsafe-or-noncanonical-id": "Unsupported model ID",
   "upstream-response-failed": "Upstream failed",
@@ -257,6 +258,10 @@ export const probeHint = (code: string): string | undefined => {
 
   if (code === "model-mismatch") {
     return "Model mismatch: compare selected, sent and reported IDs with --details."
+  }
+
+  if (code === "model-not-supported") {
+    return "Model not supported: upstream lists this ID but rejects inference for it; choose another model."
   }
 
   if (apiFailureCodes.includes(code) || /^HTTP-5\d\d$/.test(code)) {

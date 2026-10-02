@@ -234,9 +234,11 @@ exchange order.
 `resolveModelReasoningEffort` in `src/copilot/models.ts` distinguishes an explicit
 request from a configured default. `translateToOpenAI` carries
 `getClaudeTurnEffort().requested`; the adapter resolves once, and neither the Chat
-nor Responses builder reinstates a deliberately omitted value. Catalog
-`reasoning_effort: false` becomes `reasoningEfforts: []`; malformed endpoint/tier
-arrays stay unknown instead of being filtered into authoritative empty arrays.
+nor Responses builder reinstates a deliberately omitted value. In
+`parseReasoningEfforts`, catalog `reasoning_effort: false` and a `supports` object
+without the key both become `reasoningEfforts: []`; a missing `supports` object and
+malformed endpoint/tier arrays stay unknown instead of being filtered into
+authoritative empty arrays.
 These existing array fields round-trip through capture/replay without a new format.
 The probe's `route_source` and allowlisted endpoint details expose this decision
 without printing raw metadata. See [Configuration](EN-Configuration.md) for policy.
@@ -268,22 +270,29 @@ a stop reason plus `message_stop` for SSE. An error or premature EOF cannot beco
 success. Native errors/refusals are not retried on another API to bypass them.
 
 `probeModels` in `src/lib/model-probe.ts` compares the returned model with
-the exact catalog selection. Beyond existing GPT context-suffix normalization,
-there are two observed exceptions, each an exact pair:
+the exact catalog selection through `reportsSelectedModel`. Beyond existing GPT
+context-suffix normalization, it accepts only these observed provider behaviors:
 
 - Native spelling: endpoint `/v1/messages`, selected `claude-opus-5.5`, reported
   `claude-opus-5-5`.
-- Priority tier (`solFastPriorityTier`): endpoint `/responses`, selected
-  `gpt-5.6-sol-fast`, reported `gpt-5.6-sol`. The catalog names that entry
-  "GPT-5.6 Sol Fast", and a live reply reported `model: gpt-5.6-sol` with
-  `service_tier: priority`.
+- Priority tier: endpoint `/responses`, selected `gpt-5.6-sol-fast`, reported
+  `gpt-5.6-sol`. The catalog names that entry "GPT-5.6 Sol Fast", and a live reply
+  reported `model: gpt-5.6-sol` with `service_tier: priority`.
+- Dated snapshot: an undated selected ID reported with one `-YYYY-MM-DD` date
+  appended, as live replies reported `gpt-5.5-2026-04-23` for `gpt-5.5` and
+  `gpt-4o-2024-11-20` for `gpt-4o`. A dated selection must match exactly.
 
-Neither is general punctuation normalization, `-fast` stripping, or a new catalog
-alias; `claude-opus-5-5-preview`, `claude-opus-5`, `gpt-6-sol-fast` reported as
-`gpt-6-sol`, and other mismatches still fail. Config and discovery keep the catalog
-ID, while `SENT/REPORTED` retains both actual spellings. Acceptance still requires
-the usual completed-text/terminal checks; a refusal cannot become `PASS` merely
-because the model matches.
+None is general punctuation normalization, `-fast` or suffix stripping, or a new
+catalog alias. `claude-opus-5-5-preview`, `claude-opus-5`, `gpt-6-sol-fast`
+reported as `gpt-6-sol`, `gpt-5.5-preview`, and aliases that upstream serves with
+another model (`gpt-4` and `gpt-4o-2024-05-13` both reported `gpt-4.1-2025-04-14`)
+still fail. Config and discovery keep the catalog ID, while `SENT/REPORTED` retains
+both actual spellings. Acceptance still requires the usual completed-text/terminal
+checks; a refusal cannot become `PASS` merely because the model matches.
+
+An upstream HTTP 400 with code `model_not_supported` becomes its own
+`Model not supported` result, apart from payload rejections. `trajectory-compaction`
+is listed in the catalog yet answers that way.
 
 The implicit probe effort is the lowest advertised tier above `none`. `none` is
 probed only when it is the sole advertised tier: the relay never sends it on its
