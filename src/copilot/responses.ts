@@ -246,19 +246,27 @@ function deriveResponsesCacheKey(
   }
 
   const systemPrompt = payload.messages.find((message) => message.role === "system")
-  const systemText =
-    typeof systemPrompt?.content === "string" ? systemPrompt.content
-    : Array.isArray(systemPrompt?.content) ?
-      systemPrompt.content
-        .map((part) => (part.type === "text" ? part.text : ""))
-        .join("")
-    : ""
+  const systemText = getSystemPromptText(systemPrompt)
 
   if (!systemText) {
     return undefined
   }
 
   return `cr-sys-${createHash("sha256").update(systemText).digest("hex").slice(0, 32)}`
+}
+
+function getSystemPromptText(systemPrompt: Message | undefined): string {
+  if (typeof systemPrompt?.content === "string") {
+    return systemPrompt.content
+  }
+
+  if (Array.isArray(systemPrompt?.content)) {
+    return systemPrompt.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("")
+  }
+
+  return ""
 }
 
 export function translateResponsesToChatCompletion(
