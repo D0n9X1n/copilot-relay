@@ -105,10 +105,10 @@ test("status JSON command stays uncolored even when color is forced", async (t) 
     await run({ args: { json: true } })
     assert.equal(output.length, 1)
     assert.doesNotMatch(output[0], /\u001b/)
-    const value = JSON.parse(output[0])
-    assert.equal(value.running, false)
+    const report = JSON.parse(output[0])
+    assert.equal(report.running, false)
     assert.equal(process.exitCode, 1)
-    assert.equal(value.config.port, 4199)
+    assert.equal(report.config.port, 4199)
   } finally {
     if (originalForce === undefined) {
       delete process.env.FORCE_COLOR

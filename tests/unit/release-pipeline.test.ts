@@ -497,14 +497,14 @@ const assertRegistryRefused = (result: Awaited<ReturnType<typeof offlineWorkflow
 
 test("offline registry mutation proof rejects removal of the real integrity comparison", async () => {
   for (const job of ["publish-npm", "publish-github"]) {
-    const result = await offlineWorkflow(job, { registry: "different" }, yaml => {
+    const mutant = await offlineWorkflow(job, { registry: "different" }, yaml => {
       const jobText = workflowJobs(yaml)[job]
       const mutated = jobText.replace(/^[ \t]+test "\$existing" = "\$integrity".*\r?\n/m, "")
       assert.notEqual(mutated, jobText, "mutation must remove exactly the integrity guard")
       return yaml.replace(jobText, () => mutated)
     })
-    assert.equal(result.code, 0, "the mutant incorrectly succeeds on different bytes")
-    assert.throws(() => assertRegistryRefused(result), /different immutable registry bytes must fail/)
+    assert.equal(mutant.code, 0, "the mutant incorrectly succeeds on different bytes")
+    assert.throws(() => assertRegistryRefused(mutant), /different immutable registry bytes must fail/)
     assertRegistryRefused(await offlineWorkflow(job, { registry: "different" }))
   }
 })

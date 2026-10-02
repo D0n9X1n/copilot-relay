@@ -39,10 +39,10 @@ test("native request preserves signed blocks, cache markers and in-place operato
   ]
   let sent: unknown
   await withRecordedTransport({
-    fetch: async (input) => {
-      assert.equal(input.path, "/v1/messages")
-      sent = JSON.parse(input.body!)
-      assert.equal(new Headers(input.headers).get("anthropic-version"), "2023-06-01")
+    fetch: async (request) => {
+      assert.equal(request.path, "/v1/messages")
+      sent = JSON.parse(request.body!)
+      assert.equal(new Headers(request.headers).get("anthropic-version"), "2023-06-01")
       return Response.json({ id: "msg_native", type: "message", role: "assistant", model: "claude-opus-5.5", content: [{ type: "text", text: "OK" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } })
     },
     refresh: async () => {
@@ -158,7 +158,7 @@ test("native search resolves effort against restored tool-result user turns", as
       return Response.json({ id: "resp_empty", model: body.model, status: "completed", output: [] })
     }
 
-    assert.deepEqual(body.messages.map((message: { role: string }) => message.role), ["user", "system", "assistant", "user"])
+    assert.deepEqual(body.messages.map((turn: { role: string }) => turn.role), ["user", "system", "assistant", "user"])
     assert.deepEqual(body.output_config, { effort: "low" })
     return Response.json(message([{ type: "tool_use", id: "toolu_next", name: "WebSearch", input: { query: "next" } }], "tool_use"))
   }, refresh: async () => {} }, () => handleNativeMessages(config, payload as never, { requestId: "native-restored-effort" }))
@@ -412,15 +412,15 @@ for (const sibling of [false, true]) {
       assert.equal(emitted.filter((event) => event.type === "message_start").length, 1)
       assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
       const reconstructed = collectClientBlocks(emitted)
-      const next = sibling ? [{ type: "tool_result", tool_use_id: "toolu_client", content: "Fixture" }] : "Continue"
-      await createNativeMessages(config, { ...payload, messages: [...payload.messages, { role: "assistant", content: reconstructed } as never, { role: "user", content: next } as never] }, { requestId: "streamed-next" })
-      const final = calls.at(-1)!.body
-      assert.deepEqual(final.messages[1].content, content)
-      assert.equal(JSON.stringify(final.messages).includes("server_tool_use"), false)
+      const nextContent = sibling ? [{ type: "tool_result", tool_use_id: "toolu_client", content: "Fixture" }] : "Continue"
+      await createNativeMessages(config, { ...payload, messages: [...payload.messages, { role: "assistant", content: reconstructed } as never, { role: "user", content: nextContent } as never] }, { requestId: "streamed-next" })
+      const nextRequest = calls.at(-1)!.body
+      assert.deepEqual(nextRequest.messages[1].content, content)
+      assert.equal(JSON.stringify(nextRequest.messages).includes("server_tool_use"), false)
       if (sibling) {
-        assert.deepEqual(final.messages[2].content.map((block: any) => block.tool_use_id), ["toolu_search", "toolu_client"])
+        assert.deepEqual(nextRequest.messages[2].content.map((block: any) => block.tool_use_id), ["toolu_search", "toolu_client"])
       } else {
-        assert.deepEqual(final.messages.slice(0, calls[2].body.messages.length), calls[2].body.messages)
+        assert.deepEqual(nextRequest.messages.slice(0, calls[2].body.messages.length), calls[2].body.messages)
       }
 
       assert.equal(reconstructed[0].signature, "signed-search-prefix")

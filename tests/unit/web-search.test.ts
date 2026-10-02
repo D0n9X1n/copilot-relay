@@ -374,18 +374,18 @@ test("WebSearch logs bounded metadata with tool correlation and no response cont
         assert.doesNotMatch(message, /[\r\n\x1b]|PRIVATE_/)
       }
 
-      let file = ""
+      let logText = ""
       for (let attempt = 0; attempt < 50; attempt++) {
-        file = await fs.readFile(getLogPath(), "utf8").catch(() => "")
-        if (file.includes(`tool_use_id=${tool.id}`)) {
+        logText = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+        if (logText.includes(`tool_use_id=${tool.id}`)) {
           break
         }
 
         await new Promise((resolve) => setTimeout(resolve, 20))
       }
 
-      assert.match(file, /upstream_response_id=resp_evidence/)
-      assert.doesNotMatch(file, /PRIVATE_/)
+      assert.match(logText, /upstream_response_id=resp_evidence/)
+      assert.doesNotMatch(logText, /PRIVATE_/)
     })
   } finally {
     setLogLevel("error")

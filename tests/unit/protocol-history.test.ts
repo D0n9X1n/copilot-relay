@@ -115,10 +115,10 @@ test("effort-only controls preserve tool adjacency and translated prefixes", () 
     { role: "user", content: "Read the fixture." },
     { role: "assistant", content: [{ type: "tool_use", id: "tool_1", name: "Read", input: { file_path: "/fixture" } }] },
   ]
-  const result: ClaudeMessage = { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "Fixture." }] }
-  const before: ClaudeMessagesPayload = { model: "opus", max_tokens: 32, output_config: { effort: "low" }, messages: [...prefix, result] }
+  const toolResult: ClaudeMessage = { role: "user", content: [{ type: "tool_result", tool_use_id: "tool_1", content: "Fixture." }] }
+  const before: ClaudeMessagesPayload = { model: "opus", max_tokens: 32, output_config: { effort: "low" }, messages: [...prefix, toolResult] }
   for (const content of [[], "", [{ type: "text" as const, text: "" }]]) {
-    const switched: ClaudeMessagesPayload = { ...before, messages: [...prefix, { role: "system", content, output_config: { effort: "high" } }, result] }
+    const switched: ClaudeMessagesPayload = { ...before, messages: [...prefix, { role: "system", content, output_config: { effort: "high" } }, toolResult] }
     const original: ClaudeMessagesPayload = structuredClone(switched)
     const translated = translateToOpenAI(switched)
     assert.equal(translated.reasoning_effort, "high")

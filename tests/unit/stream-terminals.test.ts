@@ -110,11 +110,11 @@ test("search-shaped refusal emits preamble and later text exactly once", async (
     const response = await createServer({ host: "localhost", port: 0, copilotBaseUrl: "https://fixture.invalid", copilotToken: "fixture", upstreamTimeoutMs: 1000, vsCodeVersion: "test" }).fetch(new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "opus", stream: true, max_tokens: 32, messages: [{ role: "user", content: "Search" }], tools: [{ name: "WebSearch", input_schema: { type: "object" } }] }) }))
     return response.text()
   }))
-  const events = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5)))
+  const clientEvents = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5)))
   assert.equal(calls, 1)
-  assert.equal(events.filter((event) => event.delta?.type === "text_delta").map((event) => event.delta.text).join(""), "Checking declined")
-  assert.equal(events.filter((event) => event.delta?.type === "thinking_delta").map((event) => event.delta.thinking).join(""), "First thought")
-  assert.equal(events.find((event) => event.type === "message_delta").delta.stop_reason, "refusal")
+  assert.equal(clientEvents.filter((event) => event.delta?.type === "text_delta").map((event) => event.delta.text).join(""), "Checking declined")
+  assert.equal(clientEvents.filter((event) => event.delta?.type === "thinking_delta").map((event) => event.delta.thinking).join(""), "First thought")
+  assert.equal(clientEvents.find((event) => event.type === "message_delta").delta.stop_reason, "refusal")
 })
 
 for (const stream of [false, true]) {
@@ -171,7 +171,7 @@ for (const stream of [false, true]) {
     const paths: string[] = []
     const base = { id: "chat_refusal", created: 1, model: "claude-opus-5.5" }
     const message = { role: "assistant", content: null, refusal: "Declined", tool_calls: [{ id: "call_search", type: "function", function: { name: "WebSearch", arguments: '{"query":"fixture"}' } }] }
-    const response = await withoutLogging(() => withRecordedTransport({
+    const text = await withoutLogging(() => withRecordedTransport({
       fetch: async (request) => {
         paths.push(request.path)
         assert.equal(request.path, "/chat/completions")
@@ -193,12 +193,12 @@ for (const stream of [false, true]) {
     }))
     assert.deepEqual(paths, ["/chat/completions"])
     if (stream) {
-      const events = response.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5)))
-      assert.equal(events.find((event) => event.type === "message_delta").delta.stop_reason, "refusal")
-      assert.equal(events.some((event) => event.type === "content_block_start" && ["tool_use", "server_tool_use"].includes(event.content_block.type)), false)
+      const clientEvents = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice(5)))
+      assert.equal(clientEvents.find((event) => event.type === "message_delta").delta.stop_reason, "refusal")
+      assert.equal(clientEvents.some((event) => event.type === "content_block_start" && ["tool_use", "server_tool_use"].includes(event.content_block.type)), false)
     } else {
-      assert.equal(JSON.parse(response).stop_reason, "refusal")
-      assert.equal(JSON.parse(response).content.some((block: { type: string }) => ["tool_use", "server_tool_use"].includes(block.type)), false)
+      assert.equal(JSON.parse(text).stop_reason, "refusal")
+      assert.equal(JSON.parse(text).content.some((block: { type: string }) => ["tool_use", "server_tool_use"].includes(block.type)), false)
     }
   })
 }

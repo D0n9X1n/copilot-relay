@@ -35,11 +35,11 @@ for (const suite of ["release-issues_tests.py", "release-notes_tests.py"]) {
 }
 
 test("release-note tests fail loudly when Python is missing", async () => {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-missing-python-"))
+  const emptyDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "relay-missing-python-"))
   try {
-    await assert.rejects(runSuite(path.join(home, "nonexistent-python"), "release-notes_tests.py"), /ENOENT/)
+    await assert.rejects(runSuite(path.join(emptyDirectory, "nonexistent-python"), "release-notes_tests.py"), /ENOENT/)
   } finally {
-    await fs.rm(home, { recursive: true, force: true })
+    await fs.rm(emptyDirectory, { recursive: true, force: true })
   }
 })
 
