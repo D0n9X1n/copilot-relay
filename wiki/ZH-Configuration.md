@@ -166,6 +166,25 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 深度测试退出码：`0` 所选模型全部通过；`1` 选项、模型选择、认证或目录查询失败；
 `2` 任何其他未通过结果或无模型；`130` 中断。普通 `models` 的空目录仍以 `0` 退出。
 
+### 在同一会话中切换模型
+
+默认 `claudeUpstreamApi: chat-completions` 下，配置的 Opus 路由使用 Chat Completions，
+配置的 GPT 路由在模型需要时使用 Responses。每个新请求按当前模型选择器决定目标，
+并从该请求的字段和历史中解析 effort。请求接入后，即使配置在响应或 WebSearch
+各阶段执行期间发生变化，它仍保留原来的路由和 effort 快照。
+
+`tests/integration/model-effort-switching.test.ts` 把 relay 实际返回的 JSON/SSE 内容
+带入后续请求，在两个方向上切换模型，覆盖工具结果、长工具名、零参数工具、thinking
+文本、消息级 effort 控制和翻译路径 WebSearch 后续对话。测试通过严格的模拟上游请求
+检查目标模型、effort、输出上限、工具调用与结果配对，以及流的完整结束。这是对 relay
+本地转换和测试中编码的线上格式不变量的离线验证，**不是实际 Copilot 接受度的证明**，
+包括从另一模型保留下来的工具 ID；也不代表缓存命中率保持不变。
+
+原生 Messages 的跨协议迁移不在这组测试覆盖范围内。应选择目标模型支持的 effort；
+认证、限流、网络故障、上下文上限和上游拒绝仍可能使请求失败。relay 不会静默替换
+模型或 effort 来掩盖这些失败。合并或构建修复不会更新已运行的安装版 relay；
+需要另外更新并重启该运行时。
+
 ### 选择兼容的 effort
 
 `thinkEffort` 是默认值，不再覆盖请求。初始 effort 按以下顺序使用第一个非 null 的值：
