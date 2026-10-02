@@ -22,8 +22,12 @@ const fixture = async (): Promise<string> =>
 const metadataFixture = async (t: import("node:test").TestContext, file: string, drift: (call: number) => number) => {
   const realStat = fs.lstat.bind(fs)
   const baseline = await realStat(file)
+  const canonical = await fs.realpath(file)
+  const key = (value: unknown) => process.platform === "win32"
+    ? path.resolve(String(value)).toLowerCase() : path.resolve(String(value))
+  const targets = new Set([key(file), key(canonical)])
   let calls = 0
-  const tracked = (value: unknown) => path.resolve(String(value)).toLowerCase() === path.resolve(file).toLowerCase()
+  const tracked = (value: unknown) => targets.has(key(value))
   t.mock.method(fs, "lstat", async (...args: Parameters<typeof fs.lstat>) => {
     const stat = await realStat(...args)
     if (tracked(args[0])) {
@@ -160,6 +164,20 @@ test("failed temporary writes leave the original intact and remove partial bytes
   assert.equal(injected, true)
   assert.equal(await fs.readFile(file, "utf8"), "original\n")
   assert.deepEqual(await fs.readdir(path.dirname(file)), ["settings.json"])
+})
+
+test("metadata injection follows a canonicalized parent directory", async (t) => {
+  const file = await fixture()
+  await fs.writeFile(file, "original\n")
+  const alias = path.join(path.dirname(file), "alias")
+  await fs.symlink(path.dirname(file), alias, process.platform === "win32" ? "junction" : "dir")
+  t.after(() => fs.unlink(alias))
+  const requested = path.join(alias, "settings.json")
+  const metadata = await metadataFixture(t, requested, (call) => call === 2 ? 1 : 0)
+  const snapshot = await readFileSnapshot(requested)
+  assert.equal(snapshot.raw, "original\n")
+  assert.equal(snapshot.resolvedPath, await fs.realpath(file))
+  assert.equal(metadata.calls(), 4, "canonical lstat path must receive the injected conflict")
 })
 
 test("reacquires a snapshot after one inconsistent metadata read", async (t) => {
