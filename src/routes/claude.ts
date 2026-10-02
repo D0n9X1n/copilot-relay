@@ -726,14 +726,14 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     // non-MCP local tools, add a small Claude-family overhead to avoid
     // under-reporting context use in the UI.
     if (claudePayload.tools && claudePayload.tools.length > 0) {
-      let mcpToolExist = false
+      let hasMcpTools = false
       if (claudeBeta?.startsWith("claude-code")) {
-        mcpToolExist = claudePayload.tools.some((tool) =>
+        hasMcpTools = claudePayload.tools.some((tool) =>
           tool.name.startsWith("mcp__"),
         )
       }
 
-      if (!hasDiscoveredTokenizer && !mcpToolExist && effectiveModelId.startsWith("claude")) {
+      if (!hasDiscoveredTokenizer && !hasMcpTools && effectiveModelId.startsWith("claude")) {
         tokenCount.input += 346
       }
     }

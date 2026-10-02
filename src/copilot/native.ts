@@ -52,12 +52,12 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
     }
 
     const content = message.content as NativeBlock[]
-    const index = content.findIndex((block) => block.type === "server_tool_use" && block.name === "web_search")
-    if (index < 0) {
+    const placeholderIndex = content.findIndex((block) => block.type === "server_tool_use" && block.name === "web_search")
+    if (placeholderIndex < 0) {
       return [message]
     }
 
-    const placeholder = content[index]
+    const placeholder = content[placeholderIndex]
     if (!placeholder.id?.startsWith(bridgePrefix) || placeholder.id.length > 2048) {
       throw invalidRequest("This native route cannot replay unrecognized bridge search history. Use its original chat route.")
     }
@@ -73,29 +73,29 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
       throw invalidRequest("Invalid bridge search history.")
     }
 
-    const [id, name, count, position] = metadata
+    const [id, name, resultIndex, searchPosition] = metadata
     if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)
       || typeof name !== "string" || !isClaudeWebSearchToolName(name)
-      || !Number.isSafeInteger(count) || count <= index || count > content.length
-      || position !== index || !valid(placeholder.input)) {
+      || !Number.isSafeInteger(resultIndex) || resultIndex <= placeholderIndex || resultIndex > content.length
+      || searchPosition !== placeholderIndex || !valid(placeholder.input)) {
       throw invalidRequest("Invalid bridge search history.")
     }
 
-    const result = content[count]
-    if (!result || result.type !== "web_search_tool_result" || result.tool_use_id !== placeholder.id) {
+    const resultBlock = content[resultIndex]
+    if (!resultBlock || resultBlock.type !== "web_search_tool_result" || resultBlock.tool_use_id !== placeholder.id) {
       throw invalidRequest("Incomplete bridge search history.")
     }
 
-    const decision = content.slice(0, count).map((block, at) => at === index ? { ...block, type: "tool_use", id, name } : block)
+    const decision = content.slice(0, resultIndex).map((block, blockIndex) => blockIndex === placeholderIndex ? { ...block, type: "tool_use", id, name } : block)
     if (decision.some((block) => block.type === "server_tool_use")) {
       throw invalidRequest("Invalid bridge decision boundary.")
     }
 
-    const results: ClaudeMessage = { role: "user", content: [toolResult(id, result.content)] }
-    generatedResults.add(results)
-    const turns: ClaudeMessage[] = [{ ...message, content: decision } as ClaudeMessage, results]
-    if (content.length > count + 1) {
-      turns.push({ ...message, content: content.slice(count + 1) } as ClaudeMessage)
+    const resultTurn: ClaudeMessage = { role: "user", content: [toolResult(id, resultBlock.content)] }
+    generatedResults.add(resultTurn)
+    const turns: ClaudeMessage[] = [{ ...message, content: decision } as ClaudeMessage, resultTurn]
+    if (content.length > resultIndex + 1) {
+      turns.push({ ...message, content: content.slice(resultIndex + 1) } as ClaudeMessage)
     }
 
     return turns
@@ -296,14 +296,14 @@ async function* nativeEvents(response: Response): AsyncGenerator<NativeEvent> {
     return
   }
 
-  let terminal = false
-  let stopped = false
+  let sawStopReason = false
+  let sawMessageStop = false
   for await (const event of events(response)) {
     if (!event.data || event.data === "[DONE]") {
       continue
     }
 
-    if (stopped) {
+    if (sawMessageStop) {
       throw new Error("Native upstream emitted events after message_stop.")
     }
 
@@ -317,21 +317,21 @@ async function* nativeEvents(response: Response): AsyncGenerator<NativeEvent> {
     }
 
     if (value.type === "message_delta" && valid(value.delta) && typeof value.delta.stop_reason === "string") {
-      terminal = true
+      sawStopReason = true
     }
 
     if (value.type === "message_stop") {
-      if (!terminal) {
+      if (!sawStopReason) {
         throw new Error("Native stream stopped without a completion outcome.")
       }
 
-      stopped = true
+      sawMessageStop = true
     }
 
     yield value as NativeEvent
   }
 
-  if (!stopped) {
+  if (!sawMessageStop) {
     throw new Error("Native upstream stream ended without message_stop.")
   }
 }
@@ -430,8 +430,8 @@ export async function handleNativeMessages(
   // Withhold tool blocks until the terminal confirms their inputs are executable.
   let heldFrom: number | undefined
   let decisionDelta: NativeEvent | undefined
-  const first = await createNativeMessages(config, request, { ...options, signal })
-  const message = await collectNative(first, write ? async (event) => {
+  const firstResponse = await createNativeMessages(config, request, { ...options, signal })
+  const message = await collectNative(firstResponse, write ? async (event) => {
     if (event.type === "message_delta") {
       decisionDelta = { ...event, delta: { ...decisionDelta?.delta, ...event.delta }, usage: { ...decisionDelta?.usage, ...event.usage } }
       return
@@ -487,8 +487,8 @@ export async function handleNativeMessages(
   const marker = bridgePrefix + Buffer.from(JSON.stringify([searchCall.id, searchCall.name, message.content.length, searchPosition])).toString("base64url")
   const displayDecision = message.content.map((block) => block === searchCall ? { ...block, type: "server_tool_use", id: marker, name: "web_search" } : block)
   const resultBlock: NativeBlock = { ...searchMessage.content[1], type: "web_search_tool_result", tool_use_id: marker }
-  const result = toolResult(searchCall.id, resultBlock.content)
-  const siblings = message.content.some((block) => block.type === "tool_use" && block !== searchCall)
+  const upstreamToolResult = toolResult(searchCall.id, resultBlock.content)
+  const hasSiblingTools = message.content.some((block) => block.type === "tool_use" && block !== searchCall)
   let usage = mergeUsage(message.usage, searchMessage.usage)
   const combined = [...displayDecision, resultBlock]
   if (write) {
@@ -503,8 +503,8 @@ export async function handleNativeMessages(
     }
   }
 
-  if (siblings || search.results.length === 0) {
-    const complete = { ...message, content: combined, stop_reason: siblings ? "tool_use" : "end_turn", usage } as ClaudeResponse
+  if (hasSiblingTools || search.results.length === 0) {
+    const complete = { ...message, content: combined, stop_reason: hasSiblingTools ? "tool_use" : "end_turn", usage } as ClaudeResponse
     if (!write) {
       return complete
     }
@@ -514,13 +514,13 @@ export async function handleNativeMessages(
     return
   }
 
-  const follow = await createNativeMessages(config, {
-    ...request, messages: [...request.messages, { role: "assistant", content: message.content } as ClaudeMessage, { role: "user", content: [result] }],
+  const followUpResponse = await createNativeMessages(config, {
+    ...request, messages: [...request.messages, { role: "assistant", content: message.content } as ClaudeMessage, { role: "user", content: [upstreamToolResult] }],
   }, { ...options, signal })
   const offset = combined.length
   // Replay only withheld tool blocks; earlier text has already reached the client.
   let finalHeldFrom: number | undefined
-  const final = await collectNative(follow, write ? async (event) => {
+  const finalMessage = await collectNative(followUpResponse, write ? async (event) => {
     if (event.type === "message_start" || event.type === "message_delta" || event.type === "message_stop") {
       return
     }
@@ -533,17 +533,17 @@ export async function handleNativeMessages(
       await write({ ...event, ...(event.index !== undefined && { index: offset + event.index }) } as ClaudeStreamEventData)
     }
   } : undefined)
-  if (final.content.some((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))) {
+  if (finalMessage.content.some((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))) {
     throw new Error("Repeated bridge-managed search is unsupported.")
   }
 
-  usage = mergeUsage(usage, final.usage)
+  usage = mergeUsage(usage, finalMessage.usage)
   if (!write) {
-    return { ...final, content: [...combined, ...final.content], usage } as ClaudeResponse
+    return { ...finalMessage, content: [...combined, ...finalMessage.content], usage } as ClaudeResponse
   }
 
   if (finalHeldFrom !== undefined) {
-    for (const [index, block] of final.content.entries()) {
+    for (const [index, block] of finalMessage.content.entries()) {
       if (index < finalHeldFrom) {
         continue
       }
@@ -554,7 +554,7 @@ export async function handleNativeMessages(
     }
   }
 
-  await write({ type: "message_delta", delta: { stop_reason: final.stop_reason, stop_sequence: final.stop_sequence, ...("stop_details" in final && { stop_details: final.stop_details }) }, usage } as ClaudeStreamEventData)
+  await write({ type: "message_delta", delta: { stop_reason: finalMessage.stop_reason, stop_sequence: finalMessage.stop_sequence, ...("stop_details" in finalMessage && { stop_details: finalMessage.stop_details }) }, usage } as ClaudeStreamEventData)
   await write({ type: "message_stop" })
 }
 

@@ -306,10 +306,10 @@ export const fetchCopilot = async (
       response = await recordedFetch({
         method: init.method ?? "GET", path, body: init.body, headers, upstreamRequestId, signal,
       }, async () => {
-        const result = await undiciFetch(`${provider.baseUrl}${path}`, { ...init, headers, dispatcher: copilotDispatcher, signal })
-        const response = new Response(result.body as ReadableStream<Uint8Array> | null, { status: result.status, statusText: result.statusText, headers: result.headers })
-        Object.defineProperty(response, "url", { value: result.url })
-        return response
+        const undiciResponse = await undiciFetch(`${provider.baseUrl}${path}`, { ...init, headers, dispatcher: copilotDispatcher, signal })
+        const wrappedResponse = new Response(undiciResponse.body as ReadableStream<Uint8Array> | null, { status: undiciResponse.status, statusText: undiciResponse.statusText, headers: undiciResponse.headers })
+        Object.defineProperty(wrappedResponse, "url", { value: undiciResponse.url })
+        return wrappedResponse
       })
       const ms = Math.round(performance.now() - started)
       logUpstreamLifecycle(

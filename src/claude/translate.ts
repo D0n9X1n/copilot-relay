@@ -203,8 +203,8 @@ function handleAssistantMessage(
   )
 
   const allTextContent = [
-    ...textBlocks.map((b) => b.text),
-    ...thinkingBlocks.map((b) => b.thinking),
+    ...textBlocks.map((block) => block.text),
+    ...thinkingBlocks.map((block) => block.thinking),
   ].join("\n\n")
 
   // Assistant tool_use blocks bridge to OpenAI tool_calls; plain text and

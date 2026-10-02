@@ -155,7 +155,7 @@ const normalizeFinalAssistantPrefill = (
 const isAgentInitiator = (
   messages: ChatCompletionsPayload["messages"],
 ): "agent" | "user" =>
-  messages.some((msg) => msg.role === "assistant" || msg.role === "tool") ?
+  messages.some((message) => message.role === "assistant" || message.role === "tool") ?
     "agent"
   : "user"
 
@@ -163,9 +163,9 @@ const messagesIncludeImage = (
   messages: ChatCompletionsPayload["messages"],
 ): boolean =>
   messages.some(
-    (msg) =>
-      typeof msg.content !== "string"
-      && msg.content?.some((part) => part.type === "image_url"),
+    (message) =>
+      typeof message.content !== "string"
+      && message.content?.some((part) => part.type === "image_url"),
   )
 
 export const createChatCompletions = async (
