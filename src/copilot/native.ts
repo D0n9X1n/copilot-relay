@@ -30,7 +30,11 @@ type NativeEvent = Record<string, unknown> & {
   type: string; index?: number; content_block?: NativeBlock; message?: NativeResponse;
   delta?: Record<string, unknown>; usage?: Partial<ClaudeResponse["usage"]>;
 }
-interface NativeOptions { requestId: string; signal?: AbortSignal; headers?: Headers }
+interface NativeOptions {
+  requestId: string
+  signal?: AbortSignal
+  headers?: Headers
+}
 const valid = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 const bridgePrefix = "srvtoolu_relay_"
 const invalidRequest = (message: string): HTTPError => new HTTPError(message, Response.json({ type: "error", error: { type: "invalid_request_error", message } }, { status: 400 }))

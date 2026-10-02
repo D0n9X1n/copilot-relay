@@ -110,6 +110,25 @@ const collectViolations = (file: string, text: string): Violation[] => {
     return false
   }
 
+  // The contents between a construct's own braces: statements, switch clauses, or class,
+  // interface and enum members. Object and type literals are values and types rather than
+  // bodies, so they may stay on one line.
+  const bracedContents = (node: ts.Node): readonly ts.Node[] | undefined => {
+    if (ts.isBlock(node) || ts.isModuleBlock(node)) {
+      return node.statements
+    }
+
+    if (ts.isCaseBlock(node)) {
+      return node.clauses
+    }
+
+    if (ts.isClassLike(node) || ts.isInterfaceDeclaration(node) || ts.isEnumDeclaration(node)) {
+      return node.members
+    }
+
+    return undefined
+  }
+
   const visit = (node: ts.Node): void => {
     if (ts.isIfStatement(node)) {
       requireBlock(node.thenStatement)
@@ -136,15 +155,16 @@ const collectViolations = (file: string, text: string): Violation[] => {
       }
     }
 
-    // A non-empty block keeps `{` and `}` off its statement lines; an empty `{}` may stay compact.
-    if (ts.isBlock(node) && node.statements.length > 0) {
-      const first = node.statements[0]
-      const last = node.statements[node.statements.length - 1]
-      const opensBesideFirst = lineOf(startOf(node)) === lineOf(startOf(first))
-      const closesBesideLast = lineOf(node.getEnd()) === lineOf(last.getEnd())
+    // A non-empty block or body keeps `{` and `}` off its content lines; an empty `{}` may stay compact.
+    const contents = bracedContents(node)
+
+    if (contents !== undefined && contents.length > 0) {
+      const openBrace = childOfKind(node, ts.SyntaxKind.OpenBraceToken) ?? node
+      const opensBesideFirst = lineOf(startOf(openBrace)) === lineOf(startOf(contents[0]))
+      const closesBesideLast = lineOf(node.getEnd()) === lineOf(contents[contents.length - 1].getEnd())
 
       if (opensBesideFirst || closesBesideLast) {
-        record("multilineBlocks", startOf(node))
+        record("multilineBlocks", startOf(openBrace))
       }
     }
 
@@ -206,7 +226,7 @@ import sys
 import tokenize
 
 HEADER_KEYWORDS = {"if", "elif", "else", "for", "while", "with", "try", "except", "finally", "def", "class", "async"}
-IGNORED_TOKENS = {tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER}
+IGNORED_TOKENS = {tokenize.NL, tokenize.COMMENT, tokenize.ENCODING, tokenize.ENDMARKER}
 
 for path in sys.argv[1:]:
     with open(path, encoding="utf-8") as handle:
@@ -214,13 +234,31 @@ for path in sys.argv[1:]:
 
     depth = 0
     first_word = None
+    last_value = None
+    is_header = False
     header_colon_row = None
     reported = False
 
+    # match and case are soft keywords, so a case line is a header only directly inside a match
+    # body. Each open indented block records whether a "match ...:" line opened it.
+    match_bodies = []
+    opens_match_body = False
+
     # A logical line ends only at NEWLINE, so a backslash continuation cannot hide a one-liner.
     for kind, value, (row, _), _, _ in tokenize.generate_tokens(io.StringIO(source).readline):
+        if kind == tokenize.INDENT:
+            match_bodies.append(opens_match_body)
+            continue
+
+        if kind == tokenize.DEDENT:
+            match_bodies.pop()
+            continue
+
         if kind == tokenize.NEWLINE:
+            opens_match_body = first_word == "match" and last_value == ":"
             first_word = None
+            last_value = None
+            is_header = False
             header_colon_row = None
             reported = False
             continue
@@ -230,6 +268,10 @@ for path in sys.argv[1:]:
 
         if first_word is None:
             first_word = value
+            in_match_body = bool(match_bodies) and match_bodies[-1]
+            is_header = first_word in HEADER_KEYWORDS or (first_word == "case" and in_match_body)
+
+        last_value = value
 
         if header_colon_row is not None and not reported:
             print(f"{path}:{header_colon_row} compound statement on one line")
@@ -242,7 +284,7 @@ for path in sys.argv[1:]:
             depth += 1
         elif value in (")", "]", "}"):
             depth -= 1
-        elif value == ":" and depth == 0 and first_word in HEADER_KEYWORDS and header_colon_row is None:
+        elif value == ":" and depth == 0 and is_header and header_colon_row is None:
             header_colon_row = row
         elif value == ";" and depth == 0:
             print(f"{path}:{row} semicolon-separated statements")
@@ -310,6 +352,12 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "  poll()",
     "} while (waiting)",
     "done()",
+    "",
+    "switch (mode) { case 1: first() }",
+    "class Point { x = 1 }",
+    "class Empty {}",
+    "interface Options { id: string }",
+    "enum Kind { A }",
   ].join("\n")
 
   const found = collectViolations("sample.ts", sample)
@@ -328,6 +376,10 @@ test("the checker reports each mechanical rule at the offending line", () => {
     "22 declarations",
     "23 declarations",
     "32 blankLineAfterBlock",
+    "34 multilineBlocks",
+    "35 multilineBlocks",
+    "37 multilineBlocks",
+    "38 multilineBlocks",
   ])
 })
 
@@ -335,7 +387,7 @@ test("every if, else and loop body is a braced block", () => {
   assertNoViolations("bracedBodies")
 })
 
-test("a non-empty block puts its braces and statements on separate lines", () => {
+test("braces never share a line with the contents of a non-empty block or body", () => {
   assertNoViolations("multilineBlocks")
 })
 
@@ -359,10 +411,11 @@ test("declarations use const or let with one variable each", () => {
   assertNoViolations("declarations")
 })
 
-test("the Python checker reports compound one-liners, even when continued, and semicolons", (t) => {
+test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
+  // `case` and `match` are soft keywords: the last two lines are ordinary statements.
   const sample = path.join(directory, "sample.py")
   const source = [
     "if ready: start()",
@@ -371,6 +424,14 @@ test("the Python checker reports compound one-liners, even when continued, and s
     "    start()",
     "if ready: \\",
     "    start()",
+    "match command:",
+    "    case 1: start()",
+    "    case 2:",
+    "        stop()",
+    "    case 3: \\",
+    "        pause()",
+    "case: int = 1",
+    "match = 2",
   ].join("\n")
 
   fs.writeFileSync(sample, `${source}\n`)
@@ -379,6 +440,8 @@ test("the Python checker reports compound one-liners, even when continued, and s
     `${sample}:1 compound statement on one line`,
     `${sample}:2 semicolon-separated statements`,
     `${sample}:5 compound statement on one line`,
+    `${sample}:8 compound statement on one line`,
+    `${sample}:11 compound statement on one line`,
   ])
 })
 

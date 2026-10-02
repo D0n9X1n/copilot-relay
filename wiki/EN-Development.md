@@ -349,17 +349,24 @@ project already uses, so it adds no linter dependency.
 
 | Enforced rule | Closest ESLint rule |
 | --- | --- |
-| Every `if`, `else`, `for` and `while` body is a braced block; only `else if` is exempt | `curly: "all"` |
-| Statements never share a line with a block's `{` or `}` — no `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
+| Every `if`, `else`, `for`, `while` and `do` body is a braced block; only `else if` is exempt | `curly: "all"` |
+| Contents never share a line with the `{` or `}` of a non-empty block or a `switch`, class, interface or enum body — no `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
 | `else`, `catch` and `finally` continue the line that closes the previous block | `@stylistic/brace-style: "1tbs"` |
 | One statement per line — no `a(); b()` | `@stylistic/max-statements-per-line` |
 | A blank line follows each multi-line block statement (`if`, loop, `try`, `switch`, function) | `@stylistic/padding-line-between-statements` (`multiline-block-like`) |
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
-| Python: no compound one-line statements or `;` separators | PEP 8 (pycodestyle E701–E704) |
+| Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
 
-Mandatory braces prevent the classic failure where a second indented line looks
-conditional but always runs — the shape of Apple's 2014 `goto fail` TLS bug.
+This brace rule is deliberately stricter than the Google, Airbnb and Microsoft
+guides, which each allow some brace-less one-line bodies. It matches ESLint's
+`curly` default and [CERT C EXP19-C](https://wiki.sei.cmu.edu/confluence/display/c/EXP19-C.+Use+braces+for+the+body+of+an+if%2C+for%2C+or+while+statement):
+without braces, a line added under a one-statement body looks conditional but
+always runs. That is the shape of Apple's 2014 `goto fail` TLS bug, which CERT
+blames "in large part" on not following this recommendation. Adam Langley's
+[write-up](https://www.imperialviolet.org/2014/02/22/applebug.html) is more
+cautious, because indentation can mislead with braces too: braces remove one easy
+mistake, not every misleading layout.
 
 Reviewed rather than enforced:
 

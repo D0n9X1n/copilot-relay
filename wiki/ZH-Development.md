@@ -299,17 +299,23 @@ linter 依赖。
 
 | 强制规则 | 最接近的 ESLint 规则 |
 | --- | --- |
-| 每个 `if`、`else`、`for`、`while` 的主体都是带花括号的块；只有 `else if` 例外 | `curly: "all"` |
-| 语句不与块的 `{` 或 `}` 同行 —— 不写 `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
+| 每个 `if`、`else`、`for`、`while`、`do` 的主体都是带花括号的块；只有 `else if` 例外 | `curly: "all"` |
+| 非空的块以及 `switch`、类、接口、枚举的主体，其内容不与 `{` 或 `}` 同行 —— 不写 `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
 | `else`、`catch`、`finally` 紧接在上一个块的 `}` 所在行 | `@stylistic/brace-style: "1tbs"` |
 | 每行一条语句 —— 不写 `a(); b()` | `@stylistic/max-statements-per-line` |
 | 跨多行的块语句（`if`、循环、`try`、`switch`、函数）之后空一行 | `@stylistic/padding-line-between-statements`（`multiline-block-like`） |
 | 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
 | 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
-| Python：不写单行复合语句，不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
+| Python：不写单行复合语句（包括 `case` 子句），不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
 
-强制加花括号可以避免一类经典错误：第二行缩进看起来受条件控制，实际上总会执行 ——
-Apple 2014 年 TLS `goto fail` 漏洞就是这种形状。
+这条花括号规则有意比 Google、Airbnb 和 Microsoft 的指南更严格 —— 它们都允许某些不加
+花括号的单行主体。它与 ESLint `curly` 的默认值以及
+[CERT C EXP19-C](https://wiki.sei.cmu.edu/confluence/display/c/EXP19-C.+Use+braces+for+the+body+of+an+if%2C+for%2C+or+while+statement)
+一致：不加花括号时，在单语句主体下新增的一行看起来受条件控制，实际上总会执行。Apple
+2014 年 TLS `goto fail` 漏洞就是这种形状，CERT 认为它“在很大程度上”源于没有遵循这条
+建议。Adam Langley 的[分析](https://www.imperialviolet.org/2014/02/22/applebug.html)更为
+谨慎：加了花括号，缩进同样可能误导人。所以花括号消除的是一种容易犯的错误，而不是所有
+误导性的排版。
 
 以下规则靠评审把关，不做机械检查：
 
