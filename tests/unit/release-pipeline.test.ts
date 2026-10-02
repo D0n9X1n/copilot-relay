@@ -670,6 +670,39 @@ test("packed smoke verifies exact tarballs and executes isolated help, version, 
   }
 })
 
+test("package smoke feeds checksummed bytes to tar without absolute path arguments", async () => {
+  const source = await fs.readFile(path.join(root, "scripts/package-smoke.mjs"), "utf8")
+  assert.match(source, /tarBytes\(\["-tzf", "-"\], bytes, unpacked\)/)
+  assert.match(source, /tarBytes\(\["-xzf", "-"\], bytes, unpacked\)/)
+  assert.match(source, /child\.stdin\.end\(bytes\)/)
+  assert.doesNotMatch(source, /execute\("tar", \["-[tx]zf", candidate/)
+})
+
+test("package smoke rejects a checksum-matching corrupt archive without leaking temporary files", async () => {
+  const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "relay-corrupt-pack-"))
+  try {
+    const candidate = path.join(fixture, "candidate")
+    const temporary = path.join(fixture, "tmp")
+    await fs.mkdir(candidate)
+    await fs.mkdir(temporary)
+    const filename = "copilot-relay-1.2.3.tgz"
+    const bytes = Buffer.alloc(2 * 1024 * 1024, 0x78)
+    await fs.writeFile(path.join(candidate, filename), bytes)
+    await fs.writeFile(path.join(candidate, "SHA256SUMS"), `${createHash("sha256").update(bytes).digest("hex")}  ${filename}\n`)
+    await assert.rejects(execute(process.execPath, [path.join(root, "scripts/package-smoke.mjs"), "--verify", candidate, "copilot-relay", "1.2.3"], {
+      env: { ...process.env, TEMP: temporary, TMP: temporary, TMPDIR: temporary }, timeout: 30_000,
+    }), (error: unknown) => {
+      const stderr = (error as { stderr: string }).stderr
+      assert.match(stderr, /tar|archive|gzip/i)
+      assert.doesNotMatch(stderr, /Unhandled 'error' event|checksum mismatch/)
+      return true
+    })
+    assert.deepEqual(await fs.readdir(temporary), [])
+  } finally {
+    await fs.rm(fixture, { recursive: true, force: true })
+  }
+})
+
 test("both package test commands preload home isolation before tsx", async () => {
   const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))
   for (const name of ["test:unit", "test:integration"]) {
