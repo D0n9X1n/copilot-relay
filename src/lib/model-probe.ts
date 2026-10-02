@@ -129,7 +129,7 @@ export async function probeModels(
   const interrupt = () => controller.abort()
   process.on("SIGINT", interrupt)
   process.on("SIGTERM", interrupt)
-  const total = AbortSignal.timeout(options.totalTimeoutMs)
+  const totalDeadline = AbortSignal.timeout(options.totalTimeoutMs)
   // Probes route exact catalog IDs in this process, then restore the caller's policy.
   const saved = {
     modelRouting: runtimeState.modelRouting,
@@ -185,7 +185,7 @@ export async function probeModels(
         unverified: model.reasoningEfforts === undefined || model.supportedEndpoints === undefined,
       }
 
-      if (controller.signal.aborted || total.aborted) {
+      if (controller.signal.aborted || totalDeadline.aborted) {
         row.detail = controller.signal.aborted ? "cancelled" : "total-deadline"
       } else if (!safeId(id, config.copilotToken) || normalizeCopilotModelId(id) !== id) {
         row.status = "SKIPPED"
@@ -197,7 +197,7 @@ export async function probeModels(
         row.status = "SKIPPED"
         row.detail = "unsupported-effort"
       } else {
-        const signal = AbortSignal.any([controller.signal, total, AbortSignal.timeout(timeoutMs)])
+        const signal = AbortSignal.any([controller.signal, totalDeadline, AbortSignal.timeout(timeoutMs)])
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
         const started = performance.now()
         row.sent = true
@@ -233,7 +233,7 @@ export async function probeModels(
             if (controller.signal.aborted) {
               row.status = "NOT_TESTED"
               row.detail = "cancelled"
-            } else if (total.aborted) {
+            } else if (totalDeadline.aborted) {
               row.status = "NOT_TESTED"
               row.detail = "total-deadline"
             } else {
@@ -263,8 +263,8 @@ export async function probeModels(
               row.detail = "model-mismatch"
             } else if (body.stop_reason === "max_tokens") {
               row.status = "INCOMPLETE"
-              const tokens = record(body.usage) ? body.usage.output_tokens : undefined
-              row.detail = typeof tokens === "number" && Number.isSafeInteger(tokens) && tokens > 0 ? "reachable-output-budget-exhausted" : "output-budget-exhausted-usage-unreported"
+              const outputTokens = record(body.usage) ? body.usage.output_tokens : undefined
+              row.detail = typeof outputTokens === "number" && Number.isSafeInteger(outputTokens) && outputTokens > 0 ? "reachable-output-budget-exhausted" : "output-budget-exhausted-usage-unreported"
             } else if (body.stop_reason !== "end_turn" || body.content.some((part: unknown) => record(part) && part.type !== "text" && part.type !== "thinking")) {
               row.detail = body.stop_reason === "refusal" ? "refusal" : "refusal-or-unexpected-completion"
             } else if (body.content.some((part: unknown) => record(part) && part.type === "text" && typeof part.text === "string" && part.text.trim())) {
@@ -278,7 +278,7 @@ export async function probeModels(
           if (controller.signal.aborted) {
             row.status = "NOT_TESTED"
             row.detail = "cancelled"
-          } else if (total.aborted) {
+          } else if (totalDeadline.aborted) {
             row.status = "NOT_TESTED"
             row.detail = "total-deadline"
           } else {

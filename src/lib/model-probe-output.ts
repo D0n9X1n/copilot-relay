@@ -21,7 +21,7 @@ export interface ProbeRow {
 const tones: Record<ProbeStatus, TerminalTone> = {
   PASS: "good", FAIL: "bad", INCOMPLETE: "warning", SKIPPED: "muted", NOT_TESTED: "muted",
 }
-const reasons: Record<string, string> = {
+const reasonLabels: Record<string, string> = {
   "completed-text": "Ready",
   "probe-timeout": "Timed out",
   "upstream-timeout-or-HTTP-504": "Upstream timeout (504)",
@@ -54,7 +54,7 @@ const reasons: Record<string, string> = {
   "unknown-error": "Unknown API error",
 }
 
-export const probeReason = (code: string): string => reasons[code]
+export const probeReason = (code: string): string => reasonLabels[code]
   ?? (/^HTTP-\d{3}$/.test(code) ? `HTTP ${code.slice(5)}` : "Unknown result")
 
 export const probeColumnWidth = (ids: string[], columns: number): number =>
@@ -90,16 +90,16 @@ const probeTime = (row: ProbeRow): string => {
 }
 
 export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, columns = 80): string[] => {
-  const models = wrap(terminalText(row.id), width)
+  const modelLines = wrap(terminalText(row.id), width)
   const time = probeTime(row)
   const label = probeReason(row.detail) + (row.unverified ? " *" : "")
-  const results = wrap(label, Math.max(1, columns - width - 22))
+  const resultLines = wrap(label, Math.max(1, columns - width - 22))
   // ANSI bytes do not occupy columns, so pad the uncolored label separately.
   const status = colorText(row.status, tones[row.status], color) + " ".repeat(10 - row.status.length)
-  return Array.from({ length: Math.max(models.length, results.length) }, (_, index) => {
-    const model = (models[index] ?? "").padEnd(width)
-    const state = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(22)
-    return `${model}${state}${results[index] ?? ""}`.trimEnd()
+  return Array.from({ length: Math.max(modelLines.length, resultLines.length) }, (_, index) => {
+    const model = (modelLines[index] ?? "").padEnd(width)
+    const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(22)
+    return `${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
   })
 }
 

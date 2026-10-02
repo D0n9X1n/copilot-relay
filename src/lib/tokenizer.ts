@@ -136,9 +136,9 @@ const getEncodeChatFunction = async (encoding: string): Promise<Encoder> => {
     return fallback
   }
 
-  const mod = (await encodingMap[encoding]()) as Encoder
-  encodingCache.set(encoding, mod)
-  return mod
+  const encoder = (await encodingMap[encoding]()) as Encoder
+  encodingCache.set(encoding, encoder)
+  return encoder
 }
 
 export const getTokenizerFromModel = (model: TokenizerModel): string =>
@@ -261,16 +261,16 @@ const calculateToolTokens = (
   constants: ReturnType<typeof getModelConstants>,
 ): number => {
   let tokens = constants.funcInit
-  const func = tool.function
-  const fName = func.name
-  let fDesc = func.description || ""
-  if (fDesc.endsWith(".")) {
-    fDesc = fDesc.slice(0, -1)
+  const definition = tool.function
+  const functionName = definition.name
+  let functionDescription = definition.description || ""
+  if (functionDescription.endsWith(".")) {
+    functionDescription = functionDescription.slice(0, -1)
   }
 
-  tokens += encoder.encode(`${fName}:${fDesc}`).length
-  if (typeof func.parameters === "object" && func.parameters !== null) {
-    tokens += calculateParametersTokens(func.parameters, encoder, constants)
+  tokens += encoder.encode(`${functionName}:${functionDescription}`).length
+  if (typeof definition.parameters === "object" && definition.parameters !== null) {
+    tokens += calculateParametersTokens(definition.parameters, encoder, constants)
   }
 
   return tokens

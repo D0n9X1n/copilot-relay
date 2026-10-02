@@ -35,7 +35,7 @@ export const markDiscardedResponse = (response: Response): void => {
 }
 
 const credentialPattern = /(?:gh[pousr]_|github_pat_|sk-|eyJ)[A-Za-z0-9_-]+/
-const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
+const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino
 const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW
 const safeValue = (value: unknown): string | undefined => typeof value === "string"
@@ -137,7 +137,7 @@ export const withTraceObserver = <T>(observe: (trace: RequestTrace) => void, run
 export const getReplayRequestId = (): string | undefined => {
   // Reuse only the validated internal replay identity; never trust a client's request-ID header.
   const id = transportContext.getStore()?.requestId
-  return id && uuid.test(id) ? id : undefined
+  return id && uuidPattern.test(id) ? id : undefined
 }
 
 export const withRecordedTransport = <T>(transport: RecordedTransport, run: () => T): T => transportContext.run(transport, run)
@@ -405,12 +405,12 @@ export class RequestTrace {
       known(value, ["pending", "complete", "cancelled", "error", "absent"]) as BodyState | undefined
     const status = (value: unknown): number | undefined =>
       typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined
-    const reasons = ["end_turn", "stop_sequence", "tool_use", "pause_turn", "refusal", "max_tokens"]
+    const stopReasons = ["end_turn", "stop_sequence", "tool_use", "pause_turn", "refusal", "max_tokens"]
     return {
       requestId: this.requestId,
       status: status(this.manifest.status),
       responseState: bodyState(this.manifest.response?.state),
-      stopReason: known(this.manifest.outcome?.stop_reason, reasons),
+      stopReason: known(this.manifest.outcome?.stop_reason, stopReasons),
       reportedModel: modelId(this.manifest.outcome?.model),
       terminal: this.manifest.outcome?.terminal === true,
       failure: this.failure,
@@ -426,7 +426,7 @@ export class RequestTrace {
         status: status(exchange.status),
         responseState: bodyState(exchange.response?.state),
         finishReason: known(exchange.outcome?.finish_reason, ["stop", "length", "tool_calls", "content_filter"]),
-        stopReason: known(exchange.outcome?.stop_reason, reasons),
+        stopReason: known(exchange.outcome?.stop_reason, stopReasons),
         responseStatus: known(exchange.outcome?.response_status, ["completed", "failed", "cancelled", "incomplete"]),
         refusalCategory: known(exchange.outcome?.refusal_category, ["cyber", "bio", "reasoning_extraction", "general_harms", "frontier_llm", "unknown"]),
         incompleteReason: known(exchange.outcome?.incomplete_reason, ["max_output_tokens", "content_filter", "unknown"]),
@@ -549,16 +549,16 @@ export class RequestTrace {
     }
 
     try {
-      if (!uuid.test(id)) {
+      if (!uuidPattern.test(id)) {
         throw new Error("Invalid capture identifier.")
       }
 
       const root = path.join(paths.appDir, "captures")
       trace.directories.set(paths.appDir, await privateDirectory(paths.appDir))
       trace.directories.set(root, await privateDirectory(root))
-      const date = path.join(root, formatLogDate(new Date()))
-      trace.directories.set(date, await privateDirectory(date))
-      const directory = path.join(date, id)
+      const dayDirectory = path.join(root, formatLogDate(new Date()))
+      trace.directories.set(dayDirectory, await privateDirectory(dayDirectory))
+      const directory = path.join(dayDirectory, id)
       await fs.mkdir(directory, { mode: 0o700 })
       trace.directories.set(directory, await checkedDirectory(directory))
       trace.captureDirectory = directory
@@ -734,8 +734,8 @@ export class RequestTrace {
     }
 
     return new ReadableStream<Uint8Array>({
-      start: (value) => {
-        controller = value
+      start: (streamController) => {
+        controller = streamController
         this.abortBodies.add(abort)
         if (upstream) {
           this.upstreamBodies.add(discard)
@@ -952,29 +952,29 @@ const sweepCaptures = async (days: number, now: Date): Promise<void> => {
     }
   }
 
-  for (const date of await fs.readdir(root, { withFileTypes: true })) {
-    if (!date.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(date.name) || date.name >= cutoffName) {
+  for (const dayEntry of await fs.readdir(root, { withFileTypes: true })) {
+    if (!dayEntry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(dayEntry.name) || dayEntry.name >= cutoffName) {
       continue
     }
 
-    const parsed = new Date(`${date.name}T12:00:00`)
-    if (!Number.isFinite(parsed.getTime()) || formatLogDate(parsed) !== date.name) {
+    const parsed = new Date(`${dayEntry.name}T12:00:00`)
+    if (!Number.isFinite(parsed.getTime()) || formatLogDate(parsed) !== dayEntry.name) {
       continue
     }
 
-    const directory = path.join(root, date.name)
+    const directory = path.join(root, dayEntry.name)
     await checkParents()
-    const day = await checkedDirectory(directory)
+    const dayStat = await checkedDirectory(directory)
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const capture = path.join(directory, entry.name)
-      if (!entry.isDirectory() || !uuid.test(entry.name) || activeCaptures.has(capture)) {
+      if (!entry.isDirectory() || !uuidPattern.test(entry.name) || activeCaptures.has(capture)) {
         continue
       }
 
       try {
         await checkParents()
-        await checkedDirectory(directory, day)
-        const captured = await checkedDirectory(capture)
+        await checkedDirectory(directory, dayStat)
+        const captureStat = await checkedDirectory(capture)
         const manifest = await readRetentionManifest(path.join(capture, "meta.json"))
         if (!record(manifest) || manifest.format !== 1 || manifest.requestId !== entry.name) {
           continue
@@ -998,8 +998,8 @@ const sweepCaptures = async (days: number, now: Date): Promise<void> => {
         files.sort((left, right) => Number(path.basename(left.file) === "meta.json") - Number(path.basename(right.file) === "meta.json"))
         for (const { file, stat } of files) {
           await checkParents()
-          await checkedDirectory(directory, day)
-          await checkedDirectory(capture, captured)
+          await checkedDirectory(directory, dayStat)
+          await checkedDirectory(capture, captureStat)
           const current = await fs.lstat(file)
           if (!sameFile(current, stat) || !current.isFile() || current.nlink !== 1 || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs) {
             throw new Error("Capture changed during retention.")
@@ -1015,7 +1015,7 @@ const sweepCaptures = async (days: number, now: Date): Promise<void> => {
     }
 
     await checkParents()
-    await checkedDirectory(directory, day)
+    await checkedDirectory(directory, dayStat)
     await fs.rmdir(directory).catch(() => {})
   }
 }

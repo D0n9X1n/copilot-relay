@@ -127,13 +127,13 @@ const normalizeInteger = (
     return undefined
   }
 
-  const number = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
-  if (typeof number !== "number" || !Number.isSafeInteger(number)
-    || number < minimum || number > maximum) {
+  const candidate = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value
+  if (typeof candidate !== "number" || !Number.isSafeInteger(candidate)
+    || candidate < minimum || candidate > maximum) {
     throw new Error(`Invalid ${key}: expected an integer from ${minimum} to ${maximum}`)
   }
 
-  return number
+  return candidate
 }
 
 const normalizeString = (value: unknown): string | undefined =>

@@ -13,10 +13,10 @@ export const colorEnabled = (env: NodeJS.ProcessEnv = process.env, isTTY = Boole
 }
 
 export type TerminalTone = "good" | "bad" | "warning" | "muted"
-const codes: Record<TerminalTone, number> = { good: 32, bad: 31, warning: 33, muted: 90 }
+const ansiColorCodes: Record<TerminalTone, number> = { good: 32, bad: 31, warning: 33, muted: 90 }
 
 export const terminalText = (value: string): string => sanitizeTerminalString(value)
   .replace(/[\x80-\x9f]|\p{Cf}|\p{Zl}|\p{Zp}/gu, "")
 
 export const colorText = (text: string, tone: TerminalTone, enabled: boolean): string =>
-  enabled ? `\u001b[${codes[tone]}m${text}\u001b[0m` : text
+  enabled ? `\u001b[${ansiColorCodes[tone]}m${text}\u001b[0m` : text

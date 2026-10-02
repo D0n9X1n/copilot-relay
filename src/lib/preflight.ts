@@ -79,9 +79,9 @@ const validateModelRequest = async (
     log.info(`Preflight OK: model=${model} think_effort=${effortLabel}`)
   } catch (error) {
     if (error instanceof HTTPError) {
-      const text = await error.response.text().catch(() => "")
+      const responseBody = await error.response.text().catch(() => "")
       throw new Error(
-        `Preflight failed for model=${model} think_effort=${effortLabel}: ${error.response.status} ${error.response.statusText}${text ? ` ${text}` : ""}`,
+        `Preflight failed for model=${model} think_effort=${effortLabel}: ${error.response.status} ${error.response.statusText}${responseBody ? ` ${responseBody}` : ""}`,
       )
     }
 
