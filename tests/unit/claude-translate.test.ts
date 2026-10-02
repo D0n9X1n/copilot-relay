@@ -28,6 +28,7 @@ const createChatResponse = (model: string): ChatCompletionResponse => ({
 test("filtered chat output is a refusal, not normal completion", () => {
   const response = createChatResponse("test-model")
   response.choices[0]!.finish_reason = "content_filter"
+
   assert.equal(translateToClaude(response).stop_reason, "refusal")
 })
 
@@ -160,31 +161,47 @@ const toolCallResponse = (argumentsText: string): ChatCompletionResponse => {
     message: {
       role: "assistant",
       content: null,
-      tool_calls: [{ id: "call_1", type: "function", function: { name: "noop", arguments: argumentsText } }],
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "noop", arguments: argumentsText }
+      }],
     },
     finish_reason: "tool_calls",
   }
+
   return response
 }
 
 for (const argumentsText of ["", "   ", "\n"]) {
   test(`blank tool arguments ${JSON.stringify(argumentsText)} translate to an empty input object`, () => {
     const result = translateToClaude(toolCallResponse(argumentsText))
+
     assert.equal(result.stop_reason, "tool_use")
-    assert.deepEqual(result.content.filter((block) => block.type === "tool_use"),
-      [{ type: "tool_use", id: "call_1", name: "noop", input: {} }])
+    assert.deepEqual(
+      result.content.filter((block) => block.type === "tool_use"),
+      [{ type: "tool_use", id: "call_1", name: "noop", input: {} }]
+    )
   })
 }
 
 test("tool arguments with content still parse as before", () => {
   const result = translateToClaude(toolCallResponse('{"text":"hi"}'))
-  assert.deepEqual(result.content.find((block) => block.type === "tool_use"),
-    { type: "tool_use", id: "call_1", name: "noop", input: { text: "hi" } })
+
+  assert.deepEqual(
+    result.content.find((block) => block.type === "tool_use"),
+    { type: "tool_use", id: "call_1", name: "noop", input: { text: "hi" } }
+  )
 })
 
-for (const [argumentsText, reason] of [["{\"text\":", "is not valid JSON"], ["[1]", "is not a JSON object"], ["null", "is not a JSON object"]] as const) {
+for (const [argumentsText, reason] of [
+  ["{\"text\":", "is not valid JSON"],
+  ["[1]", "is not a JSON object"],
+  ["null", "is not a JSON object"]
+] as const) {
   test(`invalid tool arguments ${argumentsText} map to a 502 naming the tool`, async () => {
     const { UpstreamToolInputError } = await import("../../src/claude/utils")
+
     let caught: unknown
     try {
       translateToClaude(toolCallResponse(argumentsText))
@@ -195,6 +212,7 @@ for (const [argumentsText, reason] of [["{\"text\":", "is not valid JSON"], ["[1
     assert.ok(caught instanceof UpstreamToolInputError)
     assert.equal(caught.message, `Upstream returned tool input for "noop" that ${reason}.`)
     assert.equal(caught.response.status, 502)
+
     const body = await caught.response.json() as { error: { type: string; message: string } }
     assert.equal(body.error.type, "api_error")
     assert.equal(body.error.message, caught.message)

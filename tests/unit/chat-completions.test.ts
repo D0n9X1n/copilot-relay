@@ -7,9 +7,12 @@ import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
 
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-chat-tests-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
+
 const { createChatCompletions } = await import("../../src/copilot/chat")
 const { isRetryableFetchError } = await import("../../src/copilot/client")
 const { HTTPError } = await import("../../src/lib/error")
@@ -17,6 +20,7 @@ const { runtimeState } = await import("../../src/lib/state")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { getLogPath } = await import("../../src/lib/paths")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { recursive: true, force: true })
@@ -164,6 +168,7 @@ test("honors requested effort over the configured default in the upstream chat b
     }, { client: "claude", requestedModel: "opus" })
 
     const request = mock.requests[0]?.body as { reasoning_effort?: string }
+
     assert.equal(mock.requests[0]?.path, "/chat/completions")
     assert.equal(request.reasoning_effort, "low")
     assert.equal(runtimeState.thinkEffort, "max")
@@ -179,31 +184,46 @@ test("info logs show requested and effective effort without normal request paylo
   runtimeState.thinkEffort = "high"
   setLogLevel("info")
   registerSensitiveOrigin("https://metadata-gateway.example/ROUTING_SECRET_SENTINEL")
+
   const config: ProxyConfig = {
-    copilotBaseUrl: mock.baseUrl, copilotToken: "test-token",
-    host: "127.0.0.1", port: 0, upstreamTimeoutMs: 10_000, vsCodeVersion: "1.99.3",
+    copilotBaseUrl: mock.baseUrl,
+    copilotToken: "test-token",
+    host: "127.0.0.1",
+    port: 0,
+    upstreamTimeoutMs: 10_000,
+    vsCodeVersion: "1.99.3",
   }
+
   try {
     for (const [id, effort, expected] of [
       ["effort-info-explicit", "low", "low"],
       ["effort-info-unset", undefined, "high"],
       ["effort-info-none", "none", "none"],
     ] as const) {
+      // requestedModel is hostile client input: a newline, an ANSI escape and
+      // a URL on the sensitive origin registered above.
       await createChatCompletions(config, {
-        model: "opus", max_tokens: 16, stream: false, reasoning_effort: effort,
+        model: "opus",
+        max_tokens: 16,
+        stream: false,
+        reasoning_effort: effort,
         messages: [{ role: "user", content: "PRIVATE_PROMPT_SENTINEL" }],
         tools: [{
           type: "function",
           function: {
-            name: "Read", description: "PRIVATE_TOOL_SENTINEL",
+            name: "Read",
+            description: "PRIVATE_TOOL_SENTINEL",
             parameters: { type: "object" },
           },
         }],
       }, {
-        client: "claude", requestId: id,
+        client: "claude",
+        requestId: id,
         requestedModel: "opus\n\u001b[31m https://metadata-gateway.example/ROUTING_SECRET_SENTINEL",
       })
 
+      // The log file is appended asynchronously, so poll until this request's
+      // summary line lands.
       let contents = ""
       let summary: string | undefined
       for (let attempt = 0; attempt < 100; attempt++) {
@@ -238,11 +258,15 @@ test("info logs show requested and effective effort without normal request paylo
       JSON.stringify(infoCalls.mock.calls.map((call) => call.arguments)),
       /PRIVATE_PROMPT_SENTINEL|PRIVATE_TOOL_SENTINEL|Full request payload/,
     )
+
     setLogLevel("error")
     await createChatCompletions(config, {
-      model: "opus", max_tokens: 16, stream: false,
+      model: "opus",
+      max_tokens: 16,
+      stream: false,
       messages: [{ role: "user", content: "hello" }],
     }, { requestId: "effort-info-suppressed" })
+
     assert.doesNotMatch(await fs.readFile(getLogPath(), "utf8"), /effort-info-suppressed/)
   } finally {
     setLogLevel("info")
@@ -349,6 +373,7 @@ test("leaves a payload that already ends on a user message unchanged", async () 
       upstreamTimeoutMs: 180_000,
       vsCodeVersion: "1.99.3",
     }
+
     const messages = [
       { role: "system" as const, content: "You are a helpful assistant." },
       { role: "user" as const, content: "compare rust async runtimes" },

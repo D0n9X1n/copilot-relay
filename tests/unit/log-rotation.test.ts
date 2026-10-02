@@ -198,6 +198,7 @@ test("keeps three local calendar days across the fall DST transition", async () 
         mock.timers.reset();
       }
     `
+
     const { stdout } = await promisify(execFile)(process.execPath, [
       "--import", "tsx", "--input-type=module", "--eval", script,
     ], {
@@ -205,6 +206,7 @@ test("keeps three local calendar days across the fall DST transition", async () 
       env: { ...process.env, HOME: home, USERPROFILE: home, TZ: "America/New_York" },
       timeout: 10_000,
     })
+
     assert.deepEqual(JSON.parse(stdout), [
       "copilot-relay.2026-10-31.log",
       "copilot-relay.2026-11-01.log",
@@ -223,13 +225,19 @@ for (const target of ["app directory", "logs directory"]) {
     const link = target === "app directory" ? paths.appDir : paths.logsDir
     const foreignLogs = target === "app directory" ? path.join(outside, "logs") : outside
     await fs.mkdir(foreignLogs, { recursive: true })
+
+    // The link leads to an expired relay log and a 0755 directory. Retention
+    // must neither delete the log nor change the directory's mode.
     const foreignLog = path.join(foreignLogs, "copilot-relay.2000-01-01.log")
     await fs.writeFile(foreignLog, "do not delete\n")
     await fs.chmod(outside, 0o755)
+
     await fs.rm(link, { recursive: true, force: true })
     await fs.symlink(outside, link, "dir")
     try {
+      // Refusing the link may reject; either way nothing outside may change.
       await cleanupLogs(3).catch(() => undefined)
+
       assert.equal(await fs.readFile(foreignLog, "utf8"), "do not delete\n")
       assert.equal((await fs.stat(outside)).mode & 0o777, 0o755)
     } finally {

@@ -48,6 +48,7 @@ const legacyResponsesModels = [
   "gpt-6-astra",
   "GPT-6-ASTRA",
 ]
+
 const dualEndpointOrders = [
   ["/responses", "/chat/completions"],
   ["/chat/completions", "/responses"],
@@ -95,6 +96,9 @@ for (const id of ["future-model", "grok-4.7", "mai-code-1.1-flash", "gpt-6-luna"
   })
 }
 
+// Each case pairs the endpoints a catalog advertises with the expected outcome:
+// `pinned` under the default and chat-completions policies, `auto` under auto.
+// A path is the selected endpoint; any other value is the reason none was.
 const claudePolicyCases = [
   { endpoints: undefined, pinned: "/chat/completions", auto: "/chat/completions", autoFallback: true },
   { endpoints: [], pinned: "no-advertised-endpoint", auto: "no-advertised-endpoint" },
@@ -158,6 +162,8 @@ test("provider-mismatched metadata cannot choose a route or reject effort", () =
     supportedEndpoints: ["/responses"],
     reasoningEfforts: [],
   })
+  // The catalog's base URL no longer matches the configured one, so its
+  // metadata describes another provider.
   config.modelCatalog!.baseUrl = "https://previous.invalid"
 
   assert.deepEqual(selectCopilotEndpoint(config, id), {

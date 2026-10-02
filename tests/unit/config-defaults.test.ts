@@ -88,6 +88,7 @@ test("uses shipped defaults for a fresh install", async () => {
 
 test("preserves an existing Opus 5 selection after the default changes", async () => {
   await writeConfigFile("opusModel: claude-opus-5\n")
+
   assert.equal((await readAppConfig()).opusModel, "claude-opus-5")
   assert.equal((await readAppConfig()).opusModel, "claude-opus-5")
   assert.match(await readConfigFile(), /^opusModel: claude-opus-5$/m)
@@ -103,6 +104,7 @@ test("keeps an existing Sol model through repeated reads", async () => {
 
 test("materializes an explicitly disabled deadline without restoring the default", async () => {
   await writeConfigFile("upstreamTimeoutSeconds: 0\n")
+
   assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
   assert.equal((await readAppConfig()).upstreamTimeoutSeconds, 0)
   assert.match(await readConfigFile(), /upstreamTimeoutSeconds: 0/)
@@ -112,6 +114,7 @@ test("invalid effort is rejected without rewriting the user's config", async () 
   for (const value of ["none", "NONE", "ultra", "\"\"", "42"]) {
     const original = `# preserve this file\nthinkEffort: ${value}\nport: 5000\n`
     await writeConfigFile(original)
+
     await assert.rejects(readAppConfig(), /Invalid thinkEffort/)
     assert.equal(await readConfigFile(), original)
   }
@@ -119,7 +122,9 @@ test("invalid effort is rejected without rewriting the user's config", async () 
 
 test("generated effort guidance lists only valid fallback choices", async () => {
   await writeConfigFile("port: 5000\n")
+
   assert.equal((await readAppConfig()).thinkEffort, "max")
+
   const written = await readConfigFile()
   assert.match(written, /# Fallback effort when the request omits it: low, medium, high, xhigh, max\./)
   assert.doesNotMatch(written, /# Fallback effort[^\n]*none/)
@@ -129,10 +134,14 @@ test("invalid effort reload reports an error, keeps runtime settings, and can re
   await writeConfigFile("thinkEffort: high\n")
   let active = await readAppConfig()
   const complete = await readConfigFile()
+
   const errors: string[] = []
   t.mock.method(log, "error", (...values: unknown[]) => {
     errors.push(values.join(" "))
   })
+
+  // Capture the watcher's polling callback instead of scheduling it, so the
+  // test runs each poll itself.
   let poll: (() => void | Promise<void>) | undefined
   t.mock.method(globalThis, "setInterval", (callback: () => void | Promise<void>) => {
     poll = callback

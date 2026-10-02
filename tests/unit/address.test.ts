@@ -3,6 +3,7 @@ import test from "node:test"
 
 test("relay base URLs replace wildcard binds and bracket concrete IPv6", async () => {
   const { getRelayBaseUrl } = await import("../../src/lib/address")
+
   for (const [host, expected] of [
     ["0.0.0.0", "http://127.0.0.1:4142"],
     ["::", "http://[::1]:4142"],

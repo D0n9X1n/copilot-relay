@@ -121,6 +121,7 @@ const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
     assignments.length > 0,
     `claude-routes.test.ts must contain a top-level ${silenceAssignment}`,
   )
+
   // One assignment decides the level. Two mean the last one wins, so the
   // ordering checked below is not necessarily the ordering that takes effect.
   assert.equal(
@@ -128,6 +129,7 @@ const assertSilencedBeforeDynamicSrcImports = (code: string): void => {
     1,
     `claude-routes.test.ts must contain exactly one top-level ${silenceAssignment}, found ${assignments.length}`,
   )
+
   const [assignment] = assignments
 
   // Position is not enough: of the levels consola accepts, only "0" turns
@@ -186,6 +188,7 @@ test("finds the earliest src import and ignores unrelated imports", () => {
   ].join("\n")
 
   const offsets = findDynamicSrcImportOffsets(fixture)
+
   assert.equal(offsets.length, 2)
   assert.equal(offsets[0], fixture.indexOf("import('../../src/first')"))
   assert.equal(offsets[1], fixture.indexOf('import("../../src/second")'))

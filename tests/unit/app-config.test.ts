@@ -47,6 +47,7 @@ test("accepts non-negative upstream timeouts with explicit zero disabling the de
   assert.equal(normalizeUpstreamTimeoutSeconds(45), 45)
   assert.equal(normalizeUpstreamTimeoutSeconds("0"), 0)
   assert.equal(normalizeUpstreamTimeoutSeconds(0), 0)
+
   for (const value of ["abc", "180junk", "1.5", "", -1, 1.5, Infinity, true]) {
     assert.throws(() => normalizeUpstreamTimeoutSeconds(value), /non-negative integer/)
   }
@@ -71,6 +72,7 @@ test("maps legacy 'minimal' think effort to low", () => {
 
 test("rejects none and malformed explicit think effort instead of hiding them with defaults", () => {
   assert.equal(normalizeThinkEffort(undefined), undefined)
+
   for (const value of ["none", "NONE", "ultra", "maximum", "", 5, null, false]) {
     assert.throws(() => normalizeThinkEffort(value), (error: unknown) => {
       assert.ok(error instanceof Error)
@@ -181,7 +183,6 @@ test("never echoes the rejected copilot base url in the error", () => {
   }
 })
 
-
 // Why: the WHATWG URL parser normalizes backslashes to forward slashes for
 // http(s) schemes, so a base URL written with backslashes parses cleanly,
 // carries no userinfo, and is accepted. It must come back byte-for-byte like
@@ -201,7 +202,6 @@ test("accepts a backslash-normalized copilot base url unchanged", () => {
   assert.equal(new URL(backslashUrl).pathname, "/tenant/TOKEN")
   assert.equal(new URL(backslashUrl).origin, "https://gateway.example")
 })
-
 
 // Why (#47): WHATWG accepts scheme-shorthand forms - `https:host/path`,
 // `https:/host/path`, `https:\\host\path` - and normalizes every one of them to
@@ -263,15 +263,15 @@ test("refuses shorthand at validation because redaction cannot catch it", () => 
   )
 
   // 2. And this is why it must be rejected: even with the origin registered,
-  // the scrubber leaves the shorthand completely untouched. Sole scrubber user
-  // in this file, so the process-wide policy set stays order-independent here.
+  // the scrubber leaves the shorthand completely untouched. The policy set is
+  // process-wide, and the apostrophe test below registers an origin too; each
+  // uses a host the other's input never contains, so run order cannot matter.
   registerSensitiveOrigin("https://gateway.example/tenant/SHORTHAND_SENTINEL")
   assert.equal(
     scrubSensitiveUrls(`copilot base url: ${shorthand}`),
     `copilot base url: ${shorthand}`,
   )
 })
-
 
 // Why (#47): a raw apostrophe is the sharpest case. WHATWG accepts it and
 // leaves it raw in the path, so the configured value keeps it - and every
@@ -375,6 +375,7 @@ test("rejects the apostrophe form but protects its encoded equivalent", () => {
   // ...registers as a policy, and is redacted whole in rendered log text.
   registerSensitiveOrigin(encoded)
   const scrubbed = scrubSensitiveUrls(`{ url: '${encoded}/models' }`)
+
   assert.ok(
     !scrubbed.includes("APOS_SENTINEL"),
     `encoded form leaked its tail: ${scrubbed}`,
