@@ -195,9 +195,9 @@ test("stop rechecks the selected process identity immediately before SIGTERM", a
   const p = relay()
   const fixture = inventory(t, [p])
   let inspections = 0
-  fixture.hooks.beforeInspect = (process) => {
+  fixture.hooks.beforeInspect = (fakeProcess) => {
     if (++inspections > 1) {
-      process.command = "node /opt/other-app/server.js"
+      fakeProcess.command = "node /opt/other-app/server.js"
     }
   }
 
@@ -220,11 +220,11 @@ test("stop preserves the record of a live process whose identity cannot be verif
 test("stop does not SIGKILL a reused PID with the same relay command", async (t) => {
   const p = relay()
   const fixture = inventory(t, [p])
-  fixture.hooks.onSignal = (process, signal) => {
+  fixture.hooks.onSignal = (fakeProcess, signal) => {
     if (signal === "SIGTERM") {
-      process.startedAt = "Tue Sep 29 12:01:00 2026"
+      fakeProcess.startedAt = "Tue Sep 29 12:01:00 2026"
     } else {
-      process.alive = false
+      fakeProcess.alive = false
     }
   }
 
@@ -359,9 +359,9 @@ test("stop retries a transient post-TERM inspection failure before verified esca
   const p = relay()
   const fixture = inventory(t, [p])
   let failedOnce = false
-  fixture.hooks.onSignal = (process, signal) => {
+  fixture.hooks.onSignal = (fakeProcess, signal) => {
     if (signal === "SIGKILL") {
-      process.alive = false
+      fakeProcess.alive = false
     }
   }
 
@@ -460,7 +460,7 @@ test("status stays port-scoped while stop finds verified relays globally", async
 
 type ProcessFile = { kind: "file" | "directory"; canonical?: string; content?: string; denied?: boolean }
 const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile>) => {
-  const example = await fs.stat(paths.appDir)
+  const templateStats = await fs.stat(paths.appDir)
   const readFile = fs.readFile.bind(fs)
   const file = (value: unknown) => {
     const name = String(value)
@@ -478,7 +478,7 @@ const mockProcessFiles = async (t: TestContext, entries: Map<string, ProcessFile
 
   t.mock.method(fs, "stat", async (value: unknown) => {
     const { name, entry } = file(value)
-    return { ...example, ino: [...entries.keys()].indexOf(name) + 1,
+    return { ...templateStats, ino: [...entries.keys()].indexOf(name) + 1,
       isFile: () => entry.kind === "file", isDirectory: () => entry.kind === "directory" }
   })
   t.mock.method(fs, "realpath", async (value: unknown) => {
@@ -604,9 +604,9 @@ test("filesystem proof is repeated before TERM when an earlier directory entrypo
   await mockProcessFiles(t, files)
   const p = { ...relay(), command: "node /workspace/Space Folder/copilot-relay/dist/main.js start" }
   const fixture = inventory(t, [p])
-  let commands = 0
+  let commandQueries = 0
   fixture.hooks.beforeQuery = (_process, field) => {
-    if (field === "command" && ++commands > 1) {
+    if (field === "command" && ++commandQueries > 1) {
       files.set("/workspace/Space", { kind: "directory" })
     }
   }
@@ -644,7 +644,7 @@ test("status command exits 2 with a fixed diagnostic for initial inspection fail
   }
 
   await fs.writeFile(paths.configPath, "port: 45001\nlogLevel: error\n")
-  const exitCode = process.exitCode
+  const previousExitCode = process.exitCode
   const messages: string[] = []
   t.mock.method(console, "error", (value: unknown) => {
     messages.push(String(value))
@@ -653,7 +653,7 @@ test("status command exits 2 with a fixed diagnostic for initial inspection fail
     messages.push(String(value))
   })
   t.after(async () => {
-    process.exitCode = exitCode
+    process.exitCode = previousExitCode
     await fs.rm(paths.configPath, { force: true })
   })
 
@@ -709,7 +709,7 @@ test("stop continues after valid-config log cleanup refuses a symlinked log dire
   assert.equal((await fs.lstat(paths.logsDir)).isSymbolicLink(), true)
 })
 
-const entry = new URL("../../src/main.ts", import.meta.url)
+const mainEntryUrl = new URL("../../src/main.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 const invalidConfigExitCodes = { status: 2, restart: 1, stop: 0 } as const
 
@@ -753,8 +753,8 @@ for (const command of ["status", "restart", "stop"] as const) {
       };
       globalThis.fetch = forbidden;
       process.on("exit", () => console.log("SIGNALS=" + JSON.stringify(signals)));
-      process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ${JSON.stringify(command)}];
-      await import(${JSON.stringify(entry.href)});
+      process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(mainEntryUrl))}, ${JSON.stringify(command)}];
+      await import(${JSON.stringify(mainEntryUrl.href)});
     `
     const result = await new Promise<{ code: number; output: string }>((resolve, reject) => {
       const child = originalExecFile(process.execPath, [

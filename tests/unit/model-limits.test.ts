@@ -135,16 +135,16 @@ test("deep probes restore process routing and catalog state after a failed respo
   runtimeState.modelRouting = routing
   runtimeState.modelCatalog = catalog
   runtimeState.upstreamBaseUrl = "before"
-  const interrupts = process.listenerCount("SIGINT")
-  const terms = process.listenerCount("SIGTERM")
+  const sigintListeners = process.listenerCount("SIGINT")
+  const sigtermListeners = process.listenerCount("SIGTERM")
   t.mock.method(console, "log", () => {})
   try {
     assert.equal(await probeModels(config, [["exact-model", {}]], { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 2000 }), 2)
     assert.equal(runtimeState.modelRouting, routing)
     assert.equal(runtimeState.modelCatalog, catalog)
     assert.equal(runtimeState.upstreamBaseUrl, "before")
-    assert.equal(process.listenerCount("SIGINT"), interrupts)
-    assert.equal(process.listenerCount("SIGTERM"), terms)
+    assert.equal(process.listenerCount("SIGINT"), sigintListeners)
+    assert.equal(process.listenerCount("SIGTERM"), sigtermListeners)
   } finally {
     delete runtimeState.modelRouting
     await mock.close()
