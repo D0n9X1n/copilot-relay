@@ -11,6 +11,7 @@ import { astraLimits, modelCatalogPayload, opusLimits, opus55Limits } from "../f
 import type { ProxyConfig, ProxyEnv } from "../../src/lib/config"
 import type { ClaudeMessagesPayload, ClaudeStreamEventData } from "../../src/claude/types"
 
+// src/lib/paths reads the home directory on import, so redirect HOME and USERPROFILE (Windows) first.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-long-text-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
@@ -20,12 +21,14 @@ const { createServer } = await import("../../src/server")
 const { claudeRoutes } = await import("../../src/routes/claude")
 const { loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { runtimeState } = await import("../../src/lib/state")
-
 const { flushLogs } = await import("../../src/lib/log")
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { recursive: true, force: true })
 })
+
+// runtimeState is process-wide: clear what a test may set so the next one starts clean.
 test.afterEach(() => {
   delete runtimeState.modelRouting
   delete runtimeState.modelCatalog
@@ -40,6 +43,8 @@ const textAtTokenLimit = (tokens: number): string => {
 }
 
 test("unknown tokenizer names retain the conservative fallback without errors", async () => {
+  // "__proto__" is tested because encodingMap in src/lib/tokenizer.ts is a plain object: it
+  // inherits that name, so a plain property lookup would find a value instead of falling back.
   for (const tokenizer of ["unknown-tokenizer", "__proto__"]) {
     const baseUrl = "http://127.0.0.1:1"
     const app = createServer({
@@ -50,6 +55,7 @@ test("unknown tokenizer names retain the conservative fallback without errors", 
         models: new Map([["claude-opus-5.5", { limits: opus55Limits, tokenizer }]]),
       },
     })
+
     const response = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -57,6 +63,7 @@ test("unknown tokenizer names retain the conservative fallback without errors", 
         model: "opus", max_tokens: 16, messages: [{ role: "user", content: "hello" }],
       }),
     }))
+
     assert.equal(response.status, 200)
     assert.deepEqual(await response.json(), {
       input_tokens: Math.round((encode("hello").length + 7) * 1.15),
@@ -75,6 +82,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
 
       const body = raw ? JSON.parse(raw) as Record<string, unknown> : {}
       requests.push({ path: request.url ?? "/", body })
+
       response.setHeader("content-type", "application/json")
       response.end(JSON.stringify({
         id: "msg_count", type: "message", role: "assistant", model: body.model,
@@ -82,9 +90,11 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         usage: { input_tokens: 1, output_tokens: 1 },
       }))
     })
+
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
     const address = upstream.address()
     assert.ok(address && typeof address === "object")
+
     const config: ProxyConfig = {
       copilotBaseUrl: `http://127.0.0.1:${address.port}`, copilotToken: "test-token",
       host: "127.0.0.1", port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3", claudeUpstreamApi,
@@ -96,6 +106,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         supportedEndpoints: claudeUpstreamApi === "auto" ? ["/v1/messages"] : ["/chat/completions"],
       }]]),
     }
+
     const payload: ClaudeMessagesPayload = {
       model: "opus", max_tokens: 16, system: "Global instruction.", output_config: { effort: "low" },
       messages: [
@@ -110,13 +121,18 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
       ],
     }
     const original = structuredClone(payload)
+
     const inputTexts = ["Global instruction.", "first question", "Think carefully.", "Be brief.\n\nKeep context.", "Follow up instruction.", "second question", "Remember the question."]
     const expectedTokens = inputTexts.reduce((tokens, text) => tokens + encode(text).length + 4, 3)
       + encode("first answer").length + encode("second answer").length + 11
+
     const app = createServer(config)
     const post = (body: unknown, route = "/v1/messages/count_tokens") => app.fetch(new Request(`http://localhost${route}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
     }))
+
     try {
       // Read Hono's cached JSON after the actual count handler to observe its
       // input object, not just a separate caller-side serialization.
@@ -128,21 +144,28 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         afterCount = await c.req.json()
       })
       countApp.route("/v1", claudeRoutes)
+
       const directCount = await countApp.fetch(new Request("http://localhost/v1/messages/count_tokens", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
       }))
+
       assert.equal(directCount.status, 200, await directCount.clone().text())
       assert.deepEqual(await directCount.json(), { input_tokens: expectedTokens })
       assert.deepEqual(afterCount, original)
       assert.equal(requests.length, 0)
 
       const response = await post(payload)
+
       assert.equal(response.status, 200, await response.clone().text())
       const count = await response.json() as { input_tokens: number }
       assert.equal(count.input_tokens, expectedTokens)
       assert.equal(requests.length, 0)
 
+      // Dropping each message's output_config and clear_at must leave the count unchanged.
       const plain = { ...payload, messages: payload.messages.map(({ role, content }) => ({ role, content })) }
+
       assert.deepEqual(await (await post(plain)).json(), count)
       assert.equal(requests.length, 0)
 
@@ -153,6 +176,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         { ...payload, messages: [{ role: "unsupported", content: "invalid role" }] },
       ]) {
         const rejected = await post(invalid)
+
         assert.equal(rejected.status, 400)
         assert.equal((await rejected.json() as { error: { type: string } }).error.type, "invalid_request_error")
       }
@@ -194,6 +218,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
       const limits = limitsFor(model)
       const input = textAtTokenLimit(limits.max_prompt_tokens)
       const output = textAtTokenLimit(limits.max_output_tokens)
+
       const requests: Array<{ path: string; body: Record<string, unknown> }> = []
       const upstream = createHttpServer(async (request, response) => {
         let raw = ""
@@ -203,6 +228,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
 
         const body = raw ? JSON.parse(raw) as Record<string, unknown> : {}
         requests.push({ path: request.url ?? "/", body })
+
         response.setHeader("content-type", "application/json")
         if (request.url === "/models") {
           response.end(JSON.stringify(modelCatalogPayload))
@@ -215,6 +241,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
           completion_tokens: limits.max_output_tokens,
           total_tokens: limits.max_context_window_tokens,
         }
+
         if (request.url === "/responses") {
           const result = {
             id: "resp_long", created_at: 1, model,
@@ -222,6 +249,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
             usage: { input_tokens: usage.prompt_tokens, output_tokens: usage.completion_tokens, total_tokens: usage.total_tokens },
             incomplete_details: { reason: "max_output_tokens" },
           }
+
           if (body.stream) {
             response.setHeader("content-type", "text/event-stream")
             writeEvent({ type: "response.created", response: { ...result, output: [] } })
@@ -266,23 +294,30 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
         response.statusCode = 404
         response.end()
       })
+
       await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
       const address = upstream.address()
       assert.ok(address && typeof address === "object")
+
       const config: ProxyConfig = {
         copilotBaseUrl: `http://127.0.0.1:${address.port}`,
         copilotToken: "test-token",
         host: "127.0.0.1", port: 0, upstreamTimeoutMs: 0, vsCodeVersion: "1.99.3",
       }
+
       runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: model === "gpt-6-astra" ? "claude-opus-5.5" : model }
       runtimeState.upstreamBaseUrl = config.copilotBaseUrl
+
       try {
+        // The catalog fetch stays the only upstream request until the /v1/messages call below.
         await loadCopilotModelCatalog(config)
         const app = createServer(config)
+
         const models = await (await app.fetch(new Request("http://localhost/v1/models"))).json() as {
           data: Array<{ id: string; context_window: number; max_input_tokens: number; max_tokens: number }>
         }
         const exposed = models.data.find((entry) => entry.id.startsWith(model))
+
         assert.ok(exposed)
         assert.equal(exposed.context_window, limits.max_context_window_tokens)
         assert.equal(exposed.max_input_tokens, limits.max_prompt_tokens)
@@ -298,6 +333,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
           }),
         }))
         const count = await countResponse.json() as { input_tokens: number }
+
         assert.equal(countResponse.status, 200)
         assert.equal(count.input_tokens, limits.max_prompt_tokens + 7)
         assert.equal(requests.length, 1)
@@ -313,18 +349,23 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
             tools: [{ name: "WebSearch", input_schema: { type: "object" } }],
           }),
         }))
+
         assert.equal(response.status, 200)
+
         let returnedText: string
         if (stream) {
           const events = (await response.text()).split("\n")
             .filter((line) => line.startsWith("data: "))
             .map((line) => JSON.parse(line.slice(6)) as ClaudeStreamEventData)
+
           assert.ok(events.some((event) => event.type === "message_stop"))
           assert.ok(!events.some((event) => event.type === "error"))
+
           returnedText = events.flatMap((event) =>
             event.type === "content_block_delta" && event.delta.type === "text_delta" ?
               [event.delta.text] : [],
           ).join("")
+
           const final = events.find((event) => event.type === "message_delta")
           assert.ok(final?.type === "message_delta")
           assert.equal(final.usage?.output_tokens, limits.max_output_tokens)
@@ -336,6 +377,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
             stop_reason: string
           }
           returnedText = body.content.filter((block) => block.type === "text").map((block) => block.text).join("")
+
           assert.equal(body.usage.output_tokens, limits.max_output_tokens)
           assert.equal(body.stop_reason, "max_tokens")
         }
@@ -343,6 +385,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
         assert.equal(returnedText, output)
         assert.equal(encode(returnedText).length, limits.max_output_tokens)
         assert.equal(requests.length, 2)
+
         const sent = requests[1]
         assert.ok(sent)
         if (model === "gpt-6-astra") {

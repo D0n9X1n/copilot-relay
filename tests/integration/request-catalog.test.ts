@@ -9,6 +9,7 @@ import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
 
+// src/lib/paths reads the home directory on import, so redirect HOME and USERPROFILE (Windows) first.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-request-catalog-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
@@ -35,6 +36,8 @@ test.after(async () => {
   await flushLogs()
   await fs.rm(home, { recursive: true, force: true })
 })
+
+// runtimeState is process-wide: clear what a test may set so the next one starts clean.
 test.afterEach(() => {
   delete runtimeState.modelCatalog
   delete runtimeState.upstreamBaseUrl
@@ -46,23 +49,34 @@ test("compressed catalog errors preserve decoded bytes without stale framing hea
   const body = { error: { message: "catalog rate limit" } }
   const compressed = gzipSync(JSON.stringify(body))
   const upstream = createHttpServer((_request, response) => {
-    response.writeHead(429, { "content-type": "application/json", "content-encoding": "gzip", "content-length": String(compressed.length), "retry-after": "10", "x-github-request-id": "catalog-fixture-id" })
+    response.writeHead(429, {
+      "content-type": "application/json",
+      "content-encoding": "gzip",
+      "content-length": String(compressed.length),
+      "retry-after": "10",
+      "x-github-request-id": "catalog-fixture-id"
+    })
     response.end(compressed)
   })
+
   await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve))
   const upstreamAddress = upstream.address()
   assert(upstreamAddress && typeof upstreamAddress !== "string")
+
   const config = configFor(`http://127.0.0.1:${upstreamAddress.port}`)
   config.modelCatalog = { baseUrl: providerA, models: new Map([[model, {}]]) }
   const relay = await startServer(config)
   const address = relay.address()
   assert(address && typeof address !== "string")
+
   try {
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
-      method: "POST", headers: { "content-type": "application/json" },
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Fixture" }] }),
       signal: AbortSignal.timeout(5000),
     })
+
     assert.equal(response.status, 429)
     assert.equal(response.headers.get("content-encoding"), null)
     assert.equal(response.headers.get("retry-after"), "10")
@@ -71,6 +85,7 @@ test("compressed catalog errors preserve decoded bytes without stale framing hea
     assert.deepEqual(await response.json(), body)
   } finally {
     for (const server of [relay, upstream]) {
+      // close() waits for open sockets; closeAllConnections() ends them so it can resolve.
       const closed = new Promise<void>((resolve) => server.close(() => resolve()))
       if ("closeAllConnections" in server) {
         server.closeAllConnections()
@@ -83,30 +98,41 @@ test("compressed catalog errors preserve decoded bytes without stale framing hea
 
 for (const status of [400, 401, 429]) {
   test(`catalog HTTP ${status} is upstream evidence, not local validation`, async () => {
+    // The cached catalog belongs to providerA, so a request through providerB rediscovers /models.
     const config = configFor(providerB)
     config.modelCatalog = { baseUrl: providerA, models: new Map([[model, {}]]) }
     let trace: Awaited<ReturnType<typeof RequestTrace.create>> | undefined
-    await withTraceObserver((value) => {
-      trace = value
-    }, () => withRecordedTransport({
-      fetch: async (request) => {
-        assert.equal(request.path, "/models")
-        return Response.json({ error: { message: "fixture" } }, { status })
-      }, refresh: async () => {
-        throw new Error("Unexpected refresh")
+
+    await withTraceObserver(
+      (value) => {
+        trace = value
       },
-    }, async () => {
-      const response = await createServer(config).fetch(new Request("http://localhost/v1/messages", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
-          model, max_tokens: 16, messages: [{ role: "user", content: "Fixture" }],
-        }),
-      }))
-      assert.equal(response.status, status)
-      assert.deepEqual(await response.json(), { error: { message: "fixture" } })
-    }))
+      () => withRecordedTransport({
+        fetch: async (request) => {
+          assert.equal(request.path, "/models")
+          return Response.json({ error: { message: "fixture" } }, { status })
+        },
+        refresh: async () => {
+          throw new Error("Unexpected refresh")
+        },
+      }, async () => {
+        const response = await createServer(config).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model, max_tokens: 16, messages: [{ role: "user", content: "Fixture" }],
+          }),
+        }))
+
+        assert.equal(response.status, status)
+        assert.deepEqual(await response.json(), { error: { message: "fixture" } })
+      })
+    )
+
     assert(trace)
     await trace.finished
     const snapshot = trace.diagnosticSnapshot()
+
     assert.equal(snapshot.failure, undefined)
     assert.equal(snapshot.exchanges[0].path, "/models")
     assert.equal(snapshot.exchanges[0].status, status)
@@ -116,6 +142,7 @@ for (const status of [400, 401, 429]) {
 }
 
 test("lazy discovery after hot reload is reused by the next request and publishes runtime limits", async () => {
+  // The catalog was discovered from providerA, then a hot reload moved the upstream to providerB.
   const root = configFor(providerA)
   root.modelCatalog = { baseUrl: providerA, models: new Map([[model, {}]]) }
   runtimeState.modelCatalog = root.modelCatalog
@@ -160,12 +187,17 @@ test("first auto request after provider reload discovers native support before v
   runtimeState.modelRouting = { gptModel: model, opusModel: nativeModel }
   runtimeState.upstreamBaseUrl = providerA
   const app = createServer(root)
+
+  // Reload onto providerB, whose catalog (not yet discovered) serves nativeModel only on /v1/messages.
   root.copilotBaseUrl = providerB
   runtimeState.upstreamBaseUrl = providerB
+
   const requests: Array<{ path: string; body: Record<string, unknown> }> = []
   const payload = { model: "opus", max_tokens: 256, messages: [{ role: "user", content: "hello" }] }
   const post = (body: unknown, route = "/v1/messages") => app.fetch(new Request(`http://127.0.0.1${route}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   }))
 
   await withRecordedTransport({
@@ -192,6 +224,7 @@ test("first auto request after provider reload discovers native support before v
     },
   }, async () => {
     const count = await post(payload, "/v1/messages/count_tokens")
+
     assert.equal(count.status, 200)
     assert.ok((await count.json() as { input_tokens: number }).input_tokens > 0)
     assert.equal(requests.length, 0, "Counting with a stale catalog must stay local")
@@ -213,10 +246,13 @@ test("first auto request after provider reload discovers native support before v
     root.modelCatalog = { baseUrl: providerA, models: new Map() }
     runtimeState.modelCatalog = root.modelCatalog
     const controlled = {
-      ...payload, stream: true,
+      ...payload,
+      stream: true,
       messages: [{ role: "system", content: "Be brief.", clear_at: "next_user_message" }, ...payload.messages],
     }
+
     const response = await post(controlled)
+
     assert.equal(response.status, 200, await response.clone().text())
     assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/)
     const body = await response.text()
@@ -226,6 +262,7 @@ test("first auto request after provider reload discovers native support before v
     assert.deepEqual(requests.at(-1)?.body.messages, controlled.messages)
 
     const localCount = await post(controlled, "/v1/messages/count_tokens")
+
     assert.equal(localCount.status, 200)
     assert.ok((await localCount.json() as { input_tokens: number }).input_tokens > 0)
     assert.equal(requests.length, 5, "Counting native controls must not call upstream")
@@ -247,6 +284,8 @@ test("late provider A discovery updates its admitted request without overwriting
   runtimeState.thinkEffort = "low"
   const admittedA = snapshotProxyConfig(root)
   const runtimeA = snapshotRuntimeState()
+
+  // Provider A's discovery parks inside /models until provider B has reloaded and published.
   const started = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   const aLimits = { ...limits, max_output_tokens: 64 }
@@ -264,6 +303,8 @@ test("late provider A discovery updates its admitted request without overwriting
 
   try {
     await started.promise
+
+    // Hot reload onto provider B while A's discovery is still parked.
     root.copilotBaseUrl = providerB
     root.upstreamTimeoutMs = 9000
     root.claudeUpstreamApi = "chat-completions"
@@ -271,6 +312,7 @@ test("late provider A discovery updates its admitted request without overwriting
     runtimeState.modelRouting = { gptModel: "gpt-after", opusModel: "claude-after" }
     runtimeState.thinkEffort = "max"
     await admittedA.refreshCopilotToken?.("fixture-catalog-token", 1)
+
     const admittedB = snapshotProxyConfig(root)
     const runtimeB = snapshotRuntimeState()
     await withRuntimeState(runtimeB, () => withRecordedTransport({
@@ -285,8 +327,10 @@ test("late provider A discovery updates its admitted request without overwriting
 
     assert.equal(root.modelCatalog, admittedB.modelCatalog, "Provider B publishes before provider A finishes")
     assert.equal(runtimeState.modelCatalog, admittedB.modelCatalog)
+
     release.resolve()
     await discoveringA
+
     assert.equal(root.modelCatalog, admittedB.modelCatalog)
     assert.equal(runtimeState.modelCatalog, admittedB.modelCatalog)
     assert.equal(runtimeA.modelCatalog, admittedA.modelCatalog)
@@ -304,6 +348,7 @@ test("late provider A discovery updates its admitted request without overwriting
       assert.equal(resolveReasoningEffort(), "low")
       assert.equal(await boundModelOutputTokens(admittedA, model, 256), aLimits.max_output_tokens)
     })
+
     assert.equal(routeModelId("opus"), "claude-after")
     assert.equal(resolveReasoningEffort(), "max")
   } finally {
@@ -317,16 +362,20 @@ test("concurrent request traces discover independently while same-config callers
   root.modelCatalog = { baseUrl: providerA, models: new Map() }
   runtimeState.modelCatalog = root.modelCatalog
   runtimeState.upstreamBaseUrl = providerB
+
   const first = snapshotProxyConfig(root)
   const second = snapshotProxyConfig(root)
   const firstRuntime = snapshotRuntimeState()
   const secondRuntime = snapshotRuntimeState()
   const firstTrace = await RequestTrace.create(randomUUID(), new Request("http://127.0.0.1/v1/messages"), first, firstRuntime, false)
   const secondTrace = await RequestTrace.create(randomUUID(), new Request("http://127.0.0.1/v1/messages"), second, secondRuntime, false)
+
   const started = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   let firstSignal: AbortSignal | undefined
   let secondSignal: AbortSignal | undefined
+
+  // Both callers with the first config share one /models fetch, which parks until released.
   const abandoned = withRuntimeState(firstRuntime, () => withRequestTrace(firstTrace, () => withRecordedTransport({
     fetch: async (request) => {
       firstSignal = request.signal
@@ -341,6 +390,8 @@ test("concurrent request traces discover independently while same-config callers
 
   try {
     await started.promise
+
+    // The second request discovers on its own while the first fetch is still parked.
     await withRuntimeState(secondRuntime, () => withRequestTrace(secondTrace, () => withRecordedTransport({
       fetch: async (request) => {
         secondSignal = request.signal
@@ -350,14 +401,18 @@ test("concurrent request traces discover independently while same-config callers
         throw new Error("Unexpected credential refresh")
       },
     }, () => ensureCopilotModelCatalog(second, model))))
+
     assert.deepEqual(firstTrace.manifest.exchanges.map((exchange) => exchange.path), ["/models"])
     assert.deepEqual(secondTrace.manifest.exchanges.map((exchange) => exchange.path), ["/models"])
     assert.ok(firstSignal)
     assert.ok(secondSignal)
     assert.notEqual(firstSignal, secondSignal)
+
     firstTrace.controller.abort(new DOMException("First request cancelled", "AbortError"))
+
     assert.equal(firstSignal.aborted, true)
     assert.equal(secondSignal.aborted, false)
+
     release.resolve()
     for (const result of await abandoned) {
       assert.equal(result.status, "rejected")
