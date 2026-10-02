@@ -311,6 +311,18 @@ for (const route of ["/chat/completions", "/responses"]) {
   }
 }
 
+const preflightReply = (route: string | undefined, model: unknown) => {
+  if (route === "/models") {
+    return { data: [{ id: "gpt-6-astra" }, { id: "claude-opus-5" }] }
+  }
+
+  if (route === "/responses") {
+    return { id: "resp", created_at: 1, model, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }] }
+  }
+
+  return { id: "chat", created: 1, model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }
+}
+
 test("preflight recovers model discovery then validates both configured APIs", async (t) => {
   await seed()
   const count = mockAuth(t, () => Response.json({ token: "new-private-sentinel", refresh_in: 86400 }))
@@ -330,9 +342,7 @@ test("preflight recovers model discovery then validates both configured APIs", a
 
     const model = body ? JSON.parse(body).model : undefined
     res.setHeader("content-type", "application/json")
-    const reply = req.url === "/models" ? { data: [{ id: "gpt-6-astra" }, { id: "claude-opus-5" }] }
-      : req.url === "/responses" ? { id: "resp", created_at: 1, model, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }] }
-      : { id: "chat", created: 1, model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }
+    const reply = preflightReply(req.url, model)
     res.end(JSON.stringify(reply))
   })
   try {

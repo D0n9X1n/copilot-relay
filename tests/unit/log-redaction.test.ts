@@ -240,6 +240,18 @@ for (const [name, separator, escaped] of [
   }
 }
 
+const nestedLogValue = (kind: "object" | "array" | "Error cause", text: string) => {
+  if (kind === "object") {
+    return { context: { nested: text }, status: 502 }
+  }
+
+  if (kind === "array") {
+    return { context: [{ nested: [text] }], status: 502 }
+  }
+
+  return new Error("upstream failed", { cause: { nested: text, status: 502 } })
+}
+
 // Unlike top-level strings, nested strings have already been escaped by
 // inspect() before the logger can scrub them. Exercise the real rendering path.
 for (const [name, separator] of [
@@ -256,9 +268,7 @@ for (const [name, separator] of [
       const publicUrl = "https://public.fixture.invalid/a"
       registerSensitiveOrigin(`${origin}/NESTED_ADJACENT_SECRET`)
       const text = `${publicUrl}${separator}${origin}/NESTED_ADJACENT_SECRET`
-      const value = kind === "object" ? { context: { nested: text }, status: 502 }
-        : kind === "array" ? { context: [{ nested: [text] }], status: 502 }
-        : new Error("upstream failed", { cause: { nested: text, status: 502 } })
+      const value = nestedLogValue(kind, text)
 
       log.error("Nested adjacent URLs", value)
       await flushLogs()
@@ -291,17 +301,39 @@ const readSinkValue = async (): Promise<string> => {
   return rendered
 }
 
+const echoedLogValue = (
+  kind: "plain" | "nested" | "Error" | "headers" | "JSON escaped" | "inspect escaped",
+  echoed: string,
+) => {
+  if (kind === "plain") {
+    return echoed
+  }
+
+  if (kind === "nested") {
+    return { response: { body: [{ message: echoed }] } }
+  }
+
+  if (kind === "Error") {
+    return new Error(echoed, { cause: { echoed } })
+  }
+
+  if (kind === "headers") {
+    return { headers: { "x-upstream-error": echoed } }
+  }
+
+  if (kind === "JSON escaped") {
+    return JSON.stringify({ error: { message: echoed } })
+  }
+
+  return inspect({ nested: echoed }, { compact: true, breakLength: Infinity })
+}
+
 for (const kind of ["plain", "nested", "Error", "headers", "JSON escaped", "inspect escaped"] as const) {
   test(`redacts a registered exact secret echoed in ${kind} output in both sinks`, async () => {
     const secret = `LOG_SECRET_${kind.replaceAll(" ", "_")}_first\\part\n\t"quoted"_last`
     registerLogSecret(secret)
     const echoed = `Bearer ${secret}`
-    const value = kind === "plain" ? echoed
-      : kind === "nested" ? { response: { body: [{ message: echoed }] } }
-      : kind === "Error" ? new Error(echoed, { cause: { echoed } })
-      : kind === "headers" ? { headers: { "x-upstream-error": echoed } }
-      : kind === "JSON escaped" ? JSON.stringify({ error: { message: echoed } })
-      : inspect({ nested: echoed }, { compact: true, breakLength: Infinity })
+    const value = echoedLogValue(kind, echoed)
 
     log.error("upstream failure", value)
     const rendered = await readSinkValue()

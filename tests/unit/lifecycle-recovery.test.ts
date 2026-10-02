@@ -339,8 +339,9 @@ for (const field of ["command", "createdAt", "cwd"] as const) {
     fixture.hooks.beforeQuery = (_process, queried) => {
       if (queried === field && fixture.signals.length > 0) {
         unavailableQueries++
+        const outputByField = { command: p.command, cwd: `n${p.cwd}`, createdAt: p.startedAt }
         throw Object.assign(new Error("synthetic process inspection failure"), {
-          stdout: field === "command" ? p.command : field === "cwd" ? `n${p.cwd}` : p.startedAt,
+          stdout: outputByField[field],
         })
       }
     }
@@ -710,6 +711,7 @@ test("stop continues after valid-config log cleanup refuses a symlinked log dire
 
 const entry = new URL("../../src/main.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
+const invalidConfigExitCodes = { status: 2, restart: 1, stop: 0 } as const
 
 for (const command of ["status", "restart", "stop"] as const) {
   test(`${command} handles invalid config without unsafe process or network access`, async (t) => {
@@ -774,7 +776,7 @@ for (const command of ["status", "restart", "stop"] as const) {
     assert.equal(await fs.readFile(configPath, "utf8"), original)
     assert.match(result.output, /config/i)
     assert.match(result.output, command === "stop" ? /SIGNALS=\[\[900001,"SIGTERM"\]\]/ : /SIGNALS=\[\]/)
-    assert.equal(result.code, command === "status" ? 2 : command === "restart" ? 1 : 0, result.output)
+    assert.equal(result.code, invalidConfigExitCodes[command], result.output)
     if (command === "status") {
       assert.doesNotMatch(result.output, /process\s+not running/)
     }

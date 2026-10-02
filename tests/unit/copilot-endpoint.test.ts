@@ -109,14 +109,27 @@ const claudePolicyCases = [
   },
 ]
 
+const expectedClaudeOutcome = (
+  mode: ProxyConfig["claudeUpstreamApi"],
+  fixture: (typeof claudePolicyCases)[number],
+) => {
+  if (mode === "messages") {
+    return "/v1/messages"
+  }
+
+  if (mode === "auto") {
+    return fixture.auto
+  }
+
+  return fixture.pinned
+}
+
 for (const mode of [undefined, "chat-completions", "auto", "messages"] as const) {
   for (const fixture of claudePolicyCases) {
     test(`Claude policy ${mode ?? "default"} with ${JSON.stringify(fixture.endpoints)}`, () => {
       const id = "claude-new"
       const config = configFor(id, { supportedEndpoints: fixture.endpoints }, mode)
-      const expected = mode === "messages" ? "/v1/messages"
-        : mode === "auto" ? fixture.auto
-        : fixture.pinned
+      const expected = expectedClaudeOutcome(mode, fixture)
 
       const selection = selectCopilotEndpoint(config, id)
 

@@ -260,7 +260,17 @@ for (const stableChange of [false, true]) {
     const file = await fixture()
     await fs.writeFile(file, "original\n")
     let changed = false
-    const metadata = await metadataFixture(t, file, (call) => !changed ? 0 : stableChange ? 1 : call === 4 ? 1 : 0)
+    const metadata = await metadataFixture(t, file, (call) => {
+      if (!changed) {
+        return 0
+      }
+
+      if (stableChange) {
+        return 1
+      }
+
+      return call === 4 ? 1 : 0
+    })
     const snapshot = await readFileSnapshot(file)
     changed = true
     if (stableChange) {
