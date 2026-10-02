@@ -44,6 +44,21 @@ Release-note tests also require Git and Python
 live GitHub API calls. CI provisions Python 3.12 on all six legs. Python is a
 development/release dependency only, not a requirement for running the relay.
 
+Offline release-pipeline tests also need Bash, `jq`, `mkdir`, `cp`, `mktemp`, `rm`,
+`basename`, `cmp`, `grep`, and a `tar` that reads archives from standard input on
+PATH. Git Bash supplies the shell and Unix utilities on Windows; install `jq`
+separately if absent. Both Windows' BSD tar and Git's GNU tar are supported:
+`package-smoke.mjs` lists and extracts the same checksummed bytes through stdin,
+with the extraction directory set as the child working directory rather than a
+Windows drive-qualified archive argument.
+
+Release provenance capture retains output caps and timeouts. On Windows, a child
+that has exited with both captured pipes fully drained does not invoke `taskkill`;
+exceptions and unfinished captures still perform best-effort tree cleanup.
+Detached descendants that close the captured pipes are not guaranteed to be
+reaped. POSIX still cleans up the process group; descendants that create a new
+session with `setsid` can escape that group.
+
 Prefer unit tests for pure logic — config validation, model routing, token-count
 heuristics, Claude/Copilot protocol edge cases. Use integration tests only when
 Hono routing or mocked upstream behavior is part of the contract.

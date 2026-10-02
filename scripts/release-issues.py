@@ -68,7 +68,7 @@ def timestamp(value):
 
 
 def terminate(process):
-    """Kill the owned child tree, including descendants holding captured pipes open."""
+    """Best-effort child-tree cleanup; detached processes may escape OS grouping."""
     if os.name == "nt":
         try:
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -116,6 +116,7 @@ def capture(command, timeout, cap, cwd=None):
     for reader in readers:
         reader.start()
     end = time.monotonic() + timeout
+    clean_capture = False
     try:
         while process.poll() is None or any(reader.is_alive() for reader in readers):
             require(not exceeded.is_set(), "child output cap exceeded")
@@ -123,12 +124,19 @@ def capture(command, timeout, cap, cwd=None):
                 raise TimeoutError("child request timeout")
             exceeded.wait(min(0.01, max(0, end - time.monotonic())))
         require(not exceeded.is_set(), "child output cap exceeded")
-        return process.returncode, *(bytes(data).decode("utf-8", errors="strict") for data in output)
+        decoded = tuple(bytes(data).decode("utf-8", errors="strict") for data in output)
+        clean_capture = True
+        return process.returncode, *decoded
     finally:
-        terminate(process)
+        # Avoid launching taskkill for every completed Windows Git/gh command.
+        # POSIX still reaps the process group; abnormal Windows captures still
+        # terminate the tree, including children holding captured pipes open.
+        if not (os.name == "nt" and clean_capture and process.poll() is not None
+                and not exceeded.is_set() and not any(reader.is_alive() for reader in readers)):
+            terminate(process)
         for reader in readers:
             reader.join(timeout=1)
-        # Killing the tree closes all writers before closing buffered reader objects.
+        # Writers have closed through EOF or tree cleanup before closing readers.
         for pipe in (process.stdout, process.stderr):
             pipe.close()
 

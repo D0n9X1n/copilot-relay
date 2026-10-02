@@ -12,6 +12,19 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
 const execute = promisify(execFile)
+// Feed the verified bytes directly: GNU tar interprets Windows drive colons as
+// remote hosts, and reopening the path would not guarantee the hashed bytes.
+const tarBytes = (args, bytes, cwd) => new Promise((resolve, reject) => {
+  let inputError
+  const child = execFile("tar", args, { cwd }, (error, stdout) => {
+    if (error || inputError) reject(error ?? inputError)
+    else resolve(stdout)
+  })
+  // A rejecting tar may close stdin early; wait for its exit/stderr rather than
+  // letting EPIPE escape as an unhandled event.
+  child.stdin.on("error", (error) => { inputError = error })
+  child.stdin.end(bytes)
+})
 const root = fileURLToPath(new URL("../", import.meta.url))
 const argv = process.argv.slice(2)
 const verifyOnly = argv[0] === "--verify"
@@ -40,11 +53,11 @@ try {
   await fs.mkdir(home)
   // Candidate tarballs originate in our pack job, but reject unexpected members
   // before extraction rather than allowing path traversal in a smoke fixture.
-  const { stdout: entries } = await execute("tar", ["-tzf", candidate])
+  const entries = await tarBytes(["-tzf", "-"], bytes, unpacked)
   for (const entry of entries.trim().split(/\r?\n/)) {
     assert.ok(entry.startsWith("package/") && !entry.includes("\\") && !entry.split("/").includes(".."), "unsafe archive member")
   }
-  await execute("tar", ["-xzf", candidate, "-C", unpacked])
+  await tarBytes(["-xzf", "-"], bytes, unpacked)
   const installed = path.join(unpacked, "package")
   const manifest = JSON.parse(await fs.readFile(path.join(installed, "package.json"), "utf8"))
   assert.equal(manifest.name, name)

@@ -471,6 +471,24 @@ class ProvenanceTests(unittest.TestCase):
             self.collect(limits=release.Limits(retry_delay=0))
         self.assertEqual(self.log.read_text().splitlines().count(key), 1)
 
+    def test_capture_cleanup_distinguishes_completed_from_failed_commands(self):
+        terminate = release.terminate
+        cases = [
+            ("print('complete')", 5, 4096, None),
+            ("import time; time.sleep(5)", 0.1, 4096, TimeoutError),
+            ("print('x' * 8192)", 5, 16, release.Failure),
+            ("import sys; sys.stdout.buffer.write(bytes([255]))", 5, 4096, UnicodeDecodeError),
+        ]
+        for source, timeout, cap, error in cases:
+            with self.subTest(source=source), patch.object(release, "terminate", wraps=terminate) as cleanup:
+                if error is None:
+                    code, stdout, stderr = release.capture([sys.executable, "-c", source], timeout, cap)
+                    self.assertEqual((code, stdout.splitlines(), stderr), (0, ["complete"], ""))
+                else:
+                    with self.assertRaises(error):
+                        release.capture([sys.executable, "-c", source], timeout, cap)
+                self.assertEqual(cleanup.call_count, 0 if error is None and os.name == "nt" else 1)
+
     @unittest.skipIf(os.name == "nt", "POSIX process-group lifecycle assertion")
     def test_timeout_reaps_descendant_holding_pipe(self):
         # A exited parent must not leave a grandchild holding the capture open forever.
@@ -486,8 +504,27 @@ class ProvenanceTests(unittest.TestCase):
     def test_first_release_selects_issue_beyond_display_limit(self):
         # The first-release 200-commit display bound is not an issue-selection cutoff.
         early = self.commit("Fixes #1")
+        # Keep the same real history without starting commit/rev-parse for every
+        # empty fixture commit. Byte input avoids Windows newline conversion.
+        branch = self.git("symbolic-ref", "HEAD")
+        timestamp = int(self.git("show", "-s", "--format=%ct", early))
+        baseline_status = self.git("status", "--porcelain")
+        commands = []
         for i in range(200):
-            self.commit(f"unlinked {i}")
+            message = f"unlinked {i}\n".encode("utf-8")
+            parent = early if i == 0 else f":{i}"
+            commands.append((f"commit {branch}\nmark :{i + 1}\n"
+                             f"author Test <test@example.invalid> {timestamp + i + 1} +0000\n"
+                             f"committer Test <test@example.invalid> {timestamp + i + 1} +0000\n"
+                             f"data {len(message)}\n").encode("utf-8") + message
+                            + f"from {parent}\n\n".encode("utf-8"))
+        subprocess.run(["git", "fast-import", "--quiet", "--done"], cwd=self.path,
+                       input=b"".join(commands) + b"done\n", check=True)
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), "202")
+        self.assertEqual(self.git("rev-parse", "HEAD~200"), early)
+        self.assertEqual(self.git("log", "-200", "--format=%s").splitlines(),
+                         [f"unlinked {i}" for i in reversed(range(200))])
+        self.assertEqual(self.git("status", "--porcelain"), baseline_status)
         for sha in self.git("rev-list", "HEAD").splitlines():
             self.association(sha)
         self.issue(1, [commit_closer(early)])

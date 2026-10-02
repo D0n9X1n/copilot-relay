@@ -193,6 +193,32 @@ Deep exit codes: `0` all selected models passed; `1` invalid options, selection,
 authentication, or discovery failure; `2` any other non-pass result or no models;
 `130` interruption. Ordinary `models` still reports an empty catalog with exit `0`.
 
+### Switching models within a conversation
+
+With the default `claudeUpstreamApi: chat-completions`, the configured Opus route
+uses Chat Completions and the configured GPT route uses Responses when required
+by that model. A new request selects its destination from the current model
+selector and resolves effort from that request's fields and history. An admitted
+request keeps its routing and effort snapshot even if configuration changes
+while its response or WebSearch passes are in flight.
+
+`tests/integration/model-effort-switching.test.ts` replays actual relay JSON/SSE
+output into subsequent requests while switching both directions, including tool
+results, long tool names, zero-argument tools, thinking text, inline effort
+controls and translated WebSearch continuation. It checks destination model,
+effort, output ceilings, tool-call/result pairing and stream completion against
+strict mocked upstream requests. This is offline verification of relay-local
+translation and the encoded wire-format invariants, **not live Copilot acceptance
+proof**, including for tool IDs carried from another model. It does not establish
+unchanged cache hit rates.
+
+Native Messages protocol migration remains outside this coverage. Choose an
+effort supported by the destination model; authentication, rate limits, network
+failures, context limits and upstream rejection can still fail a request. The
+relay does not silently substitute a model or effort to conceal those failures.
+Merging or building a fix does not update an already running installed relay;
+that runtime must be updated and restarted separately.
+
 ### Choose a compatible effort
 
 `thinkEffort` is the default, not an override. The initial effort is the first non-null value:

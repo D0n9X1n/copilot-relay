@@ -66,7 +66,7 @@ const resolveTarget = async (filePath: string, remainingLinks = 40): Promise<str
   }
 }
 
-export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> => {
+const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
   const requestedPath = path.resolve(filePath)
   const resolvedPath = await resolveTarget(requestedPath)
   const before = await fs.lstat(resolvedPath).catch((error: unknown) => {
@@ -87,11 +87,50 @@ export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> 
     if (isMissing(error)) throw new FileConflictError()
     throw error
   }
-  if (!after.isFile() || !sameIdentity(identityOf(before), identityOf(after))
-    || await resolveTarget(requestedPath) !== resolvedPath) {
+  const snapshot = { requestedPath, resolvedPath, raw, mode: before.mode & 0o777, identity: identityOf(before) }
+  if (!after.isFile() || before.mode !== after.mode || await resolveTarget(requestedPath) !== resolvedPath) {
     throw new FileConflictError()
   }
-  return { requestedPath, resolvedPath, raw, mode: before.mode & 0o777, identity: identityOf(before) }
+  if (!sameIdentity(snapshot.identity, identityOf(after))) {
+    if (sameReadContent(snapshot, { ...snapshot, identity: identityOf(after) })) {
+      throw new MetadataReadConflictError(snapshot)
+    }
+    throw new FileConflictError()
+  }
+  return snapshot
+}
+
+// Only ctime may settle between attempts; bytes and every other identity field
+// stay anchored to the first read, so an actual edit cannot become a fresh read.
+const sameReadContent = (left: FileSnapshot, right: FileSnapshot): boolean =>
+  left.resolvedPath === right.resolvedPath && left.raw === right.raw && left.mode === right.mode
+  && left.identity !== null && right.identity !== null
+  && sameIdentity(left.identity, { ...right.identity, ctimeMs: left.identity.ctimeMs })
+
+class MetadataReadConflictError extends FileConflictError {
+  readonly snapshot: FileSnapshot
+  constructor(snapshot: FileSnapshot) {
+    super()
+    this.snapshot = snapshot
+  }
+}
+
+export const readFileSnapshot = async (filePath: string): Promise<FileSnapshot> => {
+  let firstRead: FileSnapshot | undefined
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const snapshot = await readStableSnapshot(filePath)
+      if (firstRead && !sameReadContent(firstRead, snapshot)) throw new FileConflictError()
+      return snapshot
+    } catch (error) {
+      if (!(error instanceof MetadataReadConflictError)) throw error
+      // The internal retry error holds file bytes; never expose it to callers
+      // that may log the error object (settings can contain credentials).
+      if (attempt >= 3) throw new FileConflictError()
+      if (firstRead && !sameReadContent(firstRead, error.snapshot)) throw new FileConflictError()
+      firstRead ??= error.snapshot
+    }
+  }
 }
 
 const assertUnchanged = async (expected: FileSnapshot): Promise<void> => {
