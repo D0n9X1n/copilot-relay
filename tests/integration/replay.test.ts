@@ -532,6 +532,79 @@ test("real debug capture replays a 401 refresh retry with an intentionally cance
   assert.equal(refreshes.length, 1, "Replay must not invoke the original refresh callback")
 })
 
+for (const mode of ["catalog", "fallback", "discovered-no-effort"] as const) {
+  test(`catalog-driven Responses ${mode} captures and replays offline`, { timeout: 25_000 }, async (t) => {
+    const id = "grok-4.7"
+
+    const capture = await captureWithHttpCopilot({
+      configure: (config, runtime) => {
+        runtime.modelRouting = { gptModel: id, opusModel: id }
+
+        // "fallback" has no catalog: legacy Chat preference, then the coded Responses recovery.
+        if (mode === "catalog") {
+          config.modelCatalog = {
+            baseUrl: config.copilotBaseUrl,
+            models: new Map([[id, { supportedEndpoints: ["/responses"], reasoningEfforts: [] }]]),
+          }
+        }
+
+        // A stale provider's catalog forces discovery of the explicit no-effort capability.
+        if (mode === "discovered-no-effort") {
+          config.modelCatalog = { baseUrl: "https://previous.invalid", models: new Map() }
+        }
+
+        runtime.modelCatalog = config.modelCatalog
+      },
+      respond: (request, response) => {
+        response.setHeader("content-type", "application/json")
+
+        if (request.path === "/models") {
+          response.end(JSON.stringify({ data: [{
+            id,
+            supported_endpoints: ["/responses"],
+            capabilities: { type: "chat", supports: { reasoning_effort: false } },
+          }] }))
+          return
+        }
+
+        if (request.path === "/chat/completions") {
+          response.statusCode = 400
+          response.end(JSON.stringify({ error: { code: "unsupported_api_for_model" } }))
+          return
+        }
+
+        assert.equal(request.path, "/responses")
+
+        const body = JSON.parse(request.body)
+        assert.equal(body.model, id)
+        assert.equal(body.reasoning?.effort, mode === "fallback" ? "low" : undefined)
+
+        response.end(JSON.stringify({
+          id: "resp_catalog_replay",
+          model: id,
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "PRIVATE_RESPONSE" }] }],
+          usage: { input_tokens: 7, output_tokens: 3 },
+        }))
+      },
+    })
+
+    const expectedPaths = {
+      catalog: ["/responses"],
+      fallback: ["/chat/completions", "/responses"],
+      "discovered-no-effort": ["/models", "/responses"],
+    }[mode]
+
+    assert.deepEqual(capture.requests.map((request) => request.path), expectedPaths)
+
+    if (mode === "fallback") {
+      assert.equal(capture.manifest.exchanges[0].discarded, true)
+    }
+
+    await assertRealCaptureReplaysOffline(t, capture)
+  })
+}
+
 const capturedEvents = (body: string): import("../../src/claude/types").ClaudeStreamEventData[] => body
   .split(/\r?\n/).filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6)))
 

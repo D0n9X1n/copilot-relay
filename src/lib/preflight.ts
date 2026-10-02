@@ -5,11 +5,13 @@ import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
+import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
 import { getUpstreamModelIds } from "~/lib/models"
-import { loadCopilotModelCatalog } from "~/copilot/models"
+import { loadCopilotModelCatalog, resolveModelReasoningEffort } from "~/copilot/models"
+import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { createChatCompletions } from "~/copilot/chat"
-import { handleNativeMessages, shouldUseNativeMessages } from "~/copilot/native"
+import { handleNativeMessages } from "~/copilot/native"
 
 const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   const catalog = await loadCopilotModelCatalog(config)
@@ -48,14 +50,16 @@ const createProbePayload = (model: string) => ({
 const validateModelRequest = async (
   config: ProxyConfig,
   model: string,
-  thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
+  // Report the effort actually sent. Without a client request this cannot throw: it is
+  // the configured default, or undefined for a model that advertises no effort support.
+  const effortLabel = resolveModelReasoningEffort(config, model) ?? "omitted"
+
   try {
-    // Select the same transport as real requests, including native Messages.
-    if (shouldUseNativeMessages(config, model)) {
-      await handleNativeMessages(config, {
-        ...createProbePayload(model), output_config: { effort: thinkEffort },
-      }, { requestId: randomUUID() })
+    const selection = requireCopilotEndpoint(config, model)
+
+    if (selection.endpoint === "/v1/messages") {
+      await handleNativeMessages(config, createProbePayload(model), { requestId: randomUUID() })
     } else {
       const response = await createChatCompletions(
         config,
@@ -72,14 +76,15 @@ const validateModelRequest = async (
       }
     }
 
-    log.info(`Preflight OK: model=${model} think_effort=${thinkEffort}`)
+    log.info(`Preflight OK: model=${model} think_effort=${effortLabel}`)
   } catch (error) {
     if (error instanceof HTTPError) {
       const text = await error.response.text().catch(() => "")
       throw new Error(
-        `Preflight failed for model=${model} think_effort=${thinkEffort}: ${error.response.status} ${error.response.statusText}${text ? ` ${text}` : ""}`,
+        `Preflight failed for model=${model} think_effort=${effortLabel}: ${error.response.status} ${error.response.statusText}${text ? ` ${text}` : ""}`,
       )
     }
+
     throw error
   }
 }
@@ -91,7 +96,11 @@ export const validateUpstream = async (
   log.info("Running upstream preflight")
   await ensureRequiredModels(config)
 
-  for (const model of getUpstreamModelIds()) {
-    await validateModelRequest(config, model, thinkEffort)
-  }
+  // Scope the configured default as this check's fallback rather than an explicit
+  // client control, so a model that advertises no effort support receives none.
+  await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
+    for (const model of getUpstreamModelIds()) {
+      await validateModelRequest(config, model)
+    }
+  })
 }

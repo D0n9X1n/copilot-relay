@@ -86,8 +86,21 @@ translation failure require different next steps.
    is healthy or the provider's refusal reason is known. Older captures may give
    DIFF when a newer handler adds request-ID text to an error message.
 
+For route skips, compare `planned_route`, `route_source`, `advertised_endpoints`
+and `sent` in `--details`. These reflect the provider's `supported_endpoints`;
+unknown endpoint strings are counted but never printed. An advertised
+`/responses`-only model is no longer sent to `/chat/completions` merely because
+its name is new. `SKIPPED` means no inference was sent, not that the account or
+model is unavailable. A HTTP 400 after a sent request is a separate failure and
+requires its own evidence. For `reasoning_effort: false` or an empty tier list,
+`effort=omitted` is intentional; an explicit control instead returns
+`relay_unsupported_effort`. Full selection rules live in
+[Configuration](EN-Configuration.md).
+
 | Observation | Next step |
 | --- | --- |
+| No advertised route / Unsupported route | Check known endpoint metadata and unknown-endpoint count; there is no compatible advertised adapter to test. |
+| Protocol policy conflict | Review `claudeUpstreamApi`; do not change an existing signed/native conversation's route blindly. |
 | 401 or token refresh failure | Check authentication; use `copilot-relay auth` before another probe. |
 | 403 | Check account/model entitlement and gateway policy; do not assume token expiry. |
 | 429 | Wait before another request; retries/probes consume usage. |
@@ -371,12 +384,14 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 | `upstream_model` | actual Copilot model used |
 | `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `unset` when absent |
 | `requested_thinking` | Claude Code `thinking` config, including budget when present |
-| `effective_think_effort` | request effort when supplied; otherwise the configured default sent upstream |
+| `effective_think_effort` | request effort when supplied; otherwise the configured default sent upstream, or `omitted` when the model advertises no effort support and none was requested |
 
 Use this line first when debugging "why did my request use this model/effort?"
-`unset` means the configured fallback was used. Explicit request `none` is logged
-as `none`, not confused with an omitted field. The summary contains metadata, not
-the normal prompt/tool payload dump, and strips terminal controls to stay on one line.
+`requested_think_effort=unset` means the request supplied no effort; the effective
+value is then the configured fallback, or `omitted` when the model advertises no
+effort support. An explicit request for `none` is logged as `none`, not confused
+with an absent field. The summary contains metadata, not the normal prompt/tool
+payload dump, and strips terminal controls to stay on one line.
 The native route has a narrower summary with `upstream_api=messages`, the routed
 model and effective effort. The full original model/control fields remain in a
 debug capture, not in a guarantee that both summary formats are identical.
@@ -599,8 +614,9 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 
 Compare `effective_think_effort` with `requested_think_effort` and with
 `thinkEffort` in config. Request effort takes precedence; the configured value is
-used only when no request effort is supplied. Startup preflight checks that
-default, not every possible request override. The precedence rules and distinction
+used only when no request effort is supplied and the model does not explicitly
+exclude effort. Startup preflight checks that default, or logs `omitted` for a
+no-effort model; it does not test every possible request override. The precedence rules and distinction
 from a thinking-token budget are in [Configuration](EN-Configuration.md).
 `thinkEffort: none` and malformed defaults now fail startup with valid choices;
 an invalid hot reload logs an error and leaves the previous runtime settings active.

@@ -26,12 +26,15 @@ import type {
   ToolCall,
 } from "~/copilot/types"
 import type { ProxyConfig } from "~/lib/config"
+import { HTTPError } from "~/lib/error"
+import { getCachedCopilotModel, resolveModelReasoningEffort } from "~/copilot/models"
 import { log } from "~/lib/log"
 import { sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
 import {
   getModelRouting,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
+  type ReasoningEffort,
 } from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
@@ -227,11 +230,12 @@ const buildWebSearchRequestPayload = (
   payload: ClaudeMessagesPayload,
   requestedQuery: string,
   model: string,
+  effort: ReasoningEffort | undefined,
 ) => ({
   model,
   input: buildSearchInput(payload, requestedQuery),
   tools: [{ type: "web_search_preview" }],
-  reasoning: { effort: getClaudeTurnEffort(payload).effective },
+  reasoning: effort === undefined ? undefined : { effort },
   max_output_tokens: Math.max(256, Math.min(payload.max_tokens ?? 1024, 1200)),
   temperature: payload.temperature,
   top_p: payload.top_p,
@@ -412,7 +416,7 @@ const interpretSearchResponse = (
   const safeModel = /^[a-z0-9._-]{1,100}$/i.test(modelLabel) && !(config.copilotToken && modelLabel.includes(config.copilotToken)) ? modelLabel : "redacted"
   log.info([
     `request_id=${safeRequestId} Copilot web search completion upstream_response_id=${upstreamResponseId ?? "unreported"} model=${safeModel}`,
-    `requested_effort=${requestedEffort} effective_effort=${request.reasoning.effort} output_cap=${request.max_output_tokens}`,
+    `requested_effort=${requestedEffort} effective_effort=${request.reasoning?.effort ?? "omitted"} output_cap=${request.max_output_tokens}`,
     `status=${status} incomplete_reason=${reason}`,
     `output_items=${items.length} output_types=${summarizeCounts(items.map((item) => recognizedValue(item.type, outputTypes)))}`,
     `search_calls=${calls.length} search_statuses=${summarizeCounts(callStates)}`,
@@ -497,7 +501,34 @@ export const createClaudeWebSearchExecution = async (
 ): Promise<WebSearchExecutionResult> => {
   const backendModel = getWebSearchBackendModel(config)
   const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
-  const request = buildWebSearchRequestPayload(payload, requestedQuery, backendModel)
+  const backend = getCachedCopilotModel(config, backendModel)
+  const hasIncompatibleType = backend?.type !== undefined && backend.type !== "chat"
+  const excludesResponses = backend?.supportedEndpoints !== undefined
+    && !backend.supportedEndpoints.includes("/responses")
+
+  // Ordinary chat is not a substitute for the Responses built-in search operation.
+  if (hasIncompatibleType || excludesResponses) {
+    return createFailedSearchExecution(
+      payload,
+      requestedQuery,
+      backendModel,
+      "Copilot web search requires a compatible chat model with a Responses endpoint; check webSearchBackend.",
+    )
+  }
+
+  let effort: ReasoningEffort | undefined
+
+  try {
+    effort = resolveModelReasoningEffort(config, backendModel, getClaudeTurnEffort(payload).requested)
+  } catch (error) {
+    if (!(error instanceof HTTPError)) {
+      throw error
+    }
+
+    return createFailedSearchExecution(payload, requestedQuery, backendModel, error.message)
+  }
+
+  const request = buildWebSearchRequestPayload(payload, requestedQuery, backendModel, effort)
   const response = await fetchCopilot(
     getCopilotProviderContext(config),
     "/responses",

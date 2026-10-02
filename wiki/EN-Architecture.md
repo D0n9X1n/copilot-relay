@@ -144,10 +144,13 @@ and also validates the allowed `thinkEffort` defaults: `low`, `medium`,
 `high`, `xhigh`, `max`.
 
 Which upstream *API* a model uses is a separate question from which model runs.
-`gpt-6-astra`, `gpt-5.6-sol`, and the rest of the `gpt-5.5`/`gpt-5.6` family use
-Copilot `/responses`. Claude models use `/chat/completions` by default;
-`claudeUpstreamApi: auto` opts into native `/v1/messages` when advertised in the
-current catalog, and `messages` forces it. Non-Claude routing is unaffected.
+`src/copilot/endpoint.ts` selects an advertised Chat or Responses endpoint from
+the current provider's catalog, preserving the existing preference when both
+are available or metadata is missing. New compatible model IDs need no name-list
+change. Claude models remain pinned to `/chat/completions` by default;
+`claudeUpstreamApi: auto` prefers advertised native `/v1/messages`, otherwise uses
+the translated catalog choice, and `messages` forces native. This Claude-only
+setting does not change non-Claude selection.
 All paths expose Claude Messages responses, but native signed history and old
 chat-bridge history are not transparently interchangeable. Native failures and
 refusals do not trigger a covert fallback. See [Configuration](EN-Configuration.md)
@@ -166,7 +169,8 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/claude/tool-names.ts` | Normalizes Claude tool names into Copilot-compatible names and maps them back. |
 | `src/copilot/client.ts` | Low-level Copilot HTTP client: required headers, bearer tokens, timing logs, transient 5xx retries. |
 | `src/copilot/chat.ts` | Internal chat abstraction used by routes and startup preflight. Applies model routing and think effort. |
-| `src/copilot/models.ts` | Retains discovered context/input/output limits, scopes them to the upstream provider, and bounds output budgets. |
+| `src/copilot/models.ts` | Retains provider-scoped capabilities/limits, pins admitted catalogs, resolves optional effort, and bounds output budgets. |
+| `src/copilot/endpoint.ts` | Shared catalog-driven endpoint selection, explicit protocol policy and bounded fallback permission. |
 | `src/copilot/responses.ts` | Translates between the Copilot Responses API and chat-completion-like results. |
 | `src/copilot/native.ts` | Native Claude Messages, signed history, terminal outcomes, and native WebSearch bridge continuation. |
 | `src/lib/request-trace.ts` | Request-scoped body capture, ordered upstream/refresh records, and completion metadata. |

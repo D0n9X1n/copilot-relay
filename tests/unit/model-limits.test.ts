@@ -183,7 +183,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         assert.equal(await probeModels({ ...config, claudeUpstreamApi: mode }, [[id, model]], options), 2)
         assert.equal(requests.length, 1)
       }
-      assert.match(lines.join("\n"), /SKIPPED.*Unsupported route/)
+      assert.match(lines.join("\n"), /SKIPPED.*Protocol policy conflict/)
 
       assert.equal(await probeModels(config, [[id, model]], { ...options, effort: "max" }), 2)
       assert.equal(requests.length, 1)

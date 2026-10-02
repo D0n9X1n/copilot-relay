@@ -49,7 +49,7 @@ export function translateToOpenAI(
     ...getToolNameMapperOptionsForModel(model),
   })
   const tools = translateClaudeToolsToOpenAI(payload.tools, mapper)
-  const { effective: effort } = getClaudeTurnEffort(payload)
+  const { requested: effort } = getClaudeTurnEffort(payload)
   validateClaudeMessages(payload.messages)
   const messages = translateClaudeMessagesToOpenAI(
     payload.messages,

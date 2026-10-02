@@ -67,8 +67,21 @@ opusModel: claude-opus-5.5
 | `auto` | 仅在当前上游的缓存模型目录公布了 `/v1/messages` 时使用该原生接口，否则走翻译路径。 |
 | `messages` | 强制 Claude 模型走原生 `/v1/messages`，即使目录未公布支持；上游拒绝仍作为错误返回。 |
 
-所有模式下，非 Claude 模型的 chat/Responses 选择规则保持不变。原生传输保留带签名的
-thinking、缓存标记、原位置的 system 角色与控制字段；不会为了绕过拒答或错误而悄悄改走
+所有模式下，非 Claude 模型都根据目录选择 chat/Responses。当前提供方的
+`supported_endpoints` 决定使用 `/chat/completions` 还是 `/responses`，新增模型 ID
+无需加入代码名单。两者都公布时，保留已有偏好：GPT-5.5、GPT-5.6、GPT-6 Astra
+系列优先 Responses，其他模型优先 Chat；目录的排列顺序不会改变选择。接口元数据
+缺失或格式错误时，保留旧偏好并标为未验证；显式空列表表示没有公布可用接口。
+其他协议和非聊天类型仍不受支持，这不等于账号没有权限。
+
+Claude 的 `chat-completions` 固定使用 Chat；目录排除该接口时报告协议策略冲突，
+不会静默切换。`auto` 未找到原生支持时按目录选择翻译接口；`messages` 仍显式强制
+原生接口，即使目录信息不同。深度检查、启动 preflight 和真实配置目标请求共用
+这些规则。只有非成功 HTTP 返回 `unsupported_api_for_model`，且目录（或缺失的
+元数据）与协议策略均允许时，才可从 Chat 向 Responses 重试一次；其他错误、拒答
+以及已发送部分内容的流不会触发接口切换。
+
+原生传输保留带签名的 thinking、缓存标记、原位置的 system 角色与控制字段；不会为了绕过拒答或错误而悄悄改走
 另一个 API。发布默认值仍为 `chat-completions`。2026-09-30 的小规模匹配合成试验在
 `low` effort 下测得热回合按 token 加权的缓存读取率：chat 99.8384%，native 99.7980%，
 相差约 0.04 个百分点。第二次为平衡执行顺序而让 native 先执行的试验，在其冷回合拒答后
@@ -148,8 +161,11 @@ TTY 输出中，PASS 为绿色、FAIL 为红色、INCOMPLETE 为黄色，SKIPPED
 copilot-relay models --deep --model claude-opus-5.5 --details
 ```
 
-详情包括计划/实际接口、有效 effort/输出上限、报告模型、客户端/上游 HTTP 状态、
-完成状态、关联 ID 和捕获状态。只有完整且实际存在的私有捕获才会显示 replay 命令。
+详情包括计划/实际接口、`route_source`（`catalog`、`legacy`、`policy` 或
+`unavailable`）、已知 `advertised_endpoints`、`unknown_endpoints` 数量、准确的发送/
+报告模型 ID、有效 effort/输出上限、客户端/上游 HTTP 状态、完成状态、关联 ID 和
+捕获状态。不会打印不可信的未知接口字符串。`SKIPPED` 表示没有发送推理请求。
+只有完整且实际存在的私有捕获才会显示 replay 命令。
 它仍然是**新的真实探测**，不是离线查看之前的失败；见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 | 状态 | 含义 |
@@ -173,7 +189,7 @@ Messages handler、翻译、上游客户端、token 刷新和响应翻译。每�
 | `--model` | 默认测试全部公布的 ID；指定值必须准确匹配目录。需要 `--deep`。 |
 | `--details` | 显示每次探测的安全证据及捕获/replay 可用性。需要 `--deep`，不会增加探测或重试次数。 |
 | `--max-tokens` | 每次 4096，并受目录中的输出上限及原生非流式输出上限约束。 |
-| `--effort` | 按 `none`、`low`、`medium`、`high`、`xhigh`、`max` 选择公布的最低档；无元数据时使用标为未验证的 `low`。目录明确不支持的覆盖值会跳过。 |
+| `--effort` | 按 `none`、`low`、`medium`、`high`、`xhigh`、`max` 选择公布的最低档；无元数据时使用标为未验证的 `low`。明确不支持 effort 时省略该字段（`effort=omitted`）；目录不支持的显式覆盖值会跳过。 |
 | `--timeout` | 每个模型 30 秒，同时不超过正数的 `upstreamTimeoutSeconds`。 |
 | `--total-timeout` | 探测阶段总计 300 秒；目录查询和认证发生在此预算之前。 |
 
@@ -218,8 +234,13 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 例如，即使配置为 `thinkEffort: max`，请求中的
 `output_config: {"effort": "low"}` 仍会使用 `low`。请求字段缺失或为 null 时使用默认值。
 `thinking.budget_tokens` 不是 effort 档位，不会被换算成某个档位。格式不正确的显式
-effort 返回 `400`，不会静默改用默认值。若所选上游模型不支持该 effort，仍会返回上游
-错误；relay 不会替换成其他档位。
+effort 返回 `400`，不会静默改用默认值。若
+`capabilities.supports.reasoning_effort` 为 `false` 或合法的空列表，
+表示模型明确声明不支持 effort：省略隐式默认值，但显式请求（包括 `none`）在推理/SSE 前返回
+本地 HTTP 400 `relay_unsupported_effort`。已生效的消息级 effort 也算显式请求。
+原生历史会转发控制字段，因此待生效或带 `clear_at` 的 effort 控制同样被拒绝，
+不会静默丢弃。元数据缺失、为 true 或格式错误都表示未知，而不是不支持。
+档位列表非空时，普通请求仍保留选定档位，上游拒绝仍是错误；relay 不会替换档位。
 
 可以在 Claude Code 会话中途切换 effort，无需清空历史。消息级 system `output_config`
 的唯一键为 `effort` 时，可使用 `low`、`medium`、`high`、`xhigh` 或 `max`。
@@ -234,13 +255,16 @@ effort 返回 `400`，不会静默改用默认值。若所选上游模型不支�
 
 翻译路径的 JSON/SSE 及 WebSearch 各阶段均使用选定档位；请求接入后的配置热重载
 不会改变它。原生后续调用保留控制历史，因此追加 user/工具结果回合时，待生效标记
-可能开始生效。启动 preflight 仍会为两个模型验证配置的默认档位。
+可能开始生效。启动 preflight 为接受 effort 的模型验证配置默认值；明确不支持
+推理档位的模型则不发送 effort，日志显示 `think_effort=omitted`，不会声称已验证
+一个实际未发送的档位。
 保持翻译后的消息前缀不变可避免不必要的历史变动，但请求级 effort 变化仍可能使上游
 缓存失效。原生逐消息 effort 才是协议提供的缓存保持机制，见
 [官方 effort 指南](https://platform.claude.com/docs/en/build-with-claude/effort)。
 
-选择 `gptModel` 和 `opusModel` **都支持**的默认值；如果设置了 `webSearchBackend`，
-它也必须支持该值。配置默认值只接受 `low`、`medium`、`high`、`xhigh`、`max`。
+在 `gptModel`、`opusModel` 和已设置的 `webSearchBackend` 中，所有支持 effort 的
+目标都应接受配置默认值。搜索检索仍需要 Responses 内置搜索操作；普通聊天模型
+可用不代表支持搜索工具。配置默认值只接受 `low`、`medium`、`high`、`xhigh`、`max`。
 旧配置值 `minimal`
 会被规范化为 `low`，不是独立档位。缺少 effort 元数据表示“未公布”，不是“支持所有档位”。
 

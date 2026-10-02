@@ -13,7 +13,7 @@
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
 - **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; existing selections survive upgrades.
 - **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.
-- **Know what works** — model discovery and opt-in per-model deep checks with clear results.
+- **Use advertised chat models** — catalog-driven endpoint selection, optional effort support, and clear opt-in per-model deep checks.
 - **Choose Claude's upstream protocol** — `claudeUpstreamApi: chat-completions` stays the default; opt into `auto` or `messages` for native Claude transport.
 - **Diagnose offline** — debug mode captures full observed bodies for `copilot-relay replay`; captures contain unredacted prompts and must never be shared wholesale.
 - **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux.

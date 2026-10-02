@@ -8,6 +8,9 @@ export interface ProbeRow {
   reported: string
   sent: boolean
   endpoint: string
+  routeSource?: string
+  advertisedEndpoints?: string
+  unknownEndpoints?: number
   latency: number
   detail: string
   maxTokens: number
@@ -29,6 +32,8 @@ const reasons: Record<string, string> = {
   "total-deadline": "Time budget reached",
   "unsupported-model-type": "Not a chat model",
   "unsupported-relay-endpoint": "Unsupported route",
+  "no-advertised-endpoint": "No advertised route",
+  "protocol-policy-conflict": "Protocol policy conflict",
   "unsupported-api": "Unsupported API",
   "unsupported-effort": "Unsupported effort",
   "unsafe-or-noncanonical-id": "Unsupported model ID",
@@ -101,7 +106,15 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
     `  effort=${row.effort} max_tokens=${row.maxTokens} planned_route=${row.endpoint}`,
     `  reported=${row.reported} reason=${row.detail}`,
   ]
-  if (!diagnostic) return [...lines, "  request=not started"]
+  if (row.routeSource) {
+    lines.push(`  route_source=${row.routeSource} advertised_endpoints=${row.advertisedEndpoints} unknown_endpoints=${row.unknownEndpoints}`)
+  }
+
+  lines.push(`  sent=${row.sent ? row.id : "not-started"}`)
+
+  if (!diagnostic) {
+    return [...lines, "  request=not started"]
+  }
 
   lines.push(`  request_id=${diagnostic.requestId}`)
   lines.push(`  client_http=${diagnostic.status ?? "unknown"} response=${diagnostic.responseState ?? "unknown"} terminal=${diagnostic.terminal ? "observed" : "not observed"}`)
@@ -128,14 +141,57 @@ export const renderProbeDetails = (row: ProbeRow, diagnostic?: RequestDiagnostic
   return lines
 }
 
+const apiFailureCodes = [
+  "invalid-tool-input",
+  "malformed-response",
+  "upstream-response-failed",
+  "unknown-error",
+  "network-or-invalid-response",
+  "transport-error",
+]
+
+// One short next step per failure category; the summary deduplicates repeated hints.
 export const probeHint = (code: string): string | undefined => {
-  if (code === "probe-timeout" || code === "upstream-timeout-or-HTTP-504") return "Timeout: check connection and configured deadline."
-  if (["authentication-rejected", "refresh-failed"].includes(code)) return "Authentication: run copilot-relay auth before another probe."
-  if (code === "access-denied") return "Access: check this account's model entitlement and gateway policy."
-  if (code === "rate-limited") return "Rate limit: wait before retrying; repeated probes consume usage."
-  if (code === "refusal") return "Refusal: inspect the failing request's evidence; a short probe does not explain its cause."
-  if (code.includes("budget-exhausted")) return "Output limit: reachability is not completion; review the probe's output budget."
-  if (code === "model-mismatch") return "Model mismatch: compare selected, sent and reported IDs with --details."
-  if (["invalid-tool-input", "malformed-response", "upstream-response-failed", "unknown-error", "network-or-invalid-response", "transport-error"].includes(code) || /^HTTP-5\d\d$/.test(code)) return "API failure: the request ID locates the local summary; --details shows evidence on a new probe."
+  if (code === "protocol-policy-conflict") {
+    return "Protocol policy: review claudeUpstreamApi and the advertised endpoints before changing an existing conversation's route."
+  }
+
+  // Skipped rows were never sent upstream, so they say nothing about account access.
+  if (code === "unsupported-relay-endpoint" || code === "no-advertised-endpoint") {
+    return "Route unavailable: --details distinguishes missing support from account access; skipped models were not sent an inference request."
+  }
+
+  if (code === "probe-timeout" || code === "upstream-timeout-or-HTTP-504") {
+    return "Timeout: check connection and configured deadline."
+  }
+
+  if (code === "authentication-rejected" || code === "refresh-failed") {
+    return "Authentication: run copilot-relay auth before another probe."
+  }
+
+  if (code === "access-denied") {
+    return "Access: check this account's model entitlement and gateway policy."
+  }
+
+  if (code === "rate-limited") {
+    return "Rate limit: wait before retrying; repeated probes consume usage."
+  }
+
+  if (code === "refusal") {
+    return "Refusal: inspect the failing request's evidence; a short probe does not explain its cause."
+  }
+
+  if (code.includes("budget-exhausted")) {
+    return "Output limit: reachability is not completion; review the probe's output budget."
+  }
+
+  if (code === "model-mismatch") {
+    return "Model mismatch: compare selected, sent and reported IDs with --details."
+  }
+
+  if (apiFailureCodes.includes(code) || /^HTTP-5\d\d$/.test(code)) {
+    return "API failure: the request ID locates the local summary; --details shows evidence on a new probe."
+  }
+
   return undefined
 }

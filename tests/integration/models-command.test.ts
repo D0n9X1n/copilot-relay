@@ -280,7 +280,8 @@ async function requestBody(request: IncomingMessage): Promise<Record<string, any
   for await (const chunk of request) raw += chunk
   return JSON.parse(raw)
 }
-const probeReply = (body: Record<string, any>, overrides: Record<string, unknown> = {}) => body.model === "gpt-6-astra" ? {
+// Answer in the request's protocol: Responses bodies carry `input`, Chat bodies carry `messages`.
+const probeReply = (body: Record<string, any>, overrides: Record<string, unknown> = {}) => body.input !== undefined ? {
   id: "resp_probe", created_at: 1, model: body.model, status: "completed",
   output: [{ type: "message", content: [{ type: "output_text", text: "PRIVATE_PROBE_ANSWER" }] }],
   usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 }, ...overrides,
@@ -313,6 +314,111 @@ test("models deep tests exact IDs through the isolated pipeline and prints a str
   assert.equal(sent[1]?.reasoning.effort, "low")
   assert.equal(sent[1]?.max_output_tokens, 2000)
   assert(sent.every((body) => !body.tools))
+})
+
+// Synthetic single-endpoint catalogs for the reported route-skipped IDs plus an unseen one.
+const routeSkippedModels = [
+  "gpt-5.3-codex",
+  "gpt-5.4-mini",
+  "gpt-6-luna",
+  "gpt-6-sol",
+  "gpt-6.1-sol",
+  "grok-4.5",
+  "grok-4.6",
+  "grok-4.7",
+  "mai-code-1.1-flash",
+  "future-chat-model",
+]
+
+for (const endpoint of ["/chat/completions", "/responses"]) {
+  test(`deep CLI selects advertised ${endpoint} for skipped and future model IDs`, async (t) => {
+    const sent: string[] = []
+    const catalog = {
+      data: routeSkippedModels.map((id) => ({
+        id,
+        supported_endpoints: [endpoint],
+        capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } },
+      })),
+    }
+
+    const f = await fixture(t, async (req, res) => {
+      if (req.method === "GET") {
+        return respond(res, catalog)
+      }
+
+      const body = await requestBody(req)
+      sent.push(body.model)
+      assert.equal(req.url, `${secretPath}${endpoint}`)
+      respond(res, probeReply(body))
+    }, { deep: true, logLevel: "info" })
+
+    const result = await f.run(["models", "--deep", "--details"])
+
+    assert.equal(result.code, 0, result.output)
+    assert.deepEqual(sent, [...routeSkippedModels].sort())
+    assert.match(result.stdout, /Summary: 10 passed/)
+    assert.match(result.stdout, /route_source=catalog/)
+    assert.doesNotMatch(result.stdout, /SKIPPED|Unsupported route/)
+    assert.equal(f.requests.filter((request) => request.method === "POST").length, routeSkippedModels.length)
+  })
+}
+
+for (const capability of [false, []]) {
+  test(`deep CLI omits effort for explicit non-reasoning capability ${JSON.stringify(capability)}`, async (t) => {
+    const catalog = {
+      data: [{
+        id: "plain-chat",
+        supported_endpoints: ["/chat/completions"],
+        capabilities: { type: "chat", supports: { reasoning_effort: capability } },
+      }],
+    }
+
+    const f = await fixture(t, async (req, res) => {
+      if (req.method === "GET") {
+        return respond(res, catalog)
+      }
+
+      const body = await requestBody(req)
+      assert.equal(body.reasoning_effort, undefined)
+      respond(res, probeReply(body))
+    }, { deep: true, logLevel: "info" })
+
+    const result = await f.run(["models", "--deep", "--details"])
+
+    assert.equal(result.code, 0, result.output)
+    assert.match(result.stdout, /effort=omitted/)
+    assert.match(result.stdout, /Summary: 1 passed/)
+
+    // An explicit override is a user request the model cannot honor, so it is skipped unsent.
+    const explicit = await f.run(["models", "--deep", "--effort", "none"])
+
+    assert.equal(explicit.code, 2)
+    assert.match(explicit.stdout, /Unsupported effort/)
+    assert.equal(f.requests.filter((request) => request.method === "POST").length, 1)
+  })
+}
+
+test("deep details distinguish unavailable endpoints without leaking catalog strings", async (t) => {
+  const catalog = {
+    data: [
+      { id: "empty-routes", supported_endpoints: [] },
+      // Unknown endpoint strings are untrusted; only their count may be printed.
+      { id: "unknown-routes", supported_endpoints: [`https://hidden.invalid/${oldToken}`, "/internal-secret\u001b[31m"] },
+      { id: "claude-native-only", supported_endpoints: ["/v1/messages"] },
+    ],
+  }
+
+  const f = await fixture(t, (_req, res) => respond(res, catalog), { deep: true, logLevel: "info" })
+  const result = await f.run(["models", "--deep", "--details"])
+
+  assert.equal(result.code, 2)
+  assert.match(result.stdout, /No advertised route/)
+  assert.match(result.stdout, /Unsupported route/)
+  assert.match(result.stdout, /Protocol policy conflict/)
+  assert.match(result.stdout, /advertised_endpoints=none-compatible unknown_endpoints=2/)
+  assert.match(result.stdout, /advertised_endpoints=\/v1\/messages unknown_endpoints=0/)
+  assert.doesNotMatch(result.output + result.logs, /hidden.invalid|internal-secret/)
+  assert.equal(f.requests.filter((request) => request.method === "POST").length, 0)
 })
 
 test("quiet deep setup still presents device login instructions once", async (t) => {

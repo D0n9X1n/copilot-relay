@@ -75,8 +75,18 @@ copilot-relay status --deep
    模型健康或已知提供方拒绝原因。新 handler 给错误消息加上请求 ID 后，旧捕获可能
    返回 DIFF。
 
+遇到接口跳过时，比较 `--details` 中的 `planned_route`、`route_source`、
+`advertised_endpoints` 和 `sent`。它们反映提供方的 `supported_endpoints`；未知
+接口字符串只计数，不打印。仅公布 `/responses` 的模型不会再因为名称较新就被送到
+`/chat/completions`。`SKIPPED` 表示没有发送推理请求，不等于账号或模型不可用。
+请求已发送后出现 HTTP 400 是另一类失败，需要独立证据。目录 `reasoning_effort`
+为 false 或空档位列表时，`effort=omitted` 是刻意省略；显式控制则返回
+`relay_unsupported_effort`。完整规则见[配置说明](ZH-Configuration.md)。
+
 | 观察结果 | 下一步 |
 | --- | --- |
+| No advertised route / Unsupported route | 检查已知接口元数据与未知接口数量；当前没有可测试的兼容已公布适配器。 |
+| Protocol policy conflict | 检查 `claudeUpstreamApi`；不要盲目切换已有签名/原生会话的接口。 |
 | 401 或 token 刷新失败 | 检查认证，再次探测前使用 `copilot-relay auth`。 |
 | 403 | 检查账号/模型权限和网关策略，不要直接认定 token 过期。 |
 | 429 | 等待后再请求；重试/探测会消耗用量。 |
@@ -322,10 +332,11 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 | `upstream_model` | 实际使用的 Copilot 模型 |
 | `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `unset` |
 | `requested_thinking` | Claude Code 的 `thinking` 配置，有 budget 时一并包含 |
-| `effective_think_effort` | 有请求 effort 时使用该值；否则使用配置的默认值 |
+| `effective_think_effort` | 有请求 effort 时使用该值；否则使用配置的默认值；模型明确声明不支持 effort 且请求未指定时为 `omitted` |
 
 调试"我的请求为什么用了这个模型/effort？"时，先看这一行。
-`unset` 表示使用了配置默认值。显式请求的 `none` 会记录成 `none`，不会与缺失字段混淆。
+`requested_think_effort=unset` 表示请求未指定 effort：此时有效值为配置默认值；
+模型明确声明不支持 effort 时为 `omitted`。显式请求的 `none` 会记录成 `none`，不会与缺失字段混淆。
 该摘要只包含元数据，不包含普通 prompt/工具 payload 转储，并会移除终端控制字符以保持单行。
 原生路由的摘要更简短，包含 `upstream_api=messages`、路由后模型及生效 effort。完整的
 原始模型/控制字段在 debug 捕获中保留，不保证两种摘要格式完全相同。
@@ -528,8 +539,9 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 ```
 
 把 `effective_think_effort` 与 `requested_think_effort`，以及配置里的 `thinkEffort`
-做对比。请求 effort 优先；只有请求未指定 effort 时才使用配置值。启动 preflight
-验证的是该默认值，而不是每一种请求覆盖值。优先级及 effort 与 thinking-token 预算的
+做对比。请求 effort 优先；只有请求未指定且模型未明确排除 effort 时才使用配置值。
+启动 preflight 验证默认值；明确不支持 effort 的模型日志显示 `omitted`，不会测试每一种
+请求覆盖值。优先级及 effort 与 thinking-token 预算的
 区别见[配置说明](ZH-Configuration.md)。
 `thinkEffort: none` 和格式错误的默认值现在会阻止启动，并提示有效选项；
 无效的热重载会记录错误，之前的运行时设置继续生效。

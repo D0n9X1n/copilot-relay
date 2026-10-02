@@ -72,7 +72,24 @@ upstream ID starting with `claude-`, `claudeUpstreamApi` then chooses:
 | `auto` | Use native `/v1/messages` only when the current provider's cached model catalog advertises that endpoint; otherwise use the translated path. |
 | `messages` | Force native `/v1/messages` for Claude models, even without an advertised capability. Upstream rejection remains an error. |
 
-Non-Claude models keep their existing chat/Responses selection in every mode.
+Non-Claude models use catalog-driven chat/Responses selection in every mode.
+The current provider's `supported_endpoints` chooses `/chat/completions` or
+`/responses`, including newly advertised model IDs. If both are advertised, the
+relay preserves its existing preference: Responses for GPT-5.5, GPT-5.6 and GPT-6
+Astra families, Chat for other models. Catalog order cannot change that choice.
+Missing or malformed endpoint metadata keeps this legacy preference, marked
+unverified; an explicit empty list means no advertised route. Other protocols
+and non-chat types remain unsupported, not evidence that an account lacks access.
+
+Claude `chat-completions` pins Chat: if the catalog excludes it, the request has a
+protocol-policy conflict rather than silently switching. `auto` without native
+support uses the catalog-driven translated choice. `messages` remains an explicit
+native override even when endpoint metadata disagrees. Deep probes, startup
+preflight and normal configured-target requests share these rules. A non-OK
+`unsupported_api_for_model` can retry Chat through Responses once only when the
+catalog (or missing metadata) and protocol policy permit it; other errors,
+refusals and partially delivered streams never trigger an API switch.
+
 Native transport preserves signed thinking, cache markers, in-place system roles
 and controls; it does not silently retry a refusal or failure through another API.
 `chat-completions` remains the shipped default. A bounded 2026-09-30 matched
@@ -173,8 +190,11 @@ To see safe evidence for each probe, request details on the same invocation:
 copilot-relay models --deep --model claude-opus-5.5 --details
 ```
 
-Details include planned/actual routes, effective effort/output cap, reported model,
-client/upstream HTTP status, completion state, correlation IDs and capture state.
+Details include planned/actual routes, `route_source` (`catalog`, `legacy`,
+`policy`, or `unavailable`), known `advertised_endpoints`, an `unknown_endpoints`
+count, exact sent/reported IDs, effective effort/output cap, client/upstream HTTP
+status, completion state, correlation IDs and capture state. Untrusted unknown
+endpoint strings are never printed. `SKIPPED` means no inference was sent.
 A replay command appears only for a complete existing private capture. This is
 still a **new real probe**, not offline inspection of an earlier failure; see
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
@@ -201,7 +221,7 @@ Use `status --deep` to check the running daemon's configured route.
 | `--model` | All advertised IDs; supplied ID must match the catalog exactly. Requires `--deep`. |
 | `--details` | Include safe per-probe evidence and capture/replay availability. Requires `--deep`; does not add probes or retries. |
 | `--max-tokens` | 4096 per probe, clamped to catalog output and native non-streaming ceilings. |
-| `--effort` | Lowest advertised recognized value (`none`, `low`, `medium`, `high`, `xhigh`, `max`); missing metadata uses `low` marked unverified. An override unsupported by advertised metadata is skipped. |
+| `--effort` | Lowest advertised recognized value (`none`, `low`, `medium`, `high`, `xhigh`, `max`); missing metadata uses `low` marked unverified. Explicit no-effort support omits the field (`effort=omitted`). An override unsupported by advertised metadata is skipped. |
 | `--timeout` | 30 seconds per probe, capped by a positive `upstreamTimeoutSeconds`. |
 | `--total-timeout` | 300 seconds for the probe phase. Discovery/auth precede this budget. |
 
@@ -259,7 +279,14 @@ For example, `output_config: {"effort": "low"}` uses `low` even when
 `thinkEffort: max`. Missing or null request fields use the fallback.
 `thinking.budget_tokens` is not an effort level and is not converted into one.
 Malformed explicit effort returns `400` rather than silently choosing the default.
-An effort unsupported by the selected upstream model remains an upstream error;
+When `capabilities.supports.reasoning_effort` is `false` or a valid empty list,
+the model advertises no effort support: an implicit default is omitted, while an
+explicit request (including `none`) returns local HTTP 400
+`relay_unsupported_effort` before inference or SSE. Activated inline effort also
+counts as explicit. Native history forwards controls, so its pending or `clear_at`
+effort controls are rejected too rather than silently discarded. Missing, true
+or malformed metadata means unknown, not no support. With a nonempty tier list,
+normal requests keep the chosen level and upstream rejection remains an error;
 the relay does not substitute another level.
 
 You can change effort during a Claude Code conversation without clearing its
@@ -279,14 +306,18 @@ interpret. See [Internals](EN-Internals.md).
 The selected effort is used for translated JSON/SSE and all WebSearch passes;
 config reload cannot change it within an admitted request. Native follow-ups
 retain control history, so a pending marker can activate when a later user/tool-result
-turn is appended. Startup preflight still checks the configured default for both models.
+turn is appended. Startup preflight checks the configured default for models that
+accept effort and sends no effort for explicitly non-reasoning models, logging
+`think_effort=omitted` rather than claiming an effort was tested.
 Preserving translated message prefixes avoids unnecessary history changes, but
 request-level effort changes may still invalidate upstream caches. Native
 per-message effort is the protocol mechanism for preserving that cache; see the
 [official effort guide](https://platform.claude.com/docs/en/build-with-claude/effort).
 
-Choose a default supported by **both** `gptModel` and `opusModel` (and by
-`webSearchBackend` when set). Configured defaults accept only `low`, `medium`,
+Choose a default supported by every effort-capable target among `gptModel`,
+`opusModel` and `webSearchBackend` when set. Search retrieval still requires the
+Responses built-in search operation; selecting an ordinary chat model does not
+establish search-tool support. Configured defaults accept only `low`, `medium`,
 `high`, `xhigh`, and `max`.
 Legacy config value `minimal` is normalized to `low`; it is not a separate tier.
 Missing effort metadata means "not advertised," not "all tiers supported."

@@ -3,7 +3,6 @@ import assert from "node:assert/strict"
 
 import {
   buildResponsesRequestPayload,
-  shouldUseResponsesApiForModel,
   translateResponsesToChatCompletion,
 } from "../../src/copilot/responses"
 import type { ChatCompletionsPayload } from "../../src/copilot/types"
@@ -40,28 +39,6 @@ const basePayload = (
     { role: "user", content: "Reply OK" },
   ],
   ...overrides,
-})
-
-// Why: gpt-5.5 and the gpt-5.6 family only run on Copilot /responses. Pin that
-// classification so a model bump can't silently change which endpoint (and
-// caching path) is used.
-test("gpt-5.5 routes to the /responses endpoint", () => {
-  assert.equal(shouldUseResponsesApiForModel("gpt-5.5"), true)
-  assert.equal(shouldUseResponsesApiForModel("gpt-5.5-2025-01-01"), true)
-})
-
-// Existing GPT-5.6 configurations must still use Responses without a failed chat request.
-test("gpt-5.6 family routes to the /responses endpoint", () => {
-  assert.equal(shouldUseResponsesApiForModel("gpt-5.6-sol"), true)
-  assert.equal(shouldUseResponsesApiForModel("gpt-5.6-luna"), true)
-  assert.equal(shouldUseResponsesApiForModel("gpt-5.6-terra"), true)
-})
-
-// Why: GPT-6 Astra advertises only /responses upstream. Classifying it before
-// the request avoids a guaranteed failed /chat/completions attempt on every turn.
-test("gpt-6 Astra routes to the /responses endpoint", () => {
-  assert.equal(shouldUseResponsesApiForModel("gpt-6-astra"), true)
-  assert.equal(shouldUseResponsesApiForModel("GPT-6-ASTRA"), true)
 })
 
 for (const model of ["gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"]) {

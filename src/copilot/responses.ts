@@ -202,14 +202,6 @@ interface CreateChunkOptions {
   usage?: ChatCompletionChunk["usage"]
 }
 
-// Keep the Responses-only allowlist narrow and suffix-tolerant. These models
-// reject /chat/completions with unsupported_api_for_model and must use /responses.
-const responsesOnlyModelPattern = /^(?:gpt-5\.5|gpt-5\.6|gpt-6-astra)(?:-|$)/i
-
-export function shouldUseResponsesApiForModel(model: string): boolean {
-  return responsesOnlyModelPattern.test(model)
-}
-
 export function buildResponsesRequestPayload(
   payload: ChatCompletionsPayload,
   reasoningEffort: ResponsesReasoningEffort | undefined,

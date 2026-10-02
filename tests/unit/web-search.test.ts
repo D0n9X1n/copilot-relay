@@ -8,6 +8,7 @@ import test from "node:test"
 import type { WebSearchExecutionResult } from "../../src/claude/web-search"
 import type { ClaudeMessagesPayload, ClaudeTool } from "../../src/claude/types"
 import type { ChatCompletionsPayload, Message } from "../../src/copilot/types"
+import type { CopilotModel } from "../../src/copilot/models"
 import type { ProxyConfig } from "../../src/lib/config"
 
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-search-test-"))
@@ -28,6 +29,47 @@ const { getLogPath } = await import("../../src/lib/paths")
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { recursive: true, force: true })
+})
+
+test("search retrieval honors its backend capabilities without turning into ordinary chat", async () => {
+  const { withRecordedTransport } = await import("../../src/lib/request-trace")
+  const config = { ...createConfig("https://search-capabilities.invalid"), webSearchBackend: "future-search" }
+  const withBackend = (capabilities: CopilotModel) => ({
+    ...config,
+    modelCatalog: { baseUrl: config.copilotBaseUrl, models: new Map([["future-search", capabilities]]) },
+  })
+  const sent: Array<{ path: string; body: Record<string, any> }> = []
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      sent.push({ path: request.path, body: JSON.parse(request.body!) })
+      return Response.json({ id: "resp_search", model: "future-search", status: "completed", output: [] })
+    },
+    refresh: async () => {},
+  }, async () => {
+    // Backends without the Responses endpoint fail locally instead of becoming ordinary chat.
+    for (const supportedEndpoints of [["/chat/completions"], [], ["/future"]]) {
+      const result = await createClaudeWebSearchExecution(withBackend({ supportedEndpoints }), payload, "fixture query")
+      assert.match(result.text, /Responses endpoint/)
+    }
+
+    assert.equal(sent.length, 0)
+
+    // A no-effort backend omits the implicit default but still rejects explicit effort.
+    const noEffortBackend = withBackend({ supportedEndpoints: ["/responses"], reasoningEfforts: [] })
+    await createClaudeWebSearchExecution(noEffortBackend, payload, "fixture query")
+
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0].path, "/responses")
+    assert.deepEqual(sent[0].body.tools, [{ type: "web_search_preview" }])
+    assert.equal(sent[0].body.reasoning, undefined)
+
+    const explicitPayload: ClaudeMessagesPayload = { ...payload, output_config: { effort: "low" } }
+    const explicit = await createClaudeWebSearchExecution(noEffortBackend, explicitPayload, "fixture query")
+
+    assert.match(explicit.text, /reasoning effort/)
+    assert.equal(sent.length, 1)
+  })
 })
 
 interface CapturedRequest {
