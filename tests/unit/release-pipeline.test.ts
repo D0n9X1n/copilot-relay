@@ -456,7 +456,9 @@ const offlineWorkflow = async (job: string, scenario: OfflineScenario = {}, muta
     await fs.writeFile(copy, yaml)
     const script = path.join(work, "run.sh")
     await fs.writeFile(script, workflowRunBlock(await fs.readFile(copy, "utf8"), job))
-    let code = 0, stdout = "", stderr = ""
+    let code = 0
+    let stdout = ""
+    let stderr = ""
     try {
       // Bash's own PWD is already /c/... on Windows; use it for PATH rather
       // than a drive-letter colon, and avoid executable search via the host.

@@ -339,6 +339,44 @@ replacement. These tests use temporary folders and isolated `HOME` and
 They run in the normal unit suite. A documentation change that breaks publishing
 fails CI rather than the wiki tab.
 
+## Code style
+
+Write for the next human reader. `tests/unit/code-style.test.ts` enforces the
+mechanical rules below on every script under `src/`, `tests/` and `scripts/`, plus
+root config files. It runs in the normal unit suite, so a violation fails CI with
+its `file:line`. The check parses source with the TypeScript compiler API the
+project already uses, so it adds no linter dependency.
+
+| Enforced rule | Closest ESLint rule |
+| --- | --- |
+| Every `if`, `else`, `for` and `while` body is a braced block; only `else if` is exempt | `curly: "all"` |
+| Statements never share a line with a block's `{` or `}` — no `if (x) { return }` | `@stylistic/brace-style: "1tbs"` |
+| `else`, `catch` and `finally` continue the line that closes the previous block | `@stylistic/brace-style: "1tbs"` |
+| One statement per line — no `a(); b()` | `@stylistic/max-statements-per-line` |
+| A blank line follows each multi-line block statement (`if`, loop, `try`, `switch`, function) | `@stylistic/padding-line-between-statements` (`multiline-block-like`) |
+| `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
+| `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
+| Python: no compound one-line statements or `;` separators | PEP 8 (pycodestyle E701, E702) |
+
+Mandatory braces prevent the classic failure where a second indented line looks
+conditional but always runs — the shape of Apple's 2014 `goto fail` TLS bug.
+
+Reviewed rather than enforced:
+
+- Blank lines separate the logical steps of a function, not only blocks.
+- Names say what a value is or does; booleans read as predicates; no unexplained
+  abbreviations. Renames never change public API, config keys, error codes or
+  wire fields.
+- Comments explain why — an invariant, ordering constraint or non-obvious reason —
+  not what the next line does. Fix stale comments instead of adding more.
+- Prefer guard clauses to deep nesting, and `if`/`else` or a small lookup to
+  nested ternaries.
+- Tests separate arrange, act and assert with blank lines; fixtures do not hide
+  the behavior under test.
+
+Keep formatting-only commits apart from renames and logic changes, so a reviewer
+can confirm the formatting commit compiles to the same program.
+
 ## Configuration-first rule
 
 Prefer config over hardcoded behavior. If a behavior can reasonably vary per

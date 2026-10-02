@@ -151,6 +151,14 @@ test("wiki workflow and verification guides use the shared publishing script", (
   }
 })
 
+// The style rules live in prose and in a test; every guide must name the enforcing test.
+test("contributor guides point at the test that enforces the code style", () => {
+  for (const name of ["CLAUDE.md", "wiki/EN-Development.md", "wiki/ZH-Development.md"]) {
+    const body = fs.readFileSync(path.join(repoRoot, name), "utf8")
+    assert.ok(body.includes("tests/unit/code-style.test.ts"), `${name} does not name the enforcing test`)
+  }
+})
+
 test("paired architecture guides use Mermaid for overview, request, and lifecycle flows", () => {
   for (const language of ["EN", "ZH"]) {
     const architecture = readPage(`${language}-Architecture.md`)

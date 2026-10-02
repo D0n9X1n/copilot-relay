@@ -1,0 +1,364 @@
+// Mechanical rules of the repository code style (#127), enforced here so they cannot drift.
+// Readability that needs judgment (grouping steps with blank lines, naming, why-comments)
+// is reviewed instead. "Code style" in wiki/EN-Development.md lists every rule and its precedent.
+import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import test from "node:test"
+
+import ts from "typescript"
+
+type Rule =
+  | "bracedBodies"
+  | "multilineBlocks"
+  | "oneStatementPerLine"
+  | "blankLineAfterBlock"
+  | "continuationOnClosingLine"
+  | "strictEquality"
+  | "declarations"
+
+interface Violation {
+  rule: Rule
+  file: string
+  line: number
+}
+
+const repoRoot = path.resolve(import.meta.dirname, "../..")
+const maintainedRoots = ["src", "tests", "scripts"]
+const scriptPattern = /\.(?:[cm]?ts|[cm]?js)$/
+const skippedDirectories = new Set(["node_modules", "dist"])
+const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
+
+const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
+
+// Walk the maintained trees rather than asking git, so a checkout without .git is still covered.
+const listFiles = (directory: string, pattern: RegExp): string[] => {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(directory, entry.name)
+
+    if (entry.isDirectory()) {
+      const isSkipped = skippedDirectories.has(entry.name) || entry.name.startsWith(".")
+      return isSkipped ? [] : listFiles(fullPath, pattern)
+    }
+
+    return pattern.test(entry.name) ? [fullPath] : []
+  })
+}
+
+const rootScripts = fs.readdirSync(repoRoot, { withFileTypes: true })
+  .filter((entry) => entry.isFile() && scriptPattern.test(entry.name))
+  .map((entry) => path.join(repoRoot, entry.name))
+
+const scriptFiles = [
+  ...rootScripts,
+  ...maintainedRoots.flatMap((root) => listFiles(path.join(repoRoot, root), scriptPattern)),
+]
+const pythonFiles = maintainedRoots.flatMap((root) => listFiles(path.join(repoRoot, root), /\.py$/))
+
+const collectViolations = (file: string, text: string): Violation[] => {
+  const scriptKind = /\.[cm]?ts$/.test(file) ? ts.ScriptKind.TS : ts.ScriptKind.JS
+  const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind)
+  const violations: Violation[] = []
+
+  const startOf = (node: ts.Node) => node.getStart(sourceFile)
+  const lineOf = (position: number) => sourceFile.getLineAndCharacterOfPosition(position).line
+
+  const record = (rule: Rule, position: number) => {
+    violations.push({ rule, file, line: lineOf(position) + 1 })
+  }
+
+  const childOfKind = (node: ts.Node, kind: ts.SyntaxKind) => {
+    return node.getChildren(sourceFile).find((child) => child.kind === kind)
+  }
+
+  // `else if` is the one unbraced shape allowed; the inner if is checked on its own.
+  const requireBlock = (body: ts.Statement | undefined, allowsElseIf = false) => {
+    if (body === undefined || ts.isBlock(body) || (allowsElseIf && ts.isIfStatement(body))) {
+      return
+    }
+
+    record("bracedBodies", startOf(body))
+  }
+
+  // 1TBS: else, catch and finally continue the line that closes the previous block.
+  const requireSameLine = (closedAt: number, continuation: ts.Node | undefined) => {
+    if (continuation !== undefined && lineOf(startOf(continuation)) !== lineOf(closedAt)) {
+      record("continuationOnClosingLine", startOf(continuation))
+    }
+  }
+
+  // ESLint's "block-like": the statement's last token closes a block (if, loops, try, switch,
+  // function bodies). The closing brace of an object literal or class does not count.
+  const endsWithBlock = (statement: ts.Statement) => {
+    const end = text[statement.getEnd() - 1] === ";" ? statement.getEnd() - 1 : statement.getEnd()
+    let node: ts.Node | undefined = statement
+
+    while (node !== undefined) {
+      if (ts.isBlock(node) || ts.isCaseBlock(node)) {
+        return node.getEnd() === end
+      }
+
+      node = node.getChildren(sourceFile).findLast((child) => child.getEnd() === end)
+    }
+
+    return false
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isIfStatement(node)) {
+      requireBlock(node.thenStatement)
+      requireBlock(node.elseStatement, true)
+
+      if (node.elseStatement && ts.isBlock(node.thenStatement)) {
+        requireSameLine(node.thenStatement.getEnd(), childOfKind(node, ts.SyntaxKind.ElseKeyword))
+      }
+    }
+
+    if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)
+      || ts.isWhileStatement(node) || ts.isDoStatement(node)) {
+      requireBlock(node.statement)
+    }
+
+    if (ts.isTryStatement(node)) {
+      if (node.catchClause) {
+        requireSameLine(node.tryBlock.getEnd(), node.catchClause)
+      }
+
+      if (node.finallyBlock) {
+        const previousBlock = node.catchClause ?? node.tryBlock
+        requireSameLine(previousBlock.getEnd(), childOfKind(node, ts.SyntaxKind.FinallyKeyword))
+      }
+    }
+
+    // A non-empty block keeps `{` and `}` off its statement lines; an empty `{}` may stay compact.
+    if (ts.isBlock(node) && node.statements.length > 0) {
+      const first = node.statements[0]
+      const last = node.statements[node.statements.length - 1]
+      const opensBesideFirst = lineOf(startOf(node)) === lineOf(startOf(first))
+      const closesBesideLast = lineOf(node.getEnd()) === lineOf(last.getEnd())
+
+      if (opensBesideFirst || closesBesideLast) {
+        record("multilineBlocks", startOf(node))
+      }
+    }
+
+    if (ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node)
+      || ts.isCaseClause(node) || ts.isDefaultClause(node)) {
+      for (let index = 1; index < node.statements.length; index++) {
+        const previous = node.statements[index - 1]
+        const current = node.statements[index]
+        const sharesLine = lineOf(startOf(current)) === lineOf(previous.getEnd())
+        const spansLines = lineOf(startOf(previous)) !== lineOf(previous.getEnd())
+        const hasBlankLine = /\n[ \t]*\r?\n/.test(text.slice(previous.getEnd(), startOf(current)))
+
+        // A multi-line block statement ends a paragraph: the next statement follows a blank line.
+        if (sharesLine) {
+          record("oneStatementPerLine", startOf(current))
+        } else if (spansLines && endsWithBlock(previous) && !hasBlankLine) {
+          record("blankLineAfterBlock", startOf(current))
+        }
+      }
+    }
+
+    if (ts.isBinaryExpression(node)) {
+      const operator = node.operatorToken.kind
+      const isLoose = operator === ts.SyntaxKind.EqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsToken
+
+      // `value == null` intentionally matches both null and undefined.
+      const comparesNull = node.left.kind === ts.SyntaxKind.NullKeyword || node.right.kind === ts.SyntaxKind.NullKeyword
+
+      if (isLoose && !comparesNull) {
+        record("strictEquality", startOf(node))
+      }
+    }
+
+    if (ts.isVariableDeclarationList(node)) {
+      const usesVar = (node.flags & ts.NodeFlags.BlockScoped) === 0
+      const isLoopHeader = ts.isForStatement(node.parent) || ts.isForInStatement(node.parent) || ts.isForOfStatement(node.parent)
+
+      if (usesVar || (node.declarations.length > 1 && !isLoopHeader)) {
+        record("declarations", startOf(node))
+      }
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return violations
+}
+
+const repoViolations = scriptFiles.flatMap((file) => {
+  return collectViolations(displayPath(file), fs.readFileSync(file, "utf8"))
+})
+
+// PEP 8 discourages compound statements and semicolon-separated statements. Tokens, unlike a
+// line grep, tell a block-opening colon from one inside brackets, slices or annotations.
+const pythonChecker = `
+import io
+import sys
+import tokenize
+
+HEADER_KEYWORDS = {"if", "elif", "else", "for", "while", "with", "try", "except", "finally", "def", "class", "async"}
+IGNORED_TOKENS = {tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING, tokenize.ENDMARKER}
+
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+
+    depth = 0
+    first_word = None
+    header_colon_row = None
+
+    for kind, value, (row, _), _, _ in tokenize.generate_tokens(io.StringIO(source).readline):
+        if kind == tokenize.NEWLINE:
+            first_word = None
+            header_colon_row = None
+            continue
+
+        if kind in IGNORED_TOKENS:
+            continue
+
+        if first_word is None:
+            first_word = value
+
+        if header_colon_row == row:
+            print(f"{path}:{row} compound statement on one line")
+            header_colon_row = None
+
+        if kind != tokenize.OP:
+            continue
+
+        if value in ("(", "[", "{"):
+            depth += 1
+        elif value in (")", "]", "}"):
+            depth -= 1
+        elif value == ":" and depth == 0 and first_word in HEADER_KEYWORDS:
+            header_colon_row = row
+        elif value == ";" and depth == 0:
+            print(f"{path}:{row} semicolon-separated statements")
+`
+
+// The program goes in on stdin: a multi-line -c argument is fragile on Windows command lines.
+const runPythonChecker = (files: string[]): string[] => {
+  const output = execFileSync(python, ["-", ...files], { cwd: repoRoot, input: pythonChecker, encoding: "utf8" })
+  return output.split(/\r?\n/).filter((line) => line.trim() !== "")
+}
+
+// Show where to look, capped so a large regression still prints a readable failure.
+const assertNoViolations = (rule: Rule) => {
+  const locations = repoViolations
+    .filter((violation) => violation.rule === rule)
+    .map((violation) => `${violation.file}:${violation.line}`)
+
+  const shown = locations.slice(0, 40).join("\n")
+  const remainder = locations.length > 40 ? `\n...and ${locations.length - 40} more` : ""
+
+  assert.equal(locations.length, 0, `${locations.length} ${rule} violation(s):\n${shown}${remainder}`)
+}
+
+test("the scan covers source, test, script and root config files", () => {
+  const scanned = scriptFiles.map(displayPath)
+
+  for (const expected of ["src/server.ts", "tests/unit/code-style.test.ts", "scripts/package-smoke.mjs", "tsdown.config.ts"]) {
+    assert.ok(scanned.includes(expected), `${expected} was not scanned`)
+  }
+
+  assert.ok(pythonFiles.map(displayPath).includes("scripts/release-issues.py"))
+})
+
+test("the checker reports each mechanical rule at the offending line", () => {
+  const sample = [
+    "if (ready) start()",
+    "for (const item of items) use(item)",
+    "if (ready) { start() }",
+    "const first = 1; const second = 2",
+    "if (ready) {",
+    "  start()",
+    "}",
+    "else {",
+    "  stop()",
+    "}",
+    "",
+    "try {",
+    "  load()",
+    "}",
+    "catch {",
+    "  recover()",
+    "}",
+    "",
+    "if (value == 1) {",
+    "  report()",
+    "}",
+    "var legacy = 1",
+    "let low = 1, high = 2",
+    "",
+    "if (value == null) {",
+    "  ignore()",
+    "}",
+  ].join("\n")
+
+  const found = collectViolations("sample.ts", sample)
+    .sort((left, right) => left.line - right.line || left.rule.localeCompare(right.rule))
+    .map((violation) => `${violation.line} ${violation.rule}`)
+
+  assert.deepEqual(found, [
+    "1 bracedBodies",
+    "2 bracedBodies",
+    "3 multilineBlocks",
+    "4 oneStatementPerLine",
+    "8 continuationOnClosingLine",
+    "15 continuationOnClosingLine",
+    "19 strictEquality",
+    "22 blankLineAfterBlock",
+    "22 declarations",
+    "23 declarations",
+  ])
+})
+
+test("every if, else and loop body is a braced block", () => {
+  assertNoViolations("bracedBodies")
+})
+
+test("a non-empty block puts its braces and statements on separate lines", () => {
+  assertNoViolations("multilineBlocks")
+})
+
+test("each statement starts on its own line", () => {
+  assertNoViolations("oneStatementPerLine")
+})
+
+test("a multi-line block statement is followed by a blank line", () => {
+  assertNoViolations("blankLineAfterBlock")
+})
+
+test("else, catch and finally continue the line that closes the previous block", () => {
+  assertNoViolations("continuationOnClosingLine")
+})
+
+test("equality is strict except for an intentional == null", () => {
+  assertNoViolations("strictEquality")
+})
+
+test("declarations use const or let with one variable each", () => {
+  assertNoViolations("declarations")
+})
+
+test("the Python checker reports a compound one-liner and a semicolon", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+
+  const sample = path.join(directory, "sample.py")
+  fs.writeFileSync(sample, "if ready: start()\nfirst = 1; second = 2\nif ready:\n    start()\n")
+
+  assert.deepEqual(runPythonChecker([sample]), [
+    `${sample}:1 compound statement on one line`,
+    `${sample}:2 semicolon-separated statements`,
+  ])
+})
+
+test("Python scripts keep one simple statement per line", () => {
+  assert.deepEqual(runPythonChecker(pythonFiles.map(displayPath)), [])
+})
