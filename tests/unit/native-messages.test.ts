@@ -307,11 +307,23 @@ for (const stream of [false, true]) {
   })
 }
 
+const emptyContentFor = (type: string) => {
+  if (type === "thinking") {
+    return { thinking: "", signature: undefined }
+  }
+
+  if (type === "text") {
+    return { text: "" }
+  }
+
+  return { input: {} }
+}
+
 const streamedNative = (response: ReturnType<typeof message>) => {
   const values: unknown[] = [{ type: "message_start", message: { ...response, content: [], stop_reason: null } }]
   for (const [index, value] of response.content.entries()) {
     const block = value as Record<string, any>
-    const start = { ...block, ...(block.type === "thinking" ? { thinking: "", signature: undefined } : block.type === "text" ? { text: "" } : { input: {} }) }
+    const start = { ...block, ...emptyContentFor(block.type) }
     values.push({ type: "content_block_start", index, content_block: start })
     if (block.type === "thinking") {
       values.push({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: block.thinking } }, { type: "content_block_delta", index, delta: { type: "signature_delta", signature: block.signature } })

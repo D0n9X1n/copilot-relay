@@ -305,6 +305,18 @@ for (const body of ["null", "[]", '{"output":{}}', '{"output":[null]}']) {
   })
 }
 
+const expectedProvenance = (source: string) => {
+  if (source === "action") {
+    return /reported a completed web_search_call/
+  }
+
+  if (source === "call-unreported") {
+    return /reported a web_search_call but omitted its completion status/
+  }
+
+  return /Search execution is unverified/
+}
+
 for (const source of ["annotation", "action", "text", "call-unreported"] as const) {
   test(`WebSearch accepts ${source} results and carries evidence into final context`, async () => {
     const output: Array<Record<string, unknown>> = source === "action" ? [{ type: "web_search_call", status: "completed", action: {
@@ -324,9 +336,7 @@ for (const source of ["annotation", "action", "text", "call-unreported"] as cons
       const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, search, mapper)
       assert.equal(final.messages.at(-1)?.role, "user")
       const context = String(final.messages.at(-1)?.content)
-      assert.match(context, source === "action" ? /reported a completed web_search_call/
-        : source === "call-unreported" ? /reported a web_search_call but omitted its completion status/
-        : /Search execution is unverified/)
+      assert.match(context, expectedProvenance(source))
       assert.doesNotMatch(context, /Trusted bridge retrieval context|copilot-relay executed it/)
     })
   })
