@@ -182,12 +182,12 @@ const resolveCapture = async (target: string): Promise<string> => {
 
   const root = await safeDirectory(path.join(paths.appDir, "captures"))
   const matches: string[] = []
-  for (const date of await fs.readdir(root, { withFileTypes: true })) {
-    if (!date.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(date.name)) {
+  for (const dateEntry of await fs.readdir(root, { withFileTypes: true })) {
+    if (!dateEntry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(dateEntry.name)) {
       continue
     }
 
-    const directory = path.join(root, date.name, target)
+    const directory = path.join(root, dateEntry.name, target)
     try {
       matches.push(await safeDirectory(directory))
     } catch (error) {
@@ -206,8 +206,8 @@ const resolveCapture = async (target: string): Promise<string> => {
 }
 
 const readCaptureFile = async (directory: string, file: string, maximum: number, optional = false): Promise<Buffer> => {
-  const name = path.join(directory, file)
-  const before = await fs.lstat(name).catch((error: NodeJS.ErrnoException) => {
+  const filePath = path.join(directory, file)
+  const before = await fs.lstat(filePath).catch((error: NodeJS.ErrnoException) => {
     if (optional && error.code === "ENOENT") {
       return undefined
     }
@@ -219,7 +219,7 @@ const readCaptureFile = async (directory: string, file: string, maximum: number,
   }
 
   requireValid(before.isFile() && !before.isSymbolicLink() && before.nlink === 1 && before.size <= maximum)
-  const handle = await fs.open(name, fs.constants.O_RDONLY | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW))
+  const handle = await fs.open(filePath, fs.constants.O_RDONLY | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW))
   try {
     const opened = await handle.stat()
     requireValid(opened.isFile() && opened.ino === before.ino && opened.dev === before.dev && opened.size === before.size)
@@ -231,7 +231,7 @@ const readCaptureFile = async (directory: string, file: string, maximum: number,
       offset += read.bytesRead
     }
 
-    const after = await fs.lstat(name)
+    const after = await fs.lstat(filePath)
     requireValid(!after.isSymbolicLink() && after.ino === opened.ino && after.dev === opened.dev && after.size === opened.size && after.mtimeMs === opened.mtimeMs)
     return bytes
   } finally {
@@ -315,13 +315,13 @@ const parseBody = (bytes: Uint8Array, contentType: string | undefined): unknown 
 
     const colon = line.indexOf(":")
     const field = colon < 0 ? line : line.slice(0, colon)
-    const part = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "")
+    const fieldValue = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "")
     if (field === "data") {
-      data.push(part)
+      data.push(fieldValue)
     } else if (field === "event") {
-      event = part
-    } else if (field === "id" && !part.includes("\u0000")) {
-      id = part
+      event = fieldValue
+    } else if (field === "id" && !fieldValue.includes("\u0000")) {
+      id = fieldValue
     }
   }
 
@@ -436,16 +436,16 @@ const bodyStream = (body: CapturedBody, bytes: Uint8Array): ReadableStream<Uint8
     return null
   }
 
-  let chunk = 0
+  let chunkIndex = 0
   let offset = 0
   return new ReadableStream<Uint8Array>({
     pull(controller) {
-      if (chunk === body.chunks.length) {
+      if (chunkIndex === body.chunks.length) {
         controller.close()
         return
       }
 
-      const length = body.chunks[chunk++]
+      const length = body.chunks[chunkIndex++]
       controller.enqueue(bytes.slice(offset, offset + length))
       offset += length
     },
@@ -471,9 +471,9 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
       }),
     }
     const bodies = captureBodies(manifest)
-    const discarded = new Set(manifest.exchanges.filter((exchange) => (exchange as typeof exchange & { discarded?: boolean }).discarded === true).map((exchange) => exchange.response))
+    const discardedResponses = new Set(manifest.exchanges.filter((exchange) => (exchange as typeof exchange & { discarded?: boolean }).discarded === true).map((exchange) => exchange.response))
     if (manifest.captureState !== "complete" || !manifest.handlerSettled || manifest.captureError || manifest.abort
-      || bodies.some((body) => body.state !== "complete" && body.state !== "absent" && !(body.state === "cancelled" && discarded.has(body)))) {
+      || bodies.some((body) => body.state !== "complete" && body.state !== "absent" && !(body.state === "cancelled" && discardedResponses.has(body)))) {
       return { verdict: "INCOMPLETE", exitCode: 2, summary, differences: [{ path: "capture", reason: "Only complete captures can be replayed" }] }
     }
 
@@ -545,11 +545,11 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
     })
     const expectedRequests = new Map(manifest.exchanges.map((exchange) => [exchange.order,
       parseBody(files.get(exchange.request.file)!, "application/json")]))
-    let index = 0
+    let nextOperation = 0
     const take = (kind: "fetch" | "refresh") => {
-      const operation = operations[index++]
+      const operation = operations[nextOperation++]
       if (!operation || operation.kind !== kind) {
-        differences.push({ path: `operations[${index - 1}]`, reason: "Unexpected transport operation" })
+        differences.push({ path: `operations[${nextOperation - 1}]`, reason: "Unexpected transport operation" })
         throw new Error("Unrecorded replay operation")
       }
 
@@ -599,7 +599,7 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
         differences.push({ path: "client", reason: "Handler could not complete replay" })
       }
     })))
-    if (index !== operations.length) {
+    if (nextOperation !== operations.length) {
       differences.push({ path: "operations", reason: "Recorded operations remain" })
     }
 

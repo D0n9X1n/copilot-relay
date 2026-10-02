@@ -62,9 +62,9 @@ try {
   await fs.mkdir(home)
   // Candidate tarballs originate in our pack job, but reject unexpected members
   // before extraction rather than allowing path traversal in a smoke fixture.
-  const entries = await tarBytes(["-tzf", "-"], bytes, unpacked)
-  for (const entry of entries.trim().split(/\r?\n/)) {
-    assert.ok(entry.startsWith("package/") && !entry.includes("\\") && !entry.split("/").includes(".."), "unsafe archive member")
+  const listing = await tarBytes(["-tzf", "-"], bytes, unpacked)
+  for (const member of listing.trim().split(/\r?\n/)) {
+    assert.ok(member.startsWith("package/") && !member.includes("\\") && !member.split("/").includes(".."), "unsafe archive member")
   }
 
   await tarBytes(["-xzf", "-"], bytes, unpacked)
