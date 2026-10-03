@@ -138,13 +138,13 @@ test("a quota id the command does not know is shown after the known ones", () =>
 
 test("every string from the answer is made terminal-safe", () => {
   const usage = parseCopilotUsage({
-    copilot_plan: "\u001b[31mfixture-plan\u001b[0m‮",
+    copilot_plan: "\u001b[31mfixture-plan\u001b[0m\u202e",
     access_type_sku: "fixture\u0007-sku",
     quota_reset_date: "2026-11-01\r\nForged: line",
     quota_snapshots: {
       "odd\u001b[2K_quota": { unlimited: true },
       "\u001b[0m": { unlimited: true },
-      "ch​at": { unlimited: true },
+      "ch\u200bat": { unlimited: true },
     },
   })
 
@@ -158,7 +158,7 @@ test("every string from the answer is made terminal-safe", () => {
   // stand in for it.
   assert.deepEqual(Object.keys(usage.quota_snapshots), ["chat", "completions", "premium_interactions", "odd_quota"])
   assert.equal(usage.quota_snapshots.chat, null)
-  assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f​‮]/)
+  assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b\u202e]/)
 })
 
 test("a field of an unexpected type counts as not reported", () => {
@@ -387,7 +387,7 @@ test("an error that quotes the token around a hidden character is printed withou
   // terminalText drops the zero-width space and joins the token back up, so the line is redacted
   // after terminalText has run.
   mockFetch(t, () => {
-    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 4)}​${token.slice(4)}`) })
+    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 4)}\u200b${token.slice(4)}`) })
   })
 
   assert.equal(await failure(), "Could not reach GitHub: upstream echoed [redacted]")
@@ -417,7 +417,7 @@ const echoes: Array<[string, Record<string, unknown>]> = [
   ["access_type_sku", { ...account, access_type_sku: token }],
   ["quota_reset_date", { ...account, quota_reset_date: token }],
   ["a quota id", { ...account, quota_snapshots: { ...account.quota_snapshots, [`quota-${token}`]: { unlimited: true } } }],
-  ["copilot_plan behind a hidden character", { ...account, copilot_plan: `${token.slice(0, 4)}​${token.slice(4)}` }],
+  ["copilot_plan behind a hidden character", { ...account, copilot_plan: `${token.slice(0, 4)}\u200b${token.slice(4)}` }],
 ]
 
 for (const [where, body] of echoes) {
