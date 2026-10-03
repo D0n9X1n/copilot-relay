@@ -159,6 +159,8 @@ opusModel: claude-opus-5.5
 | `src/copilot/native.ts` | 原生 Claude Messages、签名历史、终止结果及原生 WebSearch bridge 续接。 |
 | `src/lib/request-trace.ts` | 请求级正文捕获、有序上游/刷新记录及完成元数据。 |
 | `src/replay.ts` | 严格校验捕获，用当前进程内 handler 离线重放。 |
+| `src/cache.ts` | `copilot-relay cache`：按模型与上游路由统计 prompt 缓存命中率。只读本地日志；不加 HTTP 路由，不调用上游，不写任何文件。 |
+| `src/lib/cache-report.ts` | 解析上游 `completion` 日志条目，按路由归一化总输入，按本地小时或日期分桶，并渲染报告。 |
 | `src/lib/atomic-file.ts` | 用户文件的快照冲突检查与原子目标替换。 |
 | `src/lib/address.ts` | 安全格式化监听/客户端 URL，包括 IPv6 与通配监听地址。 |
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
@@ -295,6 +297,8 @@ Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留�
 在 `info` 级别，翻译请求报告请求/上游模型与 effort，原生请求标明
 `upstream_api=messages` 及生效 effort。完成元数据把 HTTP 状态与 stop/finish 原因、
 拒答、截断及已报告缓存用量分开。HTTP 200 或流关闭不等于答案已完成。
+`copilot-relay cache` 读回上游 `completion` 条目，按模型与路由报告 prompt 缓存命中率；
+见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 中央日志器在写入两个 sink 前都通过 `scrubSensitiveUrls` 处理输出值，在 `debug`
 级别也会脱敏敏感 URL 尾部；这不是通用 payload 脱敏。普通 payload 渲染仍有界且单行。

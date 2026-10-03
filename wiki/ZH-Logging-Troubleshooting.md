@@ -674,6 +674,100 @@ debug Copilot POST /chat/completions -> 200 8287ms (attempt 1)
 如果本地和上游耗时接近，瓶颈就是上游/模型延迟。如果本地明显更大，就去检查流式翻译或
 客户端行为。
 
+## Prompt 缓存命中率
+
+`copilot-relay cache` 按上游路由报告每个模型的输入中有多少由 prompt 缓存提供。它只读
+本地日志文件：既不联系中继，也不联系 Copilot，也不写入任何东西。
+
+```sh
+copilot-relay cache                      # 最近 24 小时，每个模型与路由一行
+copilot-relay cache --hourly             # 最近 24 小时的按小时趋势
+copilot-relay cache --daily              # 所有保留日志的按天趋势
+copilot-relay cache --since 6h           # 一段时长，或 ISO 日期或时间
+copilot-relay cache --model opus         # 名称包含 "opus" 的模型，不区分大小写
+copilot-relay cache --goal 97.5          # 标出低于 97.5% 的行（默认 95）
+copilot-relay cache --json               # 行数组，供脚本使用
+```
+
+```text
+Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
+
+  MODEL               ROUTE              REQUESTS  UNKNOWN  0-READ   INPUT  CACHE READ  UNCACHED  CACHE WRITE  HIT RATE
+  claude-opus-5-5     /v1/messages              1        0       0  31,654      31,136       518          516    98.36%
+  claude-opus-5.5     /chat/completions         2        1       0  31,431      30,924       507            -    98.38%
+  gpt-5.5-2026-04-23  /responses                1        0       0  19,297      17,920     1,377            -    92.86%  below goal
+
+UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE.
+```
+
+| 列 | 含义 |
+| --- | --- |
+| `MODEL`、`ROUTE` | 上游报告的模型（条目中没有时为 `unknown`）和上游路径。同一模型在不同路由上可能以不同名称报告，例如 `claude-opus-5.5` 与 `claude-opus-5-5`。 |
+| `REQUESTS` | 返回 HTTP 200 并记录了 `input_tokens` 的上游调用，包括用量到达后才被中断的调用，以及缓存情况未知的调用。 |
+| `UNKNOWN` | 条目中没有 `cache_read_input_tokens` 的调用。它们的缓存情况是未知，不是零，因此不计入任何 token 列和 `HIT RATE`。 |
+| `0-READ` | 报告的缓存读取恰好为 0 的调用。 |
+| `INPUT` | 包含缓存输入的输入 token，按下文所述逐路由归一化。 |
+| `CACHE READ` | 由 prompt 缓存提供的输入 token。 |
+| `UNCACHED` | `INPUT` 减去 `CACHE READ`。 |
+| `CACHE WRITE` | `cache_creation_input_tokens`；该行没有调用报告它时为 `-`。 |
+| `HIT RATE` | `CACHE READ` 除以 `INPUT`，截断到两位小数；该行没有缓存情况已知的调用时为 `-`。 |
+
+低于 `--goal` 的行以 `below goal` 结尾，在彩色终端中显示为红色。这几个字无论如何都会
+打印，所以在 `NO_COLOR` 和管道中也不会丢失；`HIT RATE` 截断而不是四舍五入，所以低于
+目标的行永远不会显示成目标值本身。`--goal` 最多两位小数；一行打印出的 `HIT RATE` 低于
+目标时，它才会被标出，且一定会被标出。
+
+`--hourly` 和 `--daily` 会增加一列本地时间的 `HOUR` 或 `DAY`，与日志文件名中的日期一致。
+时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
+`2026-11-01 01:00 UTC-04:00` 和 `2026-11-01 01:00 UTC-05:00`。不加 `--since` 时，汇总和
+按小时趋势覆盖最近 24 小时，按天趋势覆盖每个保留的日期。时长从现在往回计算；日期，或没有
+`Z` 和偏移量的时间，按本地时间解释。
+
+`--json` 为每一行打印一个对象，包含 `bucket`、`model`、`route`、`requests`、
+`unknownCacheRequests`、`zeroCacheReadRequests`、`totalInputTokens`、
+`cacheReadTokens`、`uncachedInputTokens`、`cacheWriteTokens`、`hitRate` 和
+`belowGoal`。`hitRate` 是 0 到 1 之间的小数，或 `null`；汇总中 `bucket` 为 `null`，
+该行没有调用报告缓存写入时 `cacheWriteTokens` 为 `null`。没有数据时打印 `[]`。
+
+参数无法使用，或日志目录无法读取时，命令在 stderr 说明原因并以 `1` 退出。任何报告，
+包括空报告，都以 `0` 退出。
+
+### 统计口径
+
+命令读取中继为每次上游调用在 `info` 级别记录的 `completion` 条目，来源是
+`~/.copilot-relay/logs/` 下按日期命名的文件。只有 `http_status=200`、`input_tokens` 为
+数字，且路由是 `/chat/completions`、`/responses` 或 `/v1/messages` 的条目才会计入。条目的
+`body` 和 `terminal` 取值不影响计入，所以用量到达后才被中断的调用，仍会显示它从缓存读取了
+多少。`request outcome` 条目会为客户端请求再次报告用量（两种条目见上文 HTTP 请求一节），
+因此从不读取它：计入它会把调用算两次。格式错误的行，以及中继仍在写入的最后一行，都会被
+跳过。
+
+`input_tokens` 在不同路由上含义不同，因此 `INPUT` 需要归一化：
+
+| 路由 | `INPUT` |
+| --- | --- |
+| `/chat/completions`、`/responses` | `input_tokens`，已包含缓存输入 |
+| `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |
+
+在 `/v1/messages` 上，缺少 `cache_creation_input_tokens` 时按 0 计算。小时和日期都是
+本地时间。
+
+命令能回看多远取决于 `logRetentionDays`（默认 `3`）。`completion` 条目在 `info` 级别
+写入，所以以 `logLevel: error` 运行的中继不会留下可读的数据，此时命令会说明没有找到
+数据，而不是打印一张空表。
+
+### 定位退化
+
+`--hourly` 会显示命中率在哪个小时发生变化。固定前缀上限，例如 #143 中的那种，表现为
+同一个缓存读取大小在大量请求中反复出现。列出某个模型最常见的读取大小：
+
+```sh
+grep -h " completion path=" ~/.copilot-relay/logs/copilot-relay.*.log \
+  | grep -F "model=claude-opus-5.5 " \
+  | grep -o "cache_read_input_tokens=[0-9]*" \
+  | sort | uniq -c | sort -rn | head
+```
+
 ## Token 缓存问题
 
 ```text
