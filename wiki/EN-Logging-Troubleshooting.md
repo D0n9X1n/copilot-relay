@@ -797,7 +797,7 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 | Column | Meaning |
 | --- | --- |
 | `MODEL`, `ROUTE` | The model the upstream reported, or `unknown` when the entry has none, and the upstream path. One model can be reported under different names on different routes, such as `claude-opus-5.5` and `claude-opus-5-5`. |
-| `REQUESTS` | Successful upstream calls, including those whose caching is unknown. |
+| `REQUESTS` | Upstream calls that answered HTTP 200 and logged `input_tokens`, including calls cut off after their usage arrived and calls whose caching is unknown. |
 | `UNKNOWN` | Calls whose entry carried no `cache_read_input_tokens`. Their caching is unknown, not zero, so they stay out of every token column and `HIT RATE`. |
 | `0-READ` | Calls that reported a cache read of exactly 0. |
 | `INPUT` | Input tokens including cached input, normalized per route as described below. |
@@ -809,12 +809,16 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 A row below `--goal` ends in `below goal`, in red on a color terminal. The words
 are printed either way, so the flag survives `NO_COLOR` and a pipe, and `HIT RATE`
 is truncated rather than rounded, so a row below the goal never prints as the goal.
+`--goal` takes at most two decimals, and a row is flagged exactly when its printed
+`HIT RATE` is below the goal.
 
 `--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
-the dates in the log file names. Without `--since`, the summary and the hourly
-trend cover the last 24 hours and the daily trend covers every retained day. A
-duration counts back from now; a date, or a time without `Z` or an offset, is
-local.
+the dates in the log file names. When clocks go back, the repeated local hour
+gets one row per real hour, each ending in its UTC offset, such as
+`2026-11-01 01:00 UTC-04:00` and `2026-11-01 01:00 UTC-05:00`. Without `--since`,
+the summary and the hourly trend cover the last 24 hours and the daily trend
+covers every retained day. A duration counts back from now; a date, or a time
+without `Z` or an offset, is local.
 
 `--json` prints one object per row with `bucket`, `model`, `route`, `requests`,
 `unknownCacheRequests`, `zeroCacheReadRequests`, `totalInputTokens`,
@@ -831,10 +835,12 @@ stderr and exits `1`. Any report, an empty one included, exits `0`.
 The command reads the `completion` entry the relay logs at `info` for each
 upstream call, from the dated files in `~/.copilot-relay/logs/`. An entry counts
 only with `http_status=200`, a numeric `input_tokens`, and a route of
-`/chat/completions`, `/responses` or `/v1/messages`. The `request outcome` entry
-reports usage again, for the client request (both entries are described under
-HTTP requests above), so it is never read: counting it would count calls twice.
-Malformed lines, and a last line the relay is still writing, are skipped.
+`/chat/completions`, `/responses` or `/v1/messages`. Its `body` and `terminal`
+values do not matter, so a call cut off after its usage arrived still shows what
+it read from cache. The `request outcome` entry reports usage again, for the
+client request (both entries are described under HTTP requests above), so it is
+never read: counting it would count calls twice. Malformed lines, and a last line
+the relay is still writing, are skipped.
 
 `input_tokens` means different things per route, so `INPUT` is normalized:
 

@@ -45,7 +45,10 @@ export interface CompletionRecord {
  * cacheReadTokens / totalInputTokens of the same row.
  */
 export interface CacheRow {
-  /** Local "YYYY-MM-DD HH:00" or "YYYY-MM-DD" in a trend; null in the summary. */
+  /**
+   * Local "YYYY-MM-DD HH:00" or "YYYY-MM-DD" in a trend; null in the summary. When clocks go back,
+   * the two rows of the repeated hour end in their UTC offset, such as " UTC-04:00".
+   */
   bucket: string | null
   model: string
   route: CompletionRoute
@@ -72,7 +75,7 @@ export interface CacheReportOptions {
   since?: Date
   /** Only models whose name contains this text, ignoring case. */
   model?: string
-  /** The hit-rate goal, in percent. */
+  /** The hit-rate goal, in percent, with at most two decimals. */
   goal: number
 }
 
@@ -192,7 +195,11 @@ export const parseCompletionLine = (line: string): CompletionRecord | undefined 
 
 // Dated files only, as getLogPath names them. The undated pre-rotation file has not been written
 // since rotation arrived, which was before completion entries existed, so it holds none.
-const datedLogFilePattern = new RegExp(`^${paths.logFileBaseName}\\.(\\d{4}-\\d{2}-\\d{2})\\.log$`)
+const datedLogFilePattern = new RegExp(`^${paths.logFileBaseName}\\.(\\d{4})-(\\d{2})-(\\d{2})\\.log$`)
+
+// A calendar day as one number, so days compare as dates. formatLogDate does not pad a year below
+// 1000, and as text "999-12-30" sorts after "2026-10-03".
+const dayNumber = (year: number, month: number, day: number): number => year * 10_000 + month * 100 + day
 
 // Entries are capped at 64 KiB by log.ts, so a run without a line break that grows past 1 MiB did
 // not come from the relay. It is dropped rather than held in memory.
@@ -217,26 +224,35 @@ const readLogDirectory = async (): Promise<Array<Dirent>> => {
 /**
  * The dated log files that can hold entries at or after `since`; all of them without it.
  *
- * A file is named for the local date its entries were written on. After a time-zone change, an
- * entry can sit in a file dated a day earlier than the current zone would give it, so that day is
- * read too.
+ * A file is named for the local date its entries were written on. UTC offsets span 26 hours, from
+ * UTC-12 to UTC+14, so after a time-zone change an entry can sit in a file dated up to two days
+ * before the date the current zone gives `since`. Those days are read too, and every entry is then
+ * checked against `since` itself.
  */
 const listLogFiles = async (since: Date | undefined): Promise<Array<string>> => {
-  let earliestDay = ""
+  let earliestDay = Number.NEGATIVE_INFINITY
 
   if (since !== undefined) {
-    const dayBefore = new Date(since.getTime())
-    dayBefore.setDate(dayBefore.getDate() - 1)
-    earliestDay = formatLogDate(dayBefore)
+    const twoDaysBefore = new Date(since.getTime())
+    twoDaysBefore.setDate(twoDaysBefore.getDate() - 2)
+
+    // A window that starts at the very beginning of the Date range has no earlier day to read.
+    if (!Number.isNaN(twoDaysBefore.getTime())) {
+      earliestDay = dayNumber(twoDaysBefore.getFullYear(), twoDaysBefore.getMonth() + 1, twoDaysBefore.getDate())
+    }
   }
 
   const entries = await readLogDirectory()
 
   return entries
     .filter((entry) => {
-      const day = datedLogFilePattern.exec(entry.name)?.[1]
+      const date = datedLogFilePattern.exec(entry.name)
 
-      return entry.isFile() && day !== undefined && day >= earliestDay
+      if (!entry.isFile() || date === null) {
+        return false
+      }
+
+      return dayNumber(Number(date[1]), Number(date[2]), Number(date[3])) >= earliestDay
     })
     .map((entry) => path.join(paths.logsDir, entry.name))
 }
@@ -299,10 +315,25 @@ async function* readCompletionRecords(since: Date | undefined): AsyncGenerator<C
   }
 }
 
-type CacheTotals = Omit<CacheRow, "uncachedInputTokens" | "hitRate" | "belowGoal">
+/** Where a record falls in the report. */
+interface Bucket {
+  /** CacheRow.bucket: a local hour or day, or null in the summary. */
+  label: string | null
+  /** For an hour, the instant it began, which tells apart two hours with one label; 0 otherwise. */
+  start: number
+  /** For an hour, the UTC offset it was in, shown when its label repeats. */
+  utcOffset?: string
+}
 
-const emptyTotals = (bucket: string | null, record: CompletionRecord): CacheTotals => ({
-  bucket,
+type CacheTotals = Omit<CacheRow, "uncachedInputTokens" | "hitRate" | "belowGoal"> & {
+  start: number
+  utcOffset?: string
+}
+
+const emptyTotals = (bucket: Bucket, record: CompletionRecord): CacheTotals => ({
+  bucket: bucket.label,
+  start: bucket.start,
+  ...(bucket.utcOffset !== undefined && { utcOffset: bucket.utcOffset }),
   model: record.model,
   route: record.route,
   requests: 0,
@@ -342,6 +373,11 @@ const addRecord = (totals: CacheTotals, record: CompletionRecord): void => {
   }
 }
 
+// The hit rate in hundredths of a percent, truncated: the rate the report prints, as an integer.
+// BigInt keeps it exact however large the token totals grow.
+const hitBasisPoints = (cacheReadTokens: number, totalInputTokens: number): number =>
+  Number((BigInt(cacheReadTokens) * 10_000n) / BigInt(totalInputTokens))
+
 const toRow = (totals: CacheTotals, goal: number): CacheRow => {
   const hasInput = totals.totalInputTokens > 0
 
@@ -357,24 +393,43 @@ const toRow = (totals: CacheTotals, goal: number): CacheRow => {
     uncachedInputTokens: totals.totalInputTokens - totals.cacheReadTokens,
     cacheWriteTokens: totals.cacheWriteTokens,
     hitRate: hasInput ? totals.cacheReadTokens / totals.totalInputTokens : null,
-    // Cross-multiplied: a divided rate could put a row that sits exactly on the goal below it.
-    belowGoal: hasInput && totals.cacheReadTokens * 100 < goal * totals.totalInputTokens,
+    // Both sides are whole hundredths of a percent, so a row is flagged exactly when its printed
+    // rate is below the goal. In floating point, 95.4 * 10,500 comes out a little above 1,001,700,
+    // which put a row that sits on that goal below it.
+    belowGoal: hasInput && hitBasisPoints(totals.cacheReadTokens, totals.totalInputTokens) < Math.round(goal * 100),
   }
 }
 
 const twoDigits = (value: number): string => String(value).padStart(2, "0")
 
+// "UTC-04:00" for the offset of the zone in effect at `timestamp`.
+const formatUtcOffset = (timestamp: Date): string => {
+  const minutes = -timestamp.getTimezoneOffset()
+  const sign = minutes < 0 ? "-" : "+"
+  const absolute = Math.abs(minutes)
+
+  return `UTC${sign}${twoDigits(Math.floor(absolute / 60))}:${twoDigits(absolute % 60)}`
+}
+
 // Local time, matching the dates in the log file names.
-const bucketOf = (timestamp: Date, view: CacheView): string | null => {
+const bucketOf = (timestamp: Date, view: CacheView): Bucket => {
   if (view === "daily") {
-    return formatLogDate(timestamp)
+    return { label: formatLogDate(timestamp), start: 0 }
   }
 
   if (view === "hourly") {
-    return `${formatLogDate(timestamp)} ${twoDigits(timestamp.getHours())}:00`
+    // When clocks go back, one local hour happens twice. The instant the local hour began tells the
+    // two apart where the label cannot.
+    const intoHour = (timestamp.getMinutes() * 60 + timestamp.getSeconds()) * 1000 + timestamp.getMilliseconds()
+
+    return {
+      label: `${formatLogDate(timestamp)} ${twoDigits(timestamp.getHours())}:00`,
+      start: timestamp.getTime() - intoHour,
+      utcOffset: formatUtcOffset(timestamp),
+    }
   }
 
-  return null
+  return { label: null, start: 0 }
 }
 
 const compareText = (left: string, right: string): number => {
@@ -385,11 +440,35 @@ const compareText = (left: string, right: string): number => {
   return left > right ? 1 : 0
 }
 
-// Oldest bucket first, so the latest hour or day ends the table.
-const compareRows = (left: CacheRow, right: CacheRow): number =>
-  compareText(left.bucket ?? "", right.bucket ?? "")
+// Oldest bucket first, so the latest hour or day ends the table. Hours sort by when they began,
+// which keeps the two copies of a repeated hour in the order they happened.
+const compareTotals = (left: CacheTotals, right: CacheTotals): number =>
+  left.start - right.start
+  || compareText(left.bucket ?? "", right.bucket ?? "")
   || compareText(left.model, right.model)
   || compareText(left.route, right.route)
+
+// The two rows of an hour that repeated when clocks went back end in their UTC offset, so the table
+// and --json tell them apart.
+const labelRepeatedHours = (sorted: Array<CacheTotals>): void => {
+  const startsByLabel = new Map<string, Set<number>>()
+
+  for (const totals of sorted) {
+    if (totals.utcOffset !== undefined && totals.bucket !== null) {
+      const starts = startsByLabel.get(totals.bucket) ?? new Set<number>()
+      starts.add(totals.start)
+      startsByLabel.set(totals.bucket, starts)
+    }
+  }
+
+  for (const totals of sorted) {
+    const starts = totals.bucket === null ? undefined : startsByLabel.get(totals.bucket)
+
+    if (totals.utcOffset !== undefined && starts !== undefined && starts.size > 1) {
+      totals.bucket = `${totals.bucket} ${totals.utcOffset}`
+    }
+  }
+}
 
 /** Reads the retained logs and returns one row per bucket, model and route. */
 export const buildCacheReport = async (options: CacheReportOptions): Promise<Array<CacheRow>> => {
@@ -402,7 +481,7 @@ export const buildCacheReport = async (options: CacheReportOptions): Promise<Arr
     }
 
     const bucket = bucketOf(record.timestamp, options.view)
-    const key = JSON.stringify([bucket, record.model, record.route])
+    const key = JSON.stringify([bucket.label, bucket.start, record.model, record.route])
     let totals = groups.get(key)
 
     if (totals === undefined) {
@@ -413,7 +492,10 @@ export const buildCacheReport = async (options: CacheReportOptions): Promise<Arr
     addRecord(totals, record)
   }
 
-  return [...groups.values()].map((totals) => toRow(totals, options.goal)).sort(compareRows)
+  const sorted = [...groups.values()].sort(compareTotals)
+  labelRepeatedHours(sorted)
+
+  return sorted.map((totals) => toRow(totals, options.goal))
 }
 
 const minuteMs = 60 * 1000
@@ -425,8 +507,9 @@ const isoTimePattern =
   /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?)?$/i
 const sinceUsage =
   "--since needs a duration such as 30m, 6h or 2d, or an ISO date or time such as 2026-10-03 or 2026-10-03T09:00."
-const goalPattern = /^(\d+(?:\.\d+)?)%?$/
-const goalUsage = "--goal needs a percentage from 0 to 100, such as --goal 95."
+// At most two decimals: the report prints and compares rates in hundredths of a percent.
+const goalPattern = /^(\d+(?:\.\d{1,2})?)%?$/
+const goalUsage = "--goal needs a percentage from 0 to 100 with at most two decimals, such as --goal 95 or --goal 97.5."
 
 const isCalendarDate = (year: number, month: number, day: number): boolean => {
   const date = new Date(year, month - 1, day)
@@ -491,7 +574,7 @@ export const parseSince = (value: string, now: Date): Date => {
   return time
 }
 
-/** The hit-rate goal for --goal, in percent, with or without a trailing "%". */
+/** The hit-rate goal for --goal, in percent with at most two decimals, with or without a trailing "%". */
 export const parseGoal = (value: string): number => {
   const match = goalPattern.exec(value.trim())
 
@@ -575,13 +658,14 @@ interface Column {
 
 const formatCount = (value: number): string => value.toLocaleString("en-US")
 
-// Truncated rather than rounded, so a row below the goal never prints as the goal itself.
+// Truncated rather than rounded, so a row below the goal never prints as the goal itself. The same
+// integer decides belowGoal, so the flag always agrees with the printed rate.
 const formatHitRate = (row: CacheRow): string => {
   if (row.hitRate === null) {
     return "-"
   }
 
-  const basisPoints = Math.floor((row.cacheReadTokens * 10_000) / row.totalInputTokens)
+  const basisPoints = hitBasisPoints(row.cacheReadTokens, row.totalInputTokens)
 
   return `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
 }

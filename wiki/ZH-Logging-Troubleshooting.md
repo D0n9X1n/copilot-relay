@@ -702,7 +702,7 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 | 列 | 含义 |
 | --- | --- |
 | `MODEL`、`ROUTE` | 上游报告的模型（条目中没有时为 `unknown`）和上游路径。同一模型在不同路由上可能以不同名称报告，例如 `claude-opus-5.5` 与 `claude-opus-5-5`。 |
-| `REQUESTS` | 成功的上游调用，包括缓存情况未知的调用。 |
+| `REQUESTS` | 返回 HTTP 200 并记录了 `input_tokens` 的上游调用，包括用量到达后才被中断的调用，以及缓存情况未知的调用。 |
 | `UNKNOWN` | 条目中没有 `cache_read_input_tokens` 的调用。它们的缓存情况是未知，不是零，因此不计入任何 token 列和 `HIT RATE`。 |
 | `0-READ` | 报告的缓存读取恰好为 0 的调用。 |
 | `INPUT` | 包含缓存输入的输入 token，按下文所述逐路由归一化。 |
@@ -713,11 +713,14 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 
 低于 `--goal` 的行以 `below goal` 结尾，在彩色终端中显示为红色。这几个字无论如何都会
 打印，所以在 `NO_COLOR` 和管道中也不会丢失；`HIT RATE` 截断而不是四舍五入，所以低于
-目标的行永远不会显示成目标值本身。
+目标的行永远不会显示成目标值本身。`--goal` 最多两位小数；一行打印出的 `HIT RATE` 低于
+目标时，它才会被标出，且一定会被标出。
 
 `--hourly` 和 `--daily` 会增加一列本地时间的 `HOUR` 或 `DAY`，与日志文件名中的日期一致。
-不加 `--since` 时，汇总和按小时趋势覆盖最近 24 小时，按天趋势覆盖每个保留的日期。时长
-从现在往回计算；日期，或没有 `Z` 和偏移量的时间，按本地时间解释。
+时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
+`2026-11-01 01:00 UTC-04:00` 和 `2026-11-01 01:00 UTC-05:00`。不加 `--since` 时，汇总和
+按小时趋势覆盖最近 24 小时，按天趋势覆盖每个保留的日期。时长从现在往回计算；日期，或没有
+`Z` 和偏移量的时间，按本地时间解释。
 
 `--json` 为每一行打印一个对象，包含 `bucket`、`model`、`route`、`requests`、
 `unknownCacheRequests`、`zeroCacheReadRequests`、`totalInputTokens`、
@@ -732,9 +735,11 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 
 命令读取中继为每次上游调用在 `info` 级别记录的 `completion` 条目，来源是
 `~/.copilot-relay/logs/` 下按日期命名的文件。只有 `http_status=200`、`input_tokens` 为
-数字，且路由是 `/chat/completions`、`/responses` 或 `/v1/messages` 的条目才会计入。
-`request outcome` 条目会为客户端请求再次报告用量（两种条目见上文 HTTP 请求一节），因此
-从不读取它：计入它会把调用算两次。格式错误的行，以及中继仍在写入的最后一行，都会被跳过。
+数字，且路由是 `/chat/completions`、`/responses` 或 `/v1/messages` 的条目才会计入。条目的
+`body` 和 `terminal` 取值不影响计入，所以用量到达后才被中断的调用，仍会显示它从缓存读取了
+多少。`request outcome` 条目会为客户端请求再次报告用量（两种条目见上文 HTTP 请求一节），
+因此从不读取它：计入它会把调用算两次。格式错误的行，以及中继仍在写入的最后一行，都会被
+跳过。
 
 `input_tokens` 在不同路由上含义不同，因此 `INPUT` 需要归一化：
 

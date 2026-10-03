@@ -361,6 +361,43 @@ test("hourly and daily trends bucket by local time", async () => {
   ])
 })
 
+// The suite runs in Asia/Kolkata, which has no daylight saving. These tests need other zones.
+const inTimeZone = async (zone: string, run: () => Promise<void>): Promise<void> => {
+  process.env.TZ = zone
+
+  try {
+    await run()
+  } finally {
+    process.env.TZ = "Asia/Kolkata"
+  }
+}
+
+// When clocks go back, one local hour happens twice. Each real hour keeps its own row, told apart
+// by its UTC offset, so the trend still shows when the rate changed.
+test("an hour that repeats when clocks go back keeps one row per real hour", async () => {
+  await inTimeZone("America/New_York", async () => {
+    // Daylight saving time ends at 02:00 local time on 2026-11-01, which is 06:00 UTC.
+    await writeLogs({
+      [dated("2026-11-01")]: entries(
+        // 00:30 and 01:30 EDT, then 01:30 and 02:30 EST.
+        chatCall("2026-11-01T04:30:00.000Z", "input_tokens=100 cache_read_input_tokens=90"),
+        chatCall("2026-11-01T05:30:00.000Z", "input_tokens=100 cache_read_input_tokens=100"),
+        chatCall("2026-11-01T06:30:00.000Z", "input_tokens=100 cache_read_input_tokens=0"),
+        chatCall("2026-11-01T07:30:00.000Z", "input_tokens=100 cache_read_input_tokens=50"),
+      ),
+    })
+
+    const rows = await buildCacheReport({ view: "hourly", since: new Date("2026-11-01T00:00:00.000Z"), goal: 95 })
+
+    assert.deepEqual(rows.map((row) => [row.bucket, row.requests, row.cacheReadTokens]), [
+      ["2026-11-01 00:00", 1, 90],
+      ["2026-11-01 01:00 UTC-04:00", 1, 100],
+      ["2026-11-01 01:00 UTC-05:00", 1, 0],
+      ["2026-11-01 02:00", 1, 50],
+    ])
+  })
+})
+
 test("--since and --model narrow the report", async () => {
   await writeLogs({
     // 10:30 local time on 2026-10-02: older than the default 24 hours, inside 2d.
@@ -414,6 +451,31 @@ test("the window also reads the file dated the day before it starts", async () =
   assert.deepEqual(rows.map((row) => row.requests), [1])
 })
 
+// UTC offsets span 26 hours, from UTC-12 to UTC+14. After a move across the date line, an entry
+// can sit in a file dated two days before the local date the window starts on.
+test("the window reads files dated up to two days before it starts", async () => {
+  await inTimeZone("Pacific/Kiritimati", async () => {
+    await writeLogs({
+      // Written at UTC-12, where 11:30 UTC on 2026-10-01 is still 2026-09-30.
+      [dated("2026-09-30")]: entries(chatCall("2026-10-01T11:30:00.000Z", "input_tokens=100 cache_read_input_tokens=90")),
+    })
+
+    // 01:00 on 2026-10-02 at UTC+14, half an hour before the entry.
+    const rows = await buildCacheReport({ view: "summary", since: new Date("2026-10-01T11:00:00.000Z"), goal: 95 })
+
+    assert.deepEqual(rows.map((row) => row.requests), [1])
+  })
+})
+
+// File dates compare as dates. As text, the unpadded year 999 would sort after 2026.
+test("a window that starts before the year 1000 still reads every later file", async () => {
+  await writeLogs({ [dated("2026-10-03")]: entries(chatLine) })
+
+  const rows = await buildCacheReport({ view: "summary", since: parseSince("1000-01-01", now), goal: 95 })
+
+  assert.deepEqual(rows.map((row) => row.requests), [1])
+})
+
 test("--since takes a duration or an ISO date or time", () => {
   assert.deepEqual(parseSince("6h", now), new Date("2026-10-03T06:00:00.000Z"))
   assert.deepEqual(parseSince("2d", now), new Date("2026-10-01T12:00:00.000Z"))
@@ -447,14 +509,16 @@ test("--since takes a duration or an ISO date or time", () => {
   }
 })
 
-test("--goal takes a percentage from 0 to 100", () => {
+test("--goal takes a percentage from 0 to 100 with at most two decimals", () => {
   assert.equal(parseGoal("95"), 95)
   assert.equal(parseGoal("97.5"), 97.5)
+  assert.equal(parseGoal("95.45"), 95.45)
   assert.equal(parseGoal("90%"), 90)
   assert.equal(parseGoal("0"), 0)
   assert.equal(parseGoal("100"), 100)
 
-  for (const value of ["", "high", "-5", "100.5", "1e2", ".5", "95%%"]) {
+  // The report prints and compares rates in hundredths of a percent.
+  for (const value of ["", "high", "-5", "100.5", "1e2", ".5", "95%%", "97.125"]) {
     assert.throws(() => parseGoal(value), CacheUsageError, value)
   }
 })
@@ -563,6 +627,25 @@ test("a row on the goal is not flagged, and a row just below it never prints as 
 
   // 94.999% is truncated to 94.99%, not rounded up to the goal it misses.
   assert.match(text, /^ {2}under-goal .* 94\.99% {2}below goal$/m)
+})
+
+// A goal with decimals is compared exactly. In binary floating point, 95.4 * 10,500 comes out a
+// little above 1,001,700, which would put a row that sits on the goal below it.
+test("a decimal goal flags exactly the rows whose printed rate is below it", async () => {
+  await writeLogs({
+    [dated("2026-10-03")]: entries(
+      completion("2026-10-03T07:00:00.000Z", "path=/chat/completions http_status=200 body=complete model=at-goal terminal=true input_tokens=10500 cache_read_input_tokens=10017"),
+      completion("2026-10-03T07:01:00.000Z", "path=/chat/completions http_status=200 body=complete model=under-goal terminal=true input_tokens=10500 cache_read_input_tokens=10016"),
+    ),
+  })
+
+  const options: CacheReportOptions = { view: "summary", since: lastDay, goal: 95.4 }
+  const rows = await buildCacheReport(options)
+  const text = renderCacheReport(rows, options).join("\n")
+
+  assert.deepEqual(rows.map((row) => [row.model, row.belowGoal]), [["at-goal", false], ["under-goal", true]])
+  assert.match(text, /^ {2}at-goal .* 95\.40%$/m)
+  assert.match(text, /^ {2}under-goal .* 95\.39% {2}below goal$/m)
 })
 
 test("an empty window says there is no data and where the data would come from", async () => {
