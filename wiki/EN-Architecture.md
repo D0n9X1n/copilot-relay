@@ -175,6 +175,8 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/copilot/native.ts` | Native Claude Messages, signed history, terminal outcomes, and native WebSearch bridge continuation. |
 | `src/lib/request-trace.ts` | Request-scoped body capture, ordered upstream/refresh records, and completion metadata. |
 | `src/replay.ts` | Strictly validated offline captures replayed through the current in-process handler. |
+| `src/cache.ts` | `copilot-relay cache`: prompt-cache hit rate per model and upstream route. Reads only local logs; no HTTP route, no upstream call, no file written. |
+| `src/lib/cache-report.ts` | Parses upstream `completion` log entries, normalizes total input per route, buckets by local hour or day, and renders the report. |
 | `src/lib/atomic-file.ts` | Snapshot conflict checks and atomic target replacement for user-owned files. |
 | `src/lib/address.ts` | Safe listener/client URL formatting, including IPv6 and wildcard hosts. |
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
@@ -328,6 +330,9 @@ At `info`, translated requests report requested/upstream models and effort;
 native requests identify `upstream_api=messages` and effective effort. Completion
 metadata separates HTTP status from stop/finish reason, refusal, truncation and
 reported cache usage. HTTP 200 or a closed stream is not proof of a completed answer.
+`copilot-relay cache` reads the upstream `completion` entries back to report
+prompt-cache hit rates per model and route; see
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 The central logger passes emitted values through `scrubSensitiveUrls` before both
 sinks, redacting sensitive URL tails even at `debug`. This is not general payload

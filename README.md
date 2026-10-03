@@ -53,6 +53,15 @@ Deep checks **consume Copilot usage** and test an isolated relay pipeline, not t
 running daemon. Add `--details` for safe failure evidence and private replay hints.
 Use `copilot-relay status --deep` for daemon health, and `copilot-relay stop` when finished.
 
+Check how well prompt caching works per model and upstream route. The report reads
+only local logs and flags rows below a hit-rate goal, 95% by default:
+
+```sh
+copilot-relay cache                  # last 24 hours
+copilot-relay cache --hourly         # or --daily; narrow with --since 6h or --model opus
+copilot-relay cache --json
+```
+
 ## Go further
 
 **[Open the Wiki](https://github.com/D0n9X1n/copilot-relay/wiki)** · **[English / 中文](wiki/README.md)**

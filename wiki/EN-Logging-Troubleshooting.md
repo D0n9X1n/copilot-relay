@@ -767,6 +767,103 @@ debug Copilot POST /chat/completions -> 200 8287ms (attempt 1)
 If local and upstream timings are close, the delay is upstream/model latency. If
 local is much larger, inspect stream translation or client-side behavior.
 
+## Prompt-cache hit rate
+
+`copilot-relay cache` reports how much of each model's input the prompt cache
+served, per upstream route. It reads only the local log files: it contacts
+neither the relay nor Copilot, and writes nothing.
+
+```sh
+copilot-relay cache                      # last 24 hours, one row per model and route
+copilot-relay cache --hourly             # hourly trend over the last 24 hours
+copilot-relay cache --daily              # daily trend across the retained logs
+copilot-relay cache --since 6h           # a duration, or an ISO date or time
+copilot-relay cache --model opus         # names containing "opus", ignoring case
+copilot-relay cache --goal 97.5          # flag rows below 97.5% (default 95)
+copilot-relay cache --json               # an array of rows, for scripts
+```
+
+```text
+Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
+
+  MODEL               ROUTE              REQUESTS  UNKNOWN  0-READ   INPUT  CACHE READ  UNCACHED  CACHE WRITE  HIT RATE
+  claude-opus-5-5     /v1/messages              1        0       0  31,654      31,136       518          516    98.36%
+  claude-opus-5.5     /chat/completions         2        1       0  31,431      30,924       507            -    98.38%
+  gpt-5.5-2026-04-23  /responses                1        0       0  19,297      17,920     1,377            -    92.86%  below goal
+
+UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE.
+```
+
+| Column | Meaning |
+| --- | --- |
+| `MODEL`, `ROUTE` | The model the upstream reported, or `unknown` when the entry has none, and the upstream path. One model can be reported under different names on different routes, such as `claude-opus-5.5` and `claude-opus-5-5`. |
+| `REQUESTS` | Successful upstream calls, including those whose caching is unknown. |
+| `UNKNOWN` | Calls whose entry carried no `cache_read_input_tokens`. Their caching is unknown, not zero, so they stay out of every token column and `HIT RATE`. |
+| `0-READ` | Calls that reported a cache read of exactly 0. |
+| `INPUT` | Input tokens including cached input, normalized per route as described below. |
+| `CACHE READ` | Input tokens served from the prompt cache. |
+| `UNCACHED` | `INPUT` minus `CACHE READ`. |
+| `CACHE WRITE` | `cache_creation_input_tokens`, or `-` when no call in the row reported it. |
+| `HIT RATE` | `CACHE READ` divided by `INPUT`, truncated to two decimals; `-` when no call in the row has known caching. |
+
+A row below `--goal` ends in `below goal`, in red on a color terminal. The words
+are printed either way, so the flag survives `NO_COLOR` and a pipe, and `HIT RATE`
+is truncated rather than rounded, so a row below the goal never prints as the goal.
+
+`--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
+the dates in the log file names. Without `--since`, the summary and the hourly
+trend cover the last 24 hours and the daily trend covers every retained day. A
+duration counts back from now; a date, or a time without `Z` or an offset, is
+local.
+
+`--json` prints one object per row with `bucket`, `model`, `route`, `requests`,
+`unknownCacheRequests`, `zeroCacheReadRequests`, `totalInputTokens`,
+`cacheReadTokens`, `uncachedInputTokens`, `cacheWriteTokens`, `hitRate` and
+`belowGoal`. `hitRate` is a fraction from 0 to 1, or `null`; `bucket` is `null`
+in the summary, and `cacheWriteTokens` is `null` when no call in the row reported
+it. With no data it prints `[]`.
+
+An unusable flag, or a logs directory that cannot be read, prints the reason on
+stderr and exits `1`. Any report, an empty one included, exits `0`.
+
+### What is counted
+
+The command reads the `completion` entry the relay logs at `info` for each
+upstream call, from the dated files in `~/.copilot-relay/logs/`. An entry counts
+only with `http_status=200`, a numeric `input_tokens`, and a route of
+`/chat/completions`, `/responses` or `/v1/messages`. The `request outcome` entry
+reports usage again, for the client request (both entries are described under
+HTTP requests above), so it is never read: counting it would count calls twice.
+Malformed lines, and a last line the relay is still writing, are skipped.
+
+`input_tokens` means different things per route, so `INPUT` is normalized:
+
+| Route | `INPUT` |
+| --- | --- |
+| `/chat/completions`, `/responses` | `input_tokens`, which already includes cached input |
+| `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |
+
+On `/v1/messages`, an absent `cache_creation_input_tokens` counts as 0. Hours and
+days are local time.
+
+How far back the command can see depends on `logRetentionDays` (default `3`).
+`completion` entries are written at `info`, so a relay running with
+`logLevel: error` leaves nothing to read, and the command says it found no data
+rather than printing an empty table.
+
+### Finding a regression
+
+`--hourly` shows the hour a hit rate changed. A fixed-prefix cap, like the one
+in #143, shows up as one cache-read size repeated across many requests. To list
+the most common read sizes for one model:
+
+```sh
+grep -h " completion path=" ~/.copilot-relay/logs/copilot-relay.*.log \
+  | grep -F "model=claude-opus-5.5 " \
+  | grep -o "cache_read_input_tokens=[0-9]*" \
+  | sort | uniq -c | sort -rn | head
+```
+
 ## Token cache problems
 
 ```text
