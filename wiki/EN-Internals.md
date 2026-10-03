@@ -341,6 +341,49 @@ without injecting nulls or defaults. Returned arguments are not stripped or
 rewritten. This setting does not apply to built-in `web_search_preview` or to
 `/chat/completions` tools.
 
+### Images in tool results
+
+Claude Code returns an image from a tool, such as `Read` opening a PNG, as an `image`
+block inside a `tool_result`. `mapContent` and `handleUserMessage` in
+`src/claude/translate.ts` turn it into a `role: "tool"` message whose content holds
+`image_url` parts. Each route then puts the image where its models read it (#150):
+
+- **`/responses`.** gpt-6-astra, gpt-5.4 and gpt-5.5 read a tool's image as an
+  `input_image` item inside `function_call_output.output`. `stringifyToolOutput` keeps
+  only the text parts, or sends the whole result as JSON text when it has none: the image
+  is dropped, or arrives as base64 text. `translateToolOutput` in
+  `src/copilot/responses.ts` therefore sends a tool message that holds an image as an
+  array of `input_text` and `input_image` items, in their original order.
+  `translateToolOutputPart` leaves out an empty text part and gives an `input_image`
+  item no `detail`: a Claude image block has none, and the shape verified in #150 had
+  none. caozhiyuan/copilot-api issues 361 and 362 report that Copilot rejects, in tool
+  output, a `detail` other than `low` or `high`, and an empty text part. Every other
+  tool message keeps the plain `stringifyToolOutput` string, so an existing history
+  sends the same bytes and keeps its prompt-cache prefix. The
+  `unsupported_api_for_model` retry from `/chat/completions` resends the unadapted
+  payload and takes the same path.
+- **`/chat/completions`, non-Claude models.** Copilot accepts `image_url` parts in a tool
+  message, but in #150 gpt-5-mini replied `NO IMAGE` and gemini-3.8-flash named colors
+  it never saw. Both read the same image when it followed in a user message.
+  `moveToolImagesToUserMessages` in `src/copilot/chat.ts` runs before
+  `normalizeFinalAssistantPrefill`. In each run of consecutive tool messages, a tool
+  message that holds images keeps only its text parts, joined with blank lines like
+  text-only tool content, or the fixed note
+  `Image output follows in the next user message.` when it has none. Its images move to
+  the start of the user message that follows the run, or to a new user message inserted
+  after the run, each call's images led by `Image output of tool call <id>:`. A tool
+  message without an image is left as it is. A payload with no tool-message images is
+  returned unchanged.
+- **`/chat/completions`, Claude models.** When `isClaudeModelId` matches the upstream
+  model, the payload keeps its shape: claude-opus-5.5 read the image inside the tool
+  message in #150, and the `copilot_cache_control` marks described in "Chat route:
+  system turns and cache breakpoints" under Prompt caching are placed on that shape.
+
+`messagesIncludeImage` in `src/copilot/chat.ts` inspects the payload actually sent, so a
+request whose images moved still carries `copilot-vision-request: true`; the
+`/responses` retry checks the payload it resends. The native `/v1/messages` route sends
+Claude's own blocks and uses none of these adapters.
+
 ### Upstream connections
 
 `fetchCopilot` in `src/copilot/client.ts` sends every upstream request through one
