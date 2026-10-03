@@ -524,6 +524,104 @@ class ProvenanceTests(unittest.TestCase):
             with self.assertRaises(UnicodeDecodeError):
                 release.capture([sys.executable, "-c", source], 5, 4096)
 
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cleanup")
+    def test_cleanup_waits_for_a_leader_that_exits_after_eperm(self):
+        # #169: macOS can refuse the group signal before poll() sees the leader exit. The leader
+        # stays blocked through the refused killpg and any immediate poll(), and is released only
+        # when terminate() begins its bounded wait.
+        source = "import sys; print('ready', flush=True); sys.stdin.read()"
+        child = subprocess.Popen([sys.executable, "-c", source], start_new_session=True,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        real_wait = child.wait
+        # A failed test must not leave the child running.
+        self.addCleanup(real_wait)
+        self.addCleanup(child.kill)
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(child.stdin.close)
+        self.assertEqual(child.stdout.readline(), b"ready\n")
+        refused = []
+        releases = []
+
+        def refuse(pid, signum):
+            refused.append((pid, signum))
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        def gated_wait(timeout=None):
+            # Only a wait that follows the refused signal releases the child.
+            if refused and not releases:
+                releases.append(timeout)
+                child.stdin.close()
+
+            return real_wait(timeout=timeout)
+
+        with patch.object(release.os, "killpg", side_effect=refuse):
+            with patch.object(child, "wait", gated_wait):
+                release.terminate(child)
+
+        self.assertEqual(refused, [(child.pid, release.signal.SIGKILL)])
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(child.returncode, 0)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group cleanup")
+    def test_capture_keeps_its_failure_when_the_leader_exits_after_eperm(self):
+        # The #169 CI failure: the output cap is exceeded, then cleanup meets EPERM while the leader
+        # is still running. The child waits for a marker that only terminate()'s bounded wait
+        # creates, so it stays blocked through the refused killpg and any immediate poll().
+        marker = self.path / "cleanup-released"
+        source = ("import os, sys, time\n"
+                  "sys.stdout.write('x' * 8192)\n"
+                  "sys.stdout.flush()\n"
+                  "while not os.path.exists(sys.argv[1]):\n"
+                  "    time.sleep(0.01)\n")
+        real_popen = subprocess.Popen
+        children = []
+        refused = []
+        releases = []
+
+        def refuse(pid, signum):
+            refused.append((pid, signum))
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        def recording_popen(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            real_wait = child.wait
+
+            def gated_wait(timeout=None):
+                # Only a wait that follows the refused signal releases the child.
+                if refused and not releases:
+                    releases.append(timeout)
+                    marker.touch()
+
+                return real_wait(timeout=timeout)
+
+            child.wait = gated_wait
+            children.append(child)
+            return child
+
+        def stop_children():
+            # Runs before setUp's cleanup removes the marker's directory: release the child, give
+            # it a bounded time to exit, then kill and reap it.
+            marker.touch()
+            for child in children:
+                try:
+                    real_popen.wait(child, timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    real_popen.wait(child)
+
+                child.stdout.close()
+                child.stderr.close()
+
+        self.addCleanup(stop_children)
+        with patch.object(release.subprocess, "Popen", recording_popen):
+            with patch.object(release.os, "killpg", side_effect=refuse):
+                with self.assertRaisesRegex(release.Failure, "^child output cap exceeded$"):
+                    release.capture([sys.executable, "-c", source, str(marker)], 5, 16)
+
+        self.assertEqual(len(children), 1)
+        self.assertEqual(refused, [(children[0].pid, release.signal.SIGKILL)])
+        self.assertEqual(len(releases), 1)
+
     @unittest.skipUnless(sys.platform == "darwin" and hasattr(os, "waitid"), "macOS group signalling after exit")
     def test_cleanup_tolerates_an_exited_unreaped_group_on_macos(self):
         # macOS answers EPERM, not ESRCH, when the group's only member has exited but is not yet
