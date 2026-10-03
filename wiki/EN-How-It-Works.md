@@ -127,7 +127,7 @@ choose an available model explicitly; see [Configuration](EN-Configuration.md).
 ## Copilot API surface
 
 The upstream paths are `/chat/completions`, `/responses`, and native
-`/v1/messages`. `gpt-6-astra`, `gpt-5.6-sol`, and the `gpt-5.5`/`gpt-5.6`
+`/v1/messages`. `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.4`, and the `gpt-5.5`/`gpt-5.6`
 family use `/responses`. Claude models keep `/chat/completions` by default.
 
 `claudeUpstreamApi: auto` enables native Claude only when the catalog advertises

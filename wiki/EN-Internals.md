@@ -224,7 +224,9 @@ maintenance cost with no test covering it.
 preflight. `selectCopilotEndpoint` in `src/copilot/endpoint.ts` reads the current
 provider's `supported_endpoints` through `getCachedCopilotModel`; probes and normal
 requests share it. The frozen legacy preference breaks ties and handles missing
-metadata, not an expanding allowlist. `requireCopilotEndpoint` turns fixed
+metadata, not an expanding allowlist. Its one later entry is `gpt-5.4` (not
+`gpt-5.4-mini`): Copilot's `/chat/completions` answers its tool-bearing requests with
+HTTP 400, while `/responses` accepts them. `requireCopilotEndpoint` turns fixed
 unsupported reasons into local errors at admission before SSE. Claude's explicit
 protocol policy takes precedence; the selection includes whether the narrowly
 coded `/chat/completions` to `/responses` recovery is allowed. Failed recovered

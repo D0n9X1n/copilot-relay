@@ -121,7 +121,7 @@ opusModel: claude-opus-5.5
 ## Copilot 上游接口
 
 上游路径包括 `/chat/completions`、`/responses` 和原生 `/v1/messages`。
-`gpt-6-astra`、`gpt-5.6-sol` 及 `gpt-5.5`/`gpt-5.6` 系列使用 `/responses`，Claude
+`gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.4` 及 `gpt-5.5`/`gpt-5.6` 系列使用 `/responses`，Claude
 模型默认保留 `/chat/completions`。
 
 `claudeUpstreamApi: auto` 只在目录公布支持时启用原生 Claude，`messages` 强制启用。

@@ -410,7 +410,6 @@ async function logUpstreamError(
     route: context.route,
     model: context.model,
     requestId: context.requestId,
-    request: context.request,
     response: {
       status: response.status,
       statusText: response.statusText || undefined,
@@ -418,6 +417,8 @@ async function logUpstreamError(
       headers: Object.fromEntries(response.headers.entries()),
       body: errorBody || undefined,
     },
+    // Last, so a long request cannot push the upstream body out of the bounded entry.
+    request: context.request,
   })
 
   return detail

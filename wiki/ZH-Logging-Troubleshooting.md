@@ -364,10 +364,11 @@ debug request_id=3b241101-e2bb-4255-8caf-4136c566a962 Copilot POST /responses ->
 ```
 
 瞬时 5xx 的重试会在 `error` 级别连同重试上下文记录。翻译路径的非 2xx 错误会用单行
-`error` 条目保留有界上游上下文：
+`error` 条目保留有界上游上下文。上游 `response` 位于 `request` 之前，因此过长的请求不会
+把上游正文挤出这条有界条目：
 
 ```text
-error Failed to create responses: route=/responses model=gpt-6-astra status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
+error Failed to create responses: route=/responses model=gpt-6-astra status=400 { response: { status: 400, headers: { ... }, body: { ... } }, request: { ... } }
 ```
 
 ### 请求捕获

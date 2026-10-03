@@ -30,7 +30,9 @@ export type EndpointSelection =
   }
 
 // Preserve existing dual-endpoint/cache preferences; new models need only catalog support.
-const legacyResponsesPattern = /^(?:gpt-5\.5|gpt-5\.6|gpt-6-astra)(?:-|$)/i
+// gpt-5.4 (not gpt-5.4-mini) is the one later entry: Copilot's /chat/completions answers its
+// tool-bearing requests with HTTP 400, while /responses accepts them.
+const legacyResponsesPattern = /^(?:gpt-5\.4(?!-mini)|gpt-5\.5|gpt-5\.6|gpt-6-astra)(?:-|$)/i
 
 // The one protocol decision shared by deep probes, startup preflight and request
 // admission, so a model that passes a check is routed the same way in real traffic.
