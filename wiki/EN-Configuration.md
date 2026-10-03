@@ -648,6 +648,12 @@ it, or with a different key, the relay answers HTTP `401` with an Anthropic-styl
 - Debug captures leave out the header that carries the key, but keep request and
   response bodies unredacted, so a key that a client puts in a prompt is stored
   there; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+- `config.yaml` then holds the key. A new `config.yaml` is created `0600`,
+  readable only by you; an existing one keeps its mode, and the relay never
+  changes it. On Linux and macOS, when `apiKey` is set and `config.yaml`, or the
+  file it links to, gives other local users any access, startup and each reload
+  that sets or changes the key log one error that names the file and its mode
+  and says to run `chmod 600` on it. Windows has no such mode bits.
 - With `claudeSetup: true`, `start` writes the key as Claude Code's
   `ANTHROPIC_AUTH_TOKEN`; see [Claude Code settings](#claude-code-settings).
 - When `host` is not a loopback address and `apiKey` is empty, startup logs one

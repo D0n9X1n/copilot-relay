@@ -259,6 +259,12 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
     "opusModel: claude-opus-5.5",
     "",
   ].join("\n"))
+  // A 0644 config.yaml holding the key, as an existing install can have: startup and the reload
+  // that rotates the key each log the mode warning. Windows has no POSIX mode bits.
+  if (process.platform !== "win32") {
+    await fs.chmod(home.configPath, 0o644)
+  }
+
   // A stale token for the settings writer to replace, beside a value it must keep.
   await fs.writeFile(home.settingsPath, `${JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "dummy", UNRELATED: "kept" } }, null, 2)}\n`)
 
@@ -328,6 +334,8 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
 
   const logs = await readLogs(home.appDir)
   assert.match(logs, / -> 401 /)
+  const modeWarnings = logs.split(`${home.configPath} holds the apiKey and has mode 0644`).length - 1
+  assert.equal(modeWarnings, process.platform === "win32" ? 0 : 2)
   for (const secret of [firstKey, secondKey, githubToken, copilotToken]) {
     assert.ok(!logs.includes(secret), "a key or token reached the log")
     assert.ok(!relay.output().includes(secret), "a key or token reached the relay console")

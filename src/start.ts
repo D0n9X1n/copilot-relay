@@ -1,4 +1,6 @@
 // `copilot-relay start`: loads config, validates upstream access, and starts the local Claude Code proxy.
+import { statSync } from "node:fs"
+
 import { type ServerType } from "@hono/node-server"
 import { defineCommand } from "citty"
 
@@ -58,6 +60,37 @@ export const unauthenticatedListenerWarning = (
 
   return terminalText(
     `apiKey is empty and host ${config.host} is not a loopback address: any client that can reach port ${config.port} can consume your Copilot usage. Set apiKey in ${paths.configPath}, or bind host to 127.0.0.1.`,
+  )
+}
+
+/**
+ * The warning for a config.yaml that other local users can access while it holds the apiKey.
+ *
+ * A new config.yaml is created 0600, but an existing one keeps its mode, and the relay never
+ * changes the mode of the user's own file. stat follows a symlink, so the mode checked is the
+ * target's. Windows has no POSIX mode bits. It never prints a key.
+ */
+export const exposedConfigWarning = (
+  config: Pick<AppConfig, "apiKey">,
+  configPath = paths.configPath,
+): string | undefined => {
+  if (!config.apiKey || process.platform === "win32") {
+    return undefined
+  }
+
+  let mode: number
+  try {
+    mode = statSync(configPath).mode & 0o777
+  } catch {
+    return undefined
+  }
+
+  if ((mode & 0o077) === 0) {
+    return undefined
+  }
+
+  return terminalText(
+    `${configPath} holds the apiKey and has mode ${mode.toString(8).padStart(4, "0")}, which lets other local users access it. Run chmod 600 ${configPath}.`,
   )
 }
 
@@ -123,10 +156,15 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   log.info(`Default think effort: ${appConfig.thinkEffort}`)
   log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
 
-  // At error level, so it shows whatever logLevel is set.
+  // At error level, so they show whatever logLevel is set.
   const listenerWarning = unauthenticatedListenerWarning(appConfig)
   if (listenerWarning) {
     log.error(listenerWarning)
+  }
+
+  const configWarning = exposedConfigWarning(appConfig)
+  if (configWarning) {
+    log.error(configWarning)
   }
 
   const authSession = await setupProxyAuth(config)
@@ -205,10 +243,17 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   }
 
   const configWatcher = watchAppConfig((nextConfig) => {
+    const previousApiKey = config.apiKey
     applyRuntimeConfig(nextConfig)
     log.info(
       `Config reloaded: logLevel=${nextConfig.logLevel} thinkEffort=${nextConfig.thinkEffort} upstreamTimeoutSeconds=${nextConfig.upstreamTimeoutSeconds}`,
     )
+
+    // Checked again when a reload sets or changes the key.
+    const reloadedConfigWarning = nextConfig.apiKey === previousApiKey ? undefined : exposedConfigWarning(nextConfig)
+    if (reloadedConfigWarning) {
+      log.error(reloadedConfigWarning)
+    }
   })
 
   // Shorter than stopProcess's 5s SIGTERM timeout, so a clean exit reliably

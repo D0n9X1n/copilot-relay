@@ -549,6 +549,11 @@ relay 在读取正文、执行任何路由之前返回 HTTP `401` 及 Anthropic 
   打印 `[redacted]`，`--deep` 也不会探测含有密钥的 ID。
 - Debug 捕获不记录携带密钥的 header，但请求和响应正文不脱敏，所以客户端放进提示词的
   密钥会保存在其中；见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+- 此时 `config.yaml` 保存着密钥。新建的 `config.yaml` 模式为 `0600`，只有你能读取；
+  已有的文件保留原来的模式，relay 从不修改它。在 Linux 和 macOS 上，设置了 `apiKey`
+  且 `config.yaml`（或它链接到的文件）允许其他本地用户进行任何访问时，启动以及每次
+  设置或修改密钥的重载都会记录一条错误，写明该文件及其模式，并提示对它运行
+  `chmod 600`。Windows 没有这类模式位。
 - `claudeSetup: true` 时，`start` 会把密钥写成 Claude Code 的 `ANTHROPIC_AUTH_TOKEN`；
   见 [Claude Code 配置](#claude-code-配置)。
 - `host` 不是 loopback 地址且 `apiKey` 为空时，启动会记录一条提到 `apiKey` 的警告。
