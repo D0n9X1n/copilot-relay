@@ -816,8 +816,22 @@ cat ~/.claude/settings.json
 
 - `ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:4142`
 - `ANTHROPIC_AUTH_TOKEN` 存在；它是给本地中继用的占位值
+- `CLAUDE_CODE_AUTO_MODE_SERVER` 为 `0`，除非你设置了其他值
 
 改 `host` 或 `port` 需要重启中继，因为监听 socket 无法在热重载期间迁移。
+
+## Claude Code 提示会话不符合 auto mode 的条件
+
+Claude Code 可能在终端中，或用 `claude -p` 时在 stderr 上，打印类似这样的提示：
+
+```text
+We're changing auto mode to no longer charge for classifier requests in Claude Code. However, this session isn't eligible because your requests go through 127.0.0.1:4142, which isn't compatible with this update. Nothing breaks: auto mode keeps working, and its classifier requests are billed as before.
+```
+
+经过中继时这是预期行为：auto mode 的服务器检查到达不了 Claude Code，所以它自己发起
+classifier 请求。在 Claude Code 的环境中设置 `CLAUDE_CODE_AUTO_MODE_SERVER=0`，可停止
+服务器检查和这条提示。`claudeSetup: true` 时，`copilot-relay start` 会在缺少该值时
+写入它；见[配置](ZH-Configuration.md)。
 
 ## 安全分享日志
 

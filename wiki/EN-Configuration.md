@@ -665,6 +665,7 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:4142
 ANTHROPIC_AUTH_TOKEN=<dummy local token>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<discovered GPT context window>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<largest discovered output budget of the model pair>
+CLAUDE_CODE_AUTO_MODE_SERVER=0
 ```
 
 into:
@@ -683,6 +684,17 @@ are unavailable and leaves explicit budgets unchanged rather than inventing them
 With `claudeSetup: false`, configure these client variables yourself.
 The settings writer uses the same snapshot/atomic replacement boundary; malformed
 or existing empty settings files are not overwritten, and unrelated values remain.
+
+`CLAUDE_CODE_AUTO_MODE_SERVER=0` is also written only when the key is absent. In
+auto mode, Claude Code asks the server to check actions such as shell commands.
+Through the relay those checks did not reach Claude Code on the `chat-completions`
+or `messages` route, so it made its own classifier requests and printed a notice
+that the session isn't eligible for auto mode's no-charge classifier requests.
+With `0`, Claude Code skips the server check and the notice; the classifier
+requests stay as they were. The value stays in `~/.claude/settings.json`: remove
+or change it when Claude Code connects without the relay, or through a gateway
+that supports the server checks. Claude Code documents the variable as temporary;
+see [auto mode classifier billing](https://code.claude.com/docs/en/auto-mode-classifier-billing).
 
 The local dummy token is **not network authentication**. Host/Origin checks and
 JSON content-type validation reduce browser-origin misuse, not access by an

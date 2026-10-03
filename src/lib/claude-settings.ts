@@ -134,6 +134,14 @@ export async function applyClaudeConfig(
     env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(input.maxOutputTokens)
   }
 
+  // In auto mode Claude Code asks the server to check actions. In #162 those checks did not reach
+  // it through the relay, so it made its own classifier requests and printed a notice asking the
+  // gateway to support them. "0" skips the server check and the notice; the classifier requests
+  // stay as they were. Seeded only when absent, so a value the user set is kept.
+  if (env.CLAUDE_CODE_AUTO_MODE_SERVER === undefined) {
+    env.CLAUDE_CODE_AUTO_MODE_SERVER = "0"
+  }
+
   const next: Record<string, unknown> = {
     ...parsed,
     ...(nextModel !== undefined && { model: nextModel }),

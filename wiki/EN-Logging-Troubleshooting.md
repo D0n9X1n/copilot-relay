@@ -924,9 +924,25 @@ Expected values:
 
 - `ANTHROPIC_BASE_URL` points at `http://127.0.0.1:4142`
 - `ANTHROPIC_AUTH_TOKEN` exists; it is a dummy value for local relay use
+- `CLAUDE_CODE_AUTO_MODE_SERVER` is `0`, unless you set another value
 
 Changing `host` or `port` requires restarting the relay, because the listening
 socket cannot move during hot reload.
+
+## Claude Code says the session isn't eligible for auto mode
+
+Claude Code can print a notice like this, in the terminal or, with `claude -p`,
+on stderr:
+
+```text
+We're changing auto mode to no longer charge for classifier requests in Claude Code. However, this session isn't eligible because your requests go through 127.0.0.1:4142, which isn't compatible with this update. Nothing breaks: auto mode keeps working, and its classifier requests are billed as before.
+```
+
+It is expected through the relay: auto mode's server checks do not reach Claude
+Code, so it makes its own classifier requests. `CLAUDE_CODE_AUTO_MODE_SERVER=0` in
+Claude Code's environment stops the server check and the notice. With
+`claudeSetup: true`, `copilot-relay start` writes it when it is absent; see
+[Configuration](EN-Configuration.md).
 
 ## Safe log sharing
 

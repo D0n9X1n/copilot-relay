@@ -572,6 +572,7 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:4142
 ANTHROPIC_AUTH_TOKEN=<dummy local token>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<发现的 GPT context 窗口>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预算>
+CLAUDE_CODE_AUTO_MODE_SERVER=0
 ```
 
 这里的 token 是本地 relay 占位值。真正访问 GitHub Copilot 用的是
@@ -583,6 +584,15 @@ CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预�
 客户端变量。
 设置写入同样使用快照及原子替换；不会覆盖格式错误或已经存在的空设置文件，其他无关
 值也会保留。
+
+`CLAUDE_CODE_AUTO_MODE_SERVER=0` 同样只在缺少该键时写入。auto mode 下，Claude Code
+会请服务器检查 shell 命令等操作。经过 relay 时，这些检查在 `chat-completions` 和
+`messages` 路由上都没有到达 Claude Code，于是它自己发起 classifier 请求，并提示该
+会话不能享受 auto mode 不再对 classifier 请求收费的变更。设为 `0` 后，Claude Code
+不再请求服务器检查，也不再显示该提示；classifier 请求与原来相同。这个值会留在
+`~/.claude/settings.json` 里：Claude Code 不经过 relay 连接，或改用支持服务器检查的
+网关时，请删除或修改它。Claude Code 文档说明该变量是临时的，见
+[auto mode classifier billing](https://code.claude.com/docs/en/auto-mode-classifier-billing)。
 
 本地占位 token **不是网络认证**。Host/Origin 与 JSON content-type 检查减少的是浏览器
 来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，见[架构](ZH-Architecture.md)。
