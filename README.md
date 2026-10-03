@@ -62,6 +62,9 @@ copilot-relay cache --hourly         # or --daily; narrow with --since 6h or --m
 copilot-relay cache --json
 ```
 
+Check your Copilot plan and quota with `copilot-relay usage`; add `--json` for
+scripts. It asks GitHub directly with the stored token, so no relay needs to run.
+
 ## Go further
 
 **[Open the Wiki](https://github.com/D0n9X1n/copilot-relay/wiki)** · **[English / 中文](wiki/README.md)**

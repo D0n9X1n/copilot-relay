@@ -768,6 +768,71 @@ grep -h " completion path=" ~/.copilot-relay/logs/copilot-relay.*.log \
   | sort | uniq -c | sort -rn | head
 ```
 
+## Copilot 套餐与配额
+
+`copilot-relay usage` 显示已保存 GitHub token 所属账号的 Copilot 套餐，以及每项配额还剩
+多少。它用 `~/.copilot-relay/github_token` 中的 token 请求 GitHub 的
+`copilot_internal/user` 接口，因此不需要中继在运行。它不换取 Copilot token，也不写入任何
+东西，包括日志文件。
+
+```sh
+copilot-relay usage                      # 套餐、SKU、重置日期，然后每项配额一行
+copilot-relay usage --json               # 同样的字段组成一个对象，供脚本使用
+```
+
+```text
+Plan         <copilot_plan>
+SKU          <access_type_sku>
+Quota reset  <quota_reset_date>
+
+chat                  unlimited; overage not permitted, overage count <overage_count>
+completions           unlimited; overage not permitted, overage count <overage_count>
+premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining>%); overage permitted, overage count <overage_count>
+```
+
+每项配额的那一行来自它在 `quota_snapshots` 中的条目：
+
+| 文本 | 字段 |
+| --- | --- |
+| `unlimited` | `unlimited` 为 `true` |
+| `<remaining> of <entitlement> remaining (<percent_remaining>%)` | `remaining`、`entitlement` 和 `percent_remaining` |
+| `overage permitted`、`overage not permitted` | `overage_permitted` |
+| `overage count <n>` | `overage_count` |
+| `credits used <n>`，仅当条目中有它时 | `credits_used` |
+
+每个数字都按 GitHub 发送的原样打印。命令不做四舍五入，也不推算任何数；百分比就是 GitHub
+的 `percent_remaining`。缺少的字段，或类型不是 GitHub 所发类型的字段，打印为 `?`；此时
+`credits_used` 则不显示。缺少的套餐、SKU、重置日期或配额打印为 `not reported`。`chat`、
+`completions` 和 `premium_interactions` 总是排在最前；回答中的其他配额跟在它们之后。
+
+`--json` 打印一个对象，包含 `copilot_plan`、`access_type_sku`、`quota_reset_date` 和
+`quota_snapshots`。前三个键始终存在；GitHub 没有报告的值，或以其他类型发送的值，为
+`null`。`quota_snapshots` 把每个配额 id 映射到它的快照。`chat`、`completions` 和
+`premium_interactions` 始终存在；缺少的快照，或不是 JSON 对象的快照，为 `null`。快照对象
+总是包含全部八个键：`unlimited`、`entitlement`、`remaining`、`percent_remaining`、
+`overage_permitted`、`overage_count`、`token_based_billing` 和 `credits_used`。缺少的字段，
+或以其他类型发送的字段，为 `null`。GitHub 回答中的其余部分，例如登录名和组织列表，从不打印。
+
+每种失败都在 stderr 打印一行并以 `1` 退出；输出报告时以 `0` 退出。请求 header 从不打印。
+GitHub 的回答和网络错误的原因，在打印任何内容之前都会检查是否含有已保存的 token。检查能找到
+原样写出的 token、字母和数字之间插入了其他字符的 token，以及（仅限回答）按 `--json` 的打印
+顺序分散在套餐、SKU、重置日期和配额 id 中的 token。后两种形式只在 token 至少有 16 个字母和
+数字时才查找；GitHub token 远多于此。网络错误原因中原样出现的 token 打印为 `[redacted]`；
+其他匹配则改为打印下表中的固定一行。以其他方式写出的 token，例如大小写不同或经过编码的，
+不会被找到。
+
+| 情况 | 消息 |
+| --- | --- |
+| 没有保存的 token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| token 文件无法读取 | `Could not read the GitHub token at <path>: <code>.` |
+| HTTP 401 或 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
+| 其他 HTTP 状态 | `GitHub answered the usage request with HTTP <status>.` |
+| 回答不是 JSON 对象 | `GitHub's answer to the usage request was not a JSON object.` |
+| 套餐、SKU、重置日期或配额 id 显示出已保存的 token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
+| 网络错误 | `Could not reach GitHub: <reason>` |
+| 网络错误，且原因显示出中间插入了其他字符的已保存 token | `Could not reach GitHub.` |
+| 30 秒内没有回答 | `GitHub did not answer within 30 seconds.` |
+
 ## Token 缓存问题
 
 ```text
