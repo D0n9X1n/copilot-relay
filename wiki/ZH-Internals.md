@@ -561,12 +561,13 @@ system 回合，会把缓存读取限制在工具加原始 system prompt；只�
 
 Chat Completions 没有 `cache_control`。在同一路由上，relay 给包含各断点所在块的那条翻译后
 消息设置 `copilot_cache_control: { "type": "ephemeral" }`，即 VS Code Copilot Chat 发送的
-字段（`src/claude/translate.ts` 中的 `markMessageBreakpoints`），因此缓存前缀不会越过客户端
-设定的边界。`handleUserMessage` 把每个 `tool_result` 变成单独的 tool 消息，所以带标记的
-工具结果标记它自己的 tool 消息，其他带标记的块标记由其余块组成的 user 消息。带断点的消息
-翻译后为空时，标记前一条消息。system 块会合并为一条消息，所以任一 system 块上的断点都会
-标记整个 system prompt；Claude Code 标记的是最后一个 system 块，此时两种边界一致。有标记且
-无提醒时，请求 2 从缓存读取 29,422 token 而不是 29,242，因为第一条 user 消息也被缓存了。
+字段（`src/claude/translate.ts` 中的 `markMessageBreakpoints`）。`handleUserMessage` 把每个
+`tool_result` 变成单独的 tool 消息，所以带标记的工具结果标记它自己的 tool 消息。合并为一条
+消息的块共用该消息的标记，所以较早块上的断点会移到该消息末尾。这适用于 system prompt、
+system 回合和 assistant 消息的各块，以及 user 消息中工具结果以外的块。Claude Code 2.1.288
+发送的两个 system 断点中，一个位于最后一个 system 块，另一个移到合并后 prompt 的末尾。带
+断点的消息翻译后为空时，标记前一条消息。有标记且无提醒时，请求 2 从缓存读取 29,422 token
+而不是 29,242，因为第一条 user 消息也被缓存了。
 
 含此改动的构建在同一天的测量：每次请求都以 `role: "system"` 发送提醒时，五回合 harness
 的请求 2 有 98.21%、请求 5 有 98.30% 的输入来自缓存（29,470 → 31,072 token）。真实

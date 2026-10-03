@@ -122,8 +122,8 @@ function translateClaudeMessagesToOpenAI(
 ): Array<Message> {
   const translated = handleSystemPrompt(system)
 
-  // System blocks join into one message, so a breakpoint on any block marks the whole
-  // prompt. Claude Code marks its last system block, where both boundaries agree.
+  // System blocks join into one message, so a breakpoint on any block marks the end of
+  // the whole prompt.
   if (claudeChatRoute && hasCacheBreakpoint(system)) {
     markCacheBreakpoint(translated.at(-1))
   }
@@ -140,8 +140,9 @@ function translateClaudeMessagesToOpenAI(
   return translated
 }
 
-// Put each breakpoint on the translated message that holds its block, so a cached
-// prefix never extends past the client's boundary. handleUserMessage emits one tool
+// Put each breakpoint on the translated message that holds its block. Tool results stay
+// separate messages; blocks that join into one message share its mark, so a breakpoint
+// on an earlier block moves to the end of that message. handleUserMessage emits one tool
 // message per tool_result, in order, then one user message for the remaining blocks.
 function markMessageBreakpoints(message: ClaudeMessage, translated: Array<Message>, start: number): void {
   if (message.role !== "user" || !Array.isArray(message.content)) {

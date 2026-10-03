@@ -666,14 +666,15 @@ measurements cover caching, not how the model weighs a later operator instructio
 Chat Completions has no `cache_control`. On the same route the relay sets
 `copilot_cache_control: { "type": "ephemeral" }`, the field VS Code Copilot Chat sends, on the
 translated message that holds each breakpoint's block (`markMessageBreakpoints` in
-`src/claude/translate.ts`), so a cached prefix never extends past the client's boundary.
-`handleUserMessage` turns each `tool_result` into its own tool message, so a marked result
-marks that tool message, and any other marked block marks the user message built from the
-remaining blocks. A breakpoint on a message that translates to nothing marks the previous
-message. System blocks join into one message, so a breakpoint on any of them marks the whole
-system prompt; Claude Code marks its last system block, where both boundaries agree. With marks
-and no reminder, request 2 read 29,422 tokens instead of 29,242, because the first user message
-was cached too.
+`src/claude/translate.ts`). `handleUserMessage` turns each `tool_result` into its own tool
+message, so a marked result marks that tool message. Blocks that join into one message share
+its mark, so a breakpoint on an earlier block moves to the end of that message. That covers the
+blocks of the system prompt, of a system turn and of an assistant message, and the blocks of a
+user message other than its tool results. Of the two system breakpoints Claude Code 2.1.288
+sends, one is on the last system block and the other moves to the end of the joined prompt. A
+breakpoint on a message that translates to nothing marks the previous message. With marks and
+no reminder, request 2 read 29,422 tokens instead of 29,242, because the first user message was
+cached too.
 
 A build with this change, measured the same day: with the reminder sent as `role: "system"` on
 every request, the five-turn harness read 98.21% of request 2 and 98.30% of request 5 from cache
