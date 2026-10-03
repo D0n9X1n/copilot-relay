@@ -47,7 +47,7 @@ export interface CompletionRecord {
 export interface CacheRow {
   /**
    * Local "YYYY-MM-DD HH:00" or "YYYY-MM-DD" in a trend; null in the summary. When clocks go back,
-   * the two rows of the repeated hour end in their UTC offset, such as " UTC-04:00".
+   * the rows of each hour that repeats end in their UTC offset, such as " UTC-04:00".
    */
   bucket: string | null
   model: string
@@ -75,7 +75,7 @@ export interface CacheReportOptions {
   since?: Date
   /** Only models whose name contains this text, ignoring case. */
   model?: string
-  /** The hit-rate goal, in percent, with at most two decimals. */
+  /** The hit-rate goal, in percent, with at most two decimals; buildCacheReport refuses others. */
   goal: number
 }
 
@@ -319,21 +319,20 @@ async function* readCompletionRecords(since: Date | undefined): AsyncGenerator<C
 interface Bucket {
   /** CacheRow.bucket: a local hour or day, or null in the summary. */
   label: string | null
-  /** For an hour, the instant it began, which tells apart two hours with one label; 0 otherwise. */
-  start: number
-  /** For an hour, the UTC offset it was in, shown when its label repeats. */
+  /** For an hour, the UTC offset it was in. With the label, it names one real hour. */
   utcOffset?: string
 }
 
 type CacheTotals = Omit<CacheRow, "uncachedInputTokens" | "hitRate" | "belowGoal"> & {
-  start: number
   utcOffset?: string
+  /** When the earliest call counted in the row was made. */
+  firstCall: number
 }
 
 const emptyTotals = (bucket: Bucket, record: CompletionRecord): CacheTotals => ({
   bucket: bucket.label,
-  start: bucket.start,
   ...(bucket.utcOffset !== undefined && { utcOffset: bucket.utcOffset }),
+  firstCall: record.timestamp.getTime(),
   model: record.model,
   route: record.route,
   requests: 0,
@@ -346,6 +345,7 @@ const emptyTotals = (bucket: Bucket, record: CompletionRecord): CacheTotals => (
 
 const addRecord = (totals: CacheTotals, record: CompletionRecord): void => {
   totals.requests += 1
+  totals.firstCall = Math.min(totals.firstCall, record.timestamp.getTime())
 
   // Without a cache read the call's caching is unknown, not zero. It stays out of every token
   // column, so that hitRate is always the row's cache read over the row's input.
@@ -414,22 +414,19 @@ const formatUtcOffset = (timestamp: Date): string => {
 // Local time, matching the dates in the log file names.
 const bucketOf = (timestamp: Date, view: CacheView): Bucket => {
   if (view === "daily") {
-    return { label: formatLogDate(timestamp), start: 0 }
+    return { label: formatLogDate(timestamp) }
   }
 
   if (view === "hourly") {
-    // When clocks go back, one local hour happens twice. The instant the local hour began tells the
-    // two apart where the label cannot.
-    const intoHour = (timestamp.getMinutes() * 60 + timestamp.getSeconds()) * 1000 + timestamp.getMilliseconds()
-
+    // When clocks go back, a local hour happens twice, first at one UTC offset and then at another,
+    // so the offset tells the two apart where the label cannot.
     return {
       label: `${formatLogDate(timestamp)} ${twoDigits(timestamp.getHours())}:00`,
-      start: timestamp.getTime() - intoHour,
       utcOffset: formatUtcOffset(timestamp),
     }
   }
 
-  return { label: null, start: 0 }
+  return { label: null }
 }
 
 const compareText = (left: string, right: string): number => {
@@ -440,31 +437,46 @@ const compareText = (left: string, right: string): number => {
   return left > right ? 1 : 0
 }
 
-// Oldest bucket first, so the latest hour or day ends the table. Hours sort by when they began,
-// which keeps the two copies of a repeated hour in the order they happened.
-const compareTotals = (left: CacheTotals, right: CacheTotals): number =>
-  left.start - right.start
-  || compareText(left.bucket ?? "", right.bucket ?? "")
-  || compareText(left.model, right.model)
-  || compareText(left.route, right.route)
+// The rows of one hour, day or summary: the label, and for an hour the UTC offset.
+const segmentOf = (totals: CacheTotals): string => JSON.stringify([totals.bucket, totals.utcOffset ?? null])
 
-// The two rows of an hour that repeated when clocks went back end in their UTC offset, so the table
-// and --json tell them apart.
+// Oldest hour or day first, so the latest one ends the table, then by model and route. Hours and
+// days sort by their earliest call, not by label, so hours that repeat when clocks go back stay in
+// the order they happened. A call's own minutes cannot date its hour: Pacific/Chatham goes back at
+// 45 minutes past, so its second 02:00 begins at 02:45.
+const sortTotals = (groups: Array<CacheTotals>): Array<CacheTotals> => {
+  const firstCalls = new Map<string, number>()
+
+  for (const totals of groups) {
+    const segment = segmentOf(totals)
+    firstCalls.set(segment, Math.min(firstCalls.get(segment) ?? totals.firstCall, totals.firstCall))
+  }
+
+  const firstCallOf = (totals: CacheTotals): number => firstCalls.get(segmentOf(totals)) ?? totals.firstCall
+
+  return [...groups].sort((left, right) =>
+    firstCallOf(left) - firstCallOf(right)
+    || compareText(left.model, right.model)
+    || compareText(left.route, right.route))
+}
+
+// When clocks go back, the rows of each hour that repeats end in their UTC offset, so the table
+// and --json tell the two hours apart.
 const labelRepeatedHours = (sorted: Array<CacheTotals>): void => {
-  const startsByLabel = new Map<string, Set<number>>()
+  const offsetsByLabel = new Map<string, Set<string>>()
 
   for (const totals of sorted) {
     if (totals.utcOffset !== undefined && totals.bucket !== null) {
-      const starts = startsByLabel.get(totals.bucket) ?? new Set<number>()
-      starts.add(totals.start)
-      startsByLabel.set(totals.bucket, starts)
+      const offsets = offsetsByLabel.get(totals.bucket) ?? new Set<string>()
+      offsets.add(totals.utcOffset)
+      offsetsByLabel.set(totals.bucket, offsets)
     }
   }
 
   for (const totals of sorted) {
-    const starts = totals.bucket === null ? undefined : startsByLabel.get(totals.bucket)
+    const offsets = totals.bucket === null ? undefined : offsetsByLabel.get(totals.bucket)
 
-    if (totals.utcOffset !== undefined && starts !== undefined && starts.size > 1) {
+    if (totals.utcOffset !== undefined && offsets !== undefined && offsets.size > 1) {
       totals.bucket = `${totals.bucket} ${totals.utcOffset}`
     }
   }
@@ -472,6 +484,10 @@ const labelRepeatedHours = (sorted: Array<CacheTotals>): void => {
 
 /** Reads the retained logs and returns one row per bucket, model and route. */
 export const buildCacheReport = async (options: CacheReportOptions): Promise<Array<CacheRow>> => {
+  // Options built in code follow the --goal rule too. Rows are compared in whole hundredths of a
+  // percent, so a finer goal would be applied rounded under a heading that shows it unrounded.
+  parseGoal(String(options.goal))
+
   const modelFilter = options.model?.toLowerCase()
   const groups = new Map<string, CacheTotals>()
 
@@ -481,7 +497,7 @@ export const buildCacheReport = async (options: CacheReportOptions): Promise<Arr
     }
 
     const bucket = bucketOf(record.timestamp, options.view)
-    const key = JSON.stringify([bucket.label, bucket.start, record.model, record.route])
+    const key = JSON.stringify([bucket.label, bucket.utcOffset ?? null, record.model, record.route])
     let totals = groups.get(key)
 
     if (totals === undefined) {
@@ -492,7 +508,7 @@ export const buildCacheReport = async (options: CacheReportOptions): Promise<Arr
     addRecord(totals, record)
   }
 
-  const sorted = [...groups.values()].sort(compareTotals)
+  const sorted = sortTotals([...groups.values()])
   labelRepeatedHours(sorted)
 
   return sorted.map((totals) => toRow(totals, options.goal))

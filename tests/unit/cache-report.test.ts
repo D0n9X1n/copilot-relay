@@ -398,6 +398,33 @@ test("an hour that repeats when clocks go back keeps one row per real hour", asy
   })
 })
 
+// Pacific/Chatham goes back 45 minutes past the hour, from 03:45 to 02:45, so the 02:00 and 03:00
+// labels both repeat. Subtracting a call's minutes would date the second 02:00 to 13:15 UTC, the
+// start of the first 03:00, and sort the two hours out of order.
+test("hours that repeat when clocks go back mid-hour stay in the order they happened", async () => {
+  await inTimeZone("Pacific/Chatham", async () => {
+    // Daylight saving time ends at 03:45 local time on 2026-04-05, which is 14:00 UTC on 2026-04-04.
+    await writeLogs({
+      [dated("2026-04-05")]: entries(
+        // 02:15 and 03:15 at UTC+13:45, then 02:50 and 03:15 at UTC+12:45.
+        chatCall("2026-04-04T12:30:00.000Z", "input_tokens=100 cache_read_input_tokens=10"),
+        chatCall("2026-04-04T13:30:00.000Z", "input_tokens=100 cache_read_input_tokens=20"),
+        chatCall("2026-04-04T14:05:00.000Z", "input_tokens=100 cache_read_input_tokens=30"),
+        chatCall("2026-04-04T14:30:00.000Z", "input_tokens=100 cache_read_input_tokens=40"),
+      ),
+    })
+
+    const rows = await buildCacheReport({ view: "hourly", since: new Date("2026-04-04T00:00:00.000Z"), goal: 95 })
+
+    assert.deepEqual(rows.map((row) => [row.bucket, row.cacheReadTokens]), [
+      ["2026-04-05 02:00 UTC+13:45", 10],
+      ["2026-04-05 03:00 UTC+13:45", 20],
+      ["2026-04-05 02:00 UTC+12:45", 30],
+      ["2026-04-05 03:00 UTC+12:45", 40],
+    ])
+  })
+})
+
 test("--since and --model narrow the report", async () => {
   await writeLogs({
     // 10:30 local time on 2026-10-02: older than the default 24 hours, inside 2d.
@@ -646,6 +673,16 @@ test("a decimal goal flags exactly the rows whose printed rate is below it", asy
   assert.deepEqual(rows.map((row) => [row.model, row.belowGoal]), [["at-goal", false], ["under-goal", true]])
   assert.match(text, /^ {2}at-goal .* 95\.40%$/m)
   assert.match(text, /^ {2}under-goal .* 95\.39% {2}below goal$/m)
+})
+
+// A caller that builds the options itself gets the --goal rule too. Rows are compared in whole
+// hundredths of a percent, so 97.124 would be applied as 97.12 under a heading that claims 97.124.
+test("a goal that --goal would refuse is refused, not rounded", async () => {
+  await writeLogs({ [dated("2026-10-03")]: entries(chatLine) })
+
+  for (const goal of [97.124, Number.NaN, -1, 101]) {
+    await assert.rejects(buildCacheReport({ view: "summary", since: lastDay, goal }), CacheUsageError, String(goal))
+  }
 })
 
 test("an empty window says there is no data and where the data would come from", async () => {

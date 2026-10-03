@@ -813,8 +813,8 @@ is truncated rather than rounded, so a row below the goal never prints as the go
 `HIT RATE` is below the goal.
 
 `--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
-the dates in the log file names. When clocks go back, the repeated local hour
-gets one row per real hour, each ending in its UTC offset, such as
+the dates in the log file names. When clocks go back, a local hour that happens
+twice gets one row per real hour, each ending in its UTC offset, such as
 `2026-11-01 01:00 UTC-04:00` and `2026-11-01 01:00 UTC-05:00`. Without `--since`,
 the summary and the hourly trend cover the last 24 hours and the daily trend
 covers every retained day. A duration counts back from now; a date, or a time
