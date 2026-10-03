@@ -10,6 +10,7 @@ import {
   refuseExternalConnections,
   replyWith,
   startFakeGitHub,
+  withProxyEnvironment,
 } from "../fixtures/network"
 
 // paths.ts resolves the home directory when it is imported, so it is redirected first. Node reads
@@ -29,6 +30,7 @@ type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 // The token file the tests write must be the temporary one.
 assert.ok(paths.githubTokenPath.startsWith(home), paths.githubTokenPath)
+assert.ok(paths.configPath.startsWith(home), paths.configPath)
 
 type Answer = (request: Request) => Response | Promise<Response>
 
@@ -581,4 +583,21 @@ test("a token file that cannot be read is reported by its error code", async (t)
   mockGitHub(t, noNetwork)
 
   assert.match(await failure(), /^Could not read the GitHub token at .+github_token: E[A-Z]+\.$/)
+})
+
+// Why (#153): with upstreamProxy: env the proxy URL comes from the environment and can carry a
+// password, so a malformed one stops the command with the fixed line that names the variables.
+test("upstreamProxy: env with a malformed proxy variable fails before any request, without its value", async (t) => {
+  await storeToken(token)
+  await fs.writeFile(paths.configPath, "upstreamProxy: env\n")
+  t.after(() => fs.rm(paths.configPath, { force: true }))
+  const requests = mockGitHub(t, noNetwork)
+
+  const message = await withProxyEnvironment({ HTTPS_PROXY: "http://usage-env-user:usage-env-secret@[bad" }, failure)
+
+  assert.equal(
+    message,
+    "Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL",
+  )
+  assert.equal(requests.length, 0)
 })

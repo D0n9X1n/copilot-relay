@@ -1,11 +1,10 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
-import { createServer, request as forward } from "node:http"
+import { createServer } from "node:http"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
-import type { Duplex } from "node:stream"
 import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
@@ -15,6 +14,7 @@ import { fetch as undiciFetch, type Dispatcher } from "undici"
 import {
   closedPort,
   refuseExternalConnections,
+  startRecordingProxy,
   withProxyEnvironment,
   withoutProxyVariables,
 } from "../fixtures/network"
@@ -90,94 +90,6 @@ const startJsonServer = async (payload: unknown) => {
     host: `127.0.0.1:${port}`,
     origin: `http://127.0.0.1:${port}`,
     requests,
-  }
-}
-
-interface ProxyRecord {
-  authorization: string | undefined
-  method: string | undefined
-  target: string | undefined
-}
-
-const loopbackHosts = new Set(["127.0.0.1", "localhost"])
-
-const parseUrl = (value: string): URL | undefined => {
-  try {
-    return new URL(value)
-  } catch {
-    return undefined
-  }
-}
-
-// A forward proxy that records every request it receives, in both forms a client may send: CONNECT
-// for a tunnel, which undici uses, and an absolute-form URL. It relays only to this machine and
-// answers 403 for any other host, so a call routed through it never reaches GitHub or Copilot.
-const startRecordingProxy = async () => {
-  const records: Array<ProxyRecord> = []
-  const tunnels = new Set<Duplex>()
-  const server = createServer((request, response) => {
-    records.push({
-      authorization: request.headers["proxy-authorization"],
-      method: request.method,
-      target: request.url,
-    })
-    const target = parseUrl(request.url ?? "")
-    if (target === undefined || target.protocol !== "http:" || !loopbackHosts.has(target.hostname)) {
-      response.writeHead(403)
-      response.end()
-      return
-    }
-
-    const headers = { ...request.headers }
-    delete headers["proxy-authorization"]
-    const upstream = forward(target, { headers, method: request.method }, (reply) => {
-      response.writeHead(reply.statusCode ?? 502, reply.headers)
-      reply.pipe(response)
-    })
-    upstream.on("error", () => response.destroy())
-    request.pipe(upstream)
-  })
-
-  server.on("connect", (request, socket, head) => {
-    records.push({
-      authorization: request.headers["proxy-authorization"],
-      method: request.method,
-      target: request.url,
-    })
-    socket.on("error", () => socket.destroy())
-    const target = parseUrl(`http://${request.url ?? ""}`)
-    if (target === undefined || !loopbackHosts.has(target.hostname)) {
-      socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-      return
-    }
-
-    const upstream = net.connect(Number(target.port), target.hostname, () => {
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")
-      upstream.write(head)
-      upstream.pipe(socket)
-      socket.pipe(upstream)
-    })
-    tunnels.add(socket)
-    upstream.on("error", () => socket.destroy())
-    socket.on("close", () => {
-      tunnels.delete(socket)
-      upstream.destroy()
-    })
-  })
-
-  const port = await listen(server)
-
-  return {
-    close: async () => {
-      for (const socket of tunnels) {
-        socket.destroy()
-      }
-
-      server.closeAllConnections()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
-    },
-    records,
-    url: `http://127.0.0.1:${port}`,
   }
 }
 

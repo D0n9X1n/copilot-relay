@@ -4,13 +4,14 @@ import fs from "node:fs/promises"
 import type { ServerResponse } from "node:http"
 import os from "node:os"
 import path from "node:path"
-import test from "node:test"
+import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 
 import {
   refuseExternalConnections,
   replyJson,
   startFakeGitHub,
+  startRecordingProxy,
   withoutProxyVariables,
 } from "../fixtures/network"
 
@@ -24,6 +25,7 @@ process.env.USERPROFILE = home
 const { paths } = await import("../../src/lib/paths")
 
 assert.ok(paths.githubTokenPath.startsWith(home), paths.githubTokenPath)
+assert.ok(paths.configPath.startsWith(home), paths.configPath)
 
 const entry = new URL("../../src/main.ts", import.meta.url)
 const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
@@ -287,3 +289,48 @@ for (const args of [["usage"], ["usage", "--json"]]) {
     assert.match(result.stderr, /^GitHub's answer to the usage request contains the stored token, so none of it is printed\.$/m)
   })
 }
+
+// Writes config.yaml for one test and removes it after.
+const writeConfig = async (t: TestContext, lines: Array<string>): Promise<void> => {
+  await fs.mkdir(paths.appDir, { recursive: true })
+  await fs.writeFile(paths.configPath, `${lines.join("\n")}\n`)
+  t.after(() => fs.rm(paths.configPath, { force: true }))
+}
+
+// Why (#153): behind a proxy the usage request must go through upstreamProxy, like every other
+// GitHub call. run() checks that nothing under the home directory changed: reading the config
+// neither completes nor rewrites it, and no log file appears.
+test("usage sends its request through upstreamProxy and still writes no file", async (t) => {
+  await storeToken()
+  const proxy = await startRecordingProxy()
+  t.after(() => proxy.close())
+  await writeConfig(t, [`upstreamProxy: ${proxy.url.replace("http://", "http://usage-user:usage-pass@")}`])
+
+  const result = await run(["usage"], "quota")
+
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /^Plan +fixture-plan$/m)
+  assert.deepEqual(result.requests, [`GET ${usageUrl}`])
+  // One tunnel, with the proxy's credentials. It leads to the stand-in, which redirectGitHubTo
+  // puts in GitHub's place.
+  assert.deepEqual(proxy.records, [{
+    authorization: `Basic ${Buffer.from("usage-user:usage-pass").toString("base64")}`,
+    method: "CONNECT",
+    target: new URL(github.origin).host,
+  }])
+})
+
+// Why (#153): usage reads config.yaml without writing it, so an invalid file stops it with a line
+// that names the file and repeats nothing from it: the file can hold a proxy password.
+test("usage with an invalid config.yaml exits 1 before any request and prints nothing from the file", async (t) => {
+  await storeToken()
+  await writeConfig(t, ["upstreamProxy: socks5://usage-user:usage-config-secret@proxy.example:1080"])
+
+  const result = await run(["usage"], "quota")
+
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /^Could not read the config at .+config\.yaml; fix it, then run copilot-relay usage again\.$/m)
+  assert.doesNotMatch(result.stderr, /usage-config-secret|socks5/)
+  assert.deepEqual(result.requests, [])
+})

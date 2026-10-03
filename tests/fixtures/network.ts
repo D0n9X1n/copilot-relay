@@ -1,10 +1,11 @@
 // Stand-ins that keep tests off the network: GitHub answered locally, no socket that leaves this
-// machine, and proxy variables under the test's control.
+// machine, proxy variables under the test's control, and a local proxy that records what it is sent.
 //
 // The relay sends GitHub calls through the same undici dispatcher as Copilot calls (#153), so a
 // test can neither replace the global fetch to fake GitHub nor let a call reach github.com.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { createServer, request as forward, type IncomingMessage, type ServerResponse } from "node:http"
 import net from "node:net"
+import type { Duplex } from "node:stream"
 
 import { Agent, type Dispatcher } from "undici"
 
@@ -226,4 +227,103 @@ export const closedPort = async (): Promise<number> => {
 
   await new Promise<void>((resolve) => server.close(() => resolve()))
   return address.port
+}
+
+export interface ProxyRecord {
+  authorization: string | undefined
+  method: string | undefined
+  target: string | undefined
+}
+
+export interface RecordingProxy {
+  close: () => Promise<void>
+  /** Every request received: a CONNECT with its host:port target, or an absolute-form URL. */
+  records: Array<ProxyRecord>
+  url: string
+}
+
+const parseUrl = (value: string): URL | undefined => {
+  try {
+    return new URL(value)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * A forward proxy that records every request it receives, in both forms a client may send: CONNECT
+ * for a tunnel, which undici uses, and an absolute-form URL. It relays only to this machine and
+ * answers 403 for any other host, so a call routed through it never reaches GitHub or Copilot.
+ */
+export const startRecordingProxy = async (): Promise<RecordingProxy> => {
+  const records: Array<ProxyRecord> = []
+  const tunnels = new Set<Duplex>()
+  const server = createServer((request, response) => {
+    records.push({
+      authorization: request.headers["proxy-authorization"],
+      method: request.method,
+      target: request.url,
+    })
+    const target = parseUrl(request.url ?? "")
+    if (target === undefined || target.protocol !== "http:" || !loopbackHosts.has(target.hostname)) {
+      response.writeHead(403)
+      response.end()
+      return
+    }
+
+    const headers = { ...request.headers }
+    delete headers["proxy-authorization"]
+    const upstream = forward(target, { headers, method: request.method }, (reply) => {
+      response.writeHead(reply.statusCode ?? 502, reply.headers)
+      reply.pipe(response)
+    })
+    upstream.on("error", () => response.destroy())
+    request.pipe(upstream)
+  })
+
+  server.on("connect", (request, socket, head) => {
+    records.push({
+      authorization: request.headers["proxy-authorization"],
+      method: request.method,
+      target: request.url,
+    })
+    socket.on("error", () => socket.destroy())
+    const target = parseUrl(`http://${request.url ?? ""}`)
+    if (target === undefined || !loopbackHosts.has(target.hostname)) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+      return
+    }
+
+    const upstream = net.connect(Number(target.port), target.hostname, () => {
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")
+      upstream.write(head)
+      upstream.pipe(socket)
+      socket.pipe(upstream)
+    })
+    tunnels.add(socket)
+    upstream.on("error", () => socket.destroy())
+    socket.on("close", () => {
+      tunnels.delete(socket)
+      upstream.destroy()
+    })
+  })
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address !== "object") {
+    throw new Error("The recording proxy did not bind a port")
+  }
+
+  return {
+    close: async () => {
+      for (const socket of tunnels) {
+        socket.destroy()
+      }
+
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+    records,
+    url: `http://127.0.0.1:${address.port}`,
+  }
 }
