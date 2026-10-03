@@ -342,6 +342,18 @@ with an unref'd zero-delay timer before reusing it, and on Windows that timer ca
 wait for the next system timer tick. `tests/unit/copilot-client.test.ts` covers
 both.
 
+Keeping idle connections longer has a cost. Before undici writes a request to an
+idle connection, it processes any FIN or RST already received on it, so a
+connection Copilot closed is not reused. A connection that a NAT or proxy between
+the relay and Copilot drops without sending either still looks open. If the
+request written to it gets a reset back, `fetchCopilot` retries it once, as it
+retries any failed fetch that was not aborted. If nothing comes back, the request
+fails when the operating system gives up on the connection, which is also retried
+once, or when the `upstreamTimeoutSeconds` deadline passes first, which fails with
+a 504 that is not retried. With the 4-second default, only a NAT or proxy that
+drops connections idle for less than 4 seconds could cause this; now one that
+drops them within 50 seconds can.
+
 ## Streaming
 
 ### Long context and output budgets
