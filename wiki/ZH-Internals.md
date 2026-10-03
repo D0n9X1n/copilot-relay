@@ -135,13 +135,18 @@ token 保护。
 `apiKey` 在每个请求中从实时的 `ProxyConfig` 读取，因此热重载对下一个请求生效。
 `isOpenProbe` 豁免 `GET /healthz` 和 `GET`/`HEAD /api/hello`；其他所有路由（包括未知
 路由）都需要密钥。`presentsApiKey` 用 SHA-256 分别对配置的密钥和每个出示的值
-（`x-api-key` 及 `Authorization: Bearer` token）求摘要，再用 `timingSafeEqual` 比较，
-因此耗时既不泄露密钥，也不泄露其长度。拒绝时返回 HTTP `401` `authentication_error`
+（`x-api-key` 及 `Authorization: Bearer` token）求摘要，再用 `timingSafeEqual` 比较这些
+定长摘要，比较不会在第一个不同的字节处提前结束。拒绝时返回 HTTP `401` `authentication_error`
 及 `WWW-Authenticate: Bearer`，发生在读取正文之前，也在未知路由处理器可能记录 payload
 之前；响应从不回显出示的值。`src/start.ts` 的 `applyRuntimeConfig` 在启动时和每次
 重载时用 `registerLogSecret` 登记密钥，`status` 和 `models` 在使用前也会登记。无论
-密钥由哪个 header 携带，`RequestTrace` 都在捕获元数据中保护它；`toStatusConfig` 把它
-显示为 `[redacted]`。
+密钥由哪个 header 携带，`RequestTrace` 都不会把它记入捕获的 header；但捕获的正文文件
+按设计不脱敏，客户端放进提示词的密钥会保存在其中。`toStatusConfig` 把密钥显示为
+`[redacted]`。在 `copilot-relay models` 中，`src/models.ts` 的 `printable` 在缩短或补齐
+一行之前替换每个模型、配置和搜索字符串中的密钥，`src/lib/model-probe.ts` 的 `safeId`
+使含有密钥的 ID 既不被探测也不被打印，两条路径还会再清理打印的每一行。Claude Code 的
+设置保存密钥时，`applyClaudeConfig` 通过 `writeFileSnapshot` 的 `ownerOnly` 选项把它们
+发布为仅所有者可读写。
 
 读取 POST 正文之前，`src/lib/config.ts` 的 `snapshotProxyConfig` 及
 `src/lib/state.ts` 的 `snapshotRuntimeState` / `withRuntimeState` 为该请求固定路由、

@@ -812,17 +812,52 @@ grep -n "authentication rejected\|token refresh completed\|token recovery failed
 ## Claude Code 设置不对
 
 当 `claudeSetup: true` 时，`copilot-relay start` 会更新 `~/.claude/settings.json`。
+设置了 `apiKey` 时，该文件以 `ANTHROPIC_AUTH_TOKEN` 保存密钥，所以不要打印这个文件，
+也不要整份分享。下面的检查打印其他值、是否设置了 token，以及 `ANTHROPIC_BASE_URL`
+上的中继如何应答这个 token，从不打印 token 本身：
 
 ```sh
-cat ~/.claude/settings.json
+node - <<'EOF'
+const file = require("node:path").join(require("node:os").homedir(), ".claude", "settings.json")
+let env
+try {
+  env = JSON.parse(require("node:fs").readFileSync(file, "utf8")).env || {}
+} catch {
+  console.log(`${file}: missing or not valid JSON`)
+}
+if (env) {
+  const base = env.ANTHROPIC_BASE_URL
+  const token = env.ANTHROPIC_AUTH_TOKEN
+  console.log(`ANTHROPIC_BASE_URL: ${base ?? "(unset)"}`)
+  console.log(`CLAUDE_CODE_AUTO_MODE_SERVER: ${env.CLAUDE_CODE_AUTO_MODE_SERVER ?? "(unset)"}`)
+  console.log(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`)
+  if (base) {
+    fetch(`${base}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        await response.arrayBuffer()
+        console.log(`The relay answers with HTTP ${response.status}.`)
+      })
+      .catch(() => console.log(`No relay answered at ${base}.`))
+  }
+}
+EOF
 ```
+
+在 PowerShell 中，用 here-string 传入同一段脚本：把第一行换成 `@'`，最后一行换成
+`'@ | node -`。
+
+`200` 表示中继接受这个 token：它与中继的 `apiKey` 一致，或者没有设置 `apiKey`。
+`401` 表示 token 缺失，或与中继正在使用的密钥不一致；见下文。
 
 期望的值：
 
 - `ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:4142`
-- 设置了 `apiKey` 时，`ANTHROPIC_AUTH_TOKEN` 是中继的 `apiKey`；否则它存在，是给
-  本地中继用的占位值
+- `ANTHROPIC_AUTH_TOKEN` 已设置。设置了 `apiKey` 时，启动会把密钥写在这里。未设置时，
+  启动保留已有 token，即使它是之前的 `apiKey` 写入的密钥，只在 token 缺失或为空时设为
+  `dummy`；此时中继接受任何 token
 - `CLAUDE_CODE_AUTO_MODE_SERVER` 为 `0`，除非你设置了其他值
+- 设置了 `apiKey` 时，在 Linux 和 macOS 上只有你能读取该文件：
+  `ls -lL ~/.claude/settings.json` 显示 `-rw-------`
 
 改 `host` 或 `port` 需要重启中继，因为监听 socket 无法在热重载期间迁移。
 

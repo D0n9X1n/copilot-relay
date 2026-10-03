@@ -545,7 +545,10 @@ relay 在读取正文、执行任何路由之前返回 HTTP `401` 及 Anthropic 
   检查随之关闭。
 - 密钥不会写入日志，也不会显示。`copilot-relay status` 在文本和 `--json` 输出中都把它
   显示为 `[redacted]`，并在 `GET /v1/models` 探测和 `--deep` 的 `POST /v1/messages`
-  探测中发送它。
+  探测中发送它。模型 ID、显示名称、配置的模型或搜索中含有密钥时，`copilot-relay models`
+  打印 `[redacted]`，`--deep` 也不会探测含有密钥的 ID。
+- Debug 捕获不记录携带密钥的 header，但请求和响应正文不脱敏，所以客户端放进提示词的
+  密钥会保存在其中；见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 - `claudeSetup: true` 时，`start` 会把密钥写成 Claude Code 的 `ANTHROPIC_AUTH_TOKEN`；
   见 [Claude Code 配置](#claude-code-配置)。
 - `host` 不是 loopback 地址且 `apiKey` 为空时，启动会记录一条提到 `apiKey` 的警告。
@@ -619,16 +622,18 @@ token 设置。切换模型时应检查这些设置；自动设置只补充缺�
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4142
-ANTHROPIC_AUTH_TOKEN=<apiKey，或本地占位 token>
+ANTHROPIC_AUTH_TOKEN=<apiKey，或文件中没有 token 时的本地占位 token>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<发现的 GPT context 窗口>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预算>
 CLAUDE_CODE_AUTO_MODE_SERVER=0
 ```
 
 设置了 `apiKey` 时，token 就是该密钥，会替换占位值或旧密钥，因为 relay 要求每个请求
-都携带它；见[要求客户端密钥](#要求客户端密钥)。未设置时，token 是本地 relay 占位值，
-只在缺失时写入；真正访问 GitHub Copilot 用的是 `~/.copilot-relay/` 里的
-GitHub/Copilot token。
+都携带它；见[要求客户端密钥](#要求客户端密钥)。之后 `start` 把该文件发布为只有你能读取
+（模式 `0600`；Windows 没有这类模式位），文件模式允许其他本地用户读取时也会重新发布。
+未设置 `apiKey` 时，`start` 保留已有的 `ANTHROPIC_AUTH_TOKEN`，即使它是之前的 `apiKey`
+写入的密钥，也不改变文件模式；只有 token 缺失或为空时才设为 `dummy`。此时任何值都可以，
+因为真正访问 GitHub Copilot 用的是 `~/.copilot-relay/` 里的 GitHub/Copilot token。
 两个预算变量仅在缺失时写入；明确设置的较小值会被保留。Relay 会按实际路由到的模型
 限制每个请求的输出预算，因此从 Astra 切换到 Opus 时，共用的客户端设置不会让请求
 超过 Opus 的上限。若网关没有提供有效的限制元数据，启动日志会说明限制不可用，

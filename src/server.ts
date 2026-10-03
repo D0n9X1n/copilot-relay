@@ -89,8 +89,9 @@ const sha256 = (value: string): Buffer => createHash("sha256").update(value, "ut
 /**
  * True when the request carries the relay's apiKey as x-api-key or Authorization: Bearer.
  *
- * Each presented value is compared as a SHA-256 digest with timingSafeEqual, so the time taken
- * depends on neither the key nor its length. Both headers are compared even after one matches.
+ * The configured key and each presented value are hashed with SHA-256, and timingSafeEqual compares
+ * the fixed-length digests, so the comparison never stops at the first byte that differs. Both
+ * headers are compared even after one matches.
  */
 const presentsApiKey = (headers: Headers, apiKey: string): boolean => {
   const expected = sha256(apiKey)

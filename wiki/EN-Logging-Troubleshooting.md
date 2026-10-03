@@ -920,18 +920,55 @@ model-list endpoints alone do not prove upstream access.
 ## Claude Code settings are wrong
 
 `copilot-relay start` can update `~/.claude/settings.json` when
-`claudeSetup: true`.
+`claudeSetup: true`. With `apiKey` set, that file holds the key as
+`ANTHROPIC_AUTH_TOKEN`, so do not print the file or share it whole. This check
+prints the other values, whether a token is set, and how the relay at
+`ANTHROPIC_BASE_URL` answers that token, never the token itself:
 
 ```sh
-cat ~/.claude/settings.json
+node - <<'EOF'
+const file = require("node:path").join(require("node:os").homedir(), ".claude", "settings.json")
+let env
+try {
+  env = JSON.parse(require("node:fs").readFileSync(file, "utf8")).env || {}
+} catch {
+  console.log(`${file}: missing or not valid JSON`)
+}
+if (env) {
+  const base = env.ANTHROPIC_BASE_URL
+  const token = env.ANTHROPIC_AUTH_TOKEN
+  console.log(`ANTHROPIC_BASE_URL: ${base ?? "(unset)"}`)
+  console.log(`CLAUDE_CODE_AUTO_MODE_SERVER: ${env.CLAUDE_CODE_AUTO_MODE_SERVER ?? "(unset)"}`)
+  console.log(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`)
+  if (base) {
+    fetch(`${base}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        await response.arrayBuffer()
+        console.log(`The relay answers with HTTP ${response.status}.`)
+      })
+      .catch(() => console.log(`No relay answered at ${base}.`))
+  }
+}
+EOF
 ```
+
+In PowerShell, pipe the same script as a here-string: replace the first line with
+`@'` and the last line with `'@ | node -`.
+
+`200` means the relay accepts the token: it matches the relay's `apiKey`, or no
+`apiKey` is set. `401` means the token is missing or differs from the key the
+relay is running with; see below.
 
 Expected values:
 
 - `ANTHROPIC_BASE_URL` points at `http://127.0.0.1:4142`
-- `ANTHROPIC_AUTH_TOKEN` is the relay's `apiKey` when one is set; otherwise it
-  exists as a dummy value for local relay use
+- `ANTHROPIC_AUTH_TOKEN` is set. With `apiKey` set, startup writes the key there.
+  Without one, startup keeps an existing token, even a key an earlier `apiKey`
+  wrote, and sets `dummy` only when the token is missing or empty; the relay then
+  accepts any token
 - `CLAUDE_CODE_AUTO_MODE_SERVER` is `0`, unless you set another value
+- With `apiKey` set, only you can read the file on Linux and macOS:
+  `ls -lL ~/.claude/settings.json` shows `-rw-------`
 
 Changing `host` or `port` requires restarting the relay, because the listening
 socket cannot move during hot reload.

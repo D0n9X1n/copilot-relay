@@ -153,15 +153,22 @@ Claude token.
 applies to the next one. `isOpenProbe` exempts `GET /healthz` and
 `GET`/`HEAD /api/hello`; every other route, unknown ones included, needs the key.
 `presentsApiKey` hashes the configured key and each presented value, `x-api-key`
-and the `Authorization: Bearer` token, with SHA-256 and compares the digests with
-`timingSafeEqual`, so the time taken reveals neither the key nor its length. A
+and the `Authorization: Bearer` token, with SHA-256 and compares the fixed-length
+digests with `timingSafeEqual`, which never stops at the first byte that differs. A
 refusal is HTTP `401` `authentication_error` with `WWW-Authenticate: Bearer`,
 returned before the body is read and before the unknown-route handler can log a
 payload; it never echoes the presented value. `applyRuntimeConfig` in
 `src/start.ts` registers the key with `registerLogSecret` at startup and on every
 reload, and `status` and `models` register it before they use it. `RequestTrace`
-protects it in capture metadata whichever header carried it, and `toStatusConfig`
-shows it as `[redacted]`.
+keeps it out of the headers a capture records, whichever header carried it, but
+captured body files are unredacted by design, so a key that a client puts in a
+prompt is stored there. `toStatusConfig` shows the key as `[redacted]`. In
+`copilot-relay models`, `printable` in `src/models.ts` replaces the key in every
+model, config and search string before a row is shortened or padded, `safeId` in
+`src/lib/model-probe.ts` keeps an ID that holds it from being probed or printed,
+and both paths scrub each printed line again. While Claude Code's settings hold
+the key, `applyClaudeConfig` publishes them owner-only through the `ownerOnly`
+option of `writeFileSnapshot`.
 
 Before consuming a POST body, `snapshotProxyConfig` in `src/lib/config.ts` and
 `snapshotRuntimeState` / `withRuntimeState` in `src/lib/state.ts` freeze routing,

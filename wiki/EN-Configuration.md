@@ -642,7 +642,12 @@ it, or with a different key, the relay answers HTTP `401` with an Anthropic-styl
   empty and the check off.
 - The key is never logged or displayed. `copilot-relay status` shows it as
   `[redacted]`, in text and in `--json`, and sends it on its `GET /v1/models` probe
-  and on the `--deep` `POST /v1/messages` probe.
+  and on the `--deep` `POST /v1/messages` probe. `copilot-relay models` prints
+  `[redacted]` wherever a model ID, a display name, a configured model or a search
+  holds it, and `--deep` does not probe an ID that holds it.
+- Debug captures leave out the header that carries the key, but keep request and
+  response bodies unredacted, so a key that a client puts in a prompt is stored
+  there; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 - With `claudeSetup: true`, `start` writes the key as Claude Code's
   `ANTHROPIC_AUTH_TOKEN`; see [Claude Code settings](#claude-code-settings).
 - When `host` is not a loopback address and `apiKey` is empty, startup logs one
@@ -720,7 +725,7 @@ With `claudeSetup: true`, `copilot-relay start` writes:
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4142
-ANTHROPIC_AUTH_TOKEN=<apiKey, or a dummy local token>
+ANTHROPIC_AUTH_TOKEN=<apiKey, or a dummy local token if the file has none>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<discovered GPT context window>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<largest discovered output budget of the model pair>
 CLAUDE_CODE_AUTO_MODE_SERVER=0
@@ -734,8 +739,12 @@ into:
 
 With `apiKey` set, the token is that key, replacing a dummy value or an older key,
 because the relay requires it on every request; see
-[Require a client key](#require-a-client-key). Without one, the token is a dummy
-value, written only when none is present, because `copilot-relay` authenticates
+[Require a client key](#require-a-client-key). `start` then publishes the file
+readable only by you (mode `0600`; Windows has no such mode bits), and publishes it
+again when its mode lets other local users read it. Without `apiKey`, `start`
+keeps an existing `ANTHROPIC_AUTH_TOKEN`, even a key an earlier `apiKey` wrote, and
+leaves the file's mode as it is; it sets the token to `dummy` only when the token
+is missing or empty. Any value works then, because `copilot-relay` authenticates
 to GitHub Copilot with your cached GitHub/Copilot tokens, not with Claude's token.
 The two budget variables are written only when absent. Smaller explicit values
 are preserved. The relay bounds each request to the actual routed model's output
