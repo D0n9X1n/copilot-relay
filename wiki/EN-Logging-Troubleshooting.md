@@ -913,12 +913,15 @@ left out. A missing plan, SKU, reset date or quota prints as `not reported`.
 other quota in the answer follows them.
 
 `--json` prints one object with `copilot_plan`, `access_type_sku`,
-`quota_reset_date` and `quota_snapshots`, which maps each quota id to an object
-with `unlimited`, `entitlement`, `remaining`, `percent_remaining`,
-`overage_permitted`, `overage_count`, `token_based_billing` and `credits_used`.
-Every key is always present; a value GitHub did not report, or sent with another
-type, is `null`. The rest of GitHub's answer, such as the login and organization
-lists, is never printed.
+`quota_reset_date` and `quota_snapshots`. Each of the first three is always
+present, and is `null` when GitHub did not report it or sent it with another
+type. `quota_snapshots` maps each quota id to its snapshot. `chat`, `completions`
+and `premium_interactions` are always present; a snapshot that is absent, or is
+not a JSON object, is `null`. A snapshot object always has all eight keys:
+`unlimited`, `entitlement`, `remaining`, `percent_remaining`, `overage_permitted`,
+`overage_count`, `token_based_billing` and `credits_used`. A field that is
+missing, or sent with another type, is `null`. The rest of GitHub's answer, such
+as the login and organization lists, is never printed.
 
 Each failure prints one line on stderr and exits `1`; a report exits `0`. The
 token and the request headers are never printed.

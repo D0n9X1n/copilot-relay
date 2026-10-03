@@ -806,10 +806,12 @@ premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining
 `completions` 和 `premium_interactions` 总是排在最前；回答中的其他配额跟在它们之后。
 
 `--json` 打印一个对象，包含 `copilot_plan`、`access_type_sku`、`quota_reset_date` 和
-`quota_snapshots`；后者把每个配额 id 映射到一个对象，包含 `unlimited`、`entitlement`、
-`remaining`、`percent_remaining`、`overage_permitted`、`overage_count`、
-`token_based_billing` 和 `credits_used`。每个键都始终存在；GitHub 没有报告的值，或以其他
-类型发送的值，为 `null`。GitHub 回答中的其余部分，例如登录名和组织列表，从不打印。
+`quota_snapshots`。前三个键始终存在；GitHub 没有报告的值，或以其他类型发送的值，为
+`null`。`quota_snapshots` 把每个配额 id 映射到它的快照。`chat`、`completions` 和
+`premium_interactions` 始终存在；缺少的快照，或不是 JSON 对象的快照，为 `null`。快照对象
+总是包含全部八个键：`unlimited`、`entitlement`、`remaining`、`percent_remaining`、
+`overage_permitted`、`overage_count`、`token_based_billing` 和 `credits_used`。缺少的字段，
+或以其他类型发送的字段，为 `null`。GitHub 回答中的其余部分，例如登录名和组织列表，从不打印。
 
 每种失败都在 stderr 打印一行并以 `1` 退出；输出报告时以 `0` 退出。token 和请求 header
 从不打印。
