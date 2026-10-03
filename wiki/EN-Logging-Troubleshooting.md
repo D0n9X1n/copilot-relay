@@ -603,6 +603,40 @@ subscription cannot access passes it unchanged. Only `POST /v1/messages`
 exercises token refresh and real upstream model access — which is what
 `status --deep` sends, and what a real Claude Code request does.
 
+## Prompt is too long
+
+Copilot rejects a prompt over the model's `max_prompt_tokens` with HTTP 400 and
+`model_max_prompt_tokens_exceeded`. The relay reports it in the shape and wording
+Anthropic's API uses, which is how Claude Code recognizes a prompt that is too
+long. A JSON request gets this body with HTTP 400, and its request summary keeps
+the upstream wording:
+
+```json
+{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}
+```
+
+```text
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 123ms error="prompt token count of 131008 exceeds the limit of 128000"
+```
+
+A streaming request already has HTTP 200, so its summary shows `-> 200`; the
+error arrives as the SSE `error` event, with ` (request_id=<id>)` appended to the
+message. [Internals](EN-Internals.md) explains why the stream opens before
+Copilot answers.
+
+```sh
+grep -n "prompt is too long\|prompt token count of" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+On `/chat/completions` and `/responses`, the `Failed to create ...` entry keeps
+Copilot's response body. A streaming request also logs
+`Error during Claude stream request:` with the mapped error.
+
+The relay never shortens a prompt. Compact the conversation (`/compact` in Claude
+Code), start a new one, or choose a model with a higher limit. `GET /v1/models`
+lists each configured model's `max_input_tokens` when the cached Copilot catalog
+reports it.
+
 ## Wrong model used
 
 With `logLevel: info` or `debug`:
