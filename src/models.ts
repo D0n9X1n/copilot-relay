@@ -1,15 +1,95 @@
 import { defineCommand } from "citty"
 
-import { loadCopilotModelCatalog } from "~/copilot/models"
-import { readAppConfig } from "~/lib/app-config"
+import { selectCopilotEndpoint } from "~/copilot/endpoint"
+import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
+import { readAppConfig, type AppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
-import { readProxyConfig } from "~/lib/config"
+import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { flushLogs, log, setLogLevel, withoutConsoleLogging } from "~/lib/log"
 import { terminalText } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
-import { isReasoningEffort } from "~/lib/models"
+import { probeReason } from "~/lib/model-probe-output"
+import {
+  normalizeModelSearch,
+  renderConfigGuide,
+  renderModelRows,
+  searchModels,
+  type ConfiguredModel,
+  type ListedModel,
+  type ModelSearch,
+} from "~/lib/model-listing"
+import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
+import { paths } from "~/lib/paths"
 import { registerSensitiveOrigin, sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
+
+// A mistake in how the command was called. Its message replaces the generic connectivity advice.
+class ModelsUsageError extends Error {}
+
+// Catalog names are untrusted: control characters are stripped and a long one is shortened so it
+// cannot take over a row.
+const displayName = (name: string | undefined): string | undefined => {
+  const text = sanitizeTerminalString(name ?? "").trim()
+
+  if (text === "") {
+    return undefined
+  }
+
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text
+}
+
+// Every advertised ID, with the reason request admission would refuse it as gptModel or opusModel.
+const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog): ListedModel[] =>
+  [...catalog.models.keys()].sort().map((id) => {
+    const selection = selectCopilotEndpoint(config, id)
+    const name = displayName(catalog.models.get(id)?.name)
+
+    return {
+      id: sanitizeTerminalString(id),
+      ...(name !== undefined && { name }),
+      ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
+    }
+  })
+
+// The configured IDs, checked the way the startup check resolves them.
+const configuredModels = (
+  appConfig: AppConfig,
+  config: ProxyConfig,
+  catalog: CopilotModelCatalog,
+): ConfiguredModel[] =>
+  (["gptModel", "opusModel"] as const).map((key) => {
+    const id = normalizeCopilotModelId(appConfig[key])
+    const selection = selectCopilotEndpoint(config, id)
+
+    return {
+      key,
+      value: sanitizeTerminalString(appConfig[key]),
+      advertised: catalog.models.has(id),
+      ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
+    }
+  })
+
+const listingHeading = (search: string, result: ModelSearch): string => {
+  if (search === "") {
+    if (result.models.length === 0) {
+      return "No models advertised by upstream."
+    }
+
+    return `Upstream-advertised models (${result.models.length}):`
+  }
+
+  const label = sanitizeTerminalString(search)
+
+  if (result.found) {
+    return `Upstream models matching "${label}" (${result.models.length}):`
+  }
+
+  if (result.models.length === 0) {
+    return `No upstream model matches "${label}". List them all with copilot-relay models.`
+  }
+
+  return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
+}
 
 export const models = defineCommand({
   meta: {
@@ -17,6 +97,11 @@ export const models = defineCommand({
     description: "List upstream models; use --deep to test inference availability.",
   },
   args: {
+    search: {
+      type: "positional",
+      required: false,
+      description: "Find models by ID or display name and print the config line to use.",
+    },
     deep: {
       type: "boolean",
       description: "Send real inference probes through an isolated relay pipeline; consumes Copilot usage.",
@@ -87,6 +172,17 @@ export const models = defineCommand({
         throw new Error("invalid effort")
       }
 
+      // Unquoted words form one search: `models sol fast` searches for "sol fast".
+      const search = args._.join(" ").trim()
+
+      if (search !== "" && args.deep) {
+        throw new ModelsUsageError("A search lists models; check one with copilot-relay models --deep --model <id>.")
+      }
+
+      if (search !== "" && normalizeModelSearch(search) === "") {
+        throw new ModelsUsageError("A search needs at least one letter or digit.")
+      }
+
       const probeOptions = {
         maxTokens: positive(args["max-tokens"], 4096),
         timeoutMs: positive(args.timeout, 30) * 1000,
@@ -113,15 +209,15 @@ export const models = defineCommand({
 
         failure = "Could not fetch upstream model catalog"
         const catalog = await loadCopilotModelCatalog(config)
-        return { config, catalog }
+        return { appConfig, config, catalog }
       }
 
-      const { config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
+      const { appConfig, config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
 
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
         if (args.model !== undefined && !catalog.models.has(args.model)) {
-          throw new Error("unknown model")
+          throw new ModelsUsageError("Find the exact ID with copilot-relay models <search>.")
         }
 
         // Order by ID alone; a plain sort() would compare stringified [id, model] pairs.
@@ -140,14 +236,28 @@ export const models = defineCommand({
         return
       }
 
-      const ids = [...catalog.models.keys()].sort().map(sanitizeTerminalString)
-      console.log(scrubSensitiveUrls(ids.length ?
-        `Upstream-advertised models (${ids.length}):\n${ids.join("\n")}`
-        : "No models advertised by upstream."))
-      console.log("Inference, tool, and effort compatibility are not verified by this listing.")
+      const listed = listedModels(config, catalog)
+      const result: ModelSearch = search === "" ? { found: true, models: listed } : searchModels(listed, search)
+      const lines = [listingHeading(search, result), ...renderModelRows(result.models)]
+
+      if (result.models.length > 0) {
+        lines.push(
+          "Inference, tool, and effort compatibility are not verified by this listing.",
+          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}; it consumes Copilot usage.`,
+        )
+      }
+
+      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen))
+      console.log(scrubSensitiveUrls(lines.join("\n")))
+
+      if (!result.found) {
+        process.exitCode = 1
+      }
     } catch (error) {
       let detail = "Check configuration, authentication, and upstream connectivity."
-      if (error instanceof HTTPError) {
+      if (error instanceof ModelsUsageError) {
+        detail = error.message
+      } else if (error instanceof HTTPError) {
         // The client wraps local aborts in synthetic HTTP responses that carry a
         // detail: 504 for a timeout, otherwise a cancellation.
         if (error.detail !== undefined) {

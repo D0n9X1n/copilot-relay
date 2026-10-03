@@ -41,10 +41,11 @@ Configuration lives in `~/.copilot-relay/config.yaml`. Model access depends on y
 account and organization policy; if startup rejects a model, choose an available
 one using the [configuration guide](wiki/EN-Configuration.md).
 
-Discover models and optionally test one:
+Discover models, find the config value for one, and optionally test it:
 
 ```sh
 copilot-relay models
+copilot-relay models sol fast    # prints the exact gptModel or opusModel line
 copilot-relay models --deep --model claude-opus-5.5
 ```
 
