@@ -1,6 +1,6 @@
 import { advertisesNoReasoningEffort, type CopilotModel } from "~/copilot/models"
 import type { ProxyConfig } from "~/lib/config"
-import { log, withoutConsoleLogging, withoutLogging } from "~/lib/log"
+import { log, scrubLogSecrets, withoutConsoleLogging, withoutLogging } from "~/lib/log"
 import { RequestTrace, withTraceObserver, type RequestDiagnostic } from "~/lib/request-trace"
 import { colorEnabled } from "~/lib/terminal"
 import {
@@ -33,14 +33,32 @@ interface ProbeResult extends ProbeRow {
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
-// Model IDs come from the catalog and from response bodies, so one is printed only when it is a
-// plain identifier that contains neither the live token nor a known credential prefix (GitHub
-// tokens, sk- keys, JWTs).
-const safeId = (id: unknown, token?: string): id is string =>
+// Whether text contains the live Copilot token or the relay's apiKey. Both are read from the
+// config on each call, so a token refreshed during a probe is checked too.
+const holdsCredential = (text: string, config: ProxyConfig): boolean => {
+  for (const secret of [config.copilotToken, config.apiKey]) {
+    if (secret && text.includes(secret)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// Model IDs come from the catalog and from response bodies, so one is probed and printed only when
+// it is a plain identifier that holds neither credential above nor a known credential prefix
+// (GitHub tokens, sk- keys, JWTs).
+const safeId = (id: unknown, config: ProxyConfig): id is string =>
   typeof id === "string"
   && /^[A-Za-z0-9._\[\]-]{1,128}$/.test(id)
-  && !(token && id.includes(token))
+  && !holdsCredential(id, config)
   && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(id)
+
+// Every line probeModels prints, --details included, is scrubbed again as a backstop behind
+// safeId and the trace's allowlist.
+const printLine = (line: string): void => {
+  console.log(scrubLogSecrets(scrubSensitiveUrls(line)))
+}
 
 const httpCategory = (status: number): string => {
   if (status === 401) {
@@ -155,9 +173,9 @@ export async function probeModels(
   entries: Array<[string, CopilotModel]>,
   options: ModelProbeOptions,
 ): Promise<number> {
-  console.log(`\nModel check · ${entries.length} ${entries.length === 1 ? "model" : "models"} · real Copilot usage`)
-  console.log("Isolated relay pipeline; not running-daemon health.")
-  console.log(`Up to ${options.maxTokens} output tokens/probe; existing retries may add calls.\n`)
+  printLine(`\nModel check · ${entries.length} ${entries.length === 1 ? "model" : "models"} · real Copilot usage`)
+  printLine("Isolated relay pipeline; not running-daemon health.")
+  printLine(`Up to ${options.maxTokens} output tokens/probe; existing retries may add calls.\n`)
 
   const controller = new AbortController()
   const interrupt = () => controller.abort()
@@ -176,13 +194,13 @@ export async function probeModels(
   const app = createServer(config)
   const columns = Math.max(40, process.stdout.columns || 80)
   const width = probeColumnWidth(
-    entries.map(([id]) => safeId(id, config.copilotToken) ? id : "[unsupported ID]"),
+    entries.map(([id]) => safeId(id, config) ? id : "[unsupported ID]"),
     columns,
   )
   const color = colorEnabled()
 
   if (entries.length) {
-    console.log(renderProbeHeader(width))
+    printLine(renderProbeHeader(width))
   }
 
   try {
@@ -219,7 +237,7 @@ export async function probeModels(
       const { advertisedEndpoints, unknownEndpoints } = summarizeAdvertisedEndpoints(model.supportedEndpoints)
 
       const row: ProbeResult = {
-        id: safeId(id, config.copilotToken) ? id : "[unsupported ID]",
+        id: safeId(id, config) ? id : "[unsupported ID]",
         status: "NOT_TESTED",
         reported: "-",
         sent: false,
@@ -236,7 +254,7 @@ export async function probeModels(
 
       if (controller.signal.aborted || totalDeadline.aborted) {
         row.detail = controller.signal.aborted ? "cancelled" : "total-deadline"
-      } else if (!safeId(id, config.copilotToken) || normalizeCopilotModelId(id) !== id) {
+      } else if (!safeId(id, config) || normalizeCopilotModelId(id) !== id) {
         row.status = "SKIPPED"
         row.detail = "unsafe-or-noncanonical-id"
       } else if (!selection.endpoint) {
@@ -325,7 +343,7 @@ export async function probeModels(
             // PASS needs all of: a reported model that matches the probe, an end_turn stop, no
             // content block with a type other than text or thinking, and some non-empty text.
             // Content entries that are not objects are skipped, not treated as blocks.
-            row.reported = safeId(body.model, config.copilotToken) ? body.model : "unreported"
+            row.reported = safeId(body.model, config) ? body.model : "unreported"
 
             if (!reportsSelectedModel(endpoint, id, row.reported)) {
               row.detail = "model-mismatch"
@@ -390,21 +408,21 @@ export async function probeModels(
 
       // The token may have been refreshed during the probe, so the ID is checked against the
       // current one too.
-      if (!safeId(id, config.copilotToken)) {
+      if (!safeId(id, config)) {
         row.id = "[unsupported ID]"
       }
 
       results.push(row)
       for (const line of renderProbeRow(row, width, color, columns)) {
-        console.log(scrubSensitiveUrls(line))
+        printLine(line)
       }
 
       if (options.details) {
         for (const line of renderProbeDetails(row, row.diagnostic)) {
-          console.log(line)
+          printLine(line)
         }
       } else if (row.status !== "PASS" && row.diagnostic) {
-        console.log(`  request_id=${row.diagnostic.requestId}`)
+        printLine(`  request_id=${row.diagnostic.requestId}`)
       }
 
       // File only: the table above has already shown this row on the console.
@@ -438,9 +456,9 @@ export async function probeModels(
     process.off("SIGTERM", interrupt)
   }
 
-  console.log(`\n${renderProbeSummary(results)}`)
+  printLine(`\n${renderProbeSummary(results)}`)
   if (results.some((row) => row.unverified)) {
-    console.log("* Effort or endpoint metadata is unverified.")
+    printLine("* Effort or endpoint metadata is unverified.")
   }
 
   // A Set, so a hint shared by several failed rows prints once.
@@ -448,15 +466,15 @@ export async function probeModels(
     results
       .filter((row) => row.status !== "PASS")
       .map((row) => probeHint(row.detail))
-      .filter(Boolean),
+      .filter((hint) => hint !== undefined),
   )
 
   for (const hint of hints) {
-    console.log(hint)
+    printLine(hint)
   }
 
   if (!options.details && results.some((row) => row.status !== "PASS" && row.sent)) {
-    console.log("Use --details for request evidence; another deep run consumes usage.")
+    printLine("Use --details for request evidence; another deep run consumes usage.")
   }
 
   // 130 is what a shell reports for Ctrl-C (128 + SIGINT); a SIGTERM abort exits the same way.

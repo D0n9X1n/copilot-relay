@@ -25,6 +25,8 @@ async function fixture(
     interrupt?: boolean;
     controlledProbeTimeout?: boolean;
     logLevel?: "info" | "debug";
+    apiKey?: string;
+    gptModel?: string;
     deviceAuth?: boolean
   } = {},
 ) {
@@ -64,12 +66,13 @@ async function fixture(
   await fs.writeFile(settingsPath, settings)
   await fs.writeFile(path.join(appDir, "config.yaml"), [
     `copilotBaseUrl: http://127.0.0.1:${address.port}${secretPath}`,
-    "gptModel: missing-gpt-model",
+    `gptModel: ${options.gptModel ?? "missing-gpt-model"}`,
     "opusModel: missing-opus-model",
     "claudeSetup: true",
     `logLevel: ${options.logLevel ?? "debug"}`,
     `port: ${address.port}`,
     `upstreamTimeoutSeconds: ${options.timeout ?? 3}`,
+    ...(options.apiKey ? [`apiKey: ${options.apiKey}`] : []),
     "",
   ].join("\n"))
   await fs.writeFile(path.join(appDir, "github_token"), options.deviceAuth ? "\n" : "github-private-token-sentinel\n")
@@ -156,11 +159,16 @@ async function fixture(
     const logFiles = await fs.readdir(path.join(appDir, "logs")).catch(() => [])
     const logs = (await Promise.all(logFiles.map((name) => fs.readFile(path.join(appDir, "logs", name), "utf8")))).join("\n")
     assert.doesNotMatch(result.output + logs, /old-private-token-sentinel|new-private-token-sentinel|github-private-token-sentinel|private-gateway-sentinel|auth-private-error-sentinel|payload-private-sentinel|UNEXPECTED_NETWORK_ACCESS/)
+    // The relay's apiKey is never printed or logged, whichever string it reached the command in.
+    if (options.apiKey) {
+      assert.ok(!(result.output + logs).includes(options.apiKey), "the relay apiKey reached the output or logs")
+    }
+
     assert.doesNotMatch(result.output, /Running upstream preflight|copilot-relay listening/)
     assert.equal(await fs.readFile(settingsPath, "utf8"), settings)
     await assert.rejects(fs.stat(path.join(appDir, "copilot-relay.pid")), { code: "ENOENT" })
     const config = await fs.readFile(path.join(appDir, "config.yaml"), "utf8")
-    assert.match(config, /gptModel: missing-gpt-model/)
+    assert.ok(config.includes(`gptModel: ${options.gptModel ?? "missing-gpt-model"}`))
     assert.match(config, /opusModel: missing-opus-model/)
     for (const request of requests) {
       if (request.method === "GET" || !options.deep) {
@@ -247,6 +255,45 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   assert.match(listing, /a-exampleforged-row\n/)
   assert.match(listing, /\nb-named {2}EvilName\n/)
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
+})
+
+// Why (#159 review): models registered the apiKey but printed through the URL scrub alone, so a key
+// in gptModel, a catalog ID, a display name or a search reached the console. A display name was
+// also shortened to 80 characters before any scrub, which could cut a key in two.
+test("models never prints the relay apiKey from gptModel, a catalog ID, a display name or a search", async (t) => {
+  const relayKey = "relay-fixture-key-0001"
+  let catalog: unknown = { data: [{ id: "gpt-6-astra" }] }
+  const harness = await fixture(t, (_request, response) => respond(response, catalog), {
+    apiKey: relayKey,
+    gptModel: relayKey,
+  })
+
+  // gptModel holds the key and upstream does not advertise it: the config line and its warning.
+  const unadvertised = await harness.run()
+
+  assert.equal(unadvertised.code, 0, unadvertised.output)
+  assert.match(unadvertised.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
+  assert.match(unadvertised.stdout, /Warning: gptModel \[redacted\] is not advertised by upstream; the startup check rejects it\./)
+
+  // The key as a catalog ID, inside a display name, and ending a name that would have been
+  // shortened through the key had it not been replaced first.
+  catalog = { data: [
+    { id: relayKey },
+    { id: "named-model", name: `Leaked ${relayKey} name` },
+    { id: "long-named-model", name: `${"x".repeat(60)}${relayKey}` },
+  ] }
+  const advertised = await harness.run()
+
+  assert.equal(advertised.code, 0, advertised.output)
+  assert.match(advertised.stdout, /Upstream-advertised models \(3\):\nlong-named-model {2}x{60}\[redacted\]\nnamed-model {7}Leaked \[redacted\] name\n\[redacted\]\n/)
+  assert.doesNotMatch(advertised.output, /relay-fixture/)
+
+  // A search for the key itself.
+  const searched = await harness.run(["models", relayKey])
+
+  assert.equal(searched.code, 1, searched.output)
+  assert.match(searched.stdout, /No upstream model matches "\[redacted\]"\./)
+  assert.doesNotMatch(searched.output, /relay-fixture/)
 })
 
 test("models shows display names, marks IDs that cannot be configured, and explains the config lines", async (t) => {
@@ -816,6 +863,46 @@ test("a model ID matching a refreshed token is never printed", async (t) => {
   assert.equal(result.code, 2)
   assert.match(result.stdout, /\[unsupported ID\]/)
   assert.doesNotMatch(result.output, /new-private-token-sentinel/)
+})
+
+// Why (#159 review): deep probes checked a model ID only against the Copilot token, so a catalog ID
+// holding the relay's apiKey was probed, sent upstream as a model name, and printed in the model
+// column and in --details.
+test("models deep never probes or prints a model ID or reply model holding the relay apiKey", async (t) => {
+  const relayKey = "relay-fixture-key-0001"
+  const sent: string[] = []
+  const harness = await fixture(
+    t,
+    async (req, res) => {
+      if (req.method === "GET") {
+        return respond(res, { data: [
+          { id: relayKey },
+          { id: `prefix-${relayKey}` },
+          {
+            id: "echo-model",
+            name: `Echo ${relayKey}`,
+            supported_endpoints: ["/responses"],
+            capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } },
+          },
+        ] })
+      }
+
+      const body = await requestBody(req)
+      sent.push(body.model)
+      // The reply names the key as its model.
+      respond(res, probeReply(body, { model: relayKey }))
+    },
+    { deep: true, apiKey: relayKey, gptModel: relayKey }
+  )
+
+  const result = await harness.run(["models", "--deep", "--details"])
+
+  assert.equal(result.code, 2, result.output)
+  assert.deepEqual(sent, ["echo-model"])
+  assert.equal(result.stdout.match(/^\[unsupported ID\] +SKIPPED +- +Unsupported model ID \*$/gm)?.length, 2)
+  assert.match(result.stdout, /^echo-model +FAIL +\S+ +Model mismatch$/m)
+  assert.match(result.stdout, /reported=unreported reason=model-mismatch/)
+  assert.doesNotMatch(result.output, /relay-fixture/)
 })
 
 test("deep details distinguish failed token refresh from generic internal errors", async (t) => {
