@@ -436,9 +436,10 @@ test("a burst of entries is appended in call order through one open", async (t) 
 })
 
 // Why: the timestamp and the dated file used to be read after the write's own awaits, so a slow
-// disk could stamp an entry late or file it under the next day. Both now come from the call.
+// disk could stamp an entry late or file it under the next day. Both now come from the call. The
+// clock starts just before local midnight, so the minute that passes before the write crosses it.
 test("an entry is stamped when it is logged, not when it is written", async (t) => {
-  const loggedAt = new Date()
+  const loggedAt = new Date(2026, 6, 24, 23, 59, 30)
   t.mock.timers.enable({ apis: ["Date"], now: loggedAt })
 
   log.info("stamped at call time")
@@ -451,8 +452,8 @@ test("an entry is stamped when it is logged, not when it is written", async (t) 
   )
 })
 
-// Why: the log file stays open between batches. A file that was renamed, linked elsewhere or
-// loosened must not keep receiving entries through the reused handle.
+// Why: the log file stays open between batches written within a second. A file that was renamed,
+// replaced, linked elsewhere or loosened must not keep receiving entries through the reused handle.
 test("an entry logged after the active file is renamed goes to a new file", async () => {
   log.info("before rename")
   await readActiveLog()
@@ -463,6 +464,38 @@ test("an entry logged after the active file is renamed goes to a new file", asyn
 
   assert.match(await fs.readFile(`${getLogPath()}.old`, "utf8"), /^\S+ info before rename\n$/)
   assert.match(await fs.readFile(getLogPath(), "utf8"), /^\S+ info after rename\n$/)
+})
+
+// Why: a rotation tool may rename the active file and create an empty one at its path. lstat shows
+// the new file as a regular private file with one link, like the open one; only the file identity
+// tells them apart.
+test("an entry logged after the active file is replaced goes to the new file", async () => {
+  log.info("before replace")
+  await readActiveLog()
+  await fs.rename(getLogPath(), `${getLogPath()}.old`)
+  await fs.writeFile(getLogPath(), "", { mode: 0o600 })
+
+  log.info("after replace")
+  await flushLogs()
+
+  assert.match(await fs.readFile(`${getLogPath()}.old`, "utf8"), /^\S+ info before replace\n$/)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /^\S+ info after replace\n$/)
+})
+
+// Why: reusing one open handle across batches is the point of the writer. A reuse check that never
+// passed would reopen the file for every batch and still pass the tests above.
+test("batches written within a second share one open of the unchanged file", async (t) => {
+  const open = t.mock.method(fs, "open")
+  log.info("first batch")
+  await readActiveLog()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  log.info("second batch")
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  log.info("third batch")
+  await flushLogs()
+
+  assert.equal(open.mock.calls.filter((call) => call.arguments[0] === getLogPath()).length, 1)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /first batch\n.*second batch\n.*third batch\n$/)
 })
 
 test("an entry is not appended through a second hard link to the active file", async () => {
