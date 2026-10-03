@@ -329,6 +329,12 @@ function upstreamReply(body: WireBody, turn: number, call?: { name: string; argu
 // Independent expected history for these text/tool fixtures, not translateToOpenAI.
 function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
   return messages.flatMap((message): Message[] => {
+    // The Claude chat route sends operator text as an in-place reminder turn.
+    if (message.role === "system" && model.startsWith("claude-")) {
+      const text = typeof message.content === "string" ? message.content : message.content.map((block) => block.text).join("\n\n")
+      return text.trim() ? [{ role: "user", content: `<system-reminder>\n${text}\n</system-reminder>` }] : []
+    }
+
     if (typeof message.content === "string") {
       return [{ role: message.role, content: message.content }]
     }

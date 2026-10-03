@@ -127,6 +127,8 @@ export interface Message {
   name?: string
   tool_calls?: Array<ToolCall>
   tool_call_id?: string
+  // Copilot's chat-route cache breakpoint; the relay sets it only for Claude models on /chat/completions.
+  copilot_cache_control?: { type: "ephemeral" }
 }
 
 export interface ToolCall {

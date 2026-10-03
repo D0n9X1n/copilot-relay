@@ -1,5 +1,6 @@
 // Non-streaming protocol translation between Claude Messages and Copilot chat completions.
 import {
+  isClaudeModelId,
   normalizeClaudeModelId,
   routeModelId,
 } from "~/lib/models"
@@ -12,6 +13,7 @@ import type {
   Tool,
   ToolCall,
 } from "~/copilot/types"
+import type { CopilotEndpoint } from "~/copilot/endpoint"
 
 import {
   type ClaudeAssistantContentBlock,
@@ -39,10 +41,18 @@ export function translateModelName(model: string): string {
   return routeModelId(model)
 }
 
+export interface TranslateToOpenAIOptions {
+  // The endpoint the request will reach; unset when createChatCompletions may retry it
+  // on /responses. Only a Claude model sent to /chat/completions with no such fallback
+  // gets in-place reminder turns and copilot_cache_control marks.
+  endpoint?: CopilotEndpoint
+}
+
 export function translateToOpenAI(
   payload: ClaudeMessagesPayload,
   _settings?: undefined,
   toolNameMapper?: ClaudeToolNameMapper,
+  options: TranslateToOpenAIOptions = {},
 ): ChatCompletionsPayload {
   const model = translateModelName(payload.model)
   const mapper = toolNameMapper ?? createClaudeToolNameMapper(payload.tools, {
@@ -57,6 +67,7 @@ export function translateToOpenAI(
     payload.messages,
     payload.system,
     mapper,
+    options.endpoint === "/chat/completions" && isClaudeModelId(model),
   )
 
   return {
@@ -107,32 +118,111 @@ function translateClaudeMessagesToOpenAI(
   claudeMessages: Array<ClaudeMessage>,
   system: string | Array<ClaudeTextBlock> | undefined,
   toolNameMapper: ClaudeToolNameMapper,
+  claudeChatRoute: boolean,
 ): Array<Message> {
-  const systemMessages = handleSystemPrompt(system)
-  const otherMessages = claudeMessages.flatMap((message): Array<Message> => {
-    switch (message.role) {
-      case "user":
-        return handleUserMessage(message)
-      case "assistant":
-        return handleAssistantMessage(message, toolNameMapper)
-      case "system":
-        // An empty control message carries only effort, which getClaudeTurnEffort reads.
-        if (
-          message.output_config !== undefined
-          && (typeof message.content === "string"
-            ? message.content.length === 0
-            : message.content.every((block) => block.text.length === 0))
-        ) {
-          return []
-        }
+  const translated = handleSystemPrompt(system)
 
-        return handleSystemPrompt(message.content)
-      default:
-        throw invalidMessage("Unsupported message role.")
+  // System blocks join into one message, so a breakpoint on any block marks the end of
+  // the whole prompt.
+  if (claudeChatRoute && hasCacheBreakpoint(system)) {
+    markCacheBreakpoint(translated.at(-1))
+  }
+
+  for (const message of claudeMessages) {
+    const start = translated.length
+    translated.push(...translateClaudeMessage(message, toolNameMapper, claudeChatRoute))
+
+    if (claudeChatRoute) {
+      markMessageBreakpoints(message, translated, start)
     }
-  })
+  }
 
-  return [...systemMessages, ...otherMessages]
+  return translated
+}
+
+// Put each breakpoint on the translated message that holds its block. Tool results stay
+// separate messages; blocks that join into one message share its mark, so a breakpoint
+// on an earlier block moves to the end of that message. handleUserMessage emits one tool
+// message per tool_result, in order, then one user message for the remaining blocks.
+function markMessageBreakpoints(message: ClaudeMessage, translated: Array<Message>, start: number): void {
+  if (message.role !== "user" || !Array.isArray(message.content)) {
+    // These translate to at most one message. A breakpoint on a turn that translates
+    // to nothing marks the previous message.
+    if (hasCacheBreakpoint(message.content)) {
+      markCacheBreakpoint(translated.at(-1))
+    }
+
+    return
+  }
+
+  let toolIndex = start
+  for (const block of message.content) {
+    if (block.type === "tool_result") {
+      if (isCacheBreakpoint(block)) {
+        markCacheBreakpoint(translated[toolIndex])
+      }
+
+      toolIndex += 1
+    } else if (isCacheBreakpoint(block)) {
+      markCacheBreakpoint(translated.at(-1))
+    }
+  }
+}
+
+function translateClaudeMessage(
+  message: ClaudeMessage,
+  toolNameMapper: ClaudeToolNameMapper,
+  claudeChatRoute: boolean,
+): Array<Message> {
+  switch (message.role) {
+    case "user":
+      return handleUserMessage(message)
+    case "assistant":
+      return handleAssistantMessage(message, toolNameMapper)
+    case "system":
+      // An empty control message carries only effort, which getClaudeTurnEffort reads.
+      if (
+        message.output_config !== undefined
+        && (typeof message.content === "string"
+          ? message.content.length === 0
+          : message.content.every((block) => block.text.length === 0))
+      ) {
+        return []
+      }
+
+      return claudeChatRoute ? toSystemReminder(message.content) : handleSystemPrompt(message.content)
+    default:
+      throw invalidMessage("Unsupported message role.")
+  }
+}
+
+// Copilot's chat route appears to fold system messages into Claude's system
+// prompt: while new system turns keep arriving later in a conversation, each
+// request reads only the tools and the original system prompt from cache. A user
+// turn holding a <system-reminder>, the form Claude Code uses for most harness
+// context, keeps the operator text in place and the prefix append-only. See
+// "Chat route: system turns and cache breakpoints" in wiki/EN-Internals.md.
+function toSystemReminder(content: string | Array<ClaudeTextBlock>): Array<Message> {
+  const text = typeof content === "string" ? content : content.map((block) => block.text).join("\n\n")
+  if (text.trim().length === 0) {
+    return []
+  }
+
+  return [{ role: "user", content: `<system-reminder>\n${text}\n</system-reminder>` }]
+}
+
+// Claude Code marks the end of each cached prefix with cache_control on a content block.
+const isCacheBreakpoint = (block: object): boolean => "cache_control" in block && Boolean(block.cache_control)
+
+// Content is a string, an array of blocks, or a null that a client sent for an absent field.
+const hasCacheBreakpoint = (content: unknown): boolean => Array.isArray(content) && content.some(isCacheBreakpoint)
+
+// Chat Completions has no cache_control. Copilot reads copilot_cache_control,
+// which VS Code Copilot Chat sets on the message that ends a cached prefix.
+const markCacheBreakpoint = (message: Message | undefined): void => {
+  if (message) {
+    message.copilot_cache_control = { type: "ephemeral" }
+  }
 }
 
 const invalidMessage = (message: string): HTTPError => new HTTPError(

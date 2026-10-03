@@ -109,7 +109,8 @@ test("redundant inline effort preserves system text and effective effort", async
         called = true
         const sent = JSON.parse(request.body!)
         assert.equal(sent.reasoning_effort, "low")
-        assert.equal(sent.messages[1].role, "system")
+        // The Claude chat route sends the operator text as an in-place reminder turn.
+        assert.deepEqual(sent.messages[1], { role: "user", content: "<system-reminder>\nUse the current effort.\n</system-reminder>" })
         const choice = { index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }
         return stream
           ? new Response(
