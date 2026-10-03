@@ -316,7 +316,9 @@ data in `default`, `const`, `enum`, or `examples`, and does not rewrite property
 The original Claude schema and the `/chat/completions` path remain unchanged;
 client-side tool validation still enforces the original constraint. The same
 adaptation covers streaming, non-streaming, and WebSearch model passes that use
-Responses.
+Responses. Normalization is copy-on-write: a schema that needs no change is sent
+as the same object, and an omitted pattern copies only the objects on its path, so
+a long tool list is not rebuilt for every request.
 
 `translateTools` in `src/copilot/responses.ts` also sets `strict: false` on every
 Responses function tool. Omitting it lets upstream normalize compatible schemas
@@ -325,6 +327,20 @@ mode preserves optional `Agent.isolation`, `Read.pages`, and nested properties
 without injecting nulls or defaults. Returned arguments are not stripped or
 rewritten. This setting does not apply to built-in `web_search_preview` or to
 `/chat/completions` tools.
+
+### Upstream connections
+
+`fetchCopilot` in `src/copilot/client.ts` sends every upstream request through one
+undici `Agent` limited to HTTP/1.1. Copilot sends no `Keep-Alive` hint, so undici's
+4-second default closed every connection idle for longer, and the next request
+paid for a new TCP and TLS handshake. In #141 Copilot reused a connection idle for
+60 seconds and had closed one idle for 120 seconds; the agent keeps idle
+connections for 50 seconds.
+
+`package.json` requires undici 7.30 or later. undici 7.28 checked an idle socket
+with an unref'd zero-delay timer before reusing it, and on Windows that timer can
+wait for the next system timer tick. `tests/unit/copilot-client.test.ts` covers
+both.
 
 ## Streaming
 
@@ -343,6 +359,11 @@ requests keep their 16-token budgets. Prompt content is never sliced to fit.
 Claude-family 15% padding in that case, so a reported tokenizer does not still
 force premature compaction through a model-name heuristic. Local model discovery
 returns cached limits and makes no upstream call.
+
+After preflight, `start` loads `o200k_base`, the fallback, and each supported
+tokenizer the configured models report before it listens, so the first
+`count_tokens` request does not wait for an encoder to be built. A model swapped
+in by hot reload loads its tokenizer on first use.
 
 `src/lib/tokenizer.ts` assigns **4096 advisory tokens per image** before any
 text encoder call. It never tokenizes base64/URL text, decodes an image or fetches
@@ -799,8 +820,8 @@ marks the final cap. These limits do not truncate the separate raw capture.
 
 ### Retention needs rotation
 
-The active file is `copilot-relay.<local-date>.log`, resolved per write so it
-rotates at local midnight with no timer.
+The active file is `copilot-relay.<local-date>.log`, resolved for each entry when
+it is logged, so it rotates at local midnight with no timer.
 
 Retention ages files by the **filename date**, falling back to mtime for undated
 files. The filename is preferred because mtime is rewritten by backups, `cp`, and
@@ -815,6 +836,28 @@ UTC stamp would roll the file over in the middle of the local afternoon for
 anyone west of Greenwich.
 
 Log volume is bounded by time, not size. Accepted (#25).
+
+### One queue, one open file
+
+`wrapFileLog` in `src/lib/log.ts` stamps each entry and picks its dated file when
+it is logged, then queues it. One drain at a time appends queued entries in call
+order through a handle kept open between batches, in writes of at most 256 KiB
+that end on entry boundaries: `FileHandle.appendFile` writes a larger buffer in
+512 KiB pieces, and another process appending to the same file could land
+between two of them.
+
+The handle is reused only while its path still names the same private file with
+one link and, on POSIX, mode 0600. A rename, deletion, replacement, second hard
+link or loosened mode makes the next batch reopen the path with the full checks:
+no symlink, one link, the same file before and after the open, then chmod 0600.
+Directories are checked when the file is opened and on each retention pass. A
+failed write never fails a request; it drops that batch and closes the handle.
+`flushLogs` waits for queued writes, then closes the file.
+
+Before #141 each entry ran its own directory checks, open, stat, chmod, append and
+close, and a burst could reach the file out of order.
+`tests/unit/log-format.test.ts` covers call order, call-time stamps and the reuse
+checks.
 
 ### Redaction
 

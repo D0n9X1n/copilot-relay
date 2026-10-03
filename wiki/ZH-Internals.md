@@ -269,13 +269,26 @@ pattern 后，上游的下一层校验仍会拒绝前瞻断言。
 遍历仅针对承载 schema 的关键字，不会改写 `default`、`const`、`enum`、
 `examples` 中的字面数据，也不会改写属性名。原始 Claude schema 和
 `/chat/completions` 路径保持不变；客户端工具校验仍执行原始约束。所有使用 Responses
-的流式、非流式以及 WebSearch 模型调用都经过同一适配。
+的流式、非流式以及 WebSearch 模型调用都经过同一适配。规范化是写时复制的：不需要改动的
+schema 作为同一个对象发送，省略 pattern 时只复制通往它的路径上的对象，因此较长的工具
+列表不会在每个请求中重建。
 
 `src/copilot/responses.ts` 中的 `translateTools` 还会在每个 Responses 函数工具上
 显式设置 `strict: false`。省略该字段时，上游可能把兼容的 schema 规范化为严格模式，
 使原本可选的属性变为必填。显式使用非严格模式可保留 `Agent.isolation`、`Read.pages`
 以及嵌套属性的可选语义，不注入 null 或默认值，也不删除或改写返回的参数。
 该设置不用于内置 `web_search_preview`，也不影响 `/chat/completions` 工具。
+
+### 上游连接
+
+`src/copilot/client.ts` 中的 `fetchCopilot` 通过同一个只用 HTTP/1.1 的 undici
+`Agent` 发送所有上游请求。Copilot 不发送 `Keep-Alive` 提示，因此 undici 默认在连接
+空闲超过 4 秒后关闭它，下一个请求要重新进行 TCP 和 TLS 握手。#141 中 Copilot 复用了
+空闲 60 秒的连接，而空闲 120 秒的连接已被关闭；Agent 现在把空闲连接保留 50 秒。
+
+`package.json` 要求 undici 7.30 或更高版本。undici 7.28 在复用空闲 socket 之前，用一个
+unref 的零延迟定时器检查它；在 Windows 上，这个定时器可能要等到下一次系统定时器 tick。
+`tests/unit/copilot-client.test.ts` 覆盖这两点。
 
 ## 流式
 
@@ -291,6 +304,10 @@ pattern 后，上游的下一层校验仍会拒绝前瞻断言。
 为了适应限制而被切片。`count_tokens` 在有数据时使用受支持的已发现 tokenizer，并在这种情况下
 跳过旧的 Claude 系列 15% 余量，避免已有 tokenizer 数据时仍因模型名称启发式而过早
 压缩。本地模型发现返回缓存的限制，不会调用上游。
+
+Preflight 之后、开始监听之前，`start` 会加载回退用的 `o200k_base`，以及配置模型报告的
+每个受支持 tokenizer，因此第一个 `count_tokens` 请求不必等待构建编码器。热重载换入的
+模型在首次使用时加载它的 tokenizer。
 
 `src/lib/tokenizer.ts` 在任何文本编码调用之前，为**每张图片分配 4096 个估算 token**。
 不会把 base64/URL 文本送入 tokenizer，不解码图片，也不拉取 URL。文本继续使用所选
@@ -671,7 +688,7 @@ Node 文档读起来像是默认的 `compact: 3` 就够了 —— 并不够。�
 
 ### 保留策略需要轮转
 
-当前文件是 `copilot-relay.<本地日期>.log`，按写入逐次解析路径，因此无需定时器即可在
+当前文件是 `copilot-relay.<本地日期>.log`，每条日志在记录时解析路径，因此无需定时器即可在
 本地零点轮转。
 
 保留策略按**文件名里的日期**判断文件年龄，对没有日期戳的文件退化为按 mtime 判断。
@@ -685,6 +702,23 @@ Node 文档读起来像是默认的 `compact: 3` 就够了 —— 并不够。�
 UTC 戳会让格林尼治以西的人在本地下午的正中间发生文件切换。
 
 日志体量由时间限定，而不是由大小限定。这是接受的取舍（#25）。
+
+### 一个队列，一个打开的文件
+
+`src/lib/log.ts` 中的 `wrapFileLog` 在记录日志时就给每条日志加时间戳、选定它的带日期
+文件，然后放入队列。同一时间只有一个 drain，它通过在批次之间保持打开的句柄，按调用顺序
+追加队列中的日志；每次写入不超过 256 KiB，且总在日志条目边界结束：
+`FileHandle.appendFile` 会把更大的缓冲区分成 512 KiB 的几段写入，另一个向同一文件追加的
+进程可能插在两段之间。
+
+只有当路径仍指向同一个只有一个链接的私有文件，且在 POSIX 上权限仍为 0600 时，句柄才会
+被复用。重命名、删除、替换、第二个硬链接或放宽的权限，都会让下一批重新打开该路径并执行
+完整检查：不是符号链接、只有一个链接、打开前后是同一个文件，然后 chmod 0600。目录在打开
+文件时以及每次保留清理时检查。写入失败永远不会让请求失败；它丢弃这一批并关闭句柄。
+`flushLogs` 等待队列中的写入完成，再关闭文件。
+
+#141 之前，每条日志各自执行目录检查、open、stat、chmod、追加和 close，一批突发日志可能
+乱序写入文件。`tests/unit/log-format.test.ts` 覆盖调用顺序、调用时的时间戳和复用检查。
 
 ### 脱敏
 

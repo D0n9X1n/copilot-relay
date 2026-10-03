@@ -198,8 +198,8 @@ flowchart TD
 ```
 
 Source: `src/start.ts` (`startRelay`) orders `readAppConfig`, `setupProxyAuth`,
-`validateUpstream`, `startServer`, `writeRelayPidFile`, `applyClaudeConfig`, and
-`watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
+`validateUpstream`, `preloadTokenizers`, `startServer`, `writeRelayPidFile`,
+`applyClaudeConfig`, and `watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
 catalog and makes a small real request for each configured model. `startServer`
 resolves only once the listener is ready; managed-settings failures are logged
 without stopping the server.
@@ -212,6 +212,7 @@ be corrected directly.
 Preflight also retains token limits and tokenizer metadata for configured models.
 Managed Claude setup uses those limits to seed absent client budget settings;
 local `/v1/models` reports the cached capacities without contacting upstream.
+Startup loads the reported tokenizers before it listens.
 See [Configuration](EN-Configuration.md) for full-context use and
 [Internals](EN-Internals.md) for output buffering and token-counting invariants.
 
@@ -310,8 +311,10 @@ Per-key meaning, validation rules, and the hot-reload/restart split live in
 
 Logs go to both the console and
 `~/.copilot-relay/logs/copilot-relay.<local-date>.log`. The active file is
-resolved per write, so it rotates at local midnight without a timer, and
-`logRetentionDays` keeps the chosen number of local calendar days including today.
+resolved for each entry when it is logged, so it rotates at local midnight without
+a timer, and `logRetentionDays` keeps the chosen number of local calendar days
+including today. Entries reach the file in call order through one queue and one
+open file; the reuse rules are in [Internals](EN-Internals.md).
 Debug captures share that retention window, with startup/reload and throttled
 request-time cleanup that preserves active or unknown-owner pending captures.
 Detailed safety/leftover rules are in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).

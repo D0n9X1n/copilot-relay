@@ -99,7 +99,7 @@ Two invariants, both learned from a log that reached 9.3 GB:
 
 **One entry, one physical line.** `formatLogValue` needs *both* `compact: true` and `breakLength: Infinity`. The Node docs read as though the default `compact: 3` suffices — it does not. The number counts inner elements united, not a threshold, so it only collapses payloads nesting no deeper than that count. On a real 4-level error payload: `compact: 3` → 10 lines, `compact: 1` → **22**, `compact: true` → 1. `tests/unit/log-format.test.ts` pins this; do not "simplify" it away. Multi-line dumps also break every `grep` recipe in `wiki/EN-Logging-Troubleshooting.md`.
 
-**Retention needs rotation.** The active file is `copilot-relay.<local-date>.log`, resolved per write so it rotates at local midnight with no timer. Retention ages files by the **filename date**, falling back to mtime for undated files. Before rotation existed, retention aged one never-rotated file by mtime, every append refreshed that mtime, and it was never once eligible for deletion. Local date, not UTC — `logRetentionDays` is a human "how many days" setting.
+**Retention needs rotation.** The active file is `copilot-relay.<local-date>.log`, resolved for each entry when it is logged, so it rotates at local midnight with no timer. Retention ages files by the **filename date**, falling back to mtime for undated files. Before rotation existed, retention aged one never-rotated file by mtime, every append refreshed that mtime, and it was never once eligible for deletion. Local date, not UTC — `logRetentionDays` is a human "how many days" setting.
 
 Log volume is bounded by time, not size. Accepted (#25).
 
