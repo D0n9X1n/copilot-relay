@@ -17,6 +17,7 @@ import {
 } from "~/lib/atomic-file"
 import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
+import { sanitizeTerminalString } from "~/lib/redact"
 
 export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
@@ -541,10 +542,36 @@ const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>
   && left.mode === right.mode
   && JSON.stringify(left.identity) === JSON.stringify(right.identity)
 
+// A reload failure the watcher has reported. snapshot is undefined when the file could not
+// be read at all.
+interface ReloadFailure {
+  reason: string
+  snapshot: FileSnapshot | undefined
+}
+
+const isSameFailure = (
+  reported: ReloadFailure | undefined,
+  reason: string,
+  snapshot: FileSnapshot | undefined,
+): boolean => {
+  if (!reported || reported.reason !== reason) {
+    return false
+  }
+
+  if (!reported.snapshot || !snapshot) {
+    return reported.snapshot === snapshot
+  }
+
+  return sameSnapshot(reported.snapshot, snapshot)
+}
+
 export const watchAppConfig = (
   onReload: (config: AppConfig) => void,
 ): ReturnType<typeof setInterval> => {
   let lastSnapshot: FileSnapshot | undefined
+  // The watcher retries an unchanged invalid file every tick. Logging every retry added one
+  // identical error per second, so each pair of file snapshot and reason is logged once.
+  let reportedFailure: ReloadFailure | undefined
   // setInterval does not wait for an async callback, so this keeps a slow reload from overlapping
   // the next tick.
   let reloading = false
@@ -555,8 +582,9 @@ export const watchAppConfig = (
     }
 
     reloading = true
+    let snapshot: FileSnapshot | undefined
     try {
-      const snapshot = await readFileSnapshot(paths.configPath)
+      snapshot = await readFileSnapshot(paths.configPath)
       if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) {
         return
       }
@@ -584,12 +612,25 @@ export const watchAppConfig = (
 
       // Failed verification or application must remain retryable without a new edit.
       lastSnapshot = snapshot
+      reportedFailure = undefined
     } catch (error) {
-      if (error instanceof InvalidThinkEffortError) {
-        log.error(`${error.message} Keeping the previous runtime settings.`)
-      } else {
-        log.error(`Could not reload config. Check ${paths.configPath} for invalid values or file errors.`)
+      // A concurrent save is not a failure: the next tick reads the newer file.
+      if (error instanceof FileConflictError) {
+        return
       }
+
+      const reason = error instanceof Error ? error.message : String(error)
+      if (isSameFailure(reportedFailure, reason, snapshot)) {
+        return
+      }
+
+      reportedFailure = { reason, snapshot }
+      // Validation messages name a key, a line or a rule; only an invalid logLevel repeats its
+      // value. A key that can hold a secret must keep its value out of its message.
+      const sentence = /[.!?]$/.test(reason) ? reason : `${reason}.`
+      log.error(sanitizeTerminalString(
+        `Could not reload config (${paths.configPath}): ${sentence} Keeping the previous runtime settings.`,
+      ))
     } finally {
       reloading = false
     }

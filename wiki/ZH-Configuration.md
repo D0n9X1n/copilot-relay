@@ -304,8 +304,8 @@ Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not 
 ```
 
 错误的文件会保留原样，供你修正；relay 不会通过写入 `max` 隐藏无效值。缺失的键仍使用
-发布默认值。无效的热重载会记录错误，并保留上一次有效的运行时设置；修正文件后正常重载
-会恢复。
+发布默认值。无效的热重载只记录一次原因，并保留上一次有效的运行时设置；修正文件后正常
+重载会恢复。
 
 这一限制针对配置默认值，而不是请求覆盖值。对于 GPT-5.6 Sol 等支持它的模型，显式请求
 中的 `none` 仍会原样传递。它不是“使用默认值”的指令。
@@ -539,6 +539,16 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 
 `host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
 host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。
+
+relay 每秒检查一次 `config.yaml`。未通过校验的修改会保留之前的运行时设置，并记录一条
+写明文件和原因的错误：
+
+```text
+Could not reload config (<config.yaml 路径>): Invalid upstreamTimeoutSeconds: expected a non-negative integer (0 disables the deadline). Keeping the previous runtime settings.
+```
+
+relay 仍会每秒重试，但不会重复这一行。再次保存文件或原因改变时才会再次记录。修正后的
+文件生效时，relay 会以 `info` 级别记录 `Config reloaded:`。
 
 每个通过接入检查的请求都会在读取正文前快照路由、协议模式、超时、搜索后端、effort
 默认值及目录视图。重载只影响新请求，不改变活动回合的重试或后续调用。凭据是例外：

@@ -127,7 +127,11 @@ generic file/syntax errors do not echo potentially sensitive config contents.
 `watchAppConfig` is read-only: every known materialized key, even the optional
 empty search backend, must be present. Empty/partial saves do not reinstate
 defaults. It verifies a second snapshot before application and does not mark a
-failed read/application as accepted, so correction can be retried.
+failed read/application as accepted, so correction can be retried. Each tick
+retries, but a failure is logged once per pair of file snapshot and reason
+(`isSameFailure`); a successful reload clears that record. A `FileConflictError`
+from a save that lands during verification is not logged, because the next tick
+reads the newer file.
 
 Adding a key means updating `config.default.yaml`, the README, and
 [Configuration](EN-Configuration.md) in both languages.

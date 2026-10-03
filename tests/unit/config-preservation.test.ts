@@ -403,6 +403,49 @@ test("hot reload retries an unchanged valid edit after its callback throws", asy
   await assert.rejects(fs.stat(paths.logsDir), { code: "ENOENT" })
 })
 
+test("a failed reload is logged once, with its reason, until the file or the reason changes", async (t) => {
+  await writeConfigFile(completeDocument())
+  let active = await readAppConfig()
+  const watcher = await startWatcher(t, (next) => {
+    active = next
+  })
+
+  const message = (index: number): string => String(watcher.errors[index]?.[0])
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "-1" }))
+  await watcher.poll()
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "an unchanged invalid file is retried without logging again")
+  assert.match(message(0), /^Could not reload config \(/)
+  assert.ok(message(0).includes(paths.configPath), "the entry names the file")
+  assert.match(message(0), /Invalid upstreamTimeoutSeconds/)
+  assert.match(message(0), / Keeping the previous runtime settings\.$/)
+  assert.equal(active.upstreamTimeoutSeconds, 90)
+
+  await writeConfigFile(completeDocument({ logRetentionDays: "0" }))
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 2, "a different reason is logged")
+  assert.match(message(1), /Invalid logRetentionDays/)
+
+  await fs.unlink(paths.configPath)
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 3, "a deleted file is logged once")
+  assert.match(message(2), /Config file is missing/)
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "45" }))
+  await watcher.poll()
+  assert.equal(active.upstreamTimeoutSeconds, 45)
+  assert.equal(watcher.errors.length, 3)
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "-1" }))
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 4, "a failure after a successful reload is logged again")
+  await assert.rejects(fs.stat(paths.logsDir), { code: "ENOENT" })
+})
+
 const badReloads: Array<[string, string | null]> = [
   ["missing file", null],
   ["empty file", ""],

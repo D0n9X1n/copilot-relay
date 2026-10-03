@@ -369,8 +369,8 @@ Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not 
 
 The invalid file is left unchanged so you can correct it; the relay never hides
 an invalid value by writing `max`. Missing keys still use the shipped default.
-An invalid hot reload logs an error and keeps the last valid runtime settings.
-After correcting the file, normal reload resumes.
+An invalid hot reload logs its reason once and keeps the last valid runtime
+settings. After correcting the file, normal reload resumes.
 
 This restriction is on the configured fallback, not on request-level overrides.
 Explicit request `none` is still passed through for models that support it, such
@@ -634,6 +634,18 @@ Requires restart:
 `host` and `port` require restart because the listening socket is already bound.
 `claudeSetup` is read once during startup, so toggling it changes nothing until
 the relay starts again.
+
+The relay checks `config.yaml` once per second. An edit that fails validation
+keeps the previous runtime settings and logs one error that names the file and
+the reason:
+
+```text
+Could not reload config (<path to config.yaml>): Invalid upstreamTimeoutSeconds: expected a non-negative integer (0 disables the deadline). Keeping the previous runtime settings.
+```
+
+The relay keeps retrying every second without repeating that line. Saving the
+file again, or a different reason, logs again. When a corrected file applies,
+the relay logs `Config reloaded:` at `info`.
 
 Each admitted request snapshots routing, protocol mode, timeout, search backend,
 effort fallback, and the catalog view before reading its body. Reloads affect new
