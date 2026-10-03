@@ -140,6 +140,27 @@ base URL、超时、协议模式、搜索后端、effort 和目录视图。后�
 结果中没有目标模型也一样。输出预算处理不能在 SSE 开始后重新发现并改变能力；
 token 计数仍完全本地，不会固定或刷新推理目录。
 
+### Claude Code 的计费行
+
+Claude Code 把一条计费归属行放在顶层 system prompt 的最前面：
+
+```text
+x-anthropic-billing-header: cc_version=2.1.288.976; cc_entrypoint=sdk-cli;
+```
+
+它是给 Anthropic API 的元数据，不是给模型的指令。`src/claude/billing-line.ts` 的
+`removeBillingLine` 在 `POST /v1/messages` 和 `POST /v1/messages/count_tokens` 解析
+正文时移除它，让每条路由和本地 token 计数看到同一份 system prompt。它只移除以
+`x-anthropic-billing-header:` 开头的 system block 或字符串 `system` 的第一行，以及
+其后的空行。没有其他文本的 block 被丢弃；其余 block 保留 `cache_control` 和剩下的
+文本。之后再出现的这段文字按普通文本处理。relay 从不记录这一行。
+
+在 #157 之前，chat 路由把这一行并入 `handleSystemPrompt` 生成的唯一 system message。
+使用 `claude-haiku-4.5` 和 `claude-opus-5.5` 时，Copilot 的 `/chat/completions` 返回
+HTTP 200，但模型没有答出该消息中的暗号，token 计数也与 Copilot 省略整条消息（包括
+Claude Code 的指令）一致。在没有这项修复的 relay 上，在 Claude Code 的环境中设置
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0`，Claude Code 就不再发送这一行。
+
 ### 翻译后的历史
 
 `src/claude/translate.ts` 处理双向非流式 payload：Claude 请求 -> Copilot chat 请求，
