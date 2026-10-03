@@ -164,6 +164,7 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/routes/claude.ts` | Owns the local Claude API surface: parses requests, logs model routing, calls the translator, handles streaming and non-streaming responses, implements `count_tokens`. |
 | `src/claude/types.ts` | Only the subset of Claude Messages API types the proxy needs. Intentionally not a full Claude SDK. |
 | `src/claude/translate.ts` | Non-streaming translation both ways, including tool calls and thinking/text blocks. |
+| `src/claude/billing-line.ts` | Removes Claude Code's billing attribution line from the top-level system prompt before any route reads it. |
 | `src/claude/stream.ts` | Converts streaming Copilot chunks into Claude SSE events. Stateful, because Claude requires explicit block start/delta/stop. |
 | `src/claude/web-search-stream.ts` | Lets a turn that advertises WebSearch still stream. |
 | `src/claude/tool-names.ts` | Normalizes Claude tool names into Copilot-compatible names and maps them back. |

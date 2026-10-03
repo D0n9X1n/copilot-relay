@@ -9,6 +9,7 @@ import {
   type ClaudeStreamEventData,
   type ClaudeStreamState,
 } from "~/claude/types"
+import { removeBillingLine } from "~/claude/billing-line"
 import {
   translateModelName,
   translateToClaude,
@@ -571,7 +572,8 @@ claudeRoutes.get("/models", (c) =>
 claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const requestId = c.get("requestId")
-  const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+  // Every route reads the system prompt without Claude Code's billing line (#157).
+  const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {
     // Rejects a malformed effort control with HTTP 400 before any other work.
@@ -718,7 +720,8 @@ claudeRoutes.post("/messages", async (c) => {
 claudeRoutes.post("/messages/count_tokens", async (c) => {
   try {
     const claudeBeta = c.req.header("claude-beta")
-    const claudePayload = await c.req.json<ClaudeMessagesPayload>()
+    // Count the system prompt the routes send, without Claude Code's billing line.
+    const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
     const countPayload =
       shouldUseNativeMessages(c.get("config"), translateModelName(claudePayload.model)) ?
         {

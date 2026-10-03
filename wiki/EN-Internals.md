@@ -159,6 +159,31 @@ for all passes, even if the target was absent from discovery. Output bounding
 cannot rediscover and change capabilities after SSE starts; token counting remains
 local and never pins or refreshes the inference catalog.
 
+### Claude Code's billing line
+
+Claude Code puts a billing attribution line first in the top-level system prompt:
+
+```text
+x-anthropic-billing-header: cc_version=2.1.288.976; cc_entrypoint=sdk-cli;
+```
+
+It is metadata for Anthropic's API, not an instruction to the model.
+`removeBillingLine` in `src/claude/billing-line.ts` removes it when `POST /v1/messages`
+and `POST /v1/messages/count_tokens` parse the body, so every route and the local
+token count see the same system prompt. It removes only a line that opens a system
+block, or a string `system`, with `x-anthropic-billing-header:`, and the blank lines
+after it. A block with no other text is dropped; the other blocks keep their
+`cache_control` and the rest of their text. A later mention of the header is ordinary
+text. The relay never logs the line.
+
+Before #157, the chat route joined the line into the one system message that
+`handleSystemPrompt` builds. With `claude-haiku-4.5` and `claude-opus-5.5`, Copilot's
+`/chat/completions` returned HTTP 200, but the model did not return a secret word from
+that message, and the token counts were consistent with Copilot omitting the whole
+message, Claude Code's instructions included. On a relay without this fix,
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` in Claude Code's environment stops Claude Code from
+sending the line.
+
 ### Translated history
 
 `src/claude/translate.ts` handles non-streaming payloads in both directions:
