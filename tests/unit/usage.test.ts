@@ -481,6 +481,33 @@ test("a token with fewer than 16 letters and digits is matched only as an exact 
   assert.equal(usage.access_type_sku, "fixture-sku")
 })
 
+// Tokens with exactly 16 and exactly 15 letters and digits: the threshold, and one below it.
+const sixteenLettersAndDigits = "abcdefgh-12345678"
+const fifteenLettersAndDigits = "abcdefgh-1234567"
+
+test("a token with exactly 16 letters and digits is found with a space inside it", async (t) => {
+  await storeToken(sixteenLettersAndDigits)
+  mockFetch(t, () => Response.json({ ...account, copilot_plan: `${sixteenLettersAndDigits.slice(0, 8)} ${sixteenLettersAndDigits.slice(8)}` }))
+
+  assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
+})
+
+test("a token with exactly 15 letters and digits is not found with a space inside it, so the answer prints unchanged", async (t) => {
+  const answer = { ...account, copilot_plan: `${fifteenLettersAndDigits.slice(0, 8)} ${fifteenLettersAndDigits.slice(8)}` }
+  await storeToken(fifteenLettersAndDigits)
+  mockFetch(t, () => Response.json(answer))
+
+  assert.deepEqual(await loadCopilotUsage(), parseCopilotUsage(answer))
+})
+
+test("an exact copy of a token with fewer than 16 letters and digits is still refused", async (t) => {
+  // Too short for the letters-and-digits comparison, so only the exact check can find it.
+  await storeToken(fifteenLettersAndDigits)
+  mockFetch(t, () => Response.json({ ...account, copilot_plan: fifteenLettersAndDigits }))
+
+  assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
+})
+
 test("a token file that cannot be read is reported by its error code", async (t) => {
   await fs.rm(paths.githubTokenPath, { recursive: true, force: true })
   await fs.mkdir(paths.githubTokenPath, { recursive: true })
