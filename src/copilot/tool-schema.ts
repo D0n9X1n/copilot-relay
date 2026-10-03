@@ -63,43 +63,82 @@ function hasUnsupportedPatternFeatures(pattern: string): boolean {
   return false
 }
 
+// Returned by mapRecord's callback for a key to leave out.
+const removed = Symbol("removed")
+
+// Copy-on-write: the record itself is returned until a value changes or a key is left out, and only
+// then copied. Object.fromEntries keeps an own "__proto__" key as data, as JSON.parse does.
+function mapRecord(
+  record: Record<string, unknown>,
+  map: (key: string, value: unknown) => unknown,
+): Record<string, unknown> {
+  const keys = Object.keys(record)
+  let entries: Array<[string, unknown]> | undefined
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index]
+    const value = record[key]
+    const mapped = map(key, value)
+    if (!entries && Object.is(mapped, value)) {
+      continue
+    }
+
+    entries ??= keys.slice(0, index).map((kept): [string, unknown] => [kept, record[kept]])
+    if (mapped !== removed) {
+      entries.push([key, mapped])
+    }
+  }
+
+  return entries ? Object.fromEntries(entries) : record
+}
+
+// Copy-on-write, like mapRecord.
+function mapArray(values: Array<unknown>): Array<unknown> {
+  let copy: Array<unknown> | undefined
+  for (let index = 0; index < values.length; index++) {
+    const value = values[index]
+    const mapped = normalizeSchemaValue(value)
+    if (!copy && Object.is(mapped, value)) {
+      continue
+    }
+
+    copy ??= values.slice(0, index)
+    copy.push(mapped)
+  }
+
+  return copy ?? values
+}
+
 function normalizeSchemaValue(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(normalizeSchemaValue)
+    return mapArray(value)
   }
 
   return isRecord(value) ? normalizeResponsesToolSchema(value) : value
 }
 
-// Responses rejects these otherwise valid Claude regex constraints. Adapt only
-// the upstream copy; the client retains its original schema for tool validation.
+// Responses rejects these otherwise valid Claude regex constraints. Adapt only what is sent
+// upstream; the client keeps its original schema for tool validation. A schema that needs no
+// change is returned as is, so a long tool list is not rebuilt on every request.
 export function normalizeResponsesToolSchema(
   schema: Record<string, unknown>,
 ): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(schema).flatMap(([key, value]): Array<[string, unknown]> => {
-      if (
-        key === "pattern"
-        && typeof value === "string"
-        && hasUnsupportedPatternFeatures(value)
-      ) {
-        return []
-      }
+  return mapRecord(schema, (key, value) => {
+    if (
+      key === "pattern"
+      && typeof value === "string"
+      && hasUnsupportedPatternFeatures(value)
+    ) {
+      return removed
+    }
 
-      if (schemaMapKeywords.has(key) && isRecord(value)) {
-        return [[key, Object.fromEntries(
-          Object.entries(value).map(([name, nested]) => [
-            name,
-            normalizeSchemaValue(nested),
-          ]),
-        )]]
-      }
+    if (schemaMapKeywords.has(key) && isRecord(value)) {
+      return mapRecord(value, (_name, nested) => normalizeSchemaValue(nested))
+    }
 
-      if (nestedSchemaKeywords.has(key)) {
-        return [[key, normalizeSchemaValue(value)]]
-      }
+    if (nestedSchemaKeywords.has(key)) {
+      return normalizeSchemaValue(value)
+    }
 
-      return [[key, value]]
-    }),
-  )
+    return value
+  })
 }
