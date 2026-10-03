@@ -9,7 +9,7 @@ import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { promisify } from "node:util"
+import { promisify, stripVTControlCharacters } from "node:util"
 
 const execute = promisify(execFile)
 
@@ -172,7 +172,11 @@ try {
       net.Server.prototype.listen = function (options, ...args) {
         if (typeof options === "number") options = 0;
         else options = { ...options, port: 0, host: "127.0.0.1" };
-        this.once("listening", () => process.send?.({ port: this.address().port }));
+        this.once("listening", () => {
+          // Written to stdout, the stream startup logs use, so the smoke can order them.
+          process.stdout.write("SMOKE_LISTENING\\n");
+          process.send?.({ port: this.address().port });
+        });
         return listen.call(this, options, ...args);
       };
       syncBuiltinESMExports();
@@ -268,7 +272,7 @@ try {
       "port: 65535",
       `copilotBaseUrl: http://127.0.0.1:${upstreamPort}`,
       "claudeSetup: false",
-      "logLevel: error",
+      "logLevel: info",
       "logRetentionDays: 3",
       "thinkEffort: high",
       "upstreamTimeoutSeconds: 5",
@@ -357,6 +361,21 @@ try {
 
     assert.ok(requests.includes("POST /responses"))
     assert.ok(requests.includes("POST /chat/completions"))
+
+    // start loads the configured models' tokenizers before its server listens. The guard writes
+    // SMOKE_LISTENING to stdout when the server listens, after every line logged before that;
+    // logLevel: info in the config above makes the startup lines print.
+    const settle = Date.now() + 5000
+    while (!output.includes("SMOKE_LISTENING") && Date.now() < settle) {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+
+    const startup = stripVTControlCharacters(output)
+    const loaded = startup.indexOf("Tokenizers loaded: o200k_base")
+    assert.ok(
+      loaded !== -1 && loaded < startup.indexOf("SMOKE_LISTENING"),
+      `tokenizers must load before the server listens:\n${startup}`,
+    )
 
     // claudeSetup is false, so ~/.claude must not exist; the guard writes the
     // violation file only when it blocks network access.

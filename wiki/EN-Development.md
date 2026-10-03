@@ -202,9 +202,10 @@ All **Node 22/26 × Linux/macOS/Windows** legs run source typecheck/unit/integra
 build and download those exact candidates. `scripts/package-smoke.mjs` checks
 checksums, package name/version, then runs only packed JavaScript in an isolated
 home with production dependencies from that leg's lockfile install. It exercises
-help, the running version, dynamically loaded tokenizer and both translated model
-routes against a guarded local mock. It cannot call real Copilot or the installed
-relay, and it cleans up only its own child, sockets and temporary files.
+help, the running version, the dynamically loaded tokenizer (which `start` loads
+before its server listens) and both translated model routes against a guarded
+local mock. It cannot call real Copilot or the installed relay, and it cleans up
+only its own child, sockets and temporary files.
 
 Publish jobs verify and publish the already-gated tarball bytes with scripts
 disabled: no publish-time rebuild or version rewrite. On rerun, a registry version

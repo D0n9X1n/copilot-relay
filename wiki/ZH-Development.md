@@ -177,7 +177,7 @@ lockfile 一致。`candidates` 只运行一次 `npm ci` 和 build，禁用脚本
 全部 **Node 22/26 × Linux/macOS/Windows** 腿执行源码 typecheck/unit/integration/build，
 并下载同一候选。`scripts/package-smoke.mjs` 检查校验和及包名/版本，然后在隔离 home
 中仅运行打包后的 JavaScript，生产依赖来自该腿的 lockfile 安装。它通过有网络守卫的
-本地 mock 验证 help、运行版本、动态 tokenizer 和两条翻译模型路由，不调用真实 Copilot
+本地 mock 验证 help、运行版本、动态 tokenizer（`start` 在服务监听前加载它）和两条翻译模型路由，不调用真实 Copilot
 或已安装 relay，只清理自己创建的子进程、socket 和临时文件。
 
 发布 job 验证并发布已经过关的 tarball 字节，禁用脚本，不在发布时重建或重写版本。
