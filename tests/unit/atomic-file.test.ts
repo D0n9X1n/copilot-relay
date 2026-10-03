@@ -8,7 +8,7 @@ const home = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-atomic-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
 
-const { readFileSnapshot, writeFileSnapshot, FileConflictError } =
+const { readFileSnapshot, writeFileSnapshot, FileConflictError, NotRegularFileError } =
   await import("../../src/lib/atomic-file")
 
 test.after(async () => {
@@ -290,7 +290,7 @@ test("a non-regular target fails bounded acquisition without reading it", async 
     assert.fail("must not read a non-regular file")
   })
 
-  await assert.rejects(readFileSnapshot(file), FileConflictError)
+  await assert.rejects(readFileSnapshot(file), NotRegularFileError)
   assert.equal(stats, 1)
   assert.equal(read.mock.callCount(), 0)
 })

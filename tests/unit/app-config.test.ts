@@ -31,6 +31,15 @@ test("rejects removed log levels", () => {
   assert.throws(() => normalizeLogLevel("silent"), /Invalid logLevel/)
 })
 
+// Why: config errors are logged at startup and on hot reload, and a value typed under the wrong
+// key can be a credential that no log redaction knows about.
+test("an invalid log level is rejected without repeating the value", () => {
+  assert.throws(() => normalizeLogLevel("https://user:SYNTHETIC_SECRET@gateway.invalid"), (error: Error) => {
+    assert.equal(error.message, "Invalid logLevel: expected one of error, info, debug")
+    return true
+  })
+})
+
 // Why: a missing key should still use the default config, while a malformed
 // configured value should fail startup.
 test("distinguishes missing and invalid log levels", () => {

@@ -121,17 +121,20 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 fallback choices separate from request-level `ReasoningEffort`. `normalizeThinkEffort`
 rejects `none` and malformed explicit defaults before config write-back or auth;
 `startRelay` also validates programmatically supplied defaults. Missing keys alone
-use the shipped default. Invalid reloads emit an error and retain active settings;
-generic file/syntax errors do not echo potentially sensitive config contents.
+use the shipped default. Invalid reloads log their reason once and retain active
+settings. Validation messages name a key, a line or a rule and never repeat a
+value, because a value typed under the wrong key can be a credential.
 
 `watchAppConfig` is read-only: every known materialized key, even the optional
 empty search backend, must be present. Empty/partial saves do not reinstate
 defaults. It verifies a second snapshot before application and does not mark a
 failed read/application as accepted, so correction can be retried. Each tick
 retries, but a failure is logged once per pair of file snapshot and reason
-(`isSameFailure`); a successful reload clears that record. A `FileConflictError`
-from a save that lands during verification is not logged, because the next tick
-reads the newer file.
+(`isSameFailure`). A successful reload, or a clean read of the applied file,
+clears that record. A save that lands while the file is read or verified is not
+a failure (`readConfigSnapshot`): the next tick reads the newer file. A path
+that is not a regular file (`NotRegularFileError`) is a failure like any other,
+and so is any error thrown while applying a reload.
 
 Adding a key means updating `config.default.yaml`, the README, and
 [Configuration](EN-Configuration.md) in both languages.

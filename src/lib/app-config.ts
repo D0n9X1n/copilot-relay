@@ -17,7 +17,7 @@ import {
 } from "~/lib/atomic-file"
 import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
-import { sanitizeTerminalString } from "~/lib/redact"
+import { terminalText } from "~/lib/terminal"
 
 export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
@@ -77,8 +77,10 @@ export const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
 
   const normalized = value.toLowerCase()
   if (!isLogLevelName(normalized)) {
+    // Never repeat the value: this message is logged at startup and on hot reload, and a value
+    // typed under the wrong key can be a credential.
     throw new Error(
-      `Invalid logLevel "${value}": expected one of ${logLevels.join(", ")}`,
+      `Invalid logLevel: expected one of ${logLevels.join(", ")}`,
     )
   }
 
@@ -565,6 +567,20 @@ const isSameFailure = (
   return sameSnapshot(reported.snapshot, snapshot)
 }
 
+// One read of the config file for a reload. Returns undefined when the file changed while it was
+// read: that is a save in progress, not a failure, and the next tick reads the newer file.
+const readConfigSnapshot = async (): Promise<FileSnapshot | undefined> => {
+  try {
+    return await readFileSnapshot(paths.configPath)
+  } catch (error) {
+    if (error instanceof FileConflictError) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 export const watchAppConfig = (
   onReload: (config: AppConfig) => void,
 ): ReturnType<typeof setInterval> => {
@@ -584,8 +600,14 @@ export const watchAppConfig = (
     reloading = true
     let snapshot: FileSnapshot | undefined
     try {
-      snapshot = await readFileSnapshot(paths.configPath)
+      snapshot = await readConfigSnapshot()
+      if (!snapshot) {
+        return
+      }
+
       if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) {
+        // A clean read of the applied file ends any failure logged since it was applied.
+        reportedFailure = undefined
         return
       }
 
@@ -603,9 +625,9 @@ export const watchAppConfig = (
       const config = resolveConfig(raw)
 
       // A save that lands while this one is being validated is picked up on the next tick.
-      const current = await readFileSnapshot(paths.configPath)
-      if (!sameSnapshot(snapshot, current)) {
-        throw new FileConflictError()
+      const current = await readConfigSnapshot()
+      if (!current || !sameSnapshot(snapshot, current)) {
+        return
       }
 
       onReload(config)
@@ -614,21 +636,16 @@ export const watchAppConfig = (
       lastSnapshot = snapshot
       reportedFailure = undefined
     } catch (error) {
-      // A concurrent save is not a failure: the next tick reads the newer file.
-      if (error instanceof FileConflictError) {
-        return
-      }
-
       const reason = error instanceof Error ? error.message : String(error)
       if (isSameFailure(reportedFailure, reason, snapshot)) {
         return
       }
 
       reportedFailure = { reason, snapshot }
-      // Validation messages name a key, a line or a rule; only an invalid logLevel repeats its
-      // value. A key that can hold a secret must keep its value out of its message.
+      // Validation messages name a key, a line or a rule and never repeat a value, because a value
+      // typed under the wrong key can be a credential. terminalText also drops C1 controls.
       const sentence = /[.!?]$/.test(reason) ? reason : `${reason}.`
-      log.error(sanitizeTerminalString(
+      log.error(terminalText(
         `Could not reload config (${paths.configPath}): ${sentence} Keeping the previous runtime settings.`,
       ))
     } finally {
