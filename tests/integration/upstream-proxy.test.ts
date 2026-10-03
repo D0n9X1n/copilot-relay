@@ -14,6 +14,7 @@ import { fetch as undiciFetch, type Dispatcher } from "undici"
 import {
   closedPort,
   refuseExternalConnections,
+  startEchoingProxy,
   startRecordingProxy,
   withProxyEnvironment,
   withoutProxyVariables,
@@ -230,9 +231,14 @@ interface RelayRun {
   output: string
 }
 
-// Runs `copilot-relay <args>` with its own home. A connection off this machine throws, and so does
-// the global fetch, so the only way out is through the configured proxy.
-const runRelay = async (childHome: string, args: Array<string>): Promise<RelayRun> => {
+// Runs `copilot-relay <args>` with its own home and any extra environment variables. A connection
+// off this machine throws, and so does the global fetch, so the only way out is through the
+// configured proxy.
+const runRelay = async (
+  childHome: string,
+  args: Array<string>,
+  env: Record<string, string> = {},
+): Promise<RelayRun> => {
   const script = `
     const network = await import(${JSON.stringify(networkFixture.href)});
     network.refuseExternalConnections();
@@ -248,6 +254,7 @@ const runRelay = async (childHome: string, args: Array<string>): Promise<RelayRu
       cwd,
       env: {
         ...withoutProxyVariables(process.env),
+        ...env,
         CONSOLA_LEVEL: undefined,
         HOME: childHome,
         NO_COLOR: "1",
@@ -354,4 +361,44 @@ test("models reads the catalog through upstreamProxy", async (t) => {
     ["CONNECT api.github.com:443", `CONNECT ${copilot.host}`],
   )
   assert.deepEqual(copilot.requests.map((request) => `${request.method} ${request.url}`), ["GET /models"])
+})
+
+// Every log file a child wrote under its home.
+const readLogs = async (childHome: string): Promise<string> => {
+  const logsDir = path.join(childHome, ".copilot-relay", "logs")
+  const names = await fs.readdir(logsDir).catch(() => [])
+  const contents = await Promise.all(names.map((name) => fs.readFile(path.join(logsDir, name), "utf8")))
+  return contents.join("\n")
+}
+
+// Why (#168): a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
+// in the error, and start logs that error for the GitHub user lookup and for the startup
+// preflight. A reply that echoes Proxy-Authorization must not carry the password, raw or in Basic
+// form, to the terminal or the log, whether the proxy comes from config.yaml or HTTPS_PROXY.
+test("start never prints or logs the proxy password a malformed CONNECT reply echoes", async (t) => {
+  const proxy = await startEchoingProxy()
+  t.after(() => proxy.close())
+  const proxyUrl = proxy.url.replace("http://", "http://relay-echo-user:relay-echo-secret@")
+  const basic = Buffer.from("relay-echo-user:relay-echo-secret").toString("base64")
+  const modes: Array<{ label: string; upstreamProxy: string; env: Record<string, string> }> = [
+    { label: "config.yaml", upstreamProxy: proxyUrl, env: {} },
+    { label: "HTTPS_PROXY", upstreamProxy: "env", env: { HTTPS_PROXY: proxyUrl } },
+  ]
+
+  for (const { label, upstreamProxy, env } of modes) {
+    const childHome = await prepareHome(t, upstreamProxy, "https://copilot-fixture.invalid")
+    const result = await runRelay(childHome, ["start"], env)
+    const logs = await readLogs(childHome)
+
+    assert.equal(result.code, 1, result.output)
+    assert.match(result.output, /Startup preflight failed/)
+    // The failure itself is still reported.
+    assert.match(result.output + logs, /does not match the HTTP\/1\.1 protocol/)
+    for (const secret of ["relay-echo-secret", basic]) {
+      assert.ok(!result.output.includes(secret), `${label}: the terminal shows the proxy password`)
+      assert.ok(!logs.includes(secret), `${label}: the log holds the proxy password`)
+    }
+  }
+
+  assert.deepEqual([...new Set(proxy.targets)], ["api.github.com:443", "copilot-fixture.invalid:443"])
 })

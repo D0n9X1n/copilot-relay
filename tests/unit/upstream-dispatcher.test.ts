@@ -12,6 +12,7 @@ import {
   redirectGitHubTo,
   refuseExternalConnections,
   replyJson,
+  startEchoingProxy,
   startFakeGitHub,
   withProxyEnvironment,
 } from "../fixtures/network"
@@ -170,4 +171,77 @@ test("GitHub sign-in uses the shared upstream dispatcher", async (t) => {
   }
 
   assert.deepEqual(github.requests, sent)
+})
+
+// What `promise` rejects with. A promise that resolves fails the test.
+const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> => {
+  try {
+    await promise
+  } catch (error) {
+    return error
+  }
+
+  throw new Error("Expected a rejection")
+}
+
+// Why (#168): a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
+// in the error, and a reply that echoes Proxy-Authorization would carry the password, raw and in
+// Basic form, into every log line that prints the error. Both proxy modes.
+test("a malformed CONNECT reply that echoes the proxy password leaves none of it in the error", async (t) => {
+  const proxy = await startEchoingProxy()
+  const restoreConnections = refuseExternalConnections()
+  t.after(async () => {
+    configureUpstreamDispatcher(undefined)
+    restoreConnections()
+    await proxy.close()
+  })
+  const proxyUrl = proxy.url.replace("http://", "http://echo-user:echo-secret@")
+  const basic = Buffer.from("echo-user:echo-secret").toString("base64")
+  const modes: Array<{ label: string; upstreamProxy: string; variables: Record<string, string> }> = [
+    { label: "URL", upstreamProxy: proxyUrl, variables: {} },
+    { label: "env", upstreamProxy: "env", variables: { HTTPS_PROXY: proxyUrl } },
+  ]
+
+  for (const { label, upstreamProxy, variables } of modes) {
+    const error = await withProxyEnvironment(variables, () => {
+      configureUpstreamDispatcher(upstreamProxy)
+      return rejectionOf(fetchUpstream("https://copilot.invalid/models", {}))
+    })
+
+    assert.ok(error instanceof TypeError, `${label}: ${String(error)}`)
+    const cause = error.cause as Error
+    assert.equal(cause.name, "HTTPParserError", label)
+    assert.ok(!Object.hasOwn(cause, "data"), `${label}: the unparsed reply was kept`)
+    const text = inspect(error, { depth: 8 })
+    assert.ok(!text.includes("echo-secret"), `${label}: ${text}`)
+    assert.ok(!text.includes(basic), `${label}: ${text}`)
+  }
+
+  assert.deepEqual(proxy.targets, ["copilot.invalid:443", "copilot.invalid:443"])
+})
+
+// Why (#168): the error is cleaned in place, so callers still read its type, code and cause; usage
+// names a failure by its cause's message or code. Credentials are replaced in its messages even
+// when they are too short to register with the log redaction: only this error changes.
+test("a transport error keeps its type, code and cause but loses every form of the proxy credentials", async (t) => {
+  const failure = Object.assign(new Error("proxy said ab:cd, Basic YWI6Y2Q=, user ab, password cd"), {
+    code: "ECONNRESET",
+    data: "raw reply ab:cd",
+  })
+  const redirect = redirectGitHubTo(`http://127.0.0.1:${await closedPort()}`, () => failure)
+  t.after(() => {
+    redirect.restore()
+    configureUpstreamDispatcher(undefined)
+  })
+  configureUpstreamDispatcher(`http://ab:cd@127.0.0.1:${await closedPort()}`)
+
+  const error = await rejectionOf(fetchUpstream("https://api.github.com/user", {}))
+
+  assert.ok(error instanceof TypeError, String(error))
+  assert.equal(error.message, "fetch failed")
+  assert.equal(error.cause, failure)
+  assert.equal(failure.code, "ECONNRESET")
+  assert.ok(!Object.hasOwn(failure, "data"), "the raw reply was kept")
+  assert.equal(failure.message, "proxy said [redacted], Basic [redacted], user [redacted], password [redacted]")
+  assert.doesNotMatch(String(failure.stack).split("\n")[0], /ab|cd|YWI6Y2Q=/)
 })

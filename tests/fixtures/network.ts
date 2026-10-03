@@ -327,3 +327,58 @@ export const startRecordingProxy = async (): Promise<RecordingProxy> => {
     url: `http://127.0.0.1:${address.port}`,
   }
 }
+
+export interface EchoingProxy {
+  close: () => Promise<void>
+  /** The host:port target of each CONNECT received. */
+  targets: Array<string>
+  url: string
+}
+
+/**
+ * A proxy that answers every CONNECT with a reply undici cannot parse, which echoes the
+ * Proxy-Authorization value it received and the password inside it. undici keeps the unparsed
+ * rest of such a reply in the error it throws, so a test can check that none of it is logged.
+ */
+export const startEchoingProxy = async (): Promise<EchoingProxy> => {
+  const targets: Array<string> = []
+  const sockets = new Set<net.Socket>()
+  const server = net.createServer((socket) => {
+    sockets.add(socket)
+    socket.on("close", () => sockets.delete(socket))
+    socket.on("error", () => socket.destroy())
+
+    let received = ""
+    socket.on("data", (chunk) => {
+      received += String(chunk)
+      if (!received.includes("\r\n\r\n")) {
+        return
+      }
+
+      targets.push(/^CONNECT (\S+)/.exec(received)?.[1] ?? "")
+      const basic = /^proxy-authorization: Basic (\S+)/im.exec(received)?.[1] ?? ""
+      const decoded = Buffer.from(basic, "base64").toString()
+      const password = decoded.slice(decoded.indexOf(":") + 1)
+      received = ""
+      socket.end(`HTTP/1.1 200 Connection Established\r\nEcho ${basic} ${password}: x\r\n\r\n`)
+    })
+  })
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address !== "object") {
+    throw new Error("The echoing proxy did not bind a port")
+  }
+
+  return {
+    close: async () => {
+      for (const socket of sockets) {
+        socket.destroy()
+      }
+
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+    targets,
+    url: `http://127.0.0.1:${address.port}`,
+  }
+}

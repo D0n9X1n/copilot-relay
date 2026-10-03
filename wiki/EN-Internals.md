@@ -579,6 +579,17 @@ would cut ordinary text: a user name `copilot` would turn `copilot-relay` into
 that `copilot-relay cache` reads. A config reload registers nothing, because it
 never rebuilds the dispatcher.
 
+`fetchUpstream` cleans the error of a request that fails without a response in
+place, before it rethrows it (`sanitizeTransportError`). Anywhere in the cause
+chain it drops `data` and `body`, where undici keeps raw bytes from the peer:
+`HTTPParserError` keeps the unparsed rest of a reply, so a proxy that answers
+`CONNECT` with a malformed reply that echoes `Proxy-Authorization` would carry
+the password into every log line that prints the error. It also replaces every
+form of the active proxy's credentials, short ones and a user name or password
+alone included, in each message and in the head of each stack: only this one
+error changes. The error keeps its type, `code` and `cause`, which callers read,
+such as `failureReason` in `src/lib/usage.ts`.
+
 When an upstream request fails without a response while `upstreamProxy` is empty
 and `HTTPS_PROXY` or `HTTP_PROXY` is set, `fetchUpstream` logs once per process
 that the variable was not used and how to opt in. The default is not `env`:
@@ -1248,6 +1259,9 @@ stand-ins: `startFakeGitHub` answers GitHub locally, `redirectGitHubTo` patches
 undici's `Agent` so requests for `github.com` and `api.github.com` reach it, and
 `refuseExternalConnections` makes any other connection off the machine throw.
 `withProxyEnvironment` sets proxy variables for one test and restores them.
+`startRecordingProxy` records the requests a proxy receives, and
+`startEchoingProxy` answers each `CONNECT` with a reply undici cannot parse that
+echoes the credentials it received.
 
 Start such a stand-in before the first `test()` in the file. `node:test` runs the
 global `after()` hooks as soon as every test registered so far has finished, which

@@ -478,6 +478,14 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 `[redacted]-relay`，用户名 `a` 会破坏 `copilot-relay cache` 读取的 `completion path=`
 条目。配置重载不会注册任何值，因为它从不重建 dispatcher。
 
+`fetchUpstream` 在重新抛出没有响应就失败的请求的错误之前，原地清理它
+（`sanitizeTransportError`）。它在整个 cause 链中删除 `data` 和 `body`，undici 在这些
+字段中保存来自对端的原始字节：`HTTPParserError` 保存回复中未解析的剩余部分，所以一个用
+格式错误的回复应答 `CONNECT` 并回显 `Proxy-Authorization` 的代理，会把密码带进每一行
+打印该错误的日志。它还在每条消息和每个 stack 的开头替换当前代理凭据的每种形式，包括较短
+的形式以及单独的用户名或密码：只有这一个错误会被改变。错误保留它的类型、`code` 和
+`cause`，调用方会读取它们，例如 `src/lib/usage.ts` 的 `failureReason`。
+
 `upstreamProxy` 为空、又设置了 `HTTPS_PROXY` 或 `HTTP_PROXY` 时，如果某个上游请求在
 没有响应的情况下失败，`fetchUpstream` 每个进程只记录一次：该变量没有被使用，以及如何
 启用。默认值不是 `env`：`readAppConfig` 会把每个键写回磁盘，`env` 默认值会让已经为
@@ -1037,7 +1045,9 @@ GitHub 调用经过 relay 的上游 dispatcher，而不是全局 `fetch`，所�
 它们。`tests/fixtures/network.ts` 提供替身：`startFakeGitHub` 在本地应答 GitHub，
 `redirectGitHubTo` 给 undici 的 `Agent` 打补丁，让发往 `github.com` 和 `api.github.com`
 的请求到达它，`refuseExternalConnections` 让任何其他离开本机的连接直接抛错。
-`withProxyEnvironment` 为单个测试设置代理变量，结束后恢复。
+`withProxyEnvironment` 为单个测试设置代理变量，结束后恢复。`startRecordingProxy` 记录
+代理收到的请求，`startEchoingProxy` 用 undici 无法解析、并回显所收到凭据的回复应答每个
+`CONNECT`。
 
 这类替身要在文件中第一个 `test()` 之前启动。`node:test` 会在目前已注册的测试全部结束时
 立即运行全局 `after()` 钩子；测试之间若有顶层 `await`，这可能就发生在等待期间，之后

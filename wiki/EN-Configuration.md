@@ -730,8 +730,11 @@ the `Basic` value it sends as `[redacted]`. A user name or password alone is not
 redacted there: redaction applies to every log line, and a short or common one,
 such as `copilot`, would also be cut out of ordinary text, such as
 `copilot-relay`. For the same reason, a form shorter than 8 characters is not
-redacted. `copilot-relay status` and the startup log show only the proxy's
-origin:
+redacted. The error of an upstream request that fails without a response is
+cleaned before anything logs it: every form of the proxy's credentials in it is
+replaced, short ones and a user name or password alone included, and the raw
+bytes of a reply the relay could not parse are dropped. `copilot-relay status`
+and the startup log show only the proxy's origin:
 
 ```text
 Upstream proxy: http://proxy.example:3128 (credentials hidden)

@@ -615,7 +615,9 @@ relay 通过 `CONNECT` 在代理中为每个调用建立隧道，所以 HTTPS �
 解码后）以及它发送的 `Basic` 值都显示为 `[redacted]`。单独的用户名或密码在那里不会被
 脱敏：脱敏作用于每一行日志，较短或常见的值（例如 `copilot`）会把普通文本（例如
 `copilot-relay`）中的相同部分也去掉。出于同样的原因，短于 8 个字符的形式不会被脱敏。
-`copilot-relay status` 和启动日志只显示代理的 origin：
+上游请求在没有响应的情况下失败时，它的错误在任何日志记录之前就会被清理：其中代理凭据的
+每种形式都会被替换，包括较短的形式以及单独的用户名或密码；relay 无法解析的回复的原始字节
+也会被丢弃。`copilot-relay status` 和启动日志只显示代理的 origin：
 
 ```text
 Upstream proxy: http://proxy.example:3128 (credentials hidden)

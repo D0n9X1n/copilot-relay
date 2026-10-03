@@ -81,26 +81,50 @@ const decodeOrKeep = (value: string): string => {
   }
 }
 
+const parseProxyUrl = (proxyUrl: string): URL | undefined => {
+  try {
+    return new URL(proxyUrl)
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * The forms a proxy's credentials take together: user:password as written in the URL and decoded,
  * and the Basic value undici sends in Proxy-Authorization. None when the URL lacks either part,
  * because undici then sends no Proxy-Authorization at all.
  */
 const credentialPairForms = (proxyUrl: string): Array<string> => {
-  let url: URL
-  try {
-    url = new URL(proxyUrl)
-  } catch {
-    return []
-  }
-
-  if (url.username === "" || url.password === "") {
+  const url = parseProxyUrl(proxyUrl)
+  if (url === undefined || url.username === "" || url.password === "") {
     return []
   }
 
   const decoded = `${decodeOrKeep(url.username)}:${decodeOrKeep(url.password)}`
   return [`${url.username}:${url.password}`, decoded, Buffer.from(decoded).toString("base64")]
 }
+
+// Every form of a proxy's credentials, each part alone included, for cleaning one error.
+const credentialForms = (proxyUrl: string): Array<string> => {
+  const url = parseProxyUrl(proxyUrl)
+  if (url === undefined) {
+    return []
+  }
+
+  return [
+    ...credentialPairForms(proxyUrl),
+    url.username,
+    decodeOrKeep(url.username),
+    url.password,
+    decodeOrKeep(url.password),
+  ].filter((form) => form !== "")
+}
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+// Every form of the credentials of each proxy the dispatcher can use, longest first, so a form
+// that begins with a shorter one is replaced whole. Undefined when no proxy has credentials.
+let activeCredentialPattern: RegExp | undefined
 
 // registerLogSecret replaces a form in every log line, so a short one could match ordinary text:
 // "a:b" is inside "data:base64".
@@ -125,11 +149,18 @@ export const configureUpstreamDispatcher = (upstreamProxy: string | undefined): 
   upstreamDispatcher = buildUpstreamDispatcher(upstreamProxy)
   configuredUpstreamProxy = upstreamProxy
 
-  for (const form of proxyUrlsFor(upstreamProxy).flatMap((proxyUrl) => credentialPairForms(proxyUrl))) {
+  const proxyUrls = proxyUrlsFor(upstreamProxy)
+  for (const form of proxyUrls.flatMap((proxyUrl) => credentialPairForms(proxyUrl))) {
     if (form.length >= minimumRegisteredLength) {
       registerLogSecret(form)
     }
   }
+
+  const forms = [...new Set(proxyUrls.flatMap((proxyUrl) => credentialForms(proxyUrl)))]
+    .sort((left, right) => right.length - left.length)
+  activeCredentialPattern = forms.length === 0
+    ? undefined
+    : new RegExp(forms.map((form) => escapeRegExp(form)).join("|"), "g")
 
   // Requests already sent through the previous dispatcher finish before it closes.
   void previous.close().catch(() => undefined)
@@ -169,14 +200,91 @@ export interface UpstreamRequestInit {
   signal?: AbortSignal
 }
 
+const redacted = "[redacted]"
+
+// Fields in which undici keeps raw bytes from the peer: HTTPParserError.data holds the unparsed
+// rest of a reply.
+const rawPayloadKeys = ["data", "body"]
+
+// Replaces an error's message or stack in place. A frozen error keeps its text.
+const replaceText = (error: Error, key: "message" | "stack", value: string): void => {
+  try {
+    Object.defineProperty(error, key, { configurable: true, enumerable: false, value, writable: true })
+  } catch {
+    // A frozen error cannot be changed.
+  }
+}
+
+// A stack with the credentials replaced in its first lines, which repeat the message. Frames name
+// code locations, never credentials, and a short form such as a one-letter user name could match
+// inside a path there.
+const scrubStackHead = (stack: string, pattern: RegExp): string => {
+  const frames = stack.search(/\n\s+at /)
+  if (frames === -1) {
+    return stack.replace(pattern, redacted)
+  }
+
+  return stack.slice(0, frames).replace(pattern, redacted) + stack.slice(frames)
+}
+
+/**
+ * Cleans the error of an upstream request that failed without a response, in place, so it keeps
+ * its type, code and cause, which callers read.
+ *
+ * It drops the raw payload undici can keep from the peer anywhere in the cause chain: a proxy that
+ * answers CONNECT with a reply undici cannot parse leaves the rest of that reply in
+ * HTTPParserError.data, and a reply that echoes Proxy-Authorization would carry the password into
+ * every log line that prints the error. It also replaces every form of the active proxy's
+ * credentials in each message, short ones and a user name or password alone included: unlike the
+ * log redaction, only this error changes.
+ */
+const sanitizeTransportError = (error: unknown, seen = new Set<unknown>()): void => {
+  if (!(error instanceof Error) || seen.has(error)) {
+    return
+  }
+
+  seen.add(error)
+
+  for (const key of rawPayloadKeys) {
+    Reflect.deleteProperty(error, key)
+  }
+
+  if (activeCredentialPattern !== undefined) {
+    if (typeof error.message === "string") {
+      const message = error.message.replace(activeCredentialPattern, redacted)
+      if (message !== error.message) {
+        replaceText(error, "message", message)
+      }
+    }
+
+    if (typeof error.stack === "string") {
+      const stack = scrubStackHead(error.stack, activeCredentialPattern)
+      if (stack !== error.stack) {
+        replaceText(error, "stack", stack)
+      }
+    }
+  }
+
+  sanitizeTransportError(error.cause, seen)
+
+  if (error instanceof AggregateError) {
+    for (const inner of error.errors) {
+      sanitizeTransportError(inner, seen)
+    }
+  }
+}
+
 /**
  * fetch for an upstream call, through this process's upstream dispatcher.
  *
- * The undici response is rewrapped as a global Response, so callers, HTTPError included, keep the
- * Response type the rest of the relay uses.
+ * A request that fails without a response rejects with its error cleaned by
+ * sanitizeTransportError, before any caller can log it. The undici response is rewrapped as a
+ * global Response, so callers, HTTPError included, keep the Response type the rest of the relay
+ * uses.
  */
 export const fetchUpstream = async (url: string, init: UpstreamRequestInit): Promise<Response> => {
   const response = await undiciFetch(url, { ...init, dispatcher: upstreamDispatcher }).catch((error: unknown) => {
+    sanitizeTransportError(error)
     noteConnectionFailure(init.signal)
     throw error
   })
