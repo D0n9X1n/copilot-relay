@@ -74,6 +74,20 @@ def timestamp(value):
     return parsed
 
 
+# How long cleanup waits for a group leader after its group signal was refused with EPERM.
+EPERM_EXIT_GRACE_SECONDS = 1
+
+
+def exits_within(process, seconds):
+    """True when the process exits, and is reaped, within the given number of seconds."""
+    try:
+        process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return False
+
+    return True
+
+
 def terminate(process):
     """Best-effort child-tree cleanup; detached processes may escape OS grouping."""
     if os.name == "nt":
@@ -89,11 +103,13 @@ def terminate(process):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        except PermissionError:
+        except PermissionError as refused:
             # macOS reports EPERM, not ESRCH, for a group whose leader has exited but is not yet
-            # reaped. Only a leader that is still running and cannot be signalled is a failure.
-            if process.poll() is None:
-                raise
+            # reaped, and can report it before poll() sees the leader exit (#169). Only a leader
+            # still running after a short wait, which cannot be signalled, is a failure; it raises
+            # the original EPERM, not the wait's timeout.
+            if not exits_within(process, EPERM_EXIT_GRACE_SECONDS):
+                raise refused
 
     if process.poll() is None:
         process.kill()
