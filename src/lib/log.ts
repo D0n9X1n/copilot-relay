@@ -1,8 +1,9 @@
 // Central logger: writes to console and ~/.copilot-relay/logs with daily
 // rotation and retention cleanup.
-import fs from "node:fs/promises"
+import fs, { type FileHandle } from "node:fs/promises"
 import type { Stats } from "node:fs"
 import { AsyncLocalStorage } from "node:async_hooks"
+import timers from "node:timers"
 import { inspect } from "node:util"
 
 import consola from "consola"
@@ -41,7 +42,6 @@ export const withoutLogging = <T>(run: () => T): T => loggingSuppressed.run(true
 export const withoutConsoleLogging = <T>(run: () => T): T => consoleSuppressed.run(true, run)
 
 let currentLogLevel = consolaLevelByName.info
-const pendingLogWrites = new Set<Promise<void>>()
 const registeredLogSecrets = new Set<string>()
 const logSecretForms = new Set<string>()
 let logSecretPattern: RegExp | undefined
@@ -136,14 +136,6 @@ const boundLogText = (value: string, maxBytes: number): string => {
 
 export const isDebugLogging = (): boolean => currentLogLevel >= consolaLevelByName.debug
 
-// Logging stays fire-and-forget on the request path; teardown can explicitly
-// wait for in-flight writes before removing a temporary home or exiting.
-export const flushLogs = async (): Promise<void> => {
-  while (pendingLogWrites.size > 0) {
-    await Promise.all([...pendingLogWrites])
-  }
-}
-
 export const setLogLevel = (level: LogLevelName): void => {
   currentLogLevel = consolaLevelByName[level]
   consola.level = consolaLevelByName[level]
@@ -203,7 +195,8 @@ const sameFile = (left: Stats, right: Stats): boolean =>
 
 // Do not chmod through an arbitrary symlink. Open the already checked directory
 // without following its final component, and operate on the handle on POSIX.
-const ensurePrivateDirectory = async (directory: string): Promise<void> => {
+// Returns the checked directory's lstat, so a reused log handle can tell it was not replaced.
+const ensurePrivateDirectory = async (directory: string): Promise<Stats> => {
   await fs.mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error
@@ -217,7 +210,7 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
 
   // Windows has no O_NOFOLLOW and no POSIX mode bits, so the lstat check above is all it gets.
   if (process.platform === "win32") {
-    return
+    return observed
   }
 
   const handle = await fs.open(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
@@ -231,14 +224,78 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
   } finally {
     await handle.close()
   }
+
+  return observed
 }
 
-const ensureLogDirectory = async (): Promise<void> => {
-  await ensurePrivateDirectory(paths.appDir)
-  await ensurePrivateDirectory(paths.logsDir)
+// The app directory holds the logs directory, so it is checked first.
+const logDirectories = [paths.appDir, paths.logsDir]
+
+const ensureLogDirectory = async (): Promise<Array<Stats>> => {
+  const checked: Array<Stats> = []
+  for (const directory of logDirectories) {
+    checked.push(await ensurePrivateDirectory(directory))
+  }
+
+  return checked
 }
 
-const appendPrivateLog = async (filePath: string, content: string): Promise<void> => {
+interface LogEntry {
+  filePath: string
+  // Already rendered: wrapFileLog renders each entry once, so the console and the file carry the
+  // same redacted text. Inspecting again here would reopen the gap #47 closed.
+  line: string
+}
+
+interface ActiveLog {
+  filePath: string
+  handle: FileHandle
+  identity: Stats
+  // The log directories as checked when the file was opened, in logDirectories order.
+  directories: Array<Stats>
+}
+
+// Entries wait here and are written in call order by one drain at a time, so a burst costs one
+// check and one append per file instead of a directory check, open, stat, chmod and close for
+// each entry.
+let logQueue: Array<LogEntry> = []
+let logWriteChain: Promise<void> = Promise.resolve()
+let activeLog: ActiveLog | undefined
+let logIdleClose: ReturnType<typeof timers.setTimeout> | undefined
+
+// FileHandle.appendFile writes a larger buffer in 512 KiB pieces, and another process appending to
+// the same file could land between two of them. Each write ends on an entry boundary and every
+// entry is under 64 KiB, so an entry is never split.
+const maxLogWriteBytes = 256 * 1024
+
+// Windows has no POSIX mode bits to check.
+const hasMode = (stats: Stats, mode: number): boolean =>
+  process.platform === "win32" || (stats.mode & 0o777) === mode
+
+const isSameDirectory = (current: Stats | undefined, checked: Stats): boolean =>
+  current !== undefined
+    && current.isDirectory()
+    && sameFile(current, checked)
+    && hasMode(current, 0o700)
+
+// The open handle is reused only while its path still names the same private file with one link,
+// inside the same private directories. lstat of the file follows links in its parent path, so the
+// directories are checked too. A rename, deletion, replacement, second hard link, replaced
+// directory or loosened mode reopens with the full checks.
+const isStillActive = async (active: ActiveLog): Promise<boolean> => {
+  const [current, ...directories] = await Promise.all(
+    [active.filePath, ...logDirectories].map((target) => fs.lstat(target).catch(() => undefined)),
+  )
+
+  return current !== undefined
+    && current.isFile()
+    && current.nlink === 1
+    && sameFile(current, active.identity)
+    && hasMode(current, 0o600)
+    && active.directories.every((checked, index) => isSameDirectory(directories[index], checked))
+}
+
+const openPrivateLog = async (filePath: string, directories: Array<Stats>): Promise<ActiveLog> => {
   const observed = await fs.lstat(filePath).catch((error: unknown) => {
     if (!isMissing(error)) {
       throw error
@@ -275,31 +332,123 @@ const appendPrivateLog = async (filePath: string, content: string): Promise<void
       await handle.chmod(0o600)
     }
 
-    await handle.appendFile(content)
-  } finally {
-    await handle.close()
+    return { filePath, handle, identity: opened, directories }
+  } catch (error) {
+    await handle.close().catch(() => undefined)
+    throw error
   }
 }
 
-/**
- * Appends one already-rendered entry.
- *
- * Takes strings rather than raw values: rendering happens once in wrapFileLog,
- * so the console and the file are guaranteed to carry the same redacted text.
- * Inspecting again here would reintroduce the gap this closes - the file would
- * be scrubbed while the console showed the original object. See #47.
- */
-const writeLogFile = async (
-  level: string,
-  values: Array<string>,
-): Promise<void> => {
-  await ensureLogDirectory()
-  await cleanupLogsIfDue()
+const closeActiveLog = async (): Promise<void> => {
+  const closing = activeLog
+  activeLog = undefined
+  await closing?.handle.close().catch(() => undefined)
+}
 
-  const line =[new Date().toISOString(), level, values.join(" ")].join(" ")
-  // Resolved per write, so a relay running across local midnight starts the next
-  // dated file on its own; there is no rotation timer to drift or miss.
-  await appendPrivateLog(getLogPath(), `${line}\n`)
+// Windows cannot rename or move a folder while a file in it is open, so the file is closed once
+// no entry has been written for a second; the next entry reopens it with the full checks. The
+// close goes through the write chain, so it never runs during a drain.
+// The timer comes from node:timers, not the global setTimeout: tests replace the global to capture
+// or run the timers of the code they drive, and a log entry must not add one to theirs.
+const logIdleCloseMs = 1000
+
+const scheduleLogIdleClose = (): void => {
+  timers.clearTimeout(logIdleClose)
+  logIdleClose = timers.setTimeout(() => {
+    logWriteChain = logWriteChain.then(closeActiveLog)
+  }, logIdleCloseMs)
+  logIdleClose.unref()
+}
+
+const openActiveLog = async (filePath: string): Promise<FileHandle> => {
+  if (activeLog?.filePath === filePath && await isStillActive(activeLog)) {
+    return activeLog.handle
+  }
+
+  await closeActiveLog()
+  const directories = await ensureLogDirectory()
+  activeLog = await openPrivateLog(filePath, directories)
+
+  return activeLog.handle
+}
+
+const appendLogLines = async (filePath: string, lines: Array<string>): Promise<void> => {
+  const handle = await openActiveLog(filePath)
+  let chunk = ""
+  let chunkBytes = 0
+  for (const line of lines) {
+    const lineBytes = Buffer.byteLength(line)
+    if (chunk !== "" && chunkBytes + lineBytes > maxLogWriteBytes) {
+      await handle.appendFile(chunk)
+      chunk = ""
+      chunkBytes = 0
+    }
+
+    chunk += line
+    chunkBytes += lineBytes
+  }
+
+  await handle.appendFile(chunk)
+}
+
+const drainLogQueue = async (): Promise<void> => {
+  const entries = logQueue
+  logQueue = []
+
+  // Retention runs at most hourly; its failure must not cost the entries already queued.
+  await cleanupLogsIfDue().catch(() => undefined)
+
+  // Consecutive entries share a dated file, so a batch splits only where it crosses local midnight.
+  const groups: Array<{ filePath: string; lines: Array<string> }> = []
+  for (const entry of entries) {
+    const last = groups.at(-1)
+    if (last?.filePath === entry.filePath) {
+      last.lines.push(entry.line)
+    } else {
+      groups.push({ filePath: entry.filePath, lines: [entry.line] })
+    }
+  }
+
+  for (const group of groups) {
+    try {
+      await appendLogLines(group.filePath, group.lines)
+    } catch {
+      // File logging must never fail a request. Dropping the handle makes the next batch reopen
+      // with the full checks instead of reusing one in an unknown state.
+      await closeActiveLog()
+    }
+  }
+
+  scheduleLogIdleClose()
+}
+
+// Only the push that finds the queue empty schedules a drain; later entries join that drain or the
+// next one. A failed drain must not stop the ones after it.
+const queueLogEntry = (entry: LogEntry): void => {
+  logQueue.push(entry)
+  if (logQueue.length === 1) {
+    // The drain this schedules sets the next idle close.
+    timers.clearTimeout(logIdleClose)
+    logWriteChain = logWriteChain.then(drainLogQueue).catch(() => undefined)
+  }
+}
+
+// Logging stays fire-and-forget on the request path; teardown can explicitly wait for queued
+// writes and close the log file before removing a temporary home or exiting. Each call waits only
+// for the close it queued: waiting for the shared chain to stop changing made two overlapping calls
+// wait for each other's close forever.
+export const flushLogs = async (): Promise<void> => {
+  let pending = true
+  while (pending) {
+    const closed = logWriteChain.then(closeActiveLog)
+    logWriteChain = closed
+    await closed
+    // Entries queued while this close was pending are drained after it, so close again.
+    pending = logQueue.length > 0
+  }
+
+  // The file is closed; a pending idle close would only close it again.
+  timers.clearTimeout(logIdleClose)
 }
 
 const cleanupLogsIfDue = async (): Promise<void> => {
@@ -361,10 +510,15 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
 
     if (writesToFile) {
       // File logging must never block the console path or fail a request. If
-      // the disk write fails, the original consola call still runs.
-      const pending = writeLogFile(level, rendered).catch(() => undefined)
-      pendingLogWrites.add(pending)
-      void pending.then(() => pendingLogWrites.delete(pending))
+      // the disk write fails, the original consola call still runs. The entry is
+      // stamped and given its dated file here, so entries keep call order and one
+      // logged before local midnight lands in that day's file even when it is
+      // written after; there is no rotation timer to drift or miss.
+      const now = new Date()
+      queueLogEntry({
+        filePath: getLogPath(now),
+        line: `${now.toISOString()} ${level} ${rendered.join(" ")}\n`,
+      })
     }
 
     return quiet ? undefined : fn(...rendered)

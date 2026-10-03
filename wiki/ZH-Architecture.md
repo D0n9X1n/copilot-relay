@@ -182,7 +182,7 @@ flowchart TD
 ```
 
 源码：`src/start.ts`（`startRelay`）依次编排 `readAppConfig`、`setupProxyAuth`、
-`validateUpstream`、`startServer`、`writeRelayPidFile`、`applyClaudeConfig` 和
+`validateUpstream`、`preloadTokenizers`、`startServer`、`writeRelayPidFile`、`applyClaudeConfig` 和
 `watchAppConfig`。`src/lib/preflight.ts`（`validateUpstream`）检查模型目录，并对每个
 配置模型发出一次小型真实请求。`startServer` 只在监听器就绪后才完成；自动管理设置失败
 会记录日志，不会让服务停止。
@@ -192,7 +192,8 @@ Preflight 在 socket 绑定**之前**运行。一个连配置模型都够不着�
 账号不支持的模型。
 
 Preflight 还会保留模型的 token 限制和 tokenizer 元数据。Claude 自动设置据此补充缺失
-的客户端预算；本地 `/v1/models` 返回缓存的容量，不会调用上游。完整 context 的使用
+的客户端预算；本地 `/v1/models` 返回缓存的容量，不会调用上游。启动时会在监听前加载
+这些 tokenizer。完整 context 的使用
 方法见[配置说明](ZH-Configuration.md)，输出缓冲和 token 计数的不变量见
 [内部实现](ZH-Internals.md)。
 
@@ -281,8 +282,9 @@ opusModel: claude-opus-5.5
 ## 日志
 
 日志同时写入控制台和
-`~/.copilot-relay/logs/copilot-relay.<本地日期>.log`。当前文件按写入逐次解析路径，
+`~/.copilot-relay/logs/copilot-relay.<本地日期>.log`。每条日志在记录时解析当前文件路径，
 因此无需定时器即可在本地零点轮转；`logRetentionDays` 按包含今天的本地日历天数保留。
+日志经同一个队列和同一个打开的文件按调用顺序写入；复用规则见[内部实现](ZH-Internals.md)。
 Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留活动捕获及 owner 未知的 pending
 捕获。安全与残留规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 

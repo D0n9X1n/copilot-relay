@@ -130,11 +130,18 @@ midnight:
 ~/.copilot-relay/logs/copilot-relay.2026-07-31.log
 ```
 
-The path is resolved per write, so a relay running across midnight starts the
-next day's file on its own — there is no rotation timer to drift. Local rather
-than UTC on purpose: `logRetentionDays` is a human-facing "how many days do I
-keep" setting, and a UTC stamp would roll the file over in the middle of the
-local afternoon for anyone west of Greenwich.
+The path is resolved for each entry when it is logged, so a relay running across
+midnight starts the next day's file on its own — there is no rotation timer to
+drift. Local rather than UTC on purpose: `logRetentionDays` is a human-facing
+"how many days do I keep" setting, and a UTC stamp would roll the file over in
+the middle of the local afternoon for anyone west of Greenwich.
+
+The relay keeps the active file open while it writes and closes it a second after
+the last entry. If you move or delete the file while the relay runs, the next
+entry creates a new file at the dated path; nothing more is written to the moved
+file. On Windows, renaming or moving the logs folder fails with an access-denied
+error while the file is open: wait a second after the last entry, or stop the
+relay first.
 
 ### Retention
 

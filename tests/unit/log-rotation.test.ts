@@ -135,7 +135,7 @@ test("retentionDays=1 keeps only the current day", async () => {
   ])
 })
 
-// Why: the path is resolved per write rather than cached at startup, which is
+// Why: the path is resolved per entry rather than cached at startup, which is
 // what lets a long-running relay roll over at local midnight with no timer.
 test("resolves a distinct dated path per calendar day", () => {
   const first = new Date(2026, 6, 24, 23, 59, 59)

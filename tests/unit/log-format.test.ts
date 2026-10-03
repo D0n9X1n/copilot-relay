@@ -388,6 +388,212 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
   }
 })
 
+// Why: two overlapping flushLogs calls each waited for the close the other had just queued, so
+// neither resolved and the loop starved the process (#141 review). A child process keeps a
+// regression from hanging this suite.
+test("concurrent flushLogs calls both resolve", async () => {
+  const home = await fs.mkdtemp(path.join(tempHome, "concurrent-flush-"))
+  try {
+    const script = `
+      const { log, flushLogs } = await import(${JSON.stringify(new URL("../../src/lib/log.ts", import.meta.url).href)});
+      log.setReporters([]);
+      log.error("before concurrent flushes");
+      await Promise.all([flushLogs(), flushLogs()]);
+      process.stdout.write("flushed");
+    `
+
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      "--import", "tsx", "--input-type=module", "--eval", script,
+    ], {
+      cwd: fileURLToPath(new URL("../..", import.meta.url)),
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: 10_000,
+    })
+
+    assert.equal(stdout, "flushed")
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
+// Why: each entry used to run its own directory checks, open, stat, chmod, append and close, and a
+// burst of them could finish out of order (#141). A burst now shares one open and keeps call order.
+test("a burst of entries is appended in call order through one open", async (t) => {
+  const open = t.mock.method(fs, "open")
+
+  for (let index = 0; index < 50; index += 1) {
+    log.info(`burst entry ${index}`)
+  }
+
+  await flushLogs()
+
+  const lines = (await fs.readFile(getLogPath(), "utf8")).trimEnd().split("\n")
+  assert.deepEqual(
+    lines.map((line) => line.replace(/^\S+ info /, "")),
+    Array.from({ length: 50 }, (_, index) => `burst entry ${index}`),
+  )
+  assert.equal(open.mock.calls.filter((call) => call.arguments[0] === getLogPath()).length, 1)
+})
+
+// Why: the timestamp and the dated file used to be read after the write's own awaits, so a slow
+// disk could stamp an entry late or file it under the next day. Both now come from the call. The
+// clock starts just before local midnight, so the minute that passes before the write crosses it.
+test("an entry is stamped when it is logged, not when it is written", async (t) => {
+  const loggedAt = new Date(2026, 6, 24, 23, 59, 30)
+  t.mock.timers.enable({ apis: ["Date"], now: loggedAt })
+
+  log.info("stamped at call time")
+  t.mock.timers.setTime(loggedAt.getTime() + 60_000)
+  await flushLogs()
+
+  assert.equal(
+    await fs.readFile(getLogPath(loggedAt), "utf8"),
+    `${loggedAt.toISOString()} info stamped at call time\n`,
+  )
+})
+
+// Why: the log file stays open between batches written within a second. A file that was renamed,
+// replaced, linked elsewhere or loosened must not keep receiving entries through the reused handle.
+test("an entry logged after the active file is renamed goes to a new file", async () => {
+  log.info("before rename")
+  await readActiveLog()
+  await fs.rename(getLogPath(), `${getLogPath()}.old`)
+
+  log.info("after rename")
+  await flushLogs()
+
+  assert.match(await fs.readFile(`${getLogPath()}.old`, "utf8"), /^\S+ info before rename\n$/)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /^\S+ info after rename\n$/)
+})
+
+// Why: a rotation tool may rename the active file and create an empty one at its path. lstat shows
+// the new file as a regular private file with one link, like the open one; only the file identity
+// tells them apart.
+test("an entry logged after the active file is replaced goes to the new file", async () => {
+  log.info("before replace")
+  await readActiveLog()
+  await fs.rename(getLogPath(), `${getLogPath()}.old`)
+  await fs.writeFile(getLogPath(), "", { mode: 0o600 })
+
+  log.info("after replace")
+  await flushLogs()
+
+  assert.match(await fs.readFile(`${getLogPath()}.old`, "utf8"), /^\S+ info before replace\n$/)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /^\S+ info after replace\n$/)
+})
+
+// Why: reusing one open handle across batches is the point of the writer. A reuse check that never
+// passed would reopen the file for every batch and still pass the tests above.
+test("batches written within a second share one open of the unchanged file", async (t) => {
+  const open = t.mock.method(fs, "open")
+  log.info("first batch")
+  await readActiveLog()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  log.info("second batch")
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  log.info("third batch")
+  await flushLogs()
+
+  assert.equal(open.mock.calls.filter((call) => call.arguments[0] === getLogPath()).length, 1)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /first batch\n.*second batch\n.*third batch\n$/)
+})
+
+test("an entry is not appended through a second hard link to the active file", async () => {
+  log.info("before link")
+  await readActiveLog()
+  const linked = path.join(paths.logsDir, "linked.log")
+  await fs.link(getLogPath(), linked)
+
+  log.info("after link")
+  await flushLogs()
+
+  assert.match(await fs.readFile(linked, "utf8"), /^\S+ info before link\n$/)
+})
+
+test("a loosened active log mode is restored before the next append", {
+  skip: process.platform === "win32",
+}, async () => {
+  log.info("before chmod")
+  await readActiveLog()
+  await fs.chmod(getLogPath(), 0o644)
+
+  log.info("after chmod")
+  await flushLogs()
+
+  assert.equal((await fs.stat(getLogPath())).mode & 0o777, 0o600)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /before chmod\n.*after chmod\n$/)
+})
+
+// Why: lstat of the log path follows links in its parent path. A logs folder replaced by a link to
+// the folder the open file was moved to leads back to the same file, so the directories are
+// checked before the handle is reused (#141 review).
+test("an entry is not appended through a logs folder replaced by a link", async () => {
+  log.info("before move")
+  await readActiveLog()
+  const moved = path.join(paths.appDir, "logs-moved")
+  await fs.mkdir(moved)
+  await fs.rename(getLogPath(), path.join(moved, path.basename(getLogPath())))
+  await fs.rmdir(paths.logsDir)
+  await fs.symlink(moved, paths.logsDir, "junction")
+  try {
+    log.info("after move")
+    await flushLogs()
+
+    assert.match(await fs.readFile(path.join(moved, path.basename(getLogPath())), "utf8"), /^\S+ info before move\n$/)
+  } finally {
+    await fs.unlink(paths.logsDir)
+    await fs.rm(moved, { recursive: true, force: true })
+  }
+})
+
+test("a loosened logs folder mode is restored before the next append", {
+  skip: process.platform === "win32",
+}, async () => {
+  log.info("before folder chmod")
+  await readActiveLog()
+  await fs.chmod(paths.logsDir, 0o755)
+
+  log.info("after folder chmod")
+  await flushLogs()
+
+  assert.equal((await fs.stat(paths.logsDir)).mode & 0o777, 0o700)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /before folder chmod\n.*after folder chmod\n$/)
+})
+
+// Why: Windows cannot rename or move a folder while a file in it is open, and the kept-open handle
+// locked the logs folder for as long as the relay ran (#141 review).
+test("the log file is closed after a second without entries", async (t) => {
+  const open = t.mock.method(fs, "open")
+  log.info("before idle")
+  await readActiveLog()
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  const calls = open.mock.calls.filter((call) => call.arguments[0] === getLogPath())
+  assert.equal(calls.length, 1)
+  const handle = await calls[0].result
+  assert.ok(handle)
+  assert.equal(handle.fd, -1)
+})
+
+// Why: tests replace the global setTimeout to capture or run the timers of the code they drive. The
+// idle close used it, so an entry drained during such a test added a timer the test then counted or
+// ran: auth-recovery.test.ts captured two timers where it expects the token refresh alone.
+test("the idle close timer does not use the global setTimeout", async (t) => {
+  const original = globalThis.setTimeout
+  const delays: Array<number | undefined> = []
+  const recording = ((callback: (...args: Array<unknown>) => void, delay?: number, ...args: Array<unknown>) => {
+    delays.push(delay)
+    return original(callback, delay, ...args)
+  }) as typeof setTimeout
+  t.mock.method(globalThis, "setTimeout", recording)
+
+  log.info("idle timer source")
+  await flushLogs()
+  t.mock.restoreAll()
+
+  assert.deepEqual(delays, [])
+})
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })

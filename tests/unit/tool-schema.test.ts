@@ -181,3 +181,67 @@ test("does not treat literal data or property names as schema keywords", () => {
 
   assert.deepEqual(normalizeResponsesToolSchema(schema), schema)
 })
+
+// Why: every request rebuilt every tool schema, though most need no change (#141).
+test("returns a schema that needs no change as the same object", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      path: { type: "string", pattern: "^[a-z/]+$" },
+      mode: { enum: ["read", "write"] },
+      tags: { type: "array", items: { type: "string" } },
+    },
+    required: ["path"],
+  }
+
+  assert.equal(normalizeResponsesToolSchema(schema), schema)
+})
+
+test("copies only the path to an omitted pattern and never changes the input", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      field: { type: "string", pattern: artifactFieldPattern },
+      other: { type: "string", pattern: "^[a-z]+$" },
+    },
+    required: ["field"],
+  }
+  const original = structuredClone(schema)
+
+  const normalized = normalizeResponsesToolSchema(schema)
+  const properties = normalized.properties as typeof schema.properties
+
+  assert.deepEqual(properties.field, { type: "string" })
+  assert.equal(properties.other, schema.properties.other)
+  assert.equal(normalized.required, schema.required)
+  assert.deepEqual(schema, original)
+})
+
+// Why: the array copy replaced Array.prototype.map, which keeps holes and the array length. Holes
+// written as undefined would make the copy differ from the input in more than the omitted pattern.
+test("keeps the holes and length of a copied array", () => {
+  const anyOf: Array<unknown> = []
+  anyOf[0] = { type: "string", pattern: artifactFieldPattern }
+  anyOf[2] = { type: "number" }
+  anyOf.length = 4
+
+  const copied = normalizeResponsesToolSchema({ anyOf }).anyOf as Array<unknown>
+
+  assert.deepEqual(copied[0], { type: "string" })
+  assert.equal(copied[2], anyOf[2])
+  assert.equal(copied.length, 4)
+  assert.ok(!(1 in copied))
+  assert.ok(!(3 in copied))
+})
+
+test("keeps a __proto__ property name as data when copying", () => {
+  const properties = JSON.parse('{"__proto__":{"type":"string"}}') as Record<string, unknown>
+  properties.field = { type: "string", pattern: artifactFieldPattern }
+
+  const copied = normalizeResponsesToolSchema({ type: "object", properties }).properties as Record<string, unknown>
+
+  assert.deepEqual(Object.keys(copied), ["__proto__", "field"])
+  assert.deepEqual(Object.getOwnPropertyDescriptor(copied, "__proto__")?.value, { type: "string" })
+  assert.deepEqual(copied.field, { type: "string" })
+  assert.equal(Object.getPrototypeOf(copied), Object.prototype)
+})

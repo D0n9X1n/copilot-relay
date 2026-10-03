@@ -783,8 +783,7 @@ export class RequestTrace {
       request: emptyBody(`upstream-${order}-request.bin`, "complete"),
     }
     this.manifest.exchanges.push(exchange)
-    const bytes = Buffer.from(input.body ?? "")
-    this.append(exchange.request, bytes)
+    this.append(exchange.request, input.body ?? "")
 
     try {
       // A replay supplies its recorded transport; otherwise the real request goes out.
@@ -965,23 +964,25 @@ export class RequestTrace {
     )
   }
 
-  private append(body: CapturedBody, bytes: Uint8Array): void {
+  // A string body is encoded only when it is recorded; otherwise only its UTF-8 length is counted.
+  private append(body: CapturedBody, data: Uint8Array | string): void {
+    const byteLength = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength
     // Counted even when not recorded, so the manifest still says how much passed through.
-    body.bytes += bytes.byteLength
+    body.bytes += byteLength
     if (!this.captureDirectory || this.manifest.captureError) {
       return
     }
 
     // Past 100,000 chunks in one body, or 8 MiB queued but not yet written, recording stops so
     // memory stays bounded. The body itself keeps flowing to its consumer.
-    if (body.chunks.length >= 100000 || this.queuedBytes + bytes.byteLength > maxQueuedBytes) {
+    if (body.chunks.length >= 100000 || this.queuedBytes + byteLength > maxQueuedBytes) {
       this.manifest.captureError = "capture_queue_limit"
       this.manifest.captureState = "incomplete"
       return
     }
 
-    body.chunks.push(bytes.byteLength)
-    const buffer = Buffer.from(bytes)
+    body.chunks.push(byteLength)
+    const buffer = Buffer.from(data)
     this.queuedBytes += buffer.length
 
     // Writes run one at a time, in order. Each rechecks the directory chain and the open file, and
