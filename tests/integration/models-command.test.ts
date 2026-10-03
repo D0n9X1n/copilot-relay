@@ -159,9 +159,11 @@ async function fixture(
     const logFiles = await fs.readdir(path.join(appDir, "logs")).catch(() => [])
     const logs = (await Promise.all(logFiles.map((name) => fs.readFile(path.join(appDir, "logs", name), "utf8")))).join("\n")
     assert.doesNotMatch(result.output + logs, /old-private-token-sentinel|new-private-token-sentinel|github-private-token-sentinel|private-gateway-sentinel|auth-private-error-sentinel|payload-private-sentinel|UNEXPECTED_NETWORK_ACCESS/)
-    // The relay's apiKey is never printed or logged, whichever string it reached the command in.
+    // The relay's apiKey is never printed or logged, whichever string it reached the command in,
+    // even split by a character a terminal does not show.
     if (options.apiKey) {
-      assert.ok(!(result.output + logs).includes(options.apiKey), "the relay apiKey reached the output or logs")
+      const visible = (result.output + logs).replace(/[\x80-\x9f]|\p{Cf}|\p{Zl}|\p{Zp}/gu, "")
+      assert.ok(!visible.includes(options.apiKey), "the relay apiKey reached the output or logs")
     }
 
     assert.doesNotMatch(result.output, /Running upstream preflight|copilot-relay listening/)
@@ -295,6 +297,32 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
   assert.match(searched.stdout, /No upstream model matches "\[redacted\]"\./)
   assert.doesNotMatch(searched.output, /relay-fixture/)
 })
+
+// Why (#159 re-review): printable removed ANSI, C0 and DEL only, so a key split by U+200B or by a
+// C1 control such as U+0085 passed it and the final scrub unchanged, readable on screen and
+// recoverable from copied output.
+for (const [name, mark] of [["U+200B", "​"], ["U+0085", "\u0085"]] as const) {
+  test(`models never prints the relay apiKey split by ${name}`, async (t) => {
+    const relayKey = "relay-fixture-key-0001"
+    const split = `relay-${mark}fixture-key-0001`
+    const harness = await fixture(t, (_request, response) => respond(response, { data: [
+      { id: "named-model", name: `Leaked ${split} name` },
+    ] }), { apiKey: relayKey, gptModel: split })
+
+    // In a display name and in a configured model value.
+    const listed = await harness.run()
+
+    assert.equal(listed.code, 0, listed.output)
+    assert.match(listed.stdout, /\nnamed-model {2}Leaked \[redacted\] name\n/)
+    assert.match(listed.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
+
+    // In a search.
+    const searched = await harness.run(["models", split])
+
+    assert.equal(searched.code, 1, searched.output)
+    assert.match(searched.stdout, /No upstream model matches "\[redacted\]"\./)
+  })
+}
 
 test("models shows display names, marks IDs that cannot be configured, and explains the config lines", async (t) => {
   const harness = await fixture(t, (_request, response) => respond(response, { data: [

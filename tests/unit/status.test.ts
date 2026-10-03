@@ -819,7 +819,15 @@ test("status command output never contains the configured apiKey", async (t) => 
   const { status: command } = await import("../../src/status")
   const key = "STATUS_COMMAND_KEY_SENTINEL"
   await fs.mkdir(paths.appDir, { recursive: true })
-  await fs.writeFile(paths.configPath, `port: 4199\napiKey: ${key}\n`)
+  // Why (#159 re-review): the key split by a character a terminal does not show, here U+200B and
+  // the C1 control U+0085 in the model settings, passed the final scrub unchanged.
+  await fs.writeFile(paths.configPath, [
+    "port: 4199",
+    `apiKey: ${key}`,
+    "gptModel: STATUS_COMMAND_​KEY_SENTINEL",
+    "opusModel: STATUS_COMMAND_\u0085KEY_SENTINEL",
+    "",
+  ].join("\n"))
   const output: string[] = []
   t.mock.method(console, "log", (value: unknown) => {
     output.push(String(value))
@@ -837,7 +845,9 @@ test("status command output never contains the configured apiKey", async (t) => 
     assert.equal(output.length, 2)
     assert.equal(JSON.parse(output[0]).config.apiKey, "[redacted]")
     assert.match(output[1], /^\s+apiKey\s+\[redacted\]$/m)
-    assert.ok(output.every((text) => !text.includes(key)), "status printed the key")
+    // A terminal shows neither split character, so the key must not appear once they are removed.
+    const visible = (text: string): string => text.replace(/[\x80-\x9f]|\p{Cf}|\p{Zl}|\p{Zp}/gu, "")
+    assert.ok(output.every((text) => !visible(text).includes(key)), "status printed the key")
   } finally {
     process.exitCode = originalExit
     await fs.rm(paths.configPath, { force: true })

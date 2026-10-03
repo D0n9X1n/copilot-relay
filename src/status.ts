@@ -16,7 +16,7 @@ import {
   scrubSensitiveUrls,
 } from "~/lib/redact"
 import { appVersion } from "~/lib/version"
-import { colorEnabled, colorText } from "~/lib/terminal"
+import { colorEnabled, colorText, withoutHiddenCharacters } from "~/lib/terminal"
 
 /**
  * Exit codes, so `status` is usable in a health check or a script.
@@ -615,11 +615,13 @@ export const status = defineCommand({
     // is the backstop for every such path, including --deep. Applied to the
     // complete output so legitimate newlines between rows survive. See #47.
     // scrubLogSecrets is the same backstop for the apiKey, which toStatusConfig
-    // already replaces in the config block.
+    // already replaces in the config block. Hidden characters are removed first,
+    // keeping colors and newlines, because one inside a value can split the key
+    // and keep it from matching.
     if (args.json) {
-      console.log(scrubLogSecrets(scrubSensitiveUrls(JSON.stringify(result, null, 2))))
+      console.log(scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(JSON.stringify(result, null, 2)))))
     } else {
-      console.log(scrubLogSecrets(scrubSensitiveUrls(renderStatus(result, colorEnabled()).join("\n"))))
+      console.log(scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(renderStatus(result, colorEnabled()).join("\n")))))
     }
 
     // 0 requires both a live process and a passing health probe. A relay that
