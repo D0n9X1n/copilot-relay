@@ -11,11 +11,12 @@ import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, setLogLevel } from "~/lib/log"
 import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
-import { defaultReasoningEffort, getExposedModelIds } from "~/lib/models"
+import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
+import { loadedTokenizers, preloadTokenizers } from "~/lib/tokenizer"
 import { appVersion } from "~/lib/version"
 import { startServer } from "~/server"
 
@@ -107,6 +108,16 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   }
 
   log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
+
+  // Preflight has read each model's tokenizer from the catalog. Loading them before listening keeps
+  // the first count_tokens request from waiting for one.
+  try {
+    await preloadTokenizers(getUpstreamModelIds().map((id) => getCachedCopilotModel(config, id)?.tokenizer))
+    log.info(`Tokenizers loaded: ${loadedTokenizers().join(", ")}`)
+  } catch (error) {
+    // Counting is advisory: a tokenizer that fails here is loaded on first use instead.
+    log.error("Tokenizer preload failed; count_tokens loads tokenizers on first use:", error)
+  }
 
   const server = await startServer(config)
   await writeRelayPidFile(config)

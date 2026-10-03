@@ -144,6 +144,26 @@ const getEncodeChatFunction = async (encoding: string): Promise<Encoder> => {
   return encoder
 }
 
+// The first count with an encoding loads its module and builds the encoder. Startup loads
+// o200k_base, the fallback, and each supported tokenizer the configured models report, so no
+// count_tokens request waits for that.
+export const preloadTokenizers = async (reported: Iterable<string | undefined>): Promise<void> => {
+  const encodings = new Set<string>(["o200k_base"])
+  for (const tokenizer of reported) {
+    if (tokenizer !== undefined && isSupportedTokenizer(tokenizer)) {
+      encodings.add(tokenizer)
+    }
+  }
+
+  // One at a time: building an encoder is CPU work, so loading them together would save little.
+  for (const encoding of encodings) {
+    await getEncodeChatFunction(encoding)
+  }
+}
+
+// Tokenizer names with a loaded encoder, in the order they were loaded.
+export const loadedTokenizers = (): Array<string> => [...encodingCache.keys()]
+
 export const getTokenizerFromModel = (model: TokenizerModel): string =>
   model.capabilities.tokenizer || "o200k_base"
 
