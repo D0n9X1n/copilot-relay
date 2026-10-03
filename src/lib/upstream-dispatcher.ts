@@ -3,7 +3,7 @@
 // own, relayListener in src/status.ts.
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici"
 
-import { log, registerLogSecret } from "~/lib/log"
+import { isLoggingSuppressed, log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
 // Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
@@ -178,9 +178,17 @@ let proxyHintLogged = false
  * Only for a request that failed without an HTTP response while upstreamProxy is empty: the relay
  * ignored HTTPS_PROXY or HTTP_PROXY and went direct, and those variables suggest the network
  * expects a proxy. A cancelled request or a passed deadline is not that kind of failure.
+ *
+ * The hint counts as logged only once it is written. Under withoutLogging, where models --deep
+ * runs its probes, log.error writes nothing, so a failure there leaves the hint for a later one.
  */
 const noteConnectionFailure = (signal: AbortSignal | undefined): void => {
-  if (proxyHintLogged || configuredUpstreamProxy !== undefined || signal?.aborted) {
+  if (
+    proxyHintLogged
+    || configuredUpstreamProxy !== undefined
+    || signal?.aborted
+    || isLoggingSuppressed()
+  ) {
     return
   }
 

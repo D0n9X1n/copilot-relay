@@ -492,7 +492,8 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 
 `upstreamProxy` 为空、又设置了 `HTTPS_PROXY` 或 `HTTP_PROXY` 时，如果某个上游请求在
 没有响应的情况下失败，`fetchUpstream` 每个进程只记录一次：该变量没有被使用，以及如何
-启用。默认值不是 `env`：`readAppConfig` 会把每个键写回磁盘，`env` 默认值会让已经为
+启用。在 `withoutLogging` 下的失败（例如 `models --deep` 的探测）不写任何内容，提示留给之后
+的失败。默认值不是 `env`：`readAppConfig` 会把每个键写回磁盘，`env` 默认值会让已经为
 其他工具设置这些变量的现有安装悄悄改走代理。`tests/integration/upstream-proxy.test.ts`
 用本地记录代理覆盖每种模式。
 

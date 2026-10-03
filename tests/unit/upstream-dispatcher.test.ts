@@ -31,7 +31,7 @@ const {
   getUpstreamDispatcher,
 } = await import("../../src/lib/upstream-dispatcher")
 const { setupProxyAuth } = await import("../../src/lib/auth")
-const { flushLogs, log } = await import("../../src/lib/log")
+const { flushLogs, withoutConsoleLogging, withoutLogging } = await import("../../src/lib/log")
 const { paths } = await import("../../src/lib/paths")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
@@ -81,33 +81,48 @@ test("a malformed proxy variable is reported by rule, never by value", async () 
   })
 })
 
+// Every upstreamProxy hint this process has written to its log files.
+const hintLines = async (): Promise<Array<string>> => {
+  await flushLogs()
+  const names = await fs.readdir(paths.logsDir).catch(() => [])
+  const contents = await Promise.all(names.map((name) => fs.readFile(path.join(paths.logsDir, name), "utf8")))
+  return contents.join("\n").split("\n").filter((line) => line.includes("upstreamProxy is empty"))
+}
+
 // Why: upstreamProxy defaults to empty, so after an upgrade an install that relied on HTTPS_PROXY
 // connects directly. Where only the proxy reaches the internet, that fails without a response and
 // nothing says why; the hint names the fix. Once per process, and never for a configured proxy or
 // a cancelled request, which are different failures.
-test("a direct failure while a proxy variable is set logs the upstreamProxy hint once", async (t) => {
-  const errors: string[] = []
-  t.mock.method(log, "error", (...values: unknown[]) => {
-    errors.push(values.join(" "))
-  })
+//
+// Why (#168): models --deep runs its probes under withoutLogging, where log.error writes nothing.
+// A failure there must leave the hint for a later one. This uses the real logger and reads the log
+// file, because a mocked log.error never sees the suppression. withoutConsoleLogging only keeps the
+// hint off the test output; the file still gets it.
+test("a direct failure while a proxy variable is set logs the upstreamProxy hint once", async () => {
   const unreachable = `http://127.0.0.1:${await closedPort()}/models`
 
-  await withProxyEnvironment({ HTTPS_PROXY: "http://proxy.example:3128" }, async () => {
-    configureUpstreamDispatcher(`http://127.0.0.1:${await closedPort()}`)
-    await assert.rejects(fetchUpstream(unreachable, {}))
-    assert.deepEqual(errors, [], "a configured proxy failed, not an ignored one")
+  await withoutConsoleLogging(async () => {
+    await withProxyEnvironment({ HTTPS_PROXY: "http://proxy.example:3128" }, async () => {
+      configureUpstreamDispatcher(`http://127.0.0.1:${await closedPort()}`)
+      await assert.rejects(fetchUpstream(unreachable, {}))
+      assert.deepEqual(await hintLines(), [], "a configured proxy failed, not an ignored one")
 
-    configureUpstreamDispatcher(undefined)
-    await assert.rejects(fetchUpstream(unreachable, { signal: AbortSignal.abort() }), { name: "AbortError" })
-    assert.deepEqual(errors, [], "a cancelled request is not a connection failure")
+      configureUpstreamDispatcher(undefined)
+      await assert.rejects(fetchUpstream(unreachable, { signal: AbortSignal.abort() }), { name: "AbortError" })
+      assert.deepEqual(await hintLines(), [], "a cancelled request is not a connection failure")
 
-    await assert.rejects(fetchUpstream(unreachable, {}))
-    await assert.rejects(fetchUpstream(unreachable, {}))
+      await withoutLogging(() => assert.rejects(fetchUpstream(unreachable, {})))
+      assert.deepEqual(await hintLines(), [], "a failure under withoutLogging writes nothing")
+
+      await assert.rejects(fetchUpstream(unreachable, {}))
+      await assert.rejects(fetchUpstream(unreachable, {}))
+    })
   })
 
-  assert.equal(errors.length, 1)
-  assert.match(errors[0], /HTTPS_PROXY or HTTP_PROXY is set, but upstreamProxy is empty/)
-  assert.ok(errors[0].includes(`set upstreamProxy: env in ${paths.configPath}`), errors[0])
+  const hints = await hintLines()
+  assert.equal(hints.length, 1, "the failure under withoutLogging used up the hint")
+  assert.match(hints[0], /HTTPS_PROXY or HTTP_PROXY is set, but upstreamProxy is empty/)
+  assert.match(hints[0], /set upstreamProxy: env in .+config\.yaml/)
 })
 
 // Why: before #153 sign-in used the global fetch, which ignores the relay's dispatcher, so a user

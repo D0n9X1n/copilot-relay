@@ -41,6 +41,9 @@ const consoleSuppressed = new AsyncLocalStorage<boolean>()
 export const withoutLogging = <T>(run: () => T): T => loggingSuppressed.run(true, run)
 export const withoutConsoleLogging = <T>(run: () => T): T => consoleSuppressed.run(true, run)
 
+// True inside withoutLogging, where no log method writes anything.
+export const isLoggingSuppressed = (): boolean => loggingSuppressed.getStore() === true
+
 let currentLogLevel = consolaLevelByName.info
 const registeredLogSecrets = new Set<string>()
 const logSecretForms = new Set<string>()

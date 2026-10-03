@@ -596,7 +596,9 @@ such as `failureReason` in `src/lib/usage.ts`.
 
 When an upstream request fails without a response while `upstreamProxy` is empty
 and `HTTPS_PROXY` or `HTTP_PROXY` is set, `fetchUpstream` logs once per process
-that the variable was not used and how to opt in. The default is not `env`:
+that the variable was not used and how to opt in. A failure under
+`withoutLogging`, such as a `models --deep` probe, writes nothing and leaves the
+hint for a later failure. The default is not `env`:
 `readAppConfig` writes every key back to disk, so an `env` default would reroute an
 existing install that sets those variables for other tools.
 `tests/integration/upstream-proxy.test.ts` runs each mode against a local
