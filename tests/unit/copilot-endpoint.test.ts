@@ -40,6 +40,8 @@ test.afterEach(() => {
 })
 
 const legacyResponsesModels = [
+  "gpt-5.4",
+  "gpt-5.4-2026-03-05",
   "gpt-5.5",
   "gpt-5.5-2025-01-01",
   "gpt-5.6-sol",
@@ -71,7 +73,7 @@ for (const id of legacyResponsesModels) {
   })
 }
 
-for (const id of ["future-model", "grok-4.7", "mai-code-1.1-flash", "gpt-6-luna"]) {
+for (const id of ["future-model", "grok-4.7", "mai-code-1.1-flash", "gpt-6-luna", "gpt-5.4-mini"]) {
   test(`${id} follows catalog support without a model-name rule`, () => {
     assert.deepEqual(selectCopilotEndpoint(configFor(id), id), {
       endpoint: "/chat/completions",

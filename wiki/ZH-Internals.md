@@ -193,7 +193,9 @@ WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直�
 `src/copilot/chat.ts` 为 routes 与启动 preflight 发送已解析好的上游 ID。
 `src/copilot/endpoint.ts` 的 `selectCopilotEndpoint` 通过 `getCachedCopilotModel`
 读取当前提供方的 `supported_endpoints`，探测和真实请求共用该选择器。固定的旧偏好
-只用于多接口选择和元数据缺失，不再是不断扩大的模型白名单。
+只用于多接口选择和元数据缺失，不再是不断扩大的模型白名单。唯一的后来条目是
+`gpt-5.4`（不含 `gpt-5.4-mini`）：Copilot 的 `/chat/completions` 对它带工具的请求返回
+HTTP 400，而 `/responses` 接受这些请求。
 `requireCopilotEndpoint` 在接入阶段、SSE 之前，把固定的不支持原因变成本地错误。
 Claude 的显式协议策略优先；选择结果还指明是否允许仅针对特定错误码的
 `/chat/completions` 到 `/responses` 恢复。被恢复的失败正文会标为 discarded 并取消，

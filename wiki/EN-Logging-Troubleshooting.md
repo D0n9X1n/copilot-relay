@@ -423,10 +423,12 @@ debug request_id=3b241101-e2bb-4255-8caf-4136c566a962 Copilot POST /responses ->
 ```
 
 Transient 5xx retries are logged at `error` with retry context. On translated
-non-2xx failures, an `error` entry retains bounded upstream context on one line:
+non-2xx failures, an `error` entry retains bounded upstream context on one line. The upstream
+`response` comes before the `request`, so a long request cannot push the upstream body out of
+the bounded entry:
 
 ```text
-error Failed to create responses: route=/responses model=gpt-6-astra status=400 { request: { ... }, response: { status: 400, headers: { ... }, body: { ... } } }
+error Failed to create responses: route=/responses model=gpt-6-astra status=400 { response: { status: 400, headers: { ... }, body: { ... } }, request: { ... } }
 ```
 
 ### Request captures
