@@ -23,6 +23,7 @@ export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
 
 export interface AppConfig {
+  apiKey: string
   claudeSetup: boolean
   copilotBaseUrl: string
   gptModel: string
@@ -46,6 +47,7 @@ export interface AppConfig {
  * rewrite a value the user's config already holds.
  */
 const defaultConfig: AppConfig = {
+  apiKey: "",
   claudeSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
   gptModel: "gpt-6-astra",
@@ -160,6 +162,34 @@ const normalizeRequiredString = (value: unknown, key: string): string | undefine
   }
 
   return normalized
+}
+
+// A fixed string: the rejected value is never interpolated, for the reason given in normalizeLogLevel.
+const invalidApiKeyMessage = "Invalid apiKey: expected empty, or at least 16 visible ASCII characters"
+
+/**
+ * Validates the optional inbound apiKey. Empty disables it.
+ *
+ * A set key is at least 16 visible ASCII characters. It travels in an HTTP
+ * header, which cannot carry a space, a control byte or a non-ASCII character
+ * reliably. Every logged copy of it is redacted as text, which would also hide
+ * any ordinary text that a very short key happened to match.
+ */
+export const normalizeApiKey = (value: unknown): string | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (typeof value !== "string") {
+    throw new Error(invalidApiKeyMessage)
+  }
+
+  const trimmed = value.trim()
+  if (trimmed !== "" && !/^[\x21-\x7E]{16,}$/.test(trimmed)) {
+    throw new Error(invalidApiKeyMessage)
+  }
+
+  return trimmed
 }
 
 /**
@@ -349,6 +379,7 @@ const readDefaultConfigTemplate = async (): Promise<string> => {
 }
 
 const configAliases: Record<string, keyof AppConfig> = {
+  api_key: "apiKey",
   claude_setup: "claudeSetup",
   copilot_base_url: "copilotBaseUrl",
   gpt_model: "gptModel",
@@ -468,6 +499,10 @@ const serializeConfig = (config: AppConfig): string =>
     "# Local port for the HTTP server.",
     `port: ${config.port}`,
     "",
+    "# Key clients must send as x-api-key or Authorization: Bearer; empty disables it.",
+    "# Set one before binding host beyond loopback.",
+    `apiKey: ${config.apiKey}`,
+    "",
     "# GitHub Copilot API base URL.",
     `copilotBaseUrl: ${config.copilotBaseUrl}`,
     "",
@@ -506,6 +541,7 @@ const serializeConfig = (config: AppConfig): string =>
   ].join("\n")
 
 const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
+  apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
   claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
   copilotBaseUrl: normalizeCopilotBaseUrl(
     normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),

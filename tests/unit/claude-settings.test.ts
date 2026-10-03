@@ -541,3 +541,51 @@ test("is byte-idempotent after the first settings update", async () => {
     assert.deepEqual(secondBytes, firstBytes)
   })
 })
+
+// Why (#159): with an apiKey set, the relay refuses Claude Code's dummy token,
+// so managed setup writes the key as ANTHROPIC_AUTH_TOKEN, replacing the dummy
+// value or an older key.
+test("writes the relay apiKey as Claude Code's auth token", async () => {
+  await withTemporarySettings(async (configPath) => {
+    const input = {
+      baseUrl: "http://127.0.0.1:4142",
+      configPath,
+      gptModel: "gpt-5.6-sol",
+    }
+
+    await applyClaudeConfig(input)
+    let env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "dummy")
+
+    await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0001" })
+    env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "relay-fixture-key-0001")
+
+    const rotated = await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0002" })
+    env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(rotated.changed, true)
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "relay-fixture-key-0002")
+
+    const repeated = await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0002" })
+    assert.equal(repeated.changed, false)
+  })
+})
+
+test("leaves an existing auth token unchanged when no apiKey is set", async () => {
+  await withTemporarySettings(async (configPath) => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true })
+    await fs.writeFile(configPath, `${JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "user-chosen-token" } }, null, 2)}\n`)
+
+    for (const apiKey of [undefined, ""]) {
+      await applyClaudeConfig({
+        apiKey,
+        baseUrl: "http://127.0.0.1:4142",
+        configPath,
+        gptModel: "gpt-5.6-sol",
+      })
+
+      const env = (await readSettings(configPath)).env as Record<string, unknown>
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, "user-chosen-token")
+    }
+  })
+})

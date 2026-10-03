@@ -90,7 +90,8 @@ export const registerLogSecret = (value: string | undefined): void => {
   logSecretPattern = new RegExp(alternatives.join("|"), "g")
 }
 
-const scrubLogSecrets = (value: string): string => {
+// Also applied to output that is printed rather than logged, such as `status`.
+export const scrubLogSecrets = (value: string): string => {
   if (!logSecretPattern) {
     return value
   }

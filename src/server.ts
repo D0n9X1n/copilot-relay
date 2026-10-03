@@ -1,5 +1,5 @@
 // HTTP server assembly: exposes only Claude Code-compatible public routes.
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto"
 import { isIPv4 } from "node:net"
 
 import { createAdaptorServer, type HttpBindings, type ServerType } from "@hono/node-server"
@@ -84,6 +84,33 @@ const isAllowedHostname = (hostname: string, configuredHost: string | undefined)
   || (isIPv4(hostname) && hostname.startsWith("127."))
   || (hostname !== "0.0.0.0" && hostname !== "[::]" && hostname === configuredHost)
 
+const sha256 = (value: string): Buffer => createHash("sha256").update(value, "utf8").digest()
+
+/**
+ * True when the request carries the relay's apiKey as x-api-key or Authorization: Bearer.
+ *
+ * Each presented value is compared as a SHA-256 digest with timingSafeEqual, so the time taken
+ * depends on neither the key nor its length. Both headers are compared even after one matches.
+ */
+const presentsApiKey = (headers: Headers, apiKey: string): boolean => {
+  const expected = sha256(apiKey)
+  const bearer = /^Bearer\s+(.+)$/i.exec(headers.get("authorization") ?? "")?.[1]
+  let matched = false
+  for (const presented of [headers.get("x-api-key"), bearer]) {
+    if (typeof presented === "string" && timingSafeEqual(sha256(presented), expected)) {
+      matched = true
+    }
+  }
+
+  return matched
+}
+
+// Static probes: they answer every caller the same way and never contact Copilot, so health
+// checks and Claude Code's reachability probe work without the key. See their handlers below.
+const isOpenProbe = (method: string, path: string): boolean =>
+  (method === "GET" && path === "/healthz")
+  || ((method === "GET" || method === "HEAD") && path === "/api/hello")
+
 export const createServer = (config: ProxyConfig) => {
   const app = new Hono<ProxyEnv & { Bindings: Partial<HttpBindings> }>()
   // Hot reload mutates config, but cannot rebind the socket. Admission must
@@ -118,7 +145,8 @@ export const createServer = (config: ProxyConfig) => {
     }
   })
 
-  // Browser-origin and local-request checks, not authentication.
+  // Browser-origin and local-request checks, then the optional apiKey. Without an apiKey, nothing
+  // here authenticates the caller.
   app.use("*", async (c, next) => {
     const url = new URL(c.req.url)
     // The Node adapter supplies the real socket. This also pins an ephemeral
@@ -157,6 +185,20 @@ export const createServer = (config: ProxyConfig) => {
         c.set("requestErrorMessage", message)
         return c.json({ error: { message } }, 403)
       }
+    }
+
+    // Read from the live config on every request, so a hot reload applies to the next one. Checked
+    // before the body or any route, including the unknown-route handler that logs payloads.
+    const apiKey = config.apiKey
+    if (apiKey && !isOpenProbe(c.req.method, c.req.path) && !presentsApiKey(c.req.raw.headers, apiKey)) {
+      // Never echo the presented value.
+      const message = "Missing or invalid API key: send the relay apiKey as x-api-key or Authorization: Bearer"
+      c.set("requestErrorMessage", message)
+      return c.json(
+        { type: "error", error: { type: "authentication_error", message } },
+        401,
+        { "www-authenticate": "Bearer" },
+      )
     }
 
     // A message request that carries a body must declare it as JSON.

@@ -263,7 +263,11 @@ export async function probeModels(
           const response = await app.fetch(
             new Request(`http://localhost${config.port ? `:${config.port}` : ""}/v1/messages`, {
               method: "POST",
-              headers: { "content-type": "application/json" },
+              headers: {
+                "content-type": "application/json",
+                // The in-process app admits a probe exactly as the daemon would, apiKey included.
+                ...(config.apiKey ? { "x-api-key": config.apiKey } : {}),
+              },
               signal,
               body: JSON.stringify({
                 model: id,

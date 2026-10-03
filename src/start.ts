@@ -2,20 +2,22 @@
 import { type ServerType } from "@hono/node-server"
 import { defineCommand } from "citty"
 
-import { getRelayBaseUrl } from "~/lib/address"
+import { getRelayBaseUrl, isLoopbackHost } from "~/lib/address"
 import { setupProxyAuth } from "~/lib/auth"
 import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { readProxyConfig } from "~/lib/config"
 import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
-import { cleanupLogs, flushLogs, log, setLogLevel } from "~/lib/log"
+import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
+import { paths } from "~/lib/paths"
 import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
 import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
+import { terminalText } from "~/lib/terminal"
 import { loadedTokenizers, preloadTokenizers } from "~/lib/tokenizer"
 import { appVersion } from "~/lib/version"
 import { startServer } from "~/server"
@@ -41,6 +43,24 @@ const canCloseConnections = (
   && typeof (server as Partial<ConnectionClosable>).closeAllConnections
     === "function"
 
+/**
+ * The startup warning for a listener that other machines may reach without a key.
+ *
+ * A warning rather than a refusal, so an existing `host: 0.0.0.0` setup keeps
+ * working after an upgrade. It names the apiKey setting and never prints a key.
+ */
+export const unauthenticatedListenerWarning = (
+  config: Pick<AppConfig, "apiKey" | "host" | "port">,
+): string | undefined => {
+  if (config.apiKey || isLoopbackHost(config.host)) {
+    return undefined
+  }
+
+  return terminalText(
+    `apiKey is empty and host ${config.host} is not a loopback address: any client that can reach port ${config.port} can consume your Copilot usage. Set apiKey in ${paths.configPath}, or bind host to 127.0.0.1.`,
+  )
+}
+
 export async function startRelay(appConfig?: AppConfig): Promise<void> {
   appConfig ??= await readAppConfig()
   appConfig = {
@@ -65,6 +85,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // base URL can still be in flight when the config changes, and its error
     // must stay redacted on its way to the log. See #47.
     registerSensitiveOrigin(nextConfig.copilotBaseUrl)
+    // The inbound apiKey, for the same reasons: registered before anything can log it, and a key
+    // replaced by a reload stays redacted.
+    registerLogSecret(nextConfig.apiKey)
 
     setLogLevel(nextConfig.logLevel)
     void cleanupLogs(nextConfig.logRetentionDays)
@@ -86,6 +109,8 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     config.upstreamTimeoutMs = nextConfig.upstreamTimeoutSeconds * 1000
     config.webSearchBackend = nextConfig.webSearchBackend
     config.claudeUpstreamApi = nextConfig.claudeUpstreamApi
+    // Admission reads this for every request, so a changed key applies to the next one.
+    config.apiKey = nextConfig.apiKey
     runtimeState.modelRouting = {
       gptModel: nextConfig.gptModel,
       opusModel: nextConfig.opusModel,
@@ -97,6 +122,12 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   log.info(`Log level: ${appConfig.logLevel}`)
   log.info(`Default think effort: ${appConfig.thinkEffort}`)
   log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
+
+  // At error level, so it shows whatever logLevel is set.
+  const listenerWarning = unauthenticatedListenerWarning(appConfig)
+  if (listenerWarning) {
+    log.error(listenerWarning)
+  }
 
   const authSession = await setupProxyAuth(config)
 
@@ -138,6 +169,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
       const gptLimits = getCachedCopilotModel(config, appConfig.gptModel)?.limits
       const opusLimits = getCachedCopilotModel(config, appConfig.opusModel)?.limits
       const claudeResult = await applyClaudeConfig({
+        apiKey: appConfig.apiKey,
         baseUrl,
         configPath: claudeConfigPath,
         gptModel: appConfig.gptModel,

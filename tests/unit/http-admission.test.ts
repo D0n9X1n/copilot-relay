@@ -15,6 +15,7 @@ process.env.CONSOLA_LEVEL = "0"
 const { createServer, startServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs, withoutLogging } = await import("../../src/lib/log")
+const { getLogPath } = await import("../../src/lib/paths")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 const configFor = (fields: Partial<ProxyConfig> = {}): ProxyConfig => ({
@@ -449,4 +450,275 @@ test("rejects an unexpected authority before reading its body or reaching upstre
   assert.equal(response.status, 403)
   assert.equal(request.bodyUsed, false)
   assert.deepEqual(upstream.requests, [])
+})
+
+// The relay's own inbound key (#159). A fixture value only.
+const relayKey = "relay-fixture-key-0001"
+
+// Anthropic's error shape. The message is fixed, so it can never echo a presented value.
+const authFailure = {
+  type: "error",
+  error: {
+    type: "authentication_error",
+    message: "Missing or invalid API key: send the relay apiKey as x-api-key or Authorization: Bearer",
+  },
+}
+
+// File writes are fire-and-forget, so poll until the expected entries land.
+const readLogUntil = async (ready: (text: string) => boolean): Promise<string> => {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await flushLogs()
+    const text = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    if (ready(text)) {
+      return text
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  throw new Error("the expected log entries never landed")
+}
+
+test("an empty apiKey admits requests with or without a key, as before", async (t) => {
+  const upstream = await fakeUpstream(t)
+  const keyHeaders: Array<Record<string, string>> = [
+    {},
+    { "x-api-key": "anything-at-all" },
+    { authorization: "Bearer anything-at-all" },
+  ]
+
+  for (const apiKey of [undefined, ""]) {
+    const app = createServer(configFor({ apiKey, copilotBaseUrl: upstream.baseUrl }))
+
+    for (const headers of keyHeaders) {
+      const response = await app.fetch(new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: payload,
+      }))
+
+      assert.equal(response.status, 200, JSON.stringify(headers))
+      await response.json()
+    }
+  }
+
+  assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, 6)
+})
+
+test("an apiKey refuses a missing or wrong key with 401 in Anthropic's error shape", async (t) => {
+  const upstream = await fakeUpstream(t)
+  const app = createServer(configFor({ apiKey: relayKey, copilotBaseUrl: upstream.baseUrl }))
+  const wrongKey = "WRONG_KEY_SENTINEL_0001"
+  const attempts: Array<Record<string, string>> = [
+    {},
+    { "x-api-key": "" },
+    { "x-api-key": wrongKey },
+    { "x-api-key": relayKey.toUpperCase() },
+    { "x-api-key": relayKey.slice(0, -1) },
+    { "x-api-key": `${relayKey}x` },
+    { authorization: `Bearer ${wrongKey}` },
+    { authorization: `Basic ${relayKey}` },
+    { authorization: `Token ${relayKey}` },
+    { authorization: relayKey },
+    { authorization: "Bearer" },
+  ]
+
+  for (const headers of attempts) {
+    const request = new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: payload,
+    })
+    const response = await app.fetch(request)
+    const text = await response.text()
+
+    assert.equal(response.status, 401, JSON.stringify(headers))
+    assert.equal(response.headers.get("www-authenticate"), "Bearer")
+    assert.deepEqual(JSON.parse(text), authFailure)
+    assert.equal(request.bodyUsed, false)
+    assert.ok(!text.includes(relayKey) && !text.includes(wrongKey), "a 401 never echoes a key")
+  }
+
+  assert.deepEqual(upstream.requests, [])
+})
+
+// Why (#159): Claude Code sends ANTHROPIC_AUTH_TOKEN as Authorization: Bearer;
+// other clients send x-api-key. Either header can carry the key.
+test("the key is accepted as x-api-key or Authorization: Bearer, in any scheme case", async (t) => {
+  const upstream = await fakeUpstream(t)
+  const app = createServer(configFor({ apiKey: relayKey, copilotBaseUrl: upstream.baseUrl }))
+  const accepted: Array<Record<string, string>> = [
+    { "x-api-key": relayKey },
+    { authorization: `Bearer ${relayKey}` },
+    { authorization: `bearer ${relayKey}` },
+    { authorization: `BEARER  ${relayKey}` },
+    { "x-api-key": relayKey, authorization: "Bearer unrelated-credential" },
+    { "x-api-key": "unrelated-credential", authorization: `Bearer ${relayKey}` },
+  ]
+
+  for (const headers of accepted) {
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: payload,
+    }))
+
+    assert.equal(response.status, 200, JSON.stringify(headers))
+    const body = await response.json() as { content: Array<{ type: string; text: string }> }
+    assert.deepEqual(body.content, [{ type: "text", text: "OK" }])
+  }
+
+  assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, accepted.length)
+})
+
+// Why (#159): health checks and Claude Code's reachability probe must keep
+// working without the key. Every other route needs it, unknown routes included.
+test("with an apiKey, only GET /healthz and GET|HEAD /api/hello stay open", async () => {
+  const app = createServer(configFor({ apiKey: relayKey }))
+  const send = (method: string, route: string, headers: Record<string, string> = {}) =>
+    app.fetch(new Request(`http://localhost${route}`, { method, headers }))
+
+  for (const [method, route] of [["GET", "/healthz"], ["GET", "/api/hello"], ["HEAD", "/api/hello"]]) {
+    assert.equal((await send(method, route)).status, 200, `${method} ${route}`)
+  }
+
+  for (const [method, route] of [
+    ["HEAD", "/healthz"],
+    ["POST", "/healthz"],
+    ["GET", "/healthz/"],
+    ["POST", "/api/hello"],
+    ["GET", "/"],
+    ["GET", "/v1/models"],
+    ["HEAD", "/v1/models"],
+    ["GET", "/v1/messages"],
+    ["OPTIONS", "/v1/messages"],
+    ["POST", "/v1/messages/count_tokens"],
+    ["GET", "/unknown"],
+  ]) {
+    assert.equal((await send(method, route)).status, 401, `${method} ${route}`)
+  }
+
+  for (const [method, route] of [["GET", "/"], ["GET", "/v1/models"], ["HEAD", "/healthz"]]) {
+    assert.equal((await send(method, route, { "x-api-key": relayKey })).status, 200, `${method} ${route} with the key`)
+  }
+})
+
+// Why (#159): an unknown route logs its payload by design. An unauthenticated
+// request is refused before that, so a stranger's body and guessed key never
+// reach the log.
+test("an unauthenticated request is refused before its body is read or logged", async (t) => {
+  const upstream = await fakeUpstream(t)
+  const app = createServer(configFor({ apiKey: relayKey, copilotBaseUrl: upstream.baseUrl }))
+  const sentinel = "UNAUTHENTICATED_PAYLOAD_SENTINEL"
+  const guessedKey = "GUESSED_KEY_SENTINEL_0001"
+  const requestIds: string[] = []
+
+  for (const route of ["/unknown", "/v1/messages", "/v1/messages/count_tokens"]) {
+    const request = new Request(`http://localhost${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": guessedKey },
+      body: JSON.stringify({ secret: sentinel }),
+    })
+    const response = await app.fetch(request)
+    const requestId = response.headers.get("x-copilot-relay-request-id")
+
+    assert.equal(response.status, 401, route)
+    assert.equal(request.bodyUsed, false, route)
+    assert.ok(requestId)
+    requestIds.push(requestId)
+  }
+
+  assert.deepEqual(upstream.requests, [])
+  const logText = await readLogUntil((text) => requestIds.every((id) => text.includes(`request_id=${id} POST`)))
+
+  for (const id of requestIds) {
+    // Its arrival and its 401 summary, and nothing from the unknown-route handler.
+    const lines = logText.split("\n").filter((line) => line.includes(id))
+    assert.equal(lines.length, 2, lines.join("\n"))
+    assert.match(lines[1], / -> 401 /)
+  }
+
+  assert.ok(!logText.includes(sentinel), "the payload must not be logged")
+  assert.ok(!logText.includes(guessedKey), "a presented key must not be logged")
+})
+
+test("authority and Origin are checked before the key, and the key before the content type", async () => {
+  const app = createServer(configFor({ apiKey: relayKey }))
+  const send = (authority: string, headers: Record<string, string>) =>
+    app.fetch(new Request(`http://${authority}/v1/messages`, { method: "POST", headers, body: "not JSON" }))
+
+  // A valid key does not rescue a bad Host or Origin.
+  assert.equal((await send("unexpected.example", { "x-api-key": relayKey, "content-type": "application/json" })).status, 403)
+  assert.equal((await send("localhost", {
+    "x-api-key": relayKey,
+    "content-type": "application/json",
+    origin: "https://unexpected.example",
+  })).status, 403)
+  // An unauthenticated request learns nothing about the content type it would need.
+  assert.equal((await send("localhost", { "content-type": "text/plain" })).status, 401)
+  assert.equal((await send("localhost", { "x-api-key": relayKey, "content-type": "text/plain" })).status, 415)
+})
+
+// Why (#159): hot reload mutates the live config, and admission reads the key
+// from it on every request, so a rotated key applies to the very next one.
+test("a key changed on the live config applies to the next request", async () => {
+  const config = configFor({ apiKey: relayKey })
+  const app = createServer(config)
+  const statusWith = async (key: string | undefined): Promise<number> =>
+    (await app.fetch(new Request("http://localhost/v1/models", key ? { headers: { "x-api-key": key } } : {}))).status
+
+  assert.equal(await statusWith(relayKey), 200)
+
+  config.apiKey = "relay-fixture-key-0002"
+  assert.equal(await statusWith(relayKey), 401)
+  assert.equal(await statusWith("relay-fixture-key-0002"), 200)
+
+  config.apiKey = ""
+  assert.equal(await statusWith(undefined), 200)
+})
+
+test("the HTTP adapter applies the apiKey to a request read from a real socket", async (t) => {
+  const server = await withoutLogging(() => startServer(configFor({ apiKey: relayKey })))
+  t.after(() => new Promise<void>(
+    (resolve, reject) => server.close((error) => error ? reject(error) : resolve())
+  ))
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+  const port = address.port
+
+  const send = (target: string, headers: Record<string, string> = {}) => new Promise<number>((resolve, reject) => {
+    const request = httpRequest({
+      hostname: "127.0.0.1",
+      port,
+      path: target,
+      headers: { host: `127.0.0.1:${port}`, connection: "close", ...headers },
+    }, (response) => {
+      response.resume()
+      response.on("end", () => resolve(response.statusCode!))
+    })
+    request.on("error", reject)
+    request.end()
+  })
+
+  assert.equal(await send("/v1/models"), 401)
+  assert.equal(await send("/v1/models", { "x-api-key": "WRONG_KEY_SENTINEL_0001" }), 401)
+  assert.equal(await send("/v1/models", { "x-api-key": relayKey }), 200)
+  assert.equal(await send("/v1/models", { authorization: `Bearer ${relayKey}` }), 200)
+  assert.equal(await send("/healthz"), 200)
+})
+
+// Why (#159): deep probes run the real admission in process, so with an apiKey
+// set they must present it, or every row would fail with 401.
+test("isolated model probes carry the configured apiKey through admission", async (t) => {
+  const upstream = await fakeUpstream(t)
+  const { probeModels } = await import("../../src/lib/model-probe")
+
+  const result = await probeModels(
+    configFor({ apiKey: relayKey, copilotBaseUrl: upstream.baseUrl }),
+    [["claude-opus-5.5", {}]],
+    { maxTokens: 16, timeoutMs: 1_000, totalTimeoutMs: 2_000 },
+  )
+
+  assert.equal(result, 0)
+  assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, 1)
 })

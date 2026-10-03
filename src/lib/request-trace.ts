@@ -598,6 +598,8 @@ export class RequestTrace {
     // Registered first: the manifest built below already checks its headers against them, and the
     // log redacts them from here on.
     this.protectCredential(config.copilotToken)
+    // The relay's own inbound key, whichever header carried it.
+    this.protectCredential(config.apiKey)
     this.protectCredential(request.headers.get("authorization")?.replace(/^Bearer\s+/i, ""))
     this.protectCredential(request.headers.get("x-api-key") ?? undefined)
 

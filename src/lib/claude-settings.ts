@@ -3,6 +3,8 @@ import { readFileSnapshot, writeFileSnapshot } from "~/lib/atomic-file"
 import { normalizeClaudeModelId, type ModelTokenLimits } from "~/lib/models"
 
 interface ApplyClaudeConfigInput {
+  // The relay's inbound apiKey. Empty or absent keeps the dummy-token behavior.
+  apiKey?: string
   baseUrl: string
   configPath: string
   gptModel: string
@@ -57,7 +59,8 @@ const hasPrimaryModelOverride = (
 /**
  * Update `~/.claude/settings.json` so its env block points Claude Code at the
  * running proxy. Preserves unrelated keys and model choices while normalizing
- * managed one-million-context GPT overrides. Sets a dummy auth token only if absent.
+ * managed one-million-context GPT overrides. Sets the auth token to the relay's
+ * apiKey when one is configured, otherwise to a dummy value only if absent.
  */
 export async function applyClaudeConfig(
   input: ApplyClaudeConfigInput,
@@ -120,9 +123,13 @@ export async function applyClaudeConfig(
 
   env.ANTHROPIC_BASE_URL = baseUrl
 
+  // With an apiKey set, the relay requires that key on every request, so the token
+  // is replaced, whether it was the dummy value or an older key. Without one,
   // Claude Code only requires a syntactically present auth token here; real
   // upstream authentication is handled by copilot-relay's Copilot token.
-  if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
+  if (input.apiKey) {
+    env.ANTHROPIC_AUTH_TOKEN = input.apiKey
+  } else if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
     env.ANTHROPIC_AUTH_TOKEN = "dummy"
   }
 

@@ -6,7 +6,7 @@ import { readAppConfig, type AppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { flushLogs, log, setLogLevel, withoutConsoleLogging } from "~/lib/log"
+import { flushLogs, log, registerLogSecret, setLogLevel, withoutConsoleLogging } from "~/lib/log"
 import { terminalText } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
@@ -196,6 +196,8 @@ export const models = defineCommand({
         const appConfig = await readAppConfig()
         setLogLevel(appConfig.logLevel)
         registerSensitiveOrigin(appConfig.copilotBaseUrl)
+        // --deep probes send the relay's apiKey to the in-process app.
+        registerLogSecret(appConfig.apiKey)
         const config = readProxyConfig(appConfig)
 
         failure = "Could not authenticate with GitHub Copilot"
