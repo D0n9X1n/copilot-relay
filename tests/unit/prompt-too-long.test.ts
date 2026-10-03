@@ -102,6 +102,25 @@ test("the native route's own prompt-too-long error is rebuilt from its counts", 
   assert.doesNotMatch(await extended.response.text(), /Private fixture detail/)
 })
 
+test("the overflow body Copilot sent on /v1/messages in a live run is rebuilt without its request_id", async () => {
+  // As observed for claude-haiku-4.5: Copilot's code inside Anthropic's envelope and wording,
+  // ">" escaped as \u003e, and a top-level request_id and type. The request id is a placeholder.
+  const observed = String.raw`{"error":{"code":"model_max_prompt_tokens_exceeded","message":"prompt is too long: 230024 tokens \u003e 200000 maximum","type":"invalid_request_error"},"request_id":"req_placeholder","type":"error"}`
+  const error = toPromptTooLongError(400, observed)
+
+  assert.ok(error instanceof PromptTooLongError)
+  assert.equal(error.message, "prompt is too long: 230024 tokens > 200000 maximum")
+  assert.deepEqual(claudeCodeCounts(error.message), ["230024", "200000"])
+
+  // The rebuilt body is Anthropic's alone; the upstream request_id is not carried.
+  const rebuilt = await error.response.text()
+  assert.deepEqual(JSON.parse(rebuilt), {
+    type: "error",
+    error: { type: "invalid_request_error", message: "prompt is too long: 230024 tokens > 200000 maximum" },
+  })
+  assert.doesNotMatch(rebuilt, /request_id|req_placeholder/)
+})
+
 test("other upstream errors are not mistaken for a prompt overflow", () => {
   const cases: Array<[number, string]> = [
     // Only HTTP 400 is an overflow.
