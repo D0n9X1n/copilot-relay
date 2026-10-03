@@ -194,7 +194,8 @@ const sameFile = (left: Stats, right: Stats): boolean =>
 
 // Do not chmod through an arbitrary symlink. Open the already checked directory
 // without following its final component, and operate on the handle on POSIX.
-const ensurePrivateDirectory = async (directory: string): Promise<void> => {
+// Returns the checked directory's lstat, so a reused log handle can tell it was not replaced.
+const ensurePrivateDirectory = async (directory: string): Promise<Stats> => {
   await fs.mkdir(directory, { mode: 0o700 }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error
@@ -208,7 +209,7 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
 
   // Windows has no O_NOFOLLOW and no POSIX mode bits, so the lstat check above is all it gets.
   if (process.platform === "win32") {
-    return
+    return observed
   }
 
   const handle = await fs.open(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
@@ -222,11 +223,20 @@ const ensurePrivateDirectory = async (directory: string): Promise<void> => {
   } finally {
     await handle.close()
   }
+
+  return observed
 }
 
-const ensureLogDirectory = async (): Promise<void> => {
-  await ensurePrivateDirectory(paths.appDir)
-  await ensurePrivateDirectory(paths.logsDir)
+// The app directory holds the logs directory, so it is checked first.
+const logDirectories = [paths.appDir, paths.logsDir]
+
+const ensureLogDirectory = async (): Promise<Array<Stats>> => {
+  const checked: Array<Stats> = []
+  for (const directory of logDirectories) {
+    checked.push(await ensurePrivateDirectory(directory))
+  }
+
+  return checked
 }
 
 interface LogEntry {
@@ -240,6 +250,8 @@ interface ActiveLog {
   filePath: string
   handle: FileHandle
   identity: Stats
+  // The log directories as checked when the file was opened, in logDirectories order.
+  directories: Array<Stats>
 }
 
 // Entries wait here and are written in call order by one drain at a time, so a burst costs one
@@ -254,19 +266,34 @@ let activeLog: ActiveLog | undefined
 // entry is under 64 KiB, so an entry is never split.
 const maxLogWriteBytes = 256 * 1024
 
-// The open handle is reused only while its path still names the same private file with one link.
-// A rename, deletion, replacement, second hard link or loosened mode reopens with the full checks.
+// Windows has no POSIX mode bits to check.
+const hasMode = (stats: Stats, mode: number): boolean =>
+  process.platform === "win32" || (stats.mode & 0o777) === mode
+
+const isSameDirectory = (current: Stats | undefined, checked: Stats): boolean =>
+  current !== undefined
+    && current.isDirectory()
+    && sameFile(current, checked)
+    && hasMode(current, 0o700)
+
+// The open handle is reused only while its path still names the same private file with one link,
+// inside the same private directories. lstat of the file follows links in its parent path, so the
+// directories are checked too. A rename, deletion, replacement, second hard link, replaced
+// directory or loosened mode reopens with the full checks.
 const isStillActive = async (active: ActiveLog): Promise<boolean> => {
-  const current = await fs.lstat(active.filePath).catch(() => undefined)
+  const [current, ...directories] = await Promise.all(
+    [active.filePath, ...logDirectories].map((target) => fs.lstat(target).catch(() => undefined)),
+  )
 
   return current !== undefined
     && current.isFile()
     && current.nlink === 1
     && sameFile(current, active.identity)
-    && (process.platform === "win32" || (current.mode & 0o777) === 0o600)
+    && hasMode(current, 0o600)
+    && active.directories.every((checked, index) => isSameDirectory(directories[index], checked))
 }
 
-const openPrivateLog = async (filePath: string): Promise<ActiveLog> => {
+const openPrivateLog = async (filePath: string, directories: Array<Stats>): Promise<ActiveLog> => {
   const observed = await fs.lstat(filePath).catch((error: unknown) => {
     if (!isMissing(error)) {
       throw error
@@ -303,7 +330,7 @@ const openPrivateLog = async (filePath: string): Promise<ActiveLog> => {
       await handle.chmod(0o600)
     }
 
-    return { filePath, handle, identity: opened }
+    return { filePath, handle, identity: opened, directories }
   } catch (error) {
     await handle.close().catch(() => undefined)
     throw error
@@ -322,8 +349,8 @@ const openActiveLog = async (filePath: string): Promise<FileHandle> => {
   }
 
   await closeActiveLog()
-  await ensureLogDirectory()
-  activeLog = await openPrivateLog(filePath)
+  const directories = await ensureLogDirectory()
+  activeLog = await openPrivateLog(filePath, directories)
 
   return activeLog.handle
 }

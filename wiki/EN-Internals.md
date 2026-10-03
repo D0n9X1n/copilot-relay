@@ -847,12 +847,17 @@ that end on entry boundaries: `FileHandle.appendFile` writes a larger buffer in
 between two of them.
 
 The handle is reused only while its path still names the same private file with
-one link and, on POSIX, mode 0600. A rename, deletion, replacement, second hard
-link or loosened mode makes the next batch reopen the path with the full checks:
-no symlink, one link, the same file before and after the open, then chmod 0600.
-Directories are checked when the file is opened and on each retention pass. A
-failed write never fails a request; it drops that batch and closes the handle.
-`flushLogs` waits for queued writes, then closes the file.
+one link and, on POSIX, mode 0600, and the app and logs directories are still the
+directories checked when it was opened: real directories, not links, with mode
+0700 on POSIX. lstat of the file follows links in its parent path, so without the
+directory check a logs directory replaced by a link to where the open file was
+moved would pass. A rename, deletion, replacement, second hard link, replaced
+directory or loosened mode makes the next batch reopen the path with the full
+checks: real private directories, then no symlink, one link, the same file before
+and after the open, and chmod 0600. A failed write never fails a request; it drops
+that batch and closes the handle. `flushLogs` waits for queued writes, then closes
+the file; each call waits for the close it queued, so overlapping calls both
+finish.
 
 Before #141 each entry ran its own directory checks, open, stat, chmod, append and
 close, and a burst could reach the file out of order.

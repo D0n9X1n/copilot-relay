@@ -491,6 +491,42 @@ test("a loosened active log mode is restored before the next append", {
   assert.match(await fs.readFile(getLogPath(), "utf8"), /before chmod\n.*after chmod\n$/)
 })
 
+// Why: lstat of the log path follows links in its parent path. A logs folder replaced by a link to
+// the folder the open file was moved to leads back to the same file, so the directories are
+// checked before the handle is reused (#141 review).
+test("an entry is not appended through a logs folder replaced by a link", async () => {
+  log.info("before move")
+  await readActiveLog()
+  const moved = path.join(paths.appDir, "logs-moved")
+  await fs.mkdir(moved)
+  await fs.rename(getLogPath(), path.join(moved, path.basename(getLogPath())))
+  await fs.rmdir(paths.logsDir)
+  await fs.symlink(moved, paths.logsDir, "junction")
+  try {
+    log.info("after move")
+    await flushLogs()
+
+    assert.match(await fs.readFile(path.join(moved, path.basename(getLogPath())), "utf8"), /^\S+ info before move\n$/)
+  } finally {
+    await fs.unlink(paths.logsDir)
+    await fs.rm(moved, { recursive: true, force: true })
+  }
+})
+
+test("a loosened logs folder mode is restored before the next append", {
+  skip: process.platform === "win32",
+}, async () => {
+  log.info("before folder chmod")
+  await readActiveLog()
+  await fs.chmod(paths.logsDir, 0o755)
+
+  log.info("after folder chmod")
+  await flushLogs()
+
+  assert.equal((await fs.stat(paths.logsDir)).mode & 0o777, 0o700)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /before folder chmod\n.*after folder chmod\n$/)
+})
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })
