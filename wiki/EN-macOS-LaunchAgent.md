@@ -81,6 +81,23 @@ outlasts a network coming up, and the relay starts on its own once it does.
 The tradeoff: after a reboot the relay may take a minute or two to come up on a
 slow network. That is it retrying, not breaking.
 
+### Behind an outbound proxy
+
+launchd does not read your shell profile, so with `upstreamProxy: env` the relay
+does not see an `HTTPS_PROXY` you exported there. If this Mac reaches the internet
+only through a proxy, set its URL in `~/.copilot-relay/config.yaml`:
+
+```yaml
+upstreamProxy: http://proxy.example:3128
+```
+
+To keep `upstreamProxy: env` instead, add the variables to `EnvironmentVariables`
+in the plist, next to `PATH`. `upstreamProxy` takes effect on restart: after
+editing `config.yaml`, run
+`launchctl kickstart -k "gui/$(id -u)/com.d0n9x1n.copilot-relay"`; after editing
+the plist, `bootout` and `bootstrap` again, as below. See
+[Configuration](EN-Configuration.md) for the rules, credentials included.
+
 ## Load and start
 
 ```sh
@@ -115,10 +132,10 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
+    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
-The `config` block is abridged above; `status` prints all eleven resolved keys.
+The `config` block is abridged above; `status` prints every resolved key.
 See [Configuration](EN-Configuration.md).
 
 The `version` row is the build the running daemon reports about itself, which is

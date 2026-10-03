@@ -34,6 +34,7 @@ host: 127.0.0.1
 port: 4142
 apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
+upstreamProxy:
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
@@ -53,6 +54,7 @@ opusModel: claude-opus-5.5
 | `port` | Local port. Default: `4142`. |
 | `apiKey` | Optional key that clients must send as `x-api-key` or `Authorization: Bearer`. Empty, the default, disables the check. Hot-reloads. See [Require a client key](#require-a-client-key). |
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
+| `upstreamProxy` | Outbound proxy for Copilot and GitHub calls, sign-in included. Empty (the default) connects directly; `env` uses `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; otherwise an absolute `http://` or `https://` proxy URL. Requires restart. See [upstreamProxy rules](#upstreamproxy-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
 | `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
 | `logRetentionDays` | Local calendar days to retain normal relay logs and debug captures, including today; positive integer, default `3`. Active/unknown captures are protected; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for cleanup rules. |
@@ -679,6 +681,69 @@ change:
 3. Restart running Claude Code sessions. Until then they send the old key and get
    `401`.
 
+## upstreamProxy rules
+
+`upstreamProxy` sends the relay's outbound calls through an HTTP proxy: every
+Copilot request, the startup check, token refresh, and GitHub sign-in. Calls to
+the relay's own listener, such as the `status` probes, never use it.
+
+| Value | Route |
+| --- | --- |
+| empty (default) | Direct. `HTTPS_PROXY` and `HTTP_PROXY` are ignored. |
+| `env` | `HTTPS_PROXY` or `HTTP_PROXY`, read when the relay starts. With only `HTTP_PROXY` set, it is used for HTTPS too. Hosts listed in `NO_PROXY` connect directly. Lower-case names work too. |
+| a URL | That proxy, such as `http://proxy.example:3128`. |
+
+The relay tunnels each call through the proxy with `CONNECT`, so its HTTPS calls
+stay encrypted end to end. It reads no other proxy setting, such as the operating
+system's proxy configuration or a PAC file.
+
+`upstreamProxy` is validated when the config is loaded, and startup fails if it
+is not:
+
+- **Empty, `env`, or an absolute `http://` or `https://` URL.** `env` must be
+  lower case. `socks5://` and other schemes, a bare `proxy.example:3128`, and a
+  URL without a host are rejected.
+- **No path, query or fragment.** `http://proxy.example:3128/` is accepted;
+  `http://proxy.example:3128/path` is not.
+- **A user name and a password together, or neither.**
+  `http://user:password@proxy.example:3128` sends a `Basic`
+  `Proxy-Authorization`. A user name without a password, or the reverse, is
+  rejected, because no credentials would be sent at all. Percent-encode reserved
+  characters in either, such as `%40` for `@` and `%23` for `#`.
+
+As with `copilotBaseUrl`, the error names the key and the rule and never repeats
+the value. With `env`, a malformed `HTTPS_PROXY` or `HTTP_PROXY` stops startup
+with an error that names the variables, not their value.
+
+The user name and password are credentials. The relay redacts them from its logs,
+and `copilot-relay status` and the startup log show only the proxy's origin:
+
+```text
+Upstream proxy: http://proxy.example:3128 (credentials hidden)
+```
+
+### Why empty is the default
+
+`readAppConfig()` writes every key back to `config.yaml`, so a default of `env`
+would be written into every existing install on upgrade, and an install whose
+shell sets `HTTPS_PROXY` for other tools would change route without being asked.
+Opt in with `env` or a URL instead.
+
+If an upstream request fails without a response while `upstreamProxy` is empty
+and `HTTPS_PROXY` or `HTTP_PROXY` is set, the relay logs this once per process:
+
+```text
+Upstream request failed without a response. HTTPS_PROXY or HTTP_PROXY is set, but upstreamProxy is empty, so copilot-relay connected directly. To use that proxy, set upstreamProxy: env in <path to config.yaml>, then run the command again or restart the relay.
+```
+
+### Background services
+
+A service manager (launchd, Task Scheduler, systemd) does not start the relay
+from your shell, so `env` does not see variables exported in your shell profile.
+Prefer a URL in `config.yaml`, or set the variables in the service definition.
+See the service page for your platform: [macOS](EN-macOS-LaunchAgent.md),
+[Windows](EN-Windows-Service.md), [Linux](EN-Linux-systemd.md).
+
 ## Hot reload vs restart
 
 Hot-reloaded, applying to work that starts after the change:
@@ -699,10 +764,12 @@ Requires restart:
 - `host`
 - `port`
 - `claudeSetup`
+- `upstreamProxy`
 
 `host` and `port` require restart because the listening socket is already bound.
 `claudeSetup` is read once during startup, so toggling it changes nothing until
-the relay starts again.
+the relay starts again. `upstreamProxy` sets up the relay's upstream connections
+once, at startup, and a reload leaves them as they are.
 
 The relay checks `config.yaml` once per second. An edit that fails validation
 keeps the previous runtime settings and logs one error that names the file and

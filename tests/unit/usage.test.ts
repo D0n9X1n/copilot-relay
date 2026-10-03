@@ -1,8 +1,16 @@
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
+import type { IncomingMessage } from "node:http"
 import os from "node:os"
 import path from "node:path"
 import test, { type TestContext } from "node:test"
+
+import {
+  redirectGitHubTo,
+  refuseExternalConnections,
+  replyWith,
+  startFakeGitHub,
+} from "../fixtures/network"
 
 // paths.ts resolves the home directory when it is imported, so it is redirected first. Node reads
 // USERPROFILE on Windows and HOME elsewhere, so both are set.
@@ -16,12 +24,46 @@ const { setupProxyAuth } = await import("../../src/lib/auth")
 const { vscodeVersion } = await import("../../src/lib/config")
 const { flushLogs } = await import("../../src/lib/log")
 const { paths } = await import("../../src/lib/paths")
+const { fetchUpstream } = await import("../../src/lib/upstream-dispatcher")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 // The token file the tests write must be the temporary one.
 assert.ok(paths.githubTokenPath.startsWith(home), paths.githubTokenPath)
 
+// The request as GitHub would have received it.
+const toRequest = (url: URL, incoming: IncomingMessage): Request => {
+  const headers = new Headers()
+  for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+    headers.append(incoming.rawHeaders[index], incoming.rawHeaders[index + 1])
+  }
+
+  return new Request(url, { headers, method: incoming.method })
+}
+
+// Stands in for GitHub where a call goes through undici's fetch with the upstream dispatcher
+// (#153), as sign-in's user lookup and token exchange do. Those calls are redirected to this local
+// server, because a stub on the global fetch no longer sees them. A connection off this machine
+// throws, so nothing reaches the network.
+//
+// This comes before the first test() because of its top-level await. node:test runs the after()
+// hooks as soon as every test registered so far has finished, which can happen during such an
+// await, and an after() hook registered later never runs.
+let answerGitHub: ((request: Request) => Response | Promise<Response>) | undefined
+
+const github = await startFakeGitHub(async (url, incoming, response) => {
+  if (answerGitHub === undefined) {
+    throw new Error("No test is answering GitHub")
+  }
+
+  await replyWith(response, await answerGitHub(toRequest(url, incoming)))
+})
+const redirect = redirectGitHubTo(github.origin)
+const restoreConnections = refuseExternalConnections()
+
 test.after(async () => {
+  restoreConnections()
+  redirect.restore()
+  await github.close()
   await flushLogs()
   await fs.rm(home, { recursive: true, force: true })
 })
@@ -258,9 +300,17 @@ test("the usage request is a GET of copilot_internal/user that carries the store
   assert.equal(requests[0].headers.get("authorization"), `token ${token}`)
 })
 
+// Why (#153): the token exchange and the user lookup go through the upstream dispatcher, so the
+// stand-in answers them. The usage request still uses the global fetch here; the stub forwards it
+// through the same dispatcher, so all three reach the stand-in the same way and their headers
+// compare.
 test("the usage request sends the headers the Copilot token exchange sends", async (t) => {
   await storeToken(token)
-  const requests = mockFetch(t, (request) => {
+  const requests: Array<Request> = []
+  const unexpected: Array<string> = []
+
+  answerGitHub = (request) => {
+    requests.push(request)
     if (request.url === "https://api.github.com/copilot_internal/v2/token") {
       return Response.json({ token: "copilot-private-token-sentinel", refresh_in: 86_400 })
     }
@@ -269,9 +319,27 @@ test("the usage request sends the headers the Copilot token exchange sends", asy
       return Response.json({ login: "fixture" })
     }
 
-    assert.equal(request.url, usageUrl, "No device authorization or other network call")
+    if (request.url === usageUrl) {
+      return Response.json(account)
+    }
 
-    return Response.json(account)
+    unexpected.push(request.url)
+
+    return Response.json({}, { status: 404 })
+  }
+
+  t.after(() => {
+    answerGitHub = undefined
+  })
+
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init)
+
+    return fetchUpstream(request.url, {
+      headers: Object.fromEntries(request.headers),
+      method: request.method,
+      signal: request.signal,
+    })
   })
 
   // The config the commands build with readProxyConfig, whose editor version is this constant.
@@ -287,6 +355,7 @@ test("the usage request sends the headers the Copilot token exchange sends", asy
   await setupProxyAuth(config)
   await loadCopilotUsage()
 
+  assert.deepEqual(unexpected, [], "No device authorization or other network call")
   const headersOf = (url: string) => [...(requests.find((request) => request.url === url)?.headers ?? [])]
   const exchange = headersOf("https://api.github.com/copilot_internal/v2/token")
 

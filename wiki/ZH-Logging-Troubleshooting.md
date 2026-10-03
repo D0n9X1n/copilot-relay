@@ -408,8 +408,8 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 
 热重载会更新 `logLevel`、`logRetentionDays`、`thinkEffort`、
 `upstreamTimeoutSeconds`、`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、
-`gptModel` 和 `opusModel`。改 `host`、`port` 或 `claudeSetup` 需要重启。Watcher 从不
-重写文件：无效、空白或不完整保存会保留上一次有效设置，直到全部落盘键再次齐备。
+`gptModel` 和 `opusModel`。改 `host`、`port`、`claudeSetup` 或 `upstreamProxy` 需要重启。
+Watcher 从不重写文件：无效、空白或不完整保存会保留上一次有效设置，直到全部落盘键再次齐备。
 活动请求保持接入时策略，但会使用刷新后的凭据。
 
 ## 启动失败
@@ -425,6 +425,16 @@ grep -n "Startup preflight failed\|Preflight failed\|Required Copilot model\|Inv
 - 配置的 `gptModel` 或 `opusModel` 在上游 `/models` 里不存在
 - `logLevel` 非法
 - `thinkEffort` 被配置的模型拒绝
+- 网络只能经代理访问互联网，而 `upstreamProxy` 为空
+
+对于最后一种原因，如果设置了 `HTTPS_PROXY` 或 `HTTP_PROXY`，relay 会记录一行写明修复
+方法的日志：
+
+```sh
+grep -n "upstreamProxy is empty" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+按[配置说明](ZH-Configuration.md)设置 `upstreamProxy`。
 
 重新登录后再试：
 

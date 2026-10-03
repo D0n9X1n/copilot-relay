@@ -10,6 +10,7 @@ import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
 import { registerLogSecret, scrubLogSecrets, setLogLevel } from "~/lib/log"
 import { getLogPath, paths } from "~/lib/paths"
 import {
+  formatUpstreamProxyForDisplay,
   formatUrlForDisplay,
   registerSensitiveOrigin,
   sanitizeTerminalString,
@@ -47,13 +48,12 @@ interface ProbeResult {
  * The resolved config as `status` reports it.
  *
  * Derived from AppConfig rather than restated, so a new config key cannot be
- * added without this type following it automatically. Three deliberate
- * differences:
+ * added without this type following it automatically. Deliberate differences:
  *
- * `webSearchBackend` is null rather than undefined when unset. JSON.stringify
- * drops undefined properties, so leaving it optional would make `status --json`
- * omit that key on a default install but emit it on a customized one; anything
- * parsing that deserves a stable key set.
+ * `webSearchBackend` and `upstreamProxy` are null rather than undefined when
+ * unset. JSON.stringify drops undefined properties, so leaving them optional
+ * would make `status --json` omit those keys on a default install but emit
+ * them on a customized one; anything parsing that deserves a stable key set.
  *
  * `copilotBaseUrl` is the display form, not the raw value. It is user-supplied
  * and may legitimately carry a credential in its path, and `status` output is
@@ -62,8 +62,12 @@ interface ProbeResult {
  *
  * `apiKey` is never the key itself: `[redacted]` when one is set, empty when
  * none is. For the same reason, and mapped here for the same reason.
+ *
+ * `upstreamProxy` is the display form too: a proxy URL can carry a user name
+ * and password, so only its origin is shown. See #153.
  */
-export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
+export type StatusConfig = Omit<AppConfig, "upstreamProxy" | "webSearchBackend"> & {
+  upstreamProxy: string | null
   webSearchBackend: string | null
 }
 
@@ -71,6 +75,7 @@ export const toStatusConfig = (config: AppConfig): StatusConfig => ({
   ...config,
   apiKey: config.apiKey ? "[redacted]" : "",
   copilotBaseUrl: formatUrlForDisplay(config.copilotBaseUrl),
+  upstreamProxy: config.upstreamProxy === undefined ? null : formatUpstreamProxyForDisplay(config.upstreamProxy),
   webSearchBackend: config.webSearchBackend ?? null,
   claudeUpstreamApi: config.claudeUpstreamApi ?? "chat-completions",
 })
@@ -187,15 +192,16 @@ const configRowOrder: Record<keyof StatusConfig, number> = {
   port: 1,
   apiKey: 2,
   copilotBaseUrl: 3,
-  claudeSetup: 4,
-  logLevel: 5,
-  logRetentionDays: 6,
-  thinkEffort: 7,
-  upstreamTimeoutSeconds: 8,
-  webSearchBackend: 9,
-  gptModel: 10,
-  opusModel: 11,
-  claudeUpstreamApi: 12,
+  upstreamProxy: 4,
+  claudeSetup: 5,
+  logLevel: 6,
+  logRetentionDays: 7,
+  thinkEffort: 8,
+  upstreamTimeoutSeconds: 9,
+  webSearchBackend: 10,
+  gptModel: 11,
+  opusModel: 12,
+  claudeUpstreamApi: 13,
 }
 
 const configRowKeys = (
@@ -206,6 +212,7 @@ const configRowKeys = (
 // from a bug that dropped it.
 const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
   apiKey: "(unset — clients need no key)",
+  upstreamProxy: "(unset — connects directly)",
   webSearchBackend: "(unset — uses gptModel)",
 }
 
@@ -214,10 +221,11 @@ const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
  *
  * These are the values on disk. That is not the same question as "what is the
  * running daemon honouring", and the footnote says so rather than leaving it
- * implied: applyRuntimeConfig() in start.ts never reads claudeSetup and
- * deliberately does not rebind the listening socket when host or port
- * changes; it hot-reloads the rest. Printing every key without that line
- * would imply a live daemon had read values it has not.
+ * implied: applyRuntimeConfig() in start.ts never reads claudeSetup, and
+ * deliberately neither rebinds the listening socket when host or port changes
+ * nor rebuilds the upstream dispatcher when upstreamProxy changes; it
+ * hot-reloads the rest. Printing every key without that line would imply a
+ * live daemon had read values it has not.
  *
  * Only shown when running, because with nothing up every value applies at the
  * next start and the note would be noise.
@@ -239,7 +247,7 @@ const renderConfig = (
 
   if (running) {
     lines.push(
-      "    host, port and claudeSetup take effect on restart; the rest hot-reload.",
+      "    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.",
     )
   }
 

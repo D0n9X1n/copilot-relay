@@ -1,0 +1,445 @@
+import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
+import fs from "node:fs/promises"
+import { createServer, request as forward } from "node:http"
+import net from "node:net"
+import os from "node:os"
+import path from "node:path"
+import type { Duplex } from "node:stream"
+import test, { type TestContext } from "node:test"
+import { fileURLToPath } from "node:url"
+import { stripVTControlCharacters } from "node:util"
+
+import { fetch as undiciFetch, type Dispatcher } from "undici"
+
+import {
+  closedPort,
+  refuseExternalConnections,
+  withProxyEnvironment,
+  withoutProxyVariables,
+} from "../fixtures/network"
+
+// See log-rotation.test.ts: the home directory must be redirected before
+// paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
+const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-upstream-proxy-"))
+process.env.HOME = home
+process.env.USERPROFILE = home
+process.env.CONSOLA_LEVEL = "0"
+
+const { fetchCopilot } = await import("../../src/copilot/client")
+const { flushLogs } = await import("../../src/lib/log")
+const { checkDeep } = await import("../../src/status")
+const { buildUpstreamDispatcher, configureUpstreamDispatcher } = await import("../../src/lib/upstream-dispatcher")
+
+const entry = new URL("../../src/main.ts", import.meta.url)
+const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
+const cwd = fileURLToPath(new URL("../../", import.meta.url))
+
+// A safety net: a connection off this machine fails the test instead of reaching GitHub or Copilot.
+const restoreConnections = refuseExternalConnections()
+
+test.afterEach(() => {
+  configureUpstreamDispatcher(undefined)
+})
+
+test.after(async () => {
+  restoreConnections()
+  await flushLogs()
+  await fs.rm(home, { recursive: true, force: true })
+})
+
+const listen = async (server: net.Server): Promise<number> => {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  assert.ok(address !== null && typeof address === "object")
+  return address.port
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+interface ReceivedRequest {
+  authorization: string | undefined
+  method: string | undefined
+  proxyAuthorization: string | undefined
+  url: string | undefined
+}
+
+// A local server that answers every request with `payload`: the Copilot stand-in, and for the
+// status probe the relay's own listener. Like Copilot, it sends no Keep-Alive hint, and it never
+// closes an idle connection itself.
+const startJsonServer = async (payload: unknown) => {
+  const requests: Array<ReceivedRequest> = []
+  const server = createServer((request, response) => {
+    requests.push({
+      authorization: request.headers.authorization,
+      method: request.method,
+      proxyAuthorization: request.headers["proxy-authorization"],
+      url: request.url,
+    })
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end(JSON.stringify(payload))
+  })
+  server.keepAliveTimeout = 0
+  const port = await listen(server)
+
+  return {
+    close: async () => {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+    host: `127.0.0.1:${port}`,
+    origin: `http://127.0.0.1:${port}`,
+    requests,
+  }
+}
+
+interface ProxyRecord {
+  authorization: string | undefined
+  method: string | undefined
+  target: string | undefined
+}
+
+const loopbackHosts = new Set(["127.0.0.1", "localhost"])
+
+const parseUrl = (value: string): URL | undefined => {
+  try {
+    return new URL(value)
+  } catch {
+    return undefined
+  }
+}
+
+// A forward proxy that records every request it receives, in both forms a client may send: CONNECT
+// for a tunnel, which undici uses, and an absolute-form URL. It relays only to this machine and
+// answers 403 for any other host, so a call routed through it never reaches GitHub or Copilot.
+const startRecordingProxy = async () => {
+  const records: Array<ProxyRecord> = []
+  const tunnels = new Set<Duplex>()
+  const server = createServer((request, response) => {
+    records.push({
+      authorization: request.headers["proxy-authorization"],
+      method: request.method,
+      target: request.url,
+    })
+    const target = parseUrl(request.url ?? "")
+    if (target === undefined || target.protocol !== "http:" || !loopbackHosts.has(target.hostname)) {
+      response.writeHead(403)
+      response.end()
+      return
+    }
+
+    const headers = { ...request.headers }
+    delete headers["proxy-authorization"]
+    const upstream = forward(target, { headers, method: request.method }, (reply) => {
+      response.writeHead(reply.statusCode ?? 502, reply.headers)
+      reply.pipe(response)
+    })
+    upstream.on("error", () => response.destroy())
+    request.pipe(upstream)
+  })
+
+  server.on("connect", (request, socket, head) => {
+    records.push({
+      authorization: request.headers["proxy-authorization"],
+      method: request.method,
+      target: request.url,
+    })
+    socket.on("error", () => socket.destroy())
+    const target = parseUrl(`http://${request.url ?? ""}`)
+    if (target === undefined || !loopbackHosts.has(target.hostname)) {
+      socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+      return
+    }
+
+    const upstream = net.connect(Number(target.port), target.hostname, () => {
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")
+      upstream.write(head)
+      upstream.pipe(socket)
+      socket.pipe(upstream)
+    })
+    tunnels.add(socket)
+    upstream.on("error", () => socket.destroy())
+    socket.on("close", () => {
+      tunnels.delete(socket)
+      upstream.destroy()
+    })
+  })
+
+  const port = await listen(server)
+
+  return {
+    close: async () => {
+      for (const socket of tunnels) {
+        socket.destroy()
+      }
+
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+    records,
+    url: `http://127.0.0.1:${port}`,
+  }
+}
+
+// One catalog request through the relay's own client, as every Copilot request is sent.
+const getModels = async (origin: string): Promise<void> => {
+  const response = await fetchCopilot(
+    { baseUrl: origin, token: "copilot-fixture-token", vsCodeVersion: "1.99.3" },
+    "/models",
+    { method: "GET" },
+  )
+  assert.equal(response.status, 200)
+  await response.text()
+}
+
+// Why (#153): where only a proxy reaches the internet, every Copilot call has to go through it. A
+// URL's user name and password become the tunnel's Proxy-Authorization and never reach Copilot.
+test("upstreamProxy as a URL sends Copilot calls through the proxy with its credentials", async (t) => {
+  const copilot = await startJsonServer({ data: [] })
+  const proxy = await startRecordingProxy()
+  t.after(async () => {
+    await proxy.close()
+    await copilot.close()
+  })
+
+  configureUpstreamDispatcher(proxy.url.replace("http://", "http://relay-user:p%40ss@"))
+  await getModels(copilot.origin)
+
+  assert.deepEqual(proxy.records, [{
+    authorization: `Basic ${Buffer.from("relay-user:p@ss").toString("base64")}`,
+    method: "CONNECT",
+    target: copilot.host,
+  }])
+  assert.deepEqual(copilot.requests, [{
+    authorization: "Bearer copilot-fixture-token",
+    method: "GET",
+    proxyAuthorization: undefined,
+    url: "/models",
+  }])
+})
+
+// Why: the default. An empty upstreamProxy connects directly, as before #153, even when the shell
+// has proxy variables set; only upstreamProxy: env reads them.
+test("an empty upstreamProxy connects directly even when proxy variables are set", async (t) => {
+  const copilot = await startJsonServer({ data: [] })
+  const proxy = await startRecordingProxy()
+  t.after(async () => {
+    await proxy.close()
+    await copilot.close()
+  })
+
+  await withProxyEnvironment({ HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url }, async () => {
+    configureUpstreamDispatcher(undefined)
+    await getModels(copilot.origin)
+  })
+
+  assert.deepEqual(proxy.records, [])
+  assert.equal(copilot.requests.length, 1)
+})
+
+// Why: upstreamProxy: env takes the proxy from HTTPS_PROXY or HTTP_PROXY, and NO_PROXY exempts a
+// host from it.
+test("upstreamProxy env uses the proxy variables and honours NO_PROXY", async (t) => {
+  const proxied = await startJsonServer({ data: [] })
+  const exempt = await startJsonServer({ data: [] })
+  const proxy = await startRecordingProxy()
+  t.after(async () => {
+    await proxy.close()
+    await proxied.close()
+    await exempt.close()
+  })
+
+  await withProxyEnvironment({ HTTP_PROXY: proxy.url, NO_PROXY: exempt.host }, async () => {
+    configureUpstreamDispatcher("env")
+    await getModels(proxied.origin)
+    await getModels(exempt.origin)
+  })
+
+  assert.deepEqual(proxy.records, [{ authorization: undefined, method: "CONNECT", target: proxied.host }])
+  assert.equal(proxied.requests.length, 1)
+  assert.equal(exempt.requests.length, 1)
+})
+
+// Why (#141): Copilot sends no Keep-Alive hint, so undici's 4 s default would close a connection
+// idle for longer, and the next request would pay for a new handshake. Through a proxy that also
+// means a new tunnel, so both proxy kinds must keep the relay's 50 s keep-alive.
+test("a proxied connection idle for longer than undici's 4 s default is reused", async (t) => {
+  const copilot = await startJsonServer({ data: [] })
+  const proxy = await startRecordingProxy()
+  const dispatchers: Array<Dispatcher> = []
+  t.after(async () => {
+    await Promise.all(dispatchers.map((dispatcher) => dispatcher.close()))
+    await proxy.close()
+    await copilot.close()
+  })
+
+  const fetchThrough = async (dispatcher: Dispatcher) => {
+    const response = await undiciFetch(`${copilot.origin}/models`, { dispatcher })
+    await response.text()
+  }
+
+  await withProxyEnvironment({ HTTP_PROXY: proxy.url }, async () => {
+    dispatchers.push(buildUpstreamDispatcher(proxy.url), buildUpstreamDispatcher("env"))
+    await Promise.all(dispatchers.map(fetchThrough))
+    await sleep(5_500)
+    await Promise.all(dispatchers.map(fetchThrough))
+  })
+
+  // One tunnel per dispatcher, each reused for its second request.
+  assert.equal(copilot.requests.length, 4)
+  assert.deepEqual(proxy.records.map((record) => record.method), ["CONNECT", "CONNECT"])
+})
+
+// Why: upstreamProxy is for Copilot and GitHub. The status probes call the relay's own listener on
+// this machine, so they keep the global fetch whatever upstreamProxy says.
+test("status probes connect to the relay directly while upstreamProxy is set", async (t) => {
+  const relay = await startJsonServer({
+    content: [{ text: "ok", type: "text" }],
+    role: "assistant",
+    stop_reason: "end_turn",
+    type: "message",
+  })
+  const proxy = await startRecordingProxy()
+  t.after(async () => {
+    await proxy.close()
+    await relay.close()
+  })
+
+  configureUpstreamDispatcher(proxy.url)
+  const result = await checkDeep(relay.origin, "claude-opus-5.5", "")
+
+  assert.equal(result.ok, true, result.detail)
+  assert.deepEqual(proxy.records, [])
+  assert.deepEqual(relay.requests.map((request) => `${request.method} ${request.url}`), ["POST /v1/messages"])
+})
+
+interface RelayRun {
+  code: number
+  output: string
+}
+
+// Runs `copilot-relay <args>` with its own home. A connection off this machine throws, and so does
+// the global fetch, so the only way out is through the configured proxy.
+const runRelay = async (childHome: string, args: Array<string>): Promise<RelayRun> => {
+  const script = `
+    const network = await import(${JSON.stringify(networkFixture.href)});
+    network.refuseExternalConnections();
+    globalThis.fetch = async () => {
+      throw new Error("UNEXPECTED_NETWORK_ACCESS");
+    };
+    process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, ...${JSON.stringify(args)}];
+    await import(${JSON.stringify(entry.href)});
+  `
+
+  return new Promise<RelayRun>((resolve, reject) => {
+    const child = execFile(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd,
+      env: {
+        ...withoutProxyVariables(process.env),
+        CONSOLA_LEVEL: undefined,
+        HOME: childHome,
+        NO_COLOR: "1",
+        USERPROFILE: childHome,
+      },
+      timeout: 30_000,
+    }, (error, stdout, stderr) => {
+      const code = error ? error.code : 0
+
+      // A timeout, a signal or a spawn failure leaves no exit code to check.
+      if (error?.killed || typeof code !== "number") {
+        reject(error ?? new Error("Missing CLI exit code"))
+        return
+      }
+
+      resolve({ code, output: stripVTControlCharacters(stdout + stderr) })
+    })
+
+    child.stdin?.end()
+  })
+}
+
+// An isolated install whose config sends upstream calls through `proxyUrl`, with cached tokens so
+// that start and models need no sign-in.
+const prepareHome = async (t: TestContext, proxyUrl: string, copilotBaseUrl: string): Promise<string> => {
+  const childHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-upstream-proxy-child-"))
+  t.after(() => fs.rm(childHome, { recursive: true, force: true }))
+
+  const appDir = path.join(childHome, ".copilot-relay")
+  await fs.mkdir(appDir)
+  // start fails its preflight before it would listen. A free port rather than the default 4142,
+  // which a developer's own relay may be using, keeps it clear even so.
+  await fs.writeFile(path.join(appDir, "config.yaml"), [
+    `copilotBaseUrl: ${copilotBaseUrl}`,
+    `upstreamProxy: ${proxyUrl}`,
+    `port: ${await closedPort()}`,
+    "claudeSetup: false",
+    "upstreamTimeoutSeconds: 5",
+    "",
+  ].join("\n"))
+  await fs.writeFile(path.join(appDir, "github_token"), "github-fixture-token\n")
+  await fs.writeFile(path.join(appDir, "copilot_token.json"), JSON.stringify({
+    refreshIn: 86400,
+    refreshedAt: Date.now(),
+    token: "copilot-fixture-token",
+  }))
+
+  return childHome
+}
+
+// Why (#153): start builds the dispatcher from its config before its first upstream call, so the
+// GitHub user lookup and the startup preflight both go through the proxy. The proxy refuses both,
+// so start stops at the preflight and never listens.
+test("start sends its GitHub and Copilot calls through upstreamProxy", async (t) => {
+  const proxy = await startRecordingProxy()
+  t.after(() => proxy.close())
+  const childHome = await prepareHome(t, proxy.url, "https://copilot-fixture.invalid")
+
+  const result = await runRelay(childHome, ["start"])
+
+  assert.equal(result.code, 1, result.output)
+  assert.match(result.output, /Startup preflight failed/)
+  assert.doesNotMatch(result.output, /UNEXPECTED_NETWORK_ACCESS|copilot-relay listening/)
+  assert.deepEqual(
+    [...new Set(proxy.records.map((record) => `${record.method} ${record.target}`))],
+    ["CONNECT api.github.com:443", "CONNECT copilot-fixture.invalid:443"],
+  )
+})
+
+// Why (#153): device login is the first call auth makes, and a user behind a proxy signs in this
+// way first. Had auth bypassed the proxy, the connection guard would have thrown
+// UNEXPECTED_NETWORK_ACCESS and the proxy would have recorded nothing.
+test("auth starts device login through upstreamProxy", async (t) => {
+  const proxy = await startRecordingProxy()
+  t.after(() => proxy.close())
+  const childHome = await prepareHome(t, proxy.url, "https://copilot-fixture.invalid")
+
+  const result = await runRelay(childHome, ["auth"])
+
+  // The proxy refuses github.com, so device login fails here.
+  assert.notEqual(result.code, 0)
+  assert.doesNotMatch(result.output, /UNEXPECTED_NETWORK_ACCESS/)
+  assert.deepEqual(proxy.records.map((record) => `${record.method} ${record.target}`), ["CONNECT github.com:443"])
+})
+
+// Why (#153): models runs in its own process and builds its own dispatcher. Its GitHub user lookup
+// and the catalog request both go through the proxy. The proxy refuses only GitHub, and a failed
+// user lookup does not stop the listing.
+test("models reads the catalog through upstreamProxy", async (t) => {
+  const copilot = await startJsonServer({ data: [{ id: "proxied-model" }] })
+  const proxy = await startRecordingProxy()
+  t.after(async () => {
+    await proxy.close()
+    await copilot.close()
+  })
+  const childHome = await prepareHome(t, proxy.url, copilot.origin)
+
+  const result = await runRelay(childHome, ["models"])
+
+  assert.equal(result.code, 0, result.output)
+  assert.match(result.output, /Upstream-advertised models \(1\):\nproxied-model\n/)
+  assert.deepEqual(
+    proxy.records.map((record) => `${record.method} ${record.target}`),
+    ["CONNECT api.github.com:443", `CONNECT ${copilot.host}`],
+  )
+  assert.deepEqual(copilot.requests.map((request) => `${request.method} ${request.url}`), ["GET /models"])
+})

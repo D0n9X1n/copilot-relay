@@ -8,7 +8,10 @@ import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 
+import { replyJson, startFakeGitHub, withoutProxyVariables } from "../fixtures/network"
+
 const entry = new URL("../../src/main.ts", import.meta.url)
+const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 const oldToken = "old-private-token-sentinel"
 const newToken = "new-private-token-sentinel"
@@ -46,9 +49,36 @@ async function fixture(
     handle(request, response, requests.length)
   })
 
+  // GitHub, answered locally. The relay sends GitHub calls through its upstream dispatcher (#153),
+  // so the child redirects them here rather than replacing the global fetch. A GitHub call other
+  // than the user lookup, the token exchange and, with deviceAuth, sign-in is recorded and fails
+  // the run.
+  const unexpectedGitHub: Array<string> = []
+  const github = await startFakeGitHub((url, _request, response) => {
+    if (url.href === "https://api.github.com/user") {
+      replyJson(response, { login: "test" })
+    } else if (url.href === "https://api.github.com/copilot_internal/v2/token") {
+      replyJson(response, { token: newToken, refresh_in: 86400 })
+    } else if (options.deviceAuth && url.href === "https://github.com/login/device/code") {
+      replyJson(response, {
+        device_code: "DEVICE_PRIVATE",
+        expires_in: 600,
+        interval: 0,
+        user_code: "FIXTURE-CODE",
+        verification_uri: "https://github.com/login/device",
+      })
+    } else if (options.deviceAuth && url.href === "https://github.com/login/oauth/access_token") {
+      replyJson(response, { access_token: "github-private-token-sentinel" })
+    } else {
+      unexpectedGitHub.push(url.href)
+      replyJson(response, {}, 404)
+    }
+  })
+
   t.after(async () => {
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    await github.close()
     await fs.rm(home, { recursive: true, force: true })
   })
 
@@ -81,19 +111,17 @@ async function fixture(
   }))
 
   const run = async (args = ["models"], env: NodeJS.ProcessEnv = {}) => {
-    // The child's fetch only answers GitHub auth URLs; anything else throws
-    // UNEXPECTED_NETWORK_ACCESS, which the checks below must never see.
+    // GitHub calls go to the stand-in above. Any other connection off this machine, and any call
+    // through the global fetch, throws UNEXPECTED_NETWORK_ACCESS, which the checks below must never
+    // see. failRefresh fails the token exchange without a response, as a dropped connection would.
+    const failExchange = options.failRefresh
+      ? `, (url) => url.pathname === "/copilot_internal/v2/token" ? new Error("auth-private-error-sentinel") : undefined`
+      : ""
     const script = `
-      globalThis.fetch = async (input) => {
-        const url = String(input);
-        if (url === "https://api.github.com/user") return Response.json({ login: "test" });
-        ${options.deviceAuth ? `
-          if (url === "https://github.com/login/device/code") return Response.json({ device_code: "DEVICE_PRIVATE", expires_in: 600, interval: 0, user_code: "FIXTURE-CODE", verification_uri: "https://github.com/login/device" });
-          if (url === "https://github.com/login/oauth/access_token") return Response.json({ access_token: "github-private-token-sentinel" });
-        ` : ''}
-        if (url === "https://api.github.com/copilot_internal/v2/token") {
-          ${options.failRefresh ? 'throw new Error("auth-private-error-sentinel");' : `return Response.json({ token: ${JSON.stringify(newToken)}, refresh_in: 86400 });`}
-        }
+      const network = await import(${JSON.stringify(networkFixture.href)});
+      network.redirectGitHubTo(${JSON.stringify(github.origin)}${failExchange});
+      network.refuseExternalConnections();
+      globalThis.fetch = async () => {
         throw new Error("UNEXPECTED_NETWORK_ACCESS");
       };
       ${options.interrupt ? `
@@ -137,7 +165,7 @@ async function fixture(
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
         cwd, timeout: 15_000,
-        env: { ...process.env, NO_COLOR: "1", ...env, HOME: home, USERPROFILE: home },
+        env: { ...withoutProxyVariables(process.env), NO_COLOR: "1", ...env, HOME: home, USERPROFILE: home },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
         if (error?.killed || typeof code !== "number") {
@@ -167,6 +195,7 @@ async function fixture(
     }
 
     assert.doesNotMatch(result.output, /Running upstream preflight|copilot-relay listening/)
+    assert.deepEqual(unexpectedGitHub.splice(0), [], "unexpected GitHub call")
     assert.equal(await fs.readFile(settingsPath, "utf8"), settings)
     await assert.rejects(fs.stat(path.join(appDir, "copilot-relay.pid")), { code: "ENOENT" })
     const config = await fs.readFile(path.join(appDir, "config.yaml"), "utf8")

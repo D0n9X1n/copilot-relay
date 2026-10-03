@@ -441,3 +441,22 @@ test("still honours the disk level gate", async () => {
   assert.ok(content.includes("error entry that must reach disk"))
   assert.ok(!content.includes("debug entry that must not reach disk"))
 })
+
+// Why (#153): a proxy URL's user name and password become a Proxy-Authorization header, so they
+// are credentials like a token. Reading the config registers both, as written in the URL and
+// decoded, so an echo of either is redacted.
+test("reading the config registers upstreamProxy credentials as log secrets", async () => {
+  const { readAppConfig } = await import("../../src/lib/app-config")
+  await fs.mkdir(paths.appDir, { recursive: true })
+  await fs.writeFile(
+    paths.configPath,
+    "upstreamProxy: http://PROXY_USER_SENTINEL:PROXY%23PASS_SENTINEL@proxy.invalid:3128\n",
+  )
+
+  await readAppConfig()
+  log.error("echoed PROXY_USER_SENTINEL PROXY%23PASS_SENTINEL PROXY#PASS_SENTINEL")
+
+  const line = (await readActiveLog()).split("\n").find((entry) => entry.includes("echoed")) ?? ""
+  assert.match(line, /echoed \[redacted\] \[redacted\] \[redacted\]/)
+  assert.doesNotMatch(line + consoleOutput.join("\n"), /SENTINEL/)
+})

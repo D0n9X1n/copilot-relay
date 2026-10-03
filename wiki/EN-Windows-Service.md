@@ -114,6 +114,26 @@ alongside the first.
 `copilot-relay start` runs in the foreground, which is what Task Scheduler
 expects — it treats the running process as the running task.
 
+### Behind an outbound proxy
+
+The task runs `node.exe` directly, not in your PowerShell session, so with
+`upstreamProxy: env` the relay does not see an `HTTPS_PROXY` set in that session
+or in your PowerShell profile. If this machine reaches the internet only through
+a proxy, set its URL in `%USERPROFILE%\.copilot-relay\config.yaml`:
+
+```yaml
+upstreamProxy: http://proxy.example:3128
+```
+
+`upstreamProxy` takes effect on restart:
+
+```powershell
+Stop-ScheduledTask -TaskName "copilot-relay"
+Start-ScheduledTask -TaskName "copilot-relay"
+```
+
+See [Configuration](EN-Configuration.md) for the rules, credentials included.
+
 ## Verifying it actually works
 
 ### The quick answer
@@ -137,10 +157,10 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
+    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
-The `config` block is abridged above; `status` prints all eleven resolved keys.
+The `config` block is abridged above; `status` prints every resolved key.
 See [Configuration](EN-Configuration.md).
 
 The `version` row is the build the running daemon reports about itself, which is

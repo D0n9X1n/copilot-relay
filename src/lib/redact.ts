@@ -97,6 +97,28 @@ export const formatUrlForDisplay = (raw: string): string => {
 }
 
 /**
+ * Renders an upstreamProxy value for display: "env" as written, a proxy URL as
+ * its origin.
+ *
+ * A proxy URL may carry a user name and password. Neither is shown; a marker
+ * says they were there, so a reader can still tell the proxy authenticates.
+ * Never throws.
+ */
+export const formatUpstreamProxyForDisplay = (upstreamProxy: string): string => {
+  if (upstreamProxy === "env") {
+    return upstreamProxy
+  }
+
+  const parsed = parseHttpUrl(upstreamProxy)
+  if (!parsed) {
+    return "(invalid url)"
+  }
+
+  const hasCredentials = parsed.username !== "" || parsed.password !== ""
+  return hasCredentials ? `${parsed.origin} (credentials hidden)` : parsed.origin
+}
+
+/**
  * Strips ANSI escapes and control bytes from a string bound for the terminal.
  *
  * `status` prints config values directly to stdout. A config string carrying

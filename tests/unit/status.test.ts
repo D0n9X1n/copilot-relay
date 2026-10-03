@@ -565,15 +565,33 @@ test("prints webSearchBackend when it is set", () => {
   assert.doesNotMatch(out, /\(unset — uses gptModel\)/)
 })
 
+// Why (#153): unset, upstreamProxy means the relay connects directly. A blank
+// value would read like a bug that dropped the key, and "direct" is not
+// guessable from the key name.
+test("names the direct route for an unset upstreamProxy", () => {
+  const out = render(runningStatus)
+
+  assert.match(out, /^\s+upstreamProxy\s+\(unset — connects directly\)$/m)
+})
+
+test("prints upstreamProxy env as written", () => {
+  const out = render({
+    ...runningStatus,
+    config: { ...baseConfig, upstreamProxy: "env" },
+  })
+
+  assert.match(out, /^\s+upstreamProxy\s+env$/m)
+})
+
 // Why: these are the values on disk, which is not the same question as what a
-// live daemon is honouring. applyRuntimeConfig() hot-reloads eight keys, never
-// reads claudeSetup, and does not rebind the socket on host/port changes — so
-// printing all eleven beside a green health line would imply the running
-// process had read values it has not.
+// live daemon is honouring. applyRuntimeConfig() never reads claudeSetup, does
+// not rebind the socket on host/port changes and does not rebuild the upstream
+// dispatcher on upstreamProxy changes (#153) — so printing every key beside a
+// green health line would imply the running process had read values it has not.
 test("flags the restart-only keys while running", () => {
   const out = render(runningStatus)
 
-  assert.match(out, /host, port and claudeSetup take effect on restart/)
+  assert.match(out, /host, port, claudeSetup and upstreamProxy take effect on restart/)
 })
 
 // Why: with nothing running every value applies at the next start, so the
@@ -587,18 +605,20 @@ test("shows the config but not the restart note when not running", () => {
   assert.doesNotMatch(out, /take effect on restart/)
 })
 
-// Why: JSON.stringify drops undefined properties. Leaving webSearchBackend
-// optional would emit one config key fewer on a default install than on a
-// customized one, so anything parsing `status --json` would see the key set
-// change under it. null keeps every AppConfig key present.
-test("keeps the --json config key set stable when webSearchBackend is unset", () => {
+// Why: JSON.stringify drops undefined properties. Leaving webSearchBackend or
+// upstreamProxy optional would drop those keys on a default install and emit
+// them on a customized one, so anything parsing `status --json` would see the
+// key set change under it. null keeps every AppConfig key present.
+test("keeps the --json config key set stable when optional keys are unset", () => {
   const parsed = JSON.parse(JSON.stringify(baseStatus)) as {
     config: Record<string, unknown>
   }
 
-  assert.equal(Object.keys(parsed.config).length, 13)
+  assert.equal(Object.keys(parsed.config).length, 14)
   assert.ok("webSearchBackend" in parsed.config)
   assert.equal(parsed.config.webSearchBackend, null)
+  assert.ok("upstreamProxy" in parsed.config)
+  assert.equal(parsed.config.upstreamProxy, null)
 })
 
 // Why: the top-level logLevel/thinkEffort predate the config block and may be
@@ -606,7 +626,7 @@ test("keeps the --json config key set stable when webSearchBackend is unset", ()
 // they and config.* are derived from one appConfig — this pins that the
 // mapping passes values through rather than transforming them, which is what
 // makes the two impossible to disagree.
-test("passes config values through unchanged except webSearchBackend", () => {
+test("passes config values through unchanged except unset optional keys", () => {
   const appConfig = {
     apiKey: "",
     claudeSetup: false,
@@ -629,6 +649,7 @@ test("passes config values through unchanged except webSearchBackend", () => {
   assert.equal(status.port, appConfig.port)
   assert.equal(status.claudeSetup, false)
   assert.equal(status.webSearchBackend, null)
+  assert.equal(status.upstreamProxy, null)
 })
 
 // Config carrying a credential in the URL path, used for the disclosure tests
@@ -699,8 +720,28 @@ test("hides copilot base url path, query and fragment in --json output", () => {
 
   const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
   // Key set and count must not shift just because one value is now redacted.
-  assert.equal(Object.keys(parsed.config).length, 13)
+  assert.equal(Object.keys(parsed.config).length, 14)
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
+})
+
+// Why (#153): a proxy URL can carry a user name and password, and `status`
+// output is what a user pastes into an issue. Text and --json show only the
+// proxy's origin, and say that credentials were there.
+test("hides upstreamProxy credentials in text and --json output", () => {
+  const config = toStatusConfig({
+    ...secretUrlConfig,
+    copilotBaseUrl: "https://api.githubcopilot.com",
+    upstreamProxy: "http://PROXY_USER_SENTINEL:PROXY_PASS_SENTINEL@proxy.example:3128",
+  })
+  const status = { ...runningStatus, config }
+  const out = render(status)
+
+  assert.doesNotMatch(out + JSON.stringify(status), /PROXY_USER_SENTINEL|PROXY_PASS_SENTINEL/)
+  assert.equal(config.upstreamProxy, "http://proxy.example:3128 (credentials hidden)")
+  assert.match(out, /^\s+upstreamProxy\s+http:\/\/proxy\.example:3128 \(credentials hidden\)$/m)
+
+  const plain = toStatusConfig({ ...secretUrlConfig, upstreamProxy: "http://proxy.example:3128" })
+  assert.equal(plain.upstreamProxy, "http://proxy.example:3128")
 })
 
 // Why: the companion hardening item in #47. status writes config values
@@ -734,6 +775,7 @@ test("keeps key order and exit codes unchanged under redaction", () => {
     "port",
     "apiKey",
     "copilotBaseUrl",
+    "upstreamProxy",
     "claudeSetup",
     "logLevel",
     "logRetentionDays",

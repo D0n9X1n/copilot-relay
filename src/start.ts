@@ -17,10 +17,11 @@ import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
 import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
-import { formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
+import { formatUpstreamProxyForDisplay, formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
 import { runtimeState } from "~/lib/state"
 import { terminalText } from "~/lib/terminal"
 import { loadedTokenizers, preloadTokenizers } from "~/lib/tokenizer"
+import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 import { appVersion } from "~/lib/version"
 import { startServer } from "~/server"
 
@@ -105,12 +106,17 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   await cleanupLogs(appConfig.logRetentionDays)
   await cleanupCaptures(appConfig.logRetentionDays)
 
+  // Built once, before the first token or preflight call. applyRuntimeConfig never rebuilds it,
+  // so upstreamProxy, like host and port, takes effect on restart.
+  configureUpstreamDispatcher(appConfig.upstreamProxy)
+
   const claudeConfigPath = defaultClaudeConfigPath
   const config = readProxyConfig(appConfig)
 
   const applyRuntimeConfig = (nextConfig: AppConfig) => {
     // Hot reload updates behavior for future requests; it intentionally does
-    // not rebind the already-listening socket when host or port changes.
+    // not rebind the already-listening socket when host or port changes, and
+    // does not rebuild the upstream dispatcher when upstreamProxy changes.
     //
     // The redaction policy is registered here rather than once at startup, so a
     // base URL introduced by a later edit is covered too. Registration is
@@ -155,6 +161,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   log.info(`Log level: ${appConfig.logLevel}`)
   log.info(`Default think effort: ${appConfig.thinkEffort}`)
   log.info(`Upstream timeout: ${appConfig.upstreamTimeoutSeconds}s`)
+  if (appConfig.upstreamProxy !== undefined) {
+    log.info(`Upstream proxy: ${formatUpstreamProxyForDisplay(appConfig.upstreamProxy)}`)
+  }
 
   // At error level, so they show whatever logLevel is set.
   const listenerWarning = unauthenticatedListenerWarning(appConfig)

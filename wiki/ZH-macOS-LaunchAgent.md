@@ -75,6 +75,21 @@ launchd 会以进程失败的速度不断重试。30 秒足够覆盖网络就绪
 
 代价是：重启后在慢速网络下，relay 可能要一两分钟才起得来。那是在重试，不是坏了。
 
+### 在出站代理后面
+
+launchd 不读取你的 shell 配置文件，所以使用 `upstreamProxy: env` 时，relay 看不到你在
+那里导出的 `HTTPS_PROXY`。如果这台 Mac 只能经代理访问互联网，请在
+`~/.copilot-relay/config.yaml` 里写上代理地址：
+
+```yaml
+upstreamProxy: http://proxy.example:3128
+```
+
+如果仍想用 `upstreamProxy: env`，请把这些变量加到 plist 的 `EnvironmentVariables` 里，
+放在 `PATH` 旁边。`upstreamProxy` 在重启后生效：改了 `config.yaml` 之后运行
+`launchctl kickstart -k "gui/$(id -u)/com.d0n9x1n.copilot-relay"`；改了 plist 之后按下文
+先 `bootout` 再 `bootstrap`。规则（包括凭据）见[配置说明](ZH-Configuration.md)。
+
 ## 加载并启动
 
 ```sh
@@ -109,10 +124,10 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
+    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
-上面的 `config` 块是节选；`status` 会打印全部 11 个解析后的配置项。参见
+上面的 `config` 块是节选；`status` 会打印全部解析后的配置项。参见
 [配置说明](ZH-Configuration.md)。
 
 `version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行

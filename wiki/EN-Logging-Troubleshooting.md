@@ -472,10 +472,11 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 
 Hot reload updates `logLevel`, `logRetentionDays`, `thinkEffort`,
 `upstreamTimeoutSeconds`, `copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`,
-`gptModel`, and `opusModel`. Changing `host`, `port`, or `claudeSetup` requires a
-restart. The watcher never rewrites the file: invalid, empty, or partial saves
-retain the last valid settings until every materialized key is present again.
-Active requests retain their admission-time policy while using refreshed credentials.
+`gptModel`, and `opusModel`. Changing `host`, `port`, `claudeSetup`, or
+`upstreamProxy` requires a restart. The watcher never rewrites the file: invalid,
+empty, or partial saves retain the last valid settings until every materialized
+key is present again. Active requests retain their admission-time policy while
+using refreshed credentials.
 
 ## Startup failed
 
@@ -490,6 +491,17 @@ Common causes:
 - configured `gptModel` or `opusModel` is not present in upstream `/models`
 - invalid `logLevel`
 - `thinkEffort` is rejected by the configured model
+- the network reaches the internet only through a proxy, and `upstreamProxy` is
+  empty
+
+For that last cause, the relay logs a line that names the fix when `HTTPS_PROXY`
+or `HTTP_PROXY` is set:
+
+```sh
+grep -n "upstreamProxy is empty" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+Set `upstreamProxy` as described in [Configuration](EN-Configuration.md).
 
 Fix auth and retry:
 

@@ -57,6 +57,7 @@ src/
     claude-settings.ts        ~/.claude/settings.json 管理
     tokenizer.ts              count_tokens 启发式
     upstream-diagnostics.ts   上游错误上下文采集
+    upstream-dispatcher.ts    Copilot 与 GitHub 调用共用的 undici dispatcher、upstreamProxy
     error.ts                  错误整形
     state.ts                  运行期状态
     version.ts                构建版本
@@ -94,11 +95,12 @@ src/
 
 需要重启：
 
-`host`、`port`、`claudeSetup`
+`host`、`port`、`claudeSetup`、`upstreamProxy`
 
 `host` 和 `port` 动不了，因为监听 socket 已经绑定。`claudeSetup` 在启动时读取一次，
-所以改它在下次启动之前什么都不会变。改 `gptModel` 会立刻改变上游请求路由，但不会
-重写已经保存在 `~/.claude/settings.json` 里的模型 —— 那是启动时写的。
+所以改它在下次启动之前什么都不会变。`upstreamProxy` 在第一次上游调用之前构建一次上游
+dispatcher，重载从不重建它（见[出站代理](#出站代理)）。改 `gptModel` 会立刻改变上游请求
+路由，但不会重写已经保存在 `~/.claude/settings.json` 里的模型 —— 那是启动时写的。
 
 一次重载会记录它应用了什么：
 
@@ -364,10 +366,12 @@ Claude Code 把工具返回的图片（例如 `Read` 打开一张 PNG）放在 `
 
 ### 上游连接
 
-`src/copilot/client.ts` 中的 `fetchCopilot` 通过同一个只用 HTTP/1.1 的 undici
-`Agent` 发送所有上游请求。Copilot 不发送 `Keep-Alive` 提示，因此 undici 默认在连接
-空闲超过 4 秒后关闭它，下一个请求要重新进行 TCP 和 TLS 握手。#141 中 Copilot 复用了
-空闲 60 秒的连接，而空闲 120 秒的连接已被关闭；Agent 现在把空闲连接保留 50 秒。
+`src/copilot/client.ts` 中的 `fetchCopilot` 与 `src/lib/auth.ts` 中的 GitHub 调用都通过
+`src/lib/upstream-dispatcher.ts` 的 `fetchUpstream` 发送上游请求，它使用本进程唯一的
+上游 undici dispatcher，只用 HTTP/1.1。Copilot 不发送 `Keep-Alive` 提示，因此 undici
+默认在连接空闲超过 4 秒后关闭它，下一个请求要重新进行 TCP 和 TLS 握手。#141 中
+Copilot 复用了空闲 60 秒的连接，而空闲 120 秒的连接已被关闭；dispatcher 现在把空闲
+连接保留 50 秒，经过代理时也一样。
 
 `package.json` 要求 undici 7.30 或更高版本。undici 7.28 在复用空闲 socket 之前，用一个
 unref 的零延迟定时器检查它；在 Windows 上，这个定时器可能要等到下一次系统定时器 tick。
@@ -431,6 +435,40 @@ type 和消息；路由追加 ` (request_id=<id>)`，计数模式不会读取它
 `UpstreamToolInputError` 自己的消息。已经开始的原生流中的 `error` 事件不做检查。覆盖测试在
 `tests/unit/prompt-too-long.test.ts` 以及 `tests/integration/claude-routes.test.ts` 的 #158
 测试中。
+
+### 出站代理
+
+`buildUpstreamDispatcher` 把解析后的 `upstreamProxy` 变成三种 undici dispatcher 之一，
+三者使用相同的 HTTP/1.1 与 keep-alive 选项：
+
+| `upstreamProxy` | Dispatcher |
+| --- | --- |
+| 空 | `Agent`：直连，与 #153 之前的所有版本相同 |
+| `env` | `EnvHttpProxyAgent`：`HTTPS_PROXY`、`HTTP_PROXY` 与 `NO_PROXY` |
+| URL | 指向该代理的 `ProxyAgent` |
+
+`configureUpstreamDispatcher` 在每个进程中构建一次，时机是读完配置之后、第一次上游
+调用之前：`startRelay` 中，以及 `auth` 和 `models` 命令中。`applyRuntimeConfig` 从不
+调用它，所以 `upstreamProxy` 与 `host`、`port` 一样在重启后生效。它从不作为 undici 的
+全局 dispatcher：`status` 探测用全局 `fetch` 调用 relay 自己的监听器，保持直连。
+
+`EnvHttpProxyAgent` 在构建时读取代理变量，小写写法优先；未设置 `HTTPS_PROXY` 时，
+HTTPS 目标使用 `HTTP_PROXY`。它对每个请求检查 `NO_PROXY`。变量格式错误时，undici 抛出
+的错误会重复变量值，因此 `buildUpstreamDispatcher` 把它换成只写变量名和规则的错误。
+
+`ProxyAgent` 用 `CONNECT` 建立隧道，HTTP 目标也一样；只有 URL 同时带用户名和密码时，
+才发送 `Basic` `Proxy-Authorization`。它拒绝带 path、query 或 fragment 的代理 URL，
+百分号转义格式错误的凭据在解码时失败。`src/lib/app-config.ts` 的
+`normalizeUpstreamProxy` 在读取配置时就应用这些规则，所以错误出现在启动时，且从不
+回显值。`resolveConfig` 把用户名和密码的原始写法与解码后形式都注册到
+`registerLogSecret`。`src/lib/redact.ts` 的 `formatUpstreamProxyForDisplay` 在
+`status` 和启动日志里只显示代理的 origin。
+
+`upstreamProxy` 为空、又设置了 `HTTPS_PROXY` 或 `HTTP_PROXY` 时，如果某个上游请求在
+没有响应的情况下失败，`fetchUpstream` 每个进程只记录一次：该变量没有被使用，以及如何
+启用。默认值不是 `env`：`readAppConfig` 会把每个键写回磁盘，`env` 默认值会让已经为
+其他工具设置这些变量的现有安装悄悄改走代理。`tests/integration/upstream-proxy.test.ts`
+用本地记录代理覆盖每种模式。
 
 ## 流式
 
@@ -940,8 +978,9 @@ drain 进行中执行。它的定时器来自 `node:timers`，而不是全局 `s
 `src/lib/redact.ts` 是纯函数，覆盖那些可能在 path、query string 或 fragment 里携带
 凭据的 URL。含密钥的网关尾部不能原样进入普通日志。`copilotBaseUrl` 校验拒绝原始引号、
 尖括号、空白和控制字符，因为它们会让整条 URL 的识别出现歧义。`src/lib/log.ts` 的
-`registerLogSecret` 在内存中保存已知认证凭据（包括轮换前的值），从普通日志中移除原始或
-转义形式的回显。即使对象检查转义了分隔符，相邻的嵌套 URL 也会分别脱敏。这不保证移除
+`registerLogSecret` 在内存中保存已知认证凭据（包括轮换前的值，以及 `upstreamProxy` 的
+用户名和密码），从普通日志中移除原始或转义形式的回显。即使对象检查转义了分隔符，相邻的
+嵌套 URL 也会分别脱敏。这不保证移除
 任意提示词/工具中的密钥；分享前仍需审查有界摘录，绝不整份上传原始捕获。见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
@@ -979,6 +1018,12 @@ const { readAppConfig } = await import("../../src/lib/app-config")
 
 集成测试让 Hono app 跑在本地 mock 的 Copilot HTTP server 之上。它们绝不可以调用真实
 服务 —— CI 上不行，本地也不行。
+
+GitHub 调用经过 relay 的上游 dispatcher，而不是全局 `fetch`，所以替换 `fetch` 无法伪造
+它们。`tests/fixtures/network.ts` 提供替身：`startFakeGitHub` 在本地应答 GitHub，
+`redirectGitHubTo` 给 undici 的 `Agent` 打补丁，让发往 `github.com` 和 `api.github.com`
+的请求到达它，`refuseExternalConnections` 让任何其他离开本机的连接直接抛错。
+`withProxyEnvironment` 为单个测试设置代理变量，结束后恢复。
 
 ### 文档的结构性测试
 

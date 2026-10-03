@@ -9,12 +9,20 @@ import test, { type TestContext } from "node:test"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 
+import {
+  refuseExternalConnections,
+  replyJson,
+  startFakeGitHub,
+  withoutProxyVariables,
+} from "../fixtures/network"
+
 // Why (#159): apiKey crosses boundaries that unit tests reach one at a time:
 // daemon admission, config hot reload, the Claude Code settings writer, the
 // `status` probes and the startup warning. This runs the real CLI against a
-// local fake Copilot upstream; a fetch stub answers GitHub auth, so nothing
+// local fake Copilot upstream and a local stand-in for GitHub auth, so nothing
 // here contacts GitHub or Copilot.
 const entry = fileURLToPath(new URL("../../src/main.ts", import.meta.url))
+const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 
 // Fixture keys and tokens only. Each is distinct, so a leak names its source.
@@ -23,27 +31,41 @@ const secondKey = "inbound-fixture-key-0002"
 const githubToken = "github-fixture-token-sentinel"
 const copilotToken = "copilot-fixture-token-sentinel"
 
+// A safety net: a connection off this machine fails the test instead of reaching GitHub or Copilot.
+const restoreConnections = refuseExternalConnections()
+
+// GitHub auth for every child, answered here. A request for anything else is recorded and its
+// connection dropped.
+const unexpectedGitHub: Array<string> = []
+const github = await startFakeGitHub((url, _request, response) => {
+  if (url.href === "https://api.github.com/user") {
+    replyJson(response, { login: "fixture-user" })
+    return
+  }
+
+  if (url.href === "https://api.github.com/copilot_internal/v2/token") {
+    replyJson(response, { token: copilotToken, refresh_in: 86400 })
+    return
+  }
+
+  unexpectedGitHub.push(url.href)
+  throw new Error("Unexpected GitHub request")
+})
+
+test.after(async () => {
+  restoreConnections()
+  await github.close()
+})
+
 // Loaded through NODE_OPTIONS rather than argv, so a relay child keeps the
-// command line `status` recognizes. GitHub auth gets fixtures, loopback passes
-// through, and anything else fails loudly.
-const fetchStub = `
-const realFetch = globalThis.fetch;
-globalThis.fetch = async (input, init) => {
-  const url = input instanceof Request ? input.url : String(input);
-  if (url.startsWith("http://127.0.0.1:")) {
-    return realFetch(input, init);
-  }
-  if (url === "https://api.github.com/user") {
-    return Response.json({ login: "fixture-user" });
-  }
-  if (url === "https://api.github.com/copilot_internal/v2/token") {
-    return Response.json({ token: ${JSON.stringify(copilotToken)}, refresh_in: 86400 });
-  }
-  if (url.startsWith("https://github.com/login/")) {
-    throw new Error("DEVICE_LOGIN_STOPPED_FOR_TEST");
-  }
-  throw new Error("UNEXPECTED_NETWORK_ACCESS " + url);
-};
+// command line `status` recognizes; tsx comes first there so this can import
+// the TypeScript fixture. GitHub calls reach the stand-in above, device login
+// fails before it is sent, and a connection off this machine throws.
+const networkLoader = `
+const network = await import(${JSON.stringify(networkFixture.href)});
+network.redirectGitHubTo(${JSON.stringify(github.origin)}, (url) =>
+  url.hostname === "github.com" ? new Error("DEVICE_LOGIN_STOPPED_FOR_TEST") : undefined);
+network.refuseExternalConnections();
 `
 
 const catalogModel = (id: string) => ({
@@ -125,15 +147,17 @@ const relayHome = async (options: { tokens: boolean }): Promise<RelayHome> => {
     }))
   }
 
-  const stub = path.join(home, "fetch-stub.mjs")
-  await fs.writeFile(stub, fetchStub)
-  const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(stub).href}`].filter(Boolean).join(" ")
+  const loader = path.join(home, "network-loader.mjs")
+  await fs.writeFile(loader, networkLoader)
+  const nodeOptions = [process.env.NODE_OPTIONS, "--import=tsx", `--import=${pathToFileURL(loader).href}`]
+    .filter(Boolean)
+    .join(" ")
 
   return {
     appDir,
     configPath: path.join(appDir, "config.yaml"),
     env: {
-      ...process.env,
+      ...withoutProxyVariables(process.env),
       HOME: home,
       USERPROFILE: home,
       NO_COLOR: "1",
@@ -343,6 +367,9 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
   }
 
   assert.doesNotMatch(logs + relay.output(), /UNEXPECTED_NETWORK_ACCESS|DEVICE_LOGIN_STOPPED_FOR_TEST|not a loopback address/)
+  // The relay's GitHub user lookup reached the stand-in, not GitHub.
+  assert.ok(github.requests.includes("GET https://api.github.com/user"), github.requests.join("\n"))
+  assert.deepEqual(unexpectedGitHub.splice(0), [])
 
   // Upstream sees only the relay's own Copilot token, never a client's key.
   for (const request of upstream.requests) {
@@ -385,4 +412,5 @@ test("startup warns about a listener beyond loopback without an apiKey and never
   assert.ok(!(await readLogs(home.appDir)).includes(firstKey), "startup logged the key")
 
   assert.doesNotMatch(await start("127.0.0.1", ""), /not a loopback address/)
+  assert.deepEqual(unexpectedGitHub.splice(0), [])
 })

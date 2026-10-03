@@ -4,6 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import test, { type TestContext } from "node:test"
 
+import { withProxyEnvironment } from "../fixtures/network"
+
 // paths.ts captures the home directory at import time, including on Windows.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-config-preservation-"))
 process.env.HOME = tempHome
@@ -21,6 +23,7 @@ const completeValues: Record<keyof AppConfig, string> = {
   port: "4193",
   apiKey: "",
   copilotBaseUrl: "https://config-fixture.invalid",
+  upstreamProxy: "http://proxy-fixture.invalid:3128",
   claudeSetup: "false",
   logLevel: "info",
   logRetentionDays: "7",
@@ -112,6 +115,7 @@ for (const [key, value] of [
   ["opusModel", ""],
   ["apiKey", "short-key-15chr"],
   ["apiKey", "\"two words key value\""],
+  ["upstreamProxy", "socks5://proxy.invalid:1080"],
 ] as const) {
   test(`readAppConfig rejects explicit ${key}=${value || "(empty)"} without changing the file`, async () => {
     const original = `# keep this document\n${key}: ${value}\n`
@@ -302,8 +306,20 @@ test("generated config guidance identifies all restart-only settings", async () 
   await readAppConfig()
 
   const written = await readConfigFile()
-  assert.match(written, /host, port, and claudeSetup require restart/)
+  assert.match(written, /host, port, claudeSetup, and upstreamProxy require restart/)
   assert.doesNotMatch(written, /This file is hot-reloaded while/)
+})
+
+// Why (#153): readAppConfig writes the default into every existing config on upgrade. A default
+// taken from HTTPS_PROXY would silently move an install with an unrelated proxy variable onto it.
+test("a fresh install leaves upstreamProxy empty even when a proxy variable is set", async () => {
+  const config = await withProxyEnvironment(
+    { HTTPS_PROXY: "http://proxy.invalid:3128", HTTP_PROXY: "http://proxy.invalid:3128" },
+    () => readAppConfig(),
+  )
+
+  assert.equal(config.upstreamProxy, undefined)
+  assert.match(await readConfigFile(), /^upstreamProxy:[ \t]*\r?$/m)
 })
 
 test("hot reload applies a complete valid edit without rewriting the document", async (t) => {
@@ -570,6 +586,7 @@ const badReloads: Array<[string, string | null]> = [
   ["invalid explicit boolean", completeDocument({ claudeSetup: "no" })],
   ["invalid explicit port", completeDocument({ port: "0" })],
   ["invalid explicit retention", completeDocument({ logRetentionDays: "0" })],
+  ["invalid explicit upstreamProxy", completeDocument({ upstreamProxy: "ftp://proxy-fixture.invalid" })],
 ]
 
 for (const [name, edited] of badReloads) {

@@ -18,11 +18,18 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
     await fs.mkdir(path.dirname(configPath), { recursive: true })
     await fs.writeFile(configPath, originalConfig)
 
-    // Authentication uses the global fetch, which now throws, so reaching auth shows as
-    // NETWORK_ACCESS_FORBIDDEN. The upstream preflight would use undici's own fetch instead,
-    // so its log line is checked as well.
+    // Every outgoing connection and the global fetch throw, so reaching authentication or the
+    // upstream preflight shows as NETWORK_ACCESS_FORBIDDEN. Both go through the relay's upstream
+    // dispatcher rather than the global fetch (#153), so the socket is guarded too. The preflight's
+    // log line is checked as well.
     const script = `
-      globalThis.fetch = async () => { throw new Error("NETWORK_ACCESS_FORBIDDEN"); };
+      import net from "node:net";
+      const forbidden = () => {
+        console.log("NETWORK_ACCESS_FORBIDDEN");
+        throw new Error("NETWORK_ACCESS_FORBIDDEN");
+      };
+      net.Socket.prototype.connect = forbidden;
+      globalThis.fetch = async () => forbidden();
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(entry))}, "start"];
       await import(${JSON.stringify(entry.href)});
     `

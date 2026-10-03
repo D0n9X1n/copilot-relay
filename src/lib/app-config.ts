@@ -15,7 +15,7 @@ import {
   writeFileSnapshot,
   type FileSnapshot,
 } from "~/lib/atomic-file"
-import { log } from "~/lib/log"
+import { log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { terminalText } from "~/lib/terminal"
 
@@ -35,6 +35,7 @@ export interface AppConfig {
   thinkEffort: ConfiguredReasoningEffort
   upstreamTimeoutSeconds: number
   webSearchBackend?: string
+  upstreamProxy?: string
   claudeUpstreamApi?: "auto" | "messages" | "chat-completions"
 }
 
@@ -59,6 +60,9 @@ const defaultConfig: AppConfig = {
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,
   webSearchBackend: undefined,
+  // Empty, not "env": this default is written into every existing config on upgrade, and an
+  // install with an unrelated HTTPS_PROXY set must not silently change its route (#153).
+  upstreamProxy: undefined,
   claudeUpstreamApi: "chat-completions",
 }
 
@@ -301,6 +305,92 @@ export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
   return trimmed
 }
 
+/**
+ * Fixed strings, like the copilotBaseUrl messages: a proxy URL can carry a password, and these
+ * messages reach the terminal and the log, so the rejected value is never repeated.
+ */
+const invalidUpstreamProxyMessage =
+  "Invalid upstreamProxy: expected empty, env, or an absolute http(s) proxy URL such as http://proxy.example:3128"
+const upstreamProxyPathMessage =
+  "Invalid upstreamProxy: a proxy URL takes no path, query or fragment"
+const upstreamProxyCredentialsMessage =
+  "Invalid upstreamProxy: credentials need both a username and a password, with reserved characters percent-encoded"
+
+const canDecodeURIComponent = (value: string): boolean => {
+  try {
+    decodeURIComponent(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Validates upstreamProxy: empty, the literal "env", or an absolute http(s) proxy URL.
+ *
+ * Each rule stops a value that undici's ProxyAgent would turn into a confusing failure. A path,
+ * query or fragment makes it throw "invalid url" when the relay builds its dispatcher. A username
+ * without a password, or the reverse, makes it send no Proxy-Authorization at all. A malformed
+ * percent-escape in the credentials makes its decodeURIComponent throw. The explicit "http://" or
+ * "https://" prefix is required for the reason copilotBaseUrl requires it: the shorthand forms
+ * WHATWG also accepts are not URLs anyone would recognize in a log line.
+ *
+ * Userinfo is accepted, unlike in copilotBaseUrl: it is how a proxy takes Basic credentials, and
+ * resolveConfig registers it with the log redaction.
+ *
+ * The accepted value is the trimmed original, which is what the dispatcher is built from.
+ */
+export const normalizeUpstreamProxy = (value: unknown): string | undefined => {
+  const trimmed = normalizeString(value)
+  if (trimmed === undefined || trimmed === "env") {
+    return trimmed
+  }
+
+  if (!conventionalHttpUrlPattern.test(trimmed)) {
+    throw new Error(invalidUpstreamProxyMessage)
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(invalidUpstreamProxyMessage)
+  }
+
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error(upstreamProxyPathMessage)
+  }
+
+  const hasUsername = parsed.username !== ""
+  const hasPassword = parsed.password !== ""
+  if (
+    hasUsername !== hasPassword
+    || !canDecodeURIComponent(parsed.username)
+    || !canDecodeURIComponent(parsed.password)
+  ) {
+    throw new Error(upstreamProxyCredentialsMessage)
+  }
+
+  return trimmed
+}
+
+/**
+ * Registers a proxy URL's username and password with the log redaction, both as written in the
+ * URL and decoded; decoded is what undici sends in Proxy-Authorization. Registration is additive,
+ * so a credential that a later edit replaces stays redacted too.
+ */
+const registerUpstreamProxyCredentials = (upstreamProxy: string | undefined): void => {
+  if (upstreamProxy === undefined || upstreamProxy === "env") {
+    return
+  }
+
+  const { password, username } = new URL(upstreamProxy)
+  for (const credential of [username, password]) {
+    registerLogSecret(credential)
+    registerLogSecret(decodeURIComponent(credential))
+  }
+}
+
 class InvalidThinkEffortError extends Error {
   constructor() {
     super(`Invalid thinkEffort. Valid values: ${configurableReasoningEfforts.join(", ")}. "none" is not allowed as a configured default.`)
@@ -387,6 +477,7 @@ const configAliases: Record<string, keyof AppConfig> = {
   log_retention_days: "logRetentionDays",
   opus_model: "opusModel",
   think_effort: "thinkEffort",
+  upstream_proxy: "upstreamProxy",
   upstream_timeout_seconds: "upstreamTimeoutSeconds",
   web_search_backend: "webSearchBackend",
   claude_upstream_api: "claudeUpstreamApi",
@@ -491,7 +582,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# copilot-relay configuration",
     "#",
     "# Valid complete edits hot-reload without rewriting this file.",
-    "# host, port, and claudeSetup require restart.",
+    "# host, port, claudeSetup, and upstreamProxy require restart.",
     "",
     "# Local host for the Claude Code-compatible HTTP server.",
     `host: ${config.host}`,
@@ -505,6 +596,10 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# GitHub Copilot API base URL.",
     `copilotBaseUrl: ${config.copilotBaseUrl}`,
+    "",
+    "# Outbound proxy for Copilot and GitHub calls. Empty connects directly; env uses",
+    "# HTTPS_PROXY, HTTP_PROXY and NO_PROXY; or a URL such as http://proxy.example:3128.",
+    `upstreamProxy: ${config.upstreamProxy ?? ""}`,
     "",
     "# Update ~/.claude/settings.json on start.",
     `claudeSetup: ${config.claudeSetup}`,
@@ -540,25 +635,33 @@ const serializeConfig = (config: AppConfig): string =>
     "",
   ].join("\n")
 
-const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
-  apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
-  claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
-  copilotBaseUrl: normalizeCopilotBaseUrl(
-    normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
-  ) ?? defaultConfig.copilotBaseUrl,
-  gptModel: normalizeRequiredString(raw.gptModel, "gptModel") ?? defaultConfig.gptModel,
-  host: normalizeRequiredString(raw.host, "host") ?? defaultConfig.host,
-  logLevel: normalizeLogLevel(raw.logLevel) ?? defaultConfig.logLevel,
-  logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
-    ?? defaultConfig.logRetentionDays,
-  opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
-  port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
-  thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
-  upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
-    ?? defaultConfig.upstreamTimeoutSeconds,
-  webSearchBackend: normalizeString(raw.webSearchBackend),
-  claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
-})
+// readAppConfig and the reload watcher both resolve through here, so a proxy password is
+// registered with the log redaction before anything can log it.
+const resolveConfig = (raw: Record<string, unknown>): AppConfig => {
+  const config: AppConfig = {
+    apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
+    claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
+    copilotBaseUrl: normalizeCopilotBaseUrl(
+      normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
+    ) ?? defaultConfig.copilotBaseUrl,
+    gptModel: normalizeRequiredString(raw.gptModel, "gptModel") ?? defaultConfig.gptModel,
+    host: normalizeRequiredString(raw.host, "host") ?? defaultConfig.host,
+    logLevel: normalizeLogLevel(raw.logLevel) ?? defaultConfig.logLevel,
+    logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
+      ?? defaultConfig.logRetentionDays,
+    opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
+    port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
+    thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
+    upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
+      ?? defaultConfig.upstreamTimeoutSeconds,
+    webSearchBackend: normalizeString(raw.webSearchBackend),
+    upstreamProxy: normalizeUpstreamProxy(raw.upstreamProxy),
+    claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
+  }
+
+  registerUpstreamProxyCredentials(config.upstreamProxy)
+  return config
+}
 
 export async function readAppConfig(): Promise<AppConfig> {
   const snapshot = await readFileSnapshot(paths.configPath)
