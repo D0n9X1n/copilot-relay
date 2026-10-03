@@ -43,7 +43,8 @@ const account = {
 }
 
 // How the child's fetch answers the usage URL in each scenario. The quota answer is given only to
-// a request that carries the stored token.
+// a request that carries the stored token; the echoed answers repeat the token where the report and
+// --json would print it.
 const scenarios = {
   quota: `
     if (new Headers(init?.headers).get("authorization") !== ${JSON.stringify(`token ${token}`)}) {
@@ -51,6 +52,8 @@ const scenarios = {
     }
     return Response.json(${JSON.stringify(account)});
   `,
+  echoedInPlan: `return Response.json(${JSON.stringify({ ...account, copilot_plan: token })});`,
+  echoedInQuotaId: `return Response.json(${JSON.stringify({ ...account, quota_snapshots: { ...account.quota_snapshots, [token]: { unlimited: true } } })});`,
   rejected: `return new Response("Bad credentials", { status: 401 });`,
   offline: `throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND api.github.com") });`,
 }
@@ -192,4 +195,24 @@ test("usage explains a network error and exits 1", async () => {
   assert.equal(result.code, 1)
   assert.equal(result.stdout, "")
   assert.match(result.stderr, /^Could not reach GitHub: getaddrinfo ENOTFOUND api\.github\.com$/m)
+})
+
+test("usage refuses an answer that echoes the token in the plan, and prints none of it", async () => {
+  await storeToken()
+
+  const result = await run(["usage"], "echoedInPlan")
+
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /^GitHub's answer to the usage request contains the stored token, so none of it is printed\.$/m)
+})
+
+test("usage --json refuses an answer that echoes the token in a quota id, and prints none of it", async () => {
+  await storeToken()
+
+  const result = await run(["usage", "--json"], "echoedInQuotaId")
+
+  assert.equal(result.code, 1)
+  assert.equal(result.stdout, "")
+  assert.match(result.stderr, /^GitHub's answer to the usage request contains the stored token, so none of it is printed\.$/m)
 })

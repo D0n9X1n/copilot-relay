@@ -381,6 +381,18 @@ test("an error that quotes the token is printed without it", async (t) => {
   assert.equal(await failure(), 'Could not reach GitHub: Headers.append: "token [redacted]" is an invalid header value.')
 })
 
+test("an error that quotes the token around a hidden character is printed without it", async (t) => {
+  await storeToken(token)
+
+  // terminalText drops the zero-width space and joins the token back up, so the line is redacted
+  // after terminalText has run.
+  mockFetch(t, () => {
+    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 4)}​${token.slice(4)}`) })
+  })
+
+  assert.equal(await failure(), "Could not reach GitHub: upstream echoed [redacted]")
+})
+
 test("a request that gets no answer in time says how long it waited", async (t) => {
   await storeToken(token)
   mockFetch(t, () => {
@@ -398,6 +410,35 @@ for (const body of ["<html>", "[]"]) {
     assert.equal(await failure(), "GitHub's answer to the usage request was not a JSON object.")
   })
 }
+
+// Success answers that echo the token where the report or --json would print it.
+const echoes: Array<[string, Record<string, unknown>]> = [
+  ["copilot_plan", { ...account, copilot_plan: `plan ${token}` }],
+  ["access_type_sku", { ...account, access_type_sku: token }],
+  ["quota_reset_date", { ...account, quota_reset_date: token }],
+  ["a quota id", { ...account, quota_snapshots: { ...account.quota_snapshots, [`quota-${token}`]: { unlimited: true } } }],
+  ["copilot_plan behind a hidden character", { ...account, copilot_plan: `${token.slice(0, 4)}​${token.slice(4)}` }],
+]
+
+for (const [where, body] of echoes) {
+  test(`an answer that echoes the token in ${where} is refused, with none of it printed`, async (t) => {
+    await storeToken(token)
+    mockFetch(t, () => Response.json(body))
+
+    assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
+  })
+}
+
+test("a token with no visible character does not refuse every answer", async (t) => {
+  // U+0085 is valid in a header value and terminalText removes it, so no printed text can show this
+  // token, while every text contains its empty visible form.
+  await storeToken("\u0085\u0085")
+  mockFetch(t, () => Response.json(account))
+
+  const usage = await loadCopilotUsage()
+
+  assert.equal(usage.copilot_plan, "fixture-plan")
+})
 
 test("a token file that cannot be read is reported by its error code", async (t) => {
   await fs.rm(paths.githubTokenPath, { recursive: true, force: true })

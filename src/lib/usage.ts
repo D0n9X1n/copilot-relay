@@ -4,7 +4,8 @@
 // The request is made with the stored GitHub token, so no relay needs to run and no Copilot token
 // is exchanged. This module writes no file and never logs. GitHub's answer also identifies the
 // account, with fields such as the login, organization lists and tracking ids, so only the plan
-// and quota fields are kept.
+// and quota fields are kept. No printed line shows the token: it is redacted from a failure line,
+// and an answer that would show it is refused.
 import { getCopilotUsage, readStoredGitHubToken } from "~/lib/auth"
 import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
@@ -185,9 +186,41 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false): Array<st
 // A stalled connection fails with a clear line instead of waiting for the socket timeouts.
 const requestTimeoutSeconds = 30
 
-// fetch can quote a header value in its error, so any text from a failed request loses the token
-// before it is shown.
-const withoutToken = (text: string, token: string): string => text.replaceAll(token, "[redacted]")
+const tokenInAnswer = "GitHub's answer to the usage request contains the stored token, so none of it is printed."
+
+// The token as a terminal shows it. Text is searched only after terminalText has run, because
+// removing a hidden character can join a split token back up. A token with no visible character
+// cannot show in printed text, and every text would contain its empty visible form.
+const visibleToken = (token: string): string => terminalText(token)
+
+// fetch can quote a header value in its error, so a failure line loses the token before it is
+// shown.
+const withoutToken = (line: string, token: string): string => {
+  const visible = visibleToken(token)
+
+  return visible === "" ? line : line.replaceAll(visible, "[redacted]")
+}
+
+// True when the report or --json would show the token. terminalText makes the answer's strings
+// safe but does not redact them, and GitHub, or a proxy in the way, can echo credentials back. The
+// answer's text reaches the output only through these strings and the quota ids; its numbers and
+// booleans print in the command's own format.
+const showsToken = (usage: CopilotUsage, token: string): boolean => {
+  const visible = visibleToken(token)
+
+  if (visible === "") {
+    return false
+  }
+
+  const answerText = [
+    usage.copilot_plan,
+    usage.access_type_sku,
+    usage.quota_reset_date,
+    ...Object.keys(usage.quota_snapshots),
+  ]
+
+  return answerText.some((text) => text !== null && text.includes(visible))
+}
 
 // The most specific reason a request failed. fetch rejects with a bare "fetch failed" and keeps the
 // reason in `cause`; a refused connection's cause can be an AggregateError with an empty message
@@ -239,7 +272,9 @@ const describeRequestFailure = async (error: unknown, token: string): Promise<Co
     return new CopilotUsageError(notAnObject)
   }
 
-  return new CopilotUsageError(terminalText(`Could not reach GitHub: ${withoutToken(failureReason(error), token)}`))
+  const line = terminalText(`Could not reach GitHub: ${failureReason(error)}`)
+
+  return new CopilotUsageError(withoutToken(line, token))
 }
 
 // A read failure is reported by its error code, such as EACCES. The message of a file error only
@@ -284,5 +319,13 @@ export const loadCopilotUsage = async (): Promise<CopilotUsage> => {
     throw await describeRequestFailure(error, token)
   }
 
-  return parseCopilotUsage(body)
+  const usage = parseCopilotUsage(body)
+
+  // Refused rather than redacted: an answer that echoes the credentials back is not one to trust,
+  // and a redacted plan or quota id would print as if it were data.
+  if (showsToken(usage, token)) {
+    throw new CopilotUsageError(tokenInAnswer)
+  }
+
+  return usage
 }

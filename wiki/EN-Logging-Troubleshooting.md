@@ -930,6 +930,7 @@ token and the request headers are never printed.
 | HTTP 401 or 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
 | Any other HTTP status | `GitHub answered the usage request with HTTP <status>.` |
 | The answer is not a JSON object | `GitHub's answer to the usage request was not a JSON object.` |
+| The plan, SKU, reset date or a quota id contains the stored token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
 | A network error | `Could not reach GitHub: <reason>` |
 | No answer within 30 seconds | `GitHub did not answer within 30 seconds.` |
 

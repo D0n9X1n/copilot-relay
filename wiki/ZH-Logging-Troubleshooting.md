@@ -821,6 +821,7 @@ premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining
 | HTTP 401 或 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
 | 其他 HTTP 状态 | `GitHub answered the usage request with HTTP <status>.` |
 | 回答不是 JSON 对象 | `GitHub's answer to the usage request was not a JSON object.` |
+| 套餐、SKU、重置日期或某个配额 id 中含有已保存的 token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
 | 网络错误 | `Could not reach GitHub: <reason>` |
 | 30 秒内没有回答 | `GitHub did not answer within 30 seconds.` |
 
