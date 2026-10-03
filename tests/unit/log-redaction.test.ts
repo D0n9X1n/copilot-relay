@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import { inspect } from "node:util"
 
+import { withProxyEnvironment } from "../fixtures/network"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(
@@ -23,6 +25,9 @@ const {
 } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { getLogPath, paths } = await import("../../src/lib/paths")
+const { readAppConfig } = await import("../../src/lib/app-config")
+const { parseCompletionLine } = await import("../../src/lib/cache-report")
+const { configureUpstreamDispatcher } = await import("../../src/lib/upstream-dispatcher")
 
 /**
  * Captures what the console sink would render, without writing to stdout.
@@ -442,21 +447,67 @@ test("still honours the disk level gate", async () => {
   assert.ok(!content.includes("debug entry that must not reach disk"))
 })
 
-// Why (#153): a proxy URL's user name and password become a Proxy-Authorization header, so they
-// are credentials like a token. Reading the config registers both, as written in the URL and
-// decoded, so an echo of either is redacted.
-test("reading the config registers upstreamProxy credentials as log secrets", async () => {
-  const { readAppConfig } = await import("../../src/lib/app-config")
+// Reads config.yaml with this upstreamProxy and builds the upstream dispatcher from it, as start
+// does.
+const startWithProxy = async (upstreamProxy: string): Promise<void> => {
   await fs.mkdir(paths.appDir, { recursive: true })
-  await fs.writeFile(
-    paths.configPath,
-    "upstreamProxy: http://PROXY_USER_SENTINEL:PROXY%23PASS_SENTINEL@proxy.invalid:3128\n",
-  )
+  await fs.writeFile(paths.configPath, `upstreamProxy: ${upstreamProxy}\n`)
+  configureUpstreamDispatcher((await readAppConfig()).upstreamProxy)
+}
 
-  await readAppConfig()
-  log.error("echoed PROXY_USER_SENTINEL PROXY%23PASS_SENTINEL PROXY#PASS_SENTINEL")
+// Why (#153, #168): a proxy URL's user name and password become a Proxy-Authorization header, so
+// they are credentials like a token. Building the dispatcher registers user:password, as written
+// in the URL and decoded, and the Basic value undici sends, so an echo of any of them is redacted.
+// A user name or password alone is not registered: redaction replaces a value in every log line.
+test("building the dispatcher registers the proxy's user:password and Basic value, not either part alone", async (t) => {
+  t.after(() => configureUpstreamDispatcher(undefined))
+  await startWithProxy("http://PROXY_USER_SENTINEL:PROXY%23PASS_SENTINEL@proxy.invalid:3128")
+  const basic = Buffer.from("PROXY_USER_SENTINEL:PROXY#PASS_SENTINEL").toString("base64")
 
-  const line = (await readActiveLog()).split("\n").find((entry) => entry.includes("echoed")) ?? ""
-  assert.match(line, /echoed \[redacted\] \[redacted\] \[redacted\]/)
-  assert.doesNotMatch(line + consoleOutput.join("\n"), /SENTINEL/)
+  log.error(`echoed PROXY_USER_SENTINEL:PROXY%23PASS_SENTINEL PROXY_USER_SENTINEL:PROXY#PASS_SENTINEL Basic ${basic}`)
+  log.error("named PROXY_USER_SENTINEL")
+  await flushLogs()
+
+  const content = await readActiveLog()
+  assert.ok(content.includes("echoed [redacted] [redacted] Basic [redacted]\n"), content)
+  assert.ok(content.includes("named PROXY_USER_SENTINEL\n"), content)
+  assert.doesNotMatch(content + consoleOutput.join("\n"), /PASS_SENTINEL/)
+  assert.ok(!(content + consoleOutput.join("\n")).includes(basic))
+})
+
+// Why (#168): a proxy user name such as "a" or "copilot" occurs in ordinary text. Registered alone,
+// "a" cut into "completion path=", so `copilot-relay cache` skipped the record, and "copilot"
+// turned "copilot-relay" into "[redacted]-relay".
+test("a short or common proxy user name leaves ordinary log lines and completion records intact", async (t) => {
+  t.after(() => configureUpstreamDispatcher(undefined))
+  await startWithProxy("http://a:proxy-pass-sentinel@proxy.invalid:3128")
+  await startWithProxy("http://copilot:proxy-pass-sentinel@proxy.invalid:3128")
+
+  const completion = "request_id=req-proxy-user upstream_request_id=up-proxy-user completion path=/v1/messages http_status=200 body=complete model=claude-opus-5-5 input_tokens=2 output_tokens=55 cache_read_input_tokens=31136"
+  log.info(completion)
+  log.info("copilot-relay applied a config change")
+  await flushLogs()
+
+  const lines = (await readActiveLog()).split("\n")
+  const recorded = lines.find((line) => line.endsWith(` info ${completion}`))
+  assert.ok(recorded, lines.join("\n"))
+  assert.equal(parseCompletionLine(recorded)?.inputTokens, 2)
+  assert.ok(lines.some((line) => line.endsWith(" info copilot-relay applied a config change")), lines.join("\n"))
+})
+
+// Why (#168): with upstreamProxy: env the proxy URLs come from the environment. Each one undici
+// reads, HTTPS_PROXY or HTTP_PROXY in either case, has its credentials registered the same way.
+test("upstreamProxy: env registers the credentials of each proxy variable undici reads", async (t) => {
+  t.after(() => configureUpstreamDispatcher(undefined))
+  await withProxyEnvironment({
+    HTTPS_PROXY: "http://env-user-sentinel:ENV%40PASS_SENTINEL@proxy.invalid:3128",
+    http_proxy: "http://http-user-sentinel:HTTP_PASS_SENTINEL@proxy.invalid:3129",
+  }, () => startWithProxy("env"))
+
+  log.error("env-echoed env-user-sentinel:ENV@PASS_SENTINEL http-user-sentinel:HTTP_PASS_SENTINEL")
+  await flushLogs()
+
+  const content = await readActiveLog()
+  assert.ok(content.includes("env-echoed [redacted] [redacted]\n"), content)
+  assert.doesNotMatch(content + consoleOutput.join("\n"), /PASS_SENTINEL/)
 })

@@ -2,7 +2,7 @@
 // Calls to the relay's own listener, such as the status probes, use the global fetch instead.
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici"
 
-import { log } from "~/lib/log"
+import { log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
 // Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
@@ -54,17 +54,82 @@ let upstreamDispatcher: Dispatcher = buildUpstreamDispatcher(undefined)
 let configuredUpstreamProxy: string | undefined
 
 /**
- * Builds this process's upstream dispatcher from the resolved upstreamProxy.
+ * The proxy URLs a dispatcher for this upstreamProxy can send through: none when it is empty, the
+ * URL itself, or with "env" each proxy variable EnvHttpProxyAgent reads, the lower-case spelling
+ * first, as undici does.
+ */
+const proxyUrlsFor = (upstreamProxy: string | undefined): Array<string> => {
+  if (upstreamProxy === undefined) {
+    return []
+  }
+
+  if (upstreamProxy !== "env") {
+    return [upstreamProxy]
+  }
+
+  return [
+    process.env.http_proxy ?? process.env.HTTP_PROXY,
+    process.env.https_proxy ?? process.env.HTTPS_PROXY,
+  ].filter((value): value is string => value !== undefined && value !== "")
+}
+
+const decodeOrKeep = (value: string): string => {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+/**
+ * The forms a proxy's credentials take together: user:password as written in the URL and decoded,
+ * and the Basic value undici sends in Proxy-Authorization. None when the URL lacks either part,
+ * because undici then sends no Proxy-Authorization at all.
+ */
+const credentialPairForms = (proxyUrl: string): Array<string> => {
+  let url: URL
+  try {
+    url = new URL(proxyUrl)
+  } catch {
+    return []
+  }
+
+  if (url.username === "" || url.password === "") {
+    return []
+  }
+
+  const decoded = `${decodeOrKeep(url.username)}:${decodeOrKeep(url.password)}`
+  return [`${url.username}:${url.password}`, decoded, Buffer.from(decoded).toString("base64")]
+}
+
+// registerLogSecret replaces a form in every log line, so a short one could match ordinary text:
+// "a:b" is inside "data:base64".
+const minimumRegisteredLength = 8
+
+/**
+ * Builds this process's upstream dispatcher from the resolved upstreamProxy, and registers the
+ * credentials of each proxy it can use with the log redaction.
  *
  * start, auth, models and usage call it once, after reading the config and before their first
- * upstream call. Until one does, upstream calls connect directly, as they did before the key existed. A
- * config reload never calls it, which is why upstreamProxy, like host and port, takes effect on
- * restart. It is never undici's global dispatcher, so calls to the relay itself stay direct.
+ * upstream call. Until one does, upstream calls connect directly, as they did before the key
+ * existed. A config reload never calls it, which is why upstreamProxy, like host and port, takes
+ * effect on restart, and why a reload registers no credentials. It is never undici's global
+ * dispatcher, so calls to the relay itself stay direct.
+ *
+ * Only the user:password pair and the Basic value are registered, never a user name or password
+ * alone: registerLogSecret replaces a value in every log line, and a short or common user name such
+ * as "copilot" would also cut it out of "copilot-relay".
  */
 export const configureUpstreamDispatcher = (upstreamProxy: string | undefined): void => {
   const previous = upstreamDispatcher
   upstreamDispatcher = buildUpstreamDispatcher(upstreamProxy)
   configuredUpstreamProxy = upstreamProxy
+
+  for (const form of proxyUrlsFor(upstreamProxy).flatMap((proxyUrl) => credentialPairForms(proxyUrl))) {
+    if (form.length >= minimumRegisteredLength) {
+      registerLogSecret(form)
+    }
+  }
 
   // Requests already sent through the previous dispatcher finish before it closes.
   void previous.close().catch(() => undefined)

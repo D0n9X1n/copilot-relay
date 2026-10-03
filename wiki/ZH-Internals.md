@@ -464,10 +464,19 @@ HTTPS 目标使用 `HTTP_PROXY`。它对每个请求检查 `NO_PROXY`。变量�
 `ProxyAgent` 用 `CONNECT` 建立隧道，HTTP 目标也一样；只有 URL 同时带用户名和密码时，
 才发送 `Basic` `Proxy-Authorization`。它拒绝带 path、query 或 fragment 的代理 URL，
 百分号转义格式错误的凭据在解码时失败。`src/lib/app-config.ts` 的
-`normalizeUpstreamProxy` 在读取配置时就应用这些规则，所以错误出现在启动时，且从不
-回显值。`resolveConfig` 把用户名和密码的原始写法与解码后形式都注册到
-`registerLogSecret`。`src/lib/redact.ts` 的 `formatUpstreamProxyForDisplay` 在
-`status` 和启动日志里只显示代理的 origin。
+`normalizeUpstreamProxy` 在读取配置时就对 `config.yaml` 中的 URL 应用这些规则，所以错误
+出现在启动时，且从不回显值。`env` 使用的代理变量不经过它：`buildUpstreamDispatcher`
+构建 `EnvHttpProxyAgent` 时只有 undici 自己的检查，而这些检查接受只有用户名没有密码的值。
+`src/lib/redact.ts` 的 `formatUpstreamProxyForDisplay` 在 `status` 和启动日志里只显示
+代理的 origin。
+
+`configureUpstreamDispatcher` 把 dispatcher 可能使用的每个代理 URL（`config.yaml` 中的
+URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `registerLogSecret`：
+`user:password` 的原始写法与解码后形式，以及 undici 发送的 `Basic` 值，各自至少 8 个字符
+时才注册。它从不单独注册用户名或密码。`registerLogSecret` 会在每一行日志中替换该值，
+较短或常见的值会切坏普通文本：用户名 `copilot` 会把 `copilot-relay` 变成
+`[redacted]-relay`，用户名 `a` 会破坏 `copilot-relay cache` 读取的 `completion path=`
+条目。配置重载不会注册任何值，因为它从不重建 dispatcher。
 
 `upstreamProxy` 为空、又设置了 `HTTPS_PROXY` 或 `HTTP_PROXY` 时，如果某个上游请求在
 没有响应的情况下失败，`fetchUpstream` 每个进程只记录一次：该变量没有被使用，以及如何
@@ -984,7 +993,7 @@ drain 进行中执行。它的定时器来自 `node:timers`，而不是全局 `s
 凭据的 URL。含密钥的网关尾部不能原样进入普通日志。`copilotBaseUrl` 校验拒绝原始引号、
 尖括号、空白和控制字符，因为它们会让整条 URL 的识别出现歧义。`src/lib/log.ts` 的
 `registerLogSecret` 在内存中保存已知认证凭据（包括轮换前的值，以及 `upstreamProxy` 的
-用户名和密码），从普通日志中移除原始或转义形式的回显。即使对象检查转义了分隔符，相邻的
+`user:password` 与 `Basic` 值），从普通日志中移除原始或转义形式的回显。即使对象检查转义了分隔符，相邻的
 嵌套 URL 也会分别脱敏。这不保证移除
 任意提示词/工具中的密钥；分享前仍需审查有界摘录，绝不整份上传原始捕获。见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。

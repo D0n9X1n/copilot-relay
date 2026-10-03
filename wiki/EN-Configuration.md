@@ -718,11 +718,20 @@ is not:
   characters in either, such as `%40` for `@` and `%23` for `#`.
 
 As with `copilotBaseUrl`, the error names the key and the rule and never repeats
-the value. With `env`, a malformed `HTTPS_PROXY` or `HTTP_PROXY` stops startup
-with an error that names the variables, not their value.
+the value. These rules apply to the URL in `config.yaml`. With `env`, undici
+reads `HTTPS_PROXY` and `HTTP_PROXY` as they are, without these checks: a value
+with a path, query or fragment, a malformed percent-escape, or no scheme stops
+startup with an error that names the variables, not their value, and a user name
+without a password is accepted and sends no credentials.
 
-The user name and password are credentials. The relay redacts them from its logs,
-and `copilot-relay status` and the startup log show only the proxy's origin:
+The user name and password are credentials. Once the relay has set up its
+upstream connections, its logs show `user:password`, as written or decoded, and
+the `Basic` value it sends as `[redacted]`. A user name or password alone is not
+redacted there: redaction applies to every log line, and a short or common one,
+such as `copilot`, would also be cut out of ordinary text, such as
+`copilot-relay`. For the same reason, a form shorter than 8 characters is not
+redacted. `copilot-relay status` and the startup log show only the proxy's
+origin:
 
 ```text
 Upstream proxy: http://proxy.example:3128 (credentials hidden)

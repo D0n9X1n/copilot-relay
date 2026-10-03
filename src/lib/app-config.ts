@@ -15,7 +15,7 @@ import {
   writeFileSnapshot,
   type FileSnapshot,
 } from "~/lib/atomic-file"
-import { log, registerLogSecret } from "~/lib/log"
+import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { terminalText } from "~/lib/terminal"
 
@@ -336,7 +336,7 @@ const canDecodeURIComponent = (value: string): boolean => {
  * WHATWG also accepts are not URLs anyone would recognize in a log line.
  *
  * Userinfo is accepted, unlike in copilotBaseUrl: it is how a proxy takes Basic credentials, and
- * resolveConfig registers it with the log redaction.
+ * configureUpstreamDispatcher registers it with the log redaction when it builds the dispatcher.
  *
  * The accepted value is the trimmed original, which is what the dispatcher is built from.
  */
@@ -372,23 +372,6 @@ export const normalizeUpstreamProxy = (value: unknown): string | undefined => {
   }
 
   return trimmed
-}
-
-/**
- * Registers a proxy URL's username and password with the log redaction, both as written in the
- * URL and decoded; decoded is what undici sends in Proxy-Authorization. Registration is additive,
- * so a credential that a later edit replaces stays redacted too.
- */
-const registerUpstreamProxyCredentials = (upstreamProxy: string | undefined): void => {
-  if (upstreamProxy === undefined || upstreamProxy === "env") {
-    return
-  }
-
-  const { password, username } = new URL(upstreamProxy)
-  for (const credential of [username, password]) {
-    registerLogSecret(credential)
-    registerLogSecret(decodeURIComponent(credential))
-  }
 }
 
 class InvalidThinkEffortError extends Error {
@@ -635,33 +618,26 @@ const serializeConfig = (config: AppConfig): string =>
     "",
   ].join("\n")
 
-// readAppConfig and the reload watcher both resolve through here, so a proxy password is
-// registered with the log redaction before anything can log it.
-const resolveConfig = (raw: Record<string, unknown>): AppConfig => {
-  const config: AppConfig = {
-    apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
-    claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
-    copilotBaseUrl: normalizeCopilotBaseUrl(
-      normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
-    ) ?? defaultConfig.copilotBaseUrl,
-    gptModel: normalizeRequiredString(raw.gptModel, "gptModel") ?? defaultConfig.gptModel,
-    host: normalizeRequiredString(raw.host, "host") ?? defaultConfig.host,
-    logLevel: normalizeLogLevel(raw.logLevel) ?? defaultConfig.logLevel,
-    logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
-      ?? defaultConfig.logRetentionDays,
-    opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
-    port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
-    thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
-    upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
-      ?? defaultConfig.upstreamTimeoutSeconds,
-    webSearchBackend: normalizeString(raw.webSearchBackend),
-    upstreamProxy: normalizeUpstreamProxy(raw.upstreamProxy),
-    claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
-  }
-
-  registerUpstreamProxyCredentials(config.upstreamProxy)
-  return config
-}
+const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
+  apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
+  claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
+  copilotBaseUrl: normalizeCopilotBaseUrl(
+    normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
+  ) ?? defaultConfig.copilotBaseUrl,
+  gptModel: normalizeRequiredString(raw.gptModel, "gptModel") ?? defaultConfig.gptModel,
+  host: normalizeRequiredString(raw.host, "host") ?? defaultConfig.host,
+  logLevel: normalizeLogLevel(raw.logLevel) ?? defaultConfig.logLevel,
+  logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
+    ?? defaultConfig.logRetentionDays,
+  opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
+  port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
+  thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
+  upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
+    ?? defaultConfig.upstreamTimeoutSeconds,
+  webSearchBackend: normalizeString(raw.webSearchBackend),
+  upstreamProxy: normalizeUpstreamProxy(raw.upstreamProxy),
+  claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
+})
 
 export async function readAppConfig(): Promise<AppConfig> {
   const snapshot = await readFileSnapshot(paths.configPath)

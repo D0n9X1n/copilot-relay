@@ -561,11 +561,23 @@ with one that names the variables and the rule.
 `Proxy-Authorization` only when the URL has both a user name and a password. It
 rejects a proxy URL with a path, query or fragment, and a credential with a
 malformed percent-escape fails when it is decoded. `normalizeUpstreamProxy` in
-`src/lib/app-config.ts` applies those rules when the config is read, so the error
-comes at startup and never repeats the value. `resolveConfig` registers the user
-name and password, as written and decoded, with `registerLogSecret`.
-`formatUpstreamProxyForDisplay` in `src/lib/redact.ts` shows only the proxy's
-origin in `status` and the startup log.
+`src/lib/app-config.ts` applies those rules to the URL in `config.yaml` when the
+config is read, so the error comes at startup and never repeats the value. The
+proxy variables that `env` uses do not go through it: only undici's own checks
+apply when `buildUpstreamDispatcher` builds the `EnvHttpProxyAgent`, and they
+accept a user name without a password. `formatUpstreamProxyForDisplay` in
+`src/lib/redact.ts` shows only the proxy's origin in `status` and the startup log.
+
+`configureUpstreamDispatcher` registers the credentials of each proxy URL the
+dispatcher can use, the one in `config.yaml` or each proxy variable that
+`EnvHttpProxyAgent` reads, with `registerLogSecret`: `user:password` as written
+and decoded, and the `Basic` value undici sends, each when it is at least 8
+characters long. It never registers a user name or password alone.
+`registerLogSecret` replaces a value in every log line, so a short or common one
+would cut ordinary text: a user name `copilot` would turn `copilot-relay` into
+`[redacted]-relay`, and a user name `a` would break the `completion path=` entries
+that `copilot-relay cache` reads. A config reload registers nothing, because it
+never rebuilds the dispatcher.
 
 When an upstream request fails without a response while `upstreamProxy` is empty
 and `HTTPS_PROXY` or `HTTP_PROXY` is set, `fetchUpstream` logs once per process
@@ -1187,8 +1199,8 @@ query string, or fragment. A secret-bearing gateway tail must not survive into
 normal logs. `copilotBaseUrl` validation rejects raw quotes, angle brackets,
 whitespace and control characters because they make whole-URL recognition
 ambiguous. `registerLogSecret` in `src/lib/log.ts` keeps known authentication
-credentials in memory, including rotated values and the `upstreamProxy` user name
-and password, and removes raw/escaped echoes from ordinary logs. Nested adjacent URLs are scrubbed independently even after
+credentials in memory, including rotated values and the `upstreamProxy`
+`user:password` and `Basic` value, and removes raw/escaped echoes from ordinary logs. Nested adjacent URLs are scrubbed independently even after
 inspection escapes their separators. This is not a promise to remove arbitrary
 prompt/tool secrets; review bounded excerpts before sharing, and never upload raw
 captures wholesale. See [Logs and troubleshooting](EN-Logging-Troubleshooting.md).

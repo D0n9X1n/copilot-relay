@@ -605,11 +605,17 @@ relay 通过 `CONNECT` 在代理中为每个调用建立隧道，所以 HTTPS �
   发送 `Basic` `Proxy-Authorization`。只有用户名没有密码（或反过来）会被拒绝，因为那样
   根本不会发送凭据。两者中的保留字符要用百分号编码，例如 `@` 写成 `%40`，`#` 写成 `%23`。
 
-与 `copilotBaseUrl` 一样，错误信息只说明字段和规则，不会重复你配置的值。使用 `env` 时，
-格式错误的 `HTTPS_PROXY` 或 `HTTP_PROXY` 会让启动失败，错误信息只写变量名，不写变量值。
+与 `copilotBaseUrl` 一样，错误信息只说明字段和规则，不会重复你配置的值。这些规则针对
+`config.yaml` 中的 URL。使用 `env` 时，undici 按原样读取 `HTTPS_PROXY` 和 `HTTP_PROXY`，
+不做这些检查：带路径、查询参数或 fragment 的值、百分号转义格式错误的值，以及没有协议的
+值会让启动失败，错误信息只写变量名，不写变量值；只有用户名没有密码的值会被接受，且不发送
+凭据。
 
-用户名和密码属于凭据。relay 会在日志中脱敏它们，`copilot-relay status` 和启动日志只显示
-代理的 origin：
+用户名和密码属于凭据。relay 建立上游连接之后，日志中出现的 `user:password`（原始写法或
+解码后）以及它发送的 `Basic` 值都显示为 `[redacted]`。单独的用户名或密码在那里不会被
+脱敏：脱敏作用于每一行日志，较短或常见的值（例如 `copilot`）会把普通文本（例如
+`copilot-relay`）中的相同部分也去掉。出于同样的原因，短于 8 个字符的形式不会被脱敏。
+`copilot-relay status` 和启动日志只显示代理的 origin：
 
 ```text
 Upstream proxy: http://proxy.example:3128 (credentials hidden)
