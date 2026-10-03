@@ -194,8 +194,8 @@ export const parseCompletionLine = (line: string): CompletionRecord | undefined 
 // since rotation arrived, which was before completion entries existed, so it holds none.
 const datedLogFilePattern = new RegExp(`^${paths.logFileBaseName}\\.(\\d{4}-\\d{2}-\\d{2})\\.log$`)
 
-// Entries are capped at 64 KiB by log.ts. A longer run without a line break did not come from the
-// relay, so it is dropped rather than held in memory.
+// Entries are capped at 64 KiB by log.ts, so a run without a line break that grows past 1 MiB did
+// not come from the relay. It is dropped rather than held in memory.
 const maxLineLength = 1024 * 1024
 
 const isMissing = (error: unknown): boolean =>

@@ -259,6 +259,20 @@ test("counts only successful completion entries that report input_tokens", async
   ])
 })
 
+// A log is read in 64 KiB chunks, so an entry can be split across two of them. A run without a line
+// break that grows past 1 MiB is dropped, and the entry after it still counts.
+test("reads a log far larger than one read chunk, entry by entry", async () => {
+  const entry = chatCall("2026-10-03T07:00:00.000Z", "input_tokens=100 cache_read_input_tokens=90")
+  const batch = Array.from({ length: 1000 }, () => entry)
+  const overlong = `${entry} padding=${"x".repeat(1536 * 1024)}`
+
+  await writeLogs({ [dated("2026-10-03")]: entries(...batch, overlong, ...batch) })
+
+  const rows = await buildCacheReport({ view: "summary", since: lastDay, goal: 95 })
+
+  assert.deepEqual(rows.map((row) => [row.requests, row.totalInputTokens, row.cacheReadTokens]), [[2000, 200000, 180000]])
+})
+
 test("a call that logged no cache read is unknown, not a zero read", async () => {
   await writeLogs({
     [dated("2026-10-03")]: entries(
