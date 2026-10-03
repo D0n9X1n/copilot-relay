@@ -579,8 +579,8 @@ token，因此修改之后：
 ## upstreamProxy 规则
 
 `upstreamProxy` 让 relay 的出站调用经过一个 HTTP 代理：每个 Copilot 请求、启动检查、
-token 刷新，以及 GitHub 登录。调用 relay 自己监听器的请求（例如 `status` 探测）从不
-使用它。
+token 刷新、GitHub 登录，以及 `copilot-relay usage` 的请求。调用 relay 自己监听器的
+请求（例如 `status` 探测）从不使用它。
 
 | 值 | 路由 |
 | --- | --- |
@@ -590,6 +590,10 @@ token 刷新，以及 GitHub 登录。调用 relay 自己监听器的请求（�
 
 relay 通过 `CONNECT` 在代理中为每个调用建立隧道，所以 HTTPS 调用经过代理时仍然端到端
 加密。它不读取其他代理设置，例如操作系统的代理配置或 PAC 文件。
+
+`copilot-relay usage` 从 `config.yaml` 读取 `upstreamProxy`，但不写这个文件。没有
+`config.yaml` 时它直连；文件无法读取或无效时，它在发出任何请求之前就停止。见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
 
 `upstreamProxy` 会在加载配置时校验，不满足以下条件时启动会直接失败：
 

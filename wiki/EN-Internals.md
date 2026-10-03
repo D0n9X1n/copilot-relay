@@ -538,11 +538,18 @@ undici dispatchers, all with the same HTTP/1.1 and keep-alive options:
 | a URL | `ProxyAgent` for that proxy |
 
 `configureUpstreamDispatcher` builds it once per process, after the config is read
-and before the first upstream call: in `startRelay`, and in the `auth` and `models`
-commands. `applyRuntimeConfig` never calls it, which is why `upstreamProxy`, like
-`host` and `port`, takes effect on restart. It is never undici's global
-dispatcher: the `status` probes call the relay's own listener with the global
-`fetch`, and stay direct.
+and before the first upstream call: in `startRelay`, and in the `auth`, `models`
+and `usage` commands. `applyRuntimeConfig` never calls it, which is why
+`upstreamProxy`, like `host` and `port`, takes effect on restart. It is never
+undici's global dispatcher: the `status` probes call the relay's own listener with
+the global `fetch`, and stay direct.
+
+`usage` writes no file, so `loadCopilotUsage` in `src/lib/usage.ts` reads the
+config with `readExistingAppConfig` rather than `readAppConfig`, which creates or
+completes `config.yaml`. It resolves an existing file without rewriting it and
+returns nothing when there is none, so the request then connects directly. The
+command runs under `withoutLogging`, so a line the request would log never reaches
+the log file.
 
 `EnvHttpProxyAgent` reads the proxy variables when it is built, the lower-case
 spelling first, and uses `HTTP_PROXY` for HTTPS targets when `HTTPS_PROXY` is
@@ -1229,6 +1236,12 @@ stand-ins: `startFakeGitHub` answers GitHub locally, `redirectGitHubTo` patches
 undici's `Agent` so requests for `github.com` and `api.github.com` reach it, and
 `refuseExternalConnections` makes any other connection off the machine throw.
 `withProxyEnvironment` sets proxy variables for one test and restores them.
+
+Start such a stand-in before the first `test()` in the file. `node:test` runs the
+global `after()` hooks as soon as every test registered so far has finished, which
+can happen during a top-level `await` placed between tests, and an `after()` hook
+registered later never runs. The stand-in then keeps listening and the test process
+never exits.
 
 ### Structural documentation tests
 

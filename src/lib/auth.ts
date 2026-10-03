@@ -280,13 +280,14 @@ const getCopilotToken = async (
 }
 
 // The plan and quota behind `copilot-relay usage`. It is read with the GitHub token itself, so no
-// Copilot token is exchanged for it. The body is GitHub's internal format; the caller checks it.
+// Copilot token is exchanged for it. Like every GitHub call it goes through the upstream
+// dispatcher, so upstreamProxy applies. The body is GitHub's internal format; the caller checks it.
 export const getCopilotUsage = async (
   githubToken: string,
   vsCodeVersion: string,
   signal?: AbortSignal,
 ): Promise<unknown> => {
-  const response = await fetch(`${githubApiBaseUrl}/copilot_internal/user`, {
+  const response = await fetchUpstream(`${githubApiBaseUrl}/copilot_internal/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
     signal,
   })

@@ -817,8 +817,9 @@ grep -h " completion path=" ~/.copilot-relay/logs/copilot-relay.*.log \
 
 `copilot-relay usage` 显示已保存 GitHub token 所属账号的 Copilot 套餐，以及每项配额还剩
 多少。它用 `~/.copilot-relay/github_token` 中的 token 请求 GitHub 的
-`copilot_internal/user` 接口，因此不需要中继在运行。它不换取 Copilot token，也不写入任何
-东西，包括日志文件。
+`copilot_internal/user` 接口，因此不需要中继在运行。请求经过 `upstreamProxy`：它从
+`config.yaml` 读取该值，但不写这个文件；没有 `config.yaml` 时直连。它不换取 Copilot
+token，也不写入任何东西，包括日志文件。
 
 ```sh
 copilot-relay usage                      # 套餐、SKU、重置日期，然后每项配额一行
@@ -870,6 +871,8 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 | --- | --- |
 | 没有保存的 token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
 | token 文件无法读取 | `Could not read the GitHub token at <path>: <code>.` |
+| `config.yaml` 无法读取或无效 | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
+| `upstreamProxy: env` 且 `HTTPS_PROXY` 或 `HTTP_PROXY` 格式错误 | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |
 | HTTP 401 或 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
 | 其他 HTTP 状态 | `GitHub answered the usage request with HTTP <status>.` |
 | 回答不是 JSON 对象 | `GitHub's answer to the usage request was not a JSON object.` |
@@ -877,6 +880,9 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 | 网络错误 | `Could not reach GitHub: <reason>` |
 | 网络错误，且原因显示出中间插入了其他字符的已保存 token | `Could not reach GitHub.` |
 | 30 秒内没有回答 | `GitHub did not answer within 30 seconds.` |
+
+`config.yaml` 那一行不给出原因，因为这个文件可能含有凭据，例如 `upstreamProxy` 的密码。
+规则见[配置说明](ZH-Configuration.md)。
 
 ## Token 缓存问题
 

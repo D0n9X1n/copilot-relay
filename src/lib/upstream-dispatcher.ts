@@ -16,11 +16,16 @@ const connectionOptions: Agent.Options = {
 }
 
 /**
- * A fixed string. With upstreamProxy: env the proxy URL comes from the environment, can carry a
- * password, and undici's own error repeats it; this message reaches the terminal and the log.
+ * A malformed HTTPS_PROXY or HTTP_PROXY with upstreamProxy: env. The message is fixed: the proxy
+ * URL comes from the environment, can carry a password, and undici's own error repeats it. This
+ * message reaches the terminal and the log.
  */
-const invalidEnvironmentProxyMessage =
-  "Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL"
+export class InvalidProxyEnvironmentError extends Error {
+  constructor() {
+    super("Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL")
+    this.name = "InvalidProxyEnvironmentError"
+  }
+}
 
 /**
  * Builds the dispatcher for one resolved upstreamProxy value.
@@ -38,7 +43,7 @@ export const buildUpstreamDispatcher = (upstreamProxy: string | undefined): Disp
     try {
       return new EnvHttpProxyAgent(connectionOptions)
     } catch {
-      throw new Error(invalidEnvironmentProxyMessage)
+      throw new InvalidProxyEnvironmentError()
     }
   }
 
@@ -51,8 +56,8 @@ let configuredUpstreamProxy: string | undefined
 /**
  * Builds this process's upstream dispatcher from the resolved upstreamProxy.
  *
- * start, auth and models call it once, after reading the config and before their first upstream
- * call. Until one does, upstream calls connect directly, as they did before the key existed. A
+ * start, auth, models and usage call it once, after reading the config and before their first
+ * upstream call. Until one does, upstream calls connect directly, as they did before the key existed. A
  * config reload never calls it, which is why upstreamProxy, like host and port, takes effect on
  * restart. It is never undici's global dispatcher, so calls to the relay itself stay direct.
  */

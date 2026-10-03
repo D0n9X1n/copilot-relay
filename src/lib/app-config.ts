@@ -677,6 +677,21 @@ export async function readAppConfig(): Promise<AppConfig> {
   return config
 }
 
+/**
+ * Reads and resolves config.yaml without creating, completing or rewriting it, for a command that
+ * writes no file, such as `usage`. Returns undefined when there is no config.yaml; unlike
+ * readAppConfig, it consults neither a legacy config file nor the default template. An invalid
+ * file throws the error readAppConfig would.
+ */
+export const readExistingAppConfig = async (): Promise<AppConfig | undefined> => {
+  const snapshot = await readFileSnapshot(paths.configPath)
+  if (snapshot.raw === null) {
+    return undefined
+  }
+
+  return resolveConfig(parseConfigYaml(snapshot.raw))
+}
+
 const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>
   left.resolvedPath === right.resolvedPath
   && left.raw === right.raw

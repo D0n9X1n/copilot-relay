@@ -448,9 +448,14 @@ type 和消息；路由追加 ` (request_id=<id>)`，计数模式不会读取它
 | URL | 指向该代理的 `ProxyAgent` |
 
 `configureUpstreamDispatcher` 在每个进程中构建一次，时机是读完配置之后、第一次上游
-调用之前：`startRelay` 中，以及 `auth` 和 `models` 命令中。`applyRuntimeConfig` 从不
-调用它，所以 `upstreamProxy` 与 `host`、`port` 一样在重启后生效。它从不作为 undici 的
-全局 dispatcher：`status` 探测用全局 `fetch` 调用 relay 自己的监听器，保持直连。
+调用之前：`startRelay` 中，以及 `auth`、`models` 和 `usage` 命令中。`applyRuntimeConfig`
+从不调用它，所以 `upstreamProxy` 与 `host`、`port` 一样在重启后生效。它从不作为 undici
+的全局 dispatcher：`status` 探测用全局 `fetch` 调用 relay 自己的监听器，保持直连。
+
+`usage` 不写任何文件，所以 `src/lib/usage.ts` 的 `loadCopilotUsage` 用
+`readExistingAppConfig` 读取配置，而不是会创建或补全 `config.yaml` 的 `readAppConfig`。
+它解析已有文件但不改写；没有文件时返回空，请求随后直连。整个命令在 `withoutLogging`
+中运行，所以请求本会记录的日志行不会进入日志文件。
 
 `EnvHttpProxyAgent` 在构建时读取代理变量，小写写法优先；未设置 `HTTPS_PROXY` 时，
 HTTPS 目标使用 `HTTP_PROXY`。它对每个请求检查 `NO_PROXY`。变量格式错误时，undici 抛出
@@ -1024,6 +1029,10 @@ GitHub 调用经过 relay 的上游 dispatcher，而不是全局 `fetch`，所�
 `redirectGitHubTo` 给 undici 的 `Agent` 打补丁，让发往 `github.com` 和 `api.github.com`
 的请求到达它，`refuseExternalConnections` 让任何其他离开本机的连接直接抛错。
 `withProxyEnvironment` 为单个测试设置代理变量，结束后恢复。
+
+这类替身要在文件中第一个 `test()` 之前启动。`node:test` 会在目前已注册的测试全部结束时
+立即运行全局 `after()` 钩子；测试之间若有顶层 `await`，这可能就发生在等待期间，之后
+注册的 `after()` 钩子永远不会运行。替身于是一直在监听，测试进程永不退出。
 
 ### 文档的结构性测试
 

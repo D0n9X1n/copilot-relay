@@ -684,8 +684,9 @@ change:
 ## upstreamProxy rules
 
 `upstreamProxy` sends the relay's outbound calls through an HTTP proxy: every
-Copilot request, the startup check, token refresh, and GitHub sign-in. Calls to
-the relay's own listener, such as the `status` probes, never use it.
+Copilot request, the startup check, token refresh, GitHub sign-in, and the
+`copilot-relay usage` request. Calls to the relay's own listener, such as the
+`status` probes, never use it.
 
 | Value | Route |
 | --- | --- |
@@ -696,6 +697,11 @@ the relay's own listener, such as the `status` probes, never use it.
 The relay tunnels each call through the proxy with `CONNECT`, so its HTTPS calls
 stay encrypted end to end. It reads no other proxy setting, such as the operating
 system's proxy configuration or a PAC file.
+
+`copilot-relay usage` reads `upstreamProxy` from `config.yaml` without writing the
+file. Without a `config.yaml` it connects directly; with one it cannot read, or
+one that is invalid, it stops before sending anything. See
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 `upstreamProxy` is validated when the config is loaded, and startup fails if it
 is not:

@@ -64,7 +64,7 @@ copilot-relay cache --json
 ```
 
 Check your Copilot plan and quota with `copilot-relay usage`; add `--json` for
-scripts. It asks GitHub directly with the stored token, so no relay needs to run.
+scripts. It asks GitHub with the stored token, so no relay needs to run.
 
 ## Go further
 

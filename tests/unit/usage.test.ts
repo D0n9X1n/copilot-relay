@@ -24,11 +24,13 @@ const { setupProxyAuth } = await import("../../src/lib/auth")
 const { vscodeVersion } = await import("../../src/lib/config")
 const { flushLogs } = await import("../../src/lib/log")
 const { paths } = await import("../../src/lib/paths")
-const { fetchUpstream } = await import("../../src/lib/upstream-dispatcher")
+const { configureUpstreamDispatcher, getUpstreamDispatcher } = await import("../../src/lib/upstream-dispatcher")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 // The token file the tests write must be the temporary one.
 assert.ok(paths.githubTokenPath.startsWith(home), paths.githubTokenPath)
+
+type Answer = (request: Request) => Response | Promise<Response>
 
 // The request as GitHub would have received it.
 const toRequest = (url: URL, incoming: IncomingMessage): Request => {
@@ -40,29 +42,31 @@ const toRequest = (url: URL, incoming: IncomingMessage): Request => {
   return new Request(url, { headers, method: incoming.method })
 }
 
-// Stands in for GitHub where a call goes through undici's fetch with the upstream dispatcher
-// (#153), as sign-in's user lookup and token exchange do. Those calls are redirected to this local
-// server, because a stub on the global fetch no longer sees them. A connection off this machine
-// throws, so nothing reaches the network.
+// Stands in for GitHub. GitHub calls go through undici's fetch with the upstream dispatcher (#153),
+// so they are redirected to this local server rather than stubbed on the global fetch. The current
+// test answers through `answer`, or makes a call fail before it is sent through `dispatchFailure`.
+// A connection off this machine throws, so nothing reaches the network.
 //
 // This comes before the first test() because of its top-level await. node:test runs the after()
 // hooks as soon as every test registered so far has finished, which can happen during such an
 // await, and an after() hook registered later never runs.
-let answerGitHub: ((request: Request) => Response | Promise<Response>) | undefined
+let answer: Answer | undefined
+let dispatchFailure: (() => Error) | undefined
 
 const github = await startFakeGitHub(async (url, incoming, response) => {
-  if (answerGitHub === undefined) {
+  if (answer === undefined) {
     throw new Error("No test is answering GitHub")
   }
 
-  await replyWith(response, await answerGitHub(toRequest(url, incoming)))
+  await replyWith(response, await answer(toRequest(url, incoming)))
 })
-const redirect = redirectGitHubTo(github.origin)
+const redirect = redirectGitHubTo(github.origin, () => dispatchFailure?.())
 const restoreConnections = refuseExternalConnections()
 
 test.after(async () => {
   restoreConnections()
   redirect.restore()
+  configureUpstreamDispatcher(undefined)
   await github.close()
   await flushLogs()
   await fs.rm(home, { recursive: true, force: true })
@@ -273,24 +277,36 @@ const storeToken = async (value: string): Promise<void> => {
   await fs.writeFile(paths.githubTokenPath, `${value}\n`)
 }
 
-// Stands in for GitHub for one test: records each request and answers it with `answer`. Nothing
-// reaches the network.
-const mockFetch = (t: TestContext, answer: (request: Request) => Response | Promise<Response>): Array<Request> => {
+// Answers GitHub for one test with `reply`, and returns each request it answered. A reply that
+// throws drops the connection.
+const mockGitHub = (t: TestContext, reply: Answer): Array<Request> => {
   const requests: Array<Request> = []
 
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const request = new Request(input, init)
+  answer = (request) => {
     requests.push(request)
+    return reply(request)
+  }
 
-    return answer(request)
+  t.after(() => {
+    answer = undefined
   })
 
   return requests
 }
 
+// Makes each GitHub call in one test fail before it is sent, as a network error would. fetch
+// rejects with "fetch failed" and the returned error as its cause.
+const failGitHub = (t: TestContext, failure: () => Error): void => {
+  dispatchFailure = failure
+
+  t.after(() => {
+    dispatchFailure = undefined
+  })
+}
+
 test("the usage request is a GET of copilot_internal/user that carries the stored token", async (t) => {
   await storeToken(token)
-  const requests = mockFetch(t, () => Response.json(account))
+  const requests = mockGitHub(t, () => Response.json(account))
 
   await loadCopilotUsage()
 
@@ -300,17 +316,23 @@ test("the usage request is a GET of copilot_internal/user that carries the store
   assert.equal(requests[0].headers.get("authorization"), `token ${token}`)
 })
 
-// Why (#153): the token exchange and the user lookup go through the upstream dispatcher, so the
-// stand-in answers them. The usage request still uses the global fetch here; the stub forwards it
-// through the same dispatcher, so all three reach the stand-in the same way and their headers
-// compare.
+// Why (#153): GitHub calls go through the upstream dispatcher, so upstreamProxy applies to them.
+// Without a config.yaml, usage builds the direct one.
+test("the usage request goes through the upstream dispatcher", async (t) => {
+  await storeToken(token)
+  mockGitHub(t, () => Response.json(account))
+  const sentBefore = redirect.calls.length
+
+  await loadCopilotUsage()
+
+  const calls = redirect.calls.slice(sentBefore)
+  assert.deepEqual(calls.map((call) => `${call.method} ${call.url}`), [`GET ${usageUrl}`])
+  assert.equal(calls[0].dispatcher, getUpstreamDispatcher())
+})
+
 test("the usage request sends the headers the Copilot token exchange sends", async (t) => {
   await storeToken(token)
-  const requests: Array<Request> = []
-  const unexpected: Array<string> = []
-
-  answerGitHub = (request) => {
-    requests.push(request)
+  const requests = mockGitHub(t, (request) => {
     if (request.url === "https://api.github.com/copilot_internal/v2/token") {
       return Response.json({ token: "copilot-private-token-sentinel", refresh_in: 86_400 })
     }
@@ -319,27 +341,7 @@ test("the usage request sends the headers the Copilot token exchange sends", asy
       return Response.json({ login: "fixture" })
     }
 
-    if (request.url === usageUrl) {
-      return Response.json(account)
-    }
-
-    unexpected.push(request.url)
-
-    return Response.json({}, { status: 404 })
-  }
-
-  t.after(() => {
-    answerGitHub = undefined
-  })
-
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const request = new Request(input, init)
-
-    return fetchUpstream(request.url, {
-      headers: Object.fromEntries(request.headers),
-      method: request.method,
-      signal: request.signal,
-    })
+    return Response.json(account)
   })
 
   // The config the commands build with readProxyConfig, whose editor version is this constant.
@@ -355,7 +357,10 @@ test("the usage request sends the headers the Copilot token exchange sends", asy
   await setupProxyAuth(config)
   await loadCopilotUsage()
 
-  assert.deepEqual(unexpected, [], "No device authorization or other network call")
+  // No device authorization or other network call: only the exchange, the user lookup and usage.
+  const expected = new Set([usageUrl, "https://api.github.com/copilot_internal/v2/token", "https://api.github.com/user"])
+  assert.deepEqual(requests.map((request) => request.url).filter((url) => !expected.has(url)), [])
+
   const headersOf = (url: string) => [...(requests.find((request) => request.url === url)?.headers ?? [])]
   const exchange = headersOf("https://api.github.com/copilot_internal/v2/token")
 
@@ -389,7 +394,7 @@ const noNetwork = () => {
 
 test("without a stored token the command suggests copilot-relay auth and sends nothing", async (t) => {
   await fs.rm(paths.githubTokenPath, { recursive: true, force: true })
-  const requests = mockFetch(t, noNetwork)
+  const requests = mockGitHub(t, noNetwork)
 
   const message = await failure()
 
@@ -400,7 +405,7 @@ test("without a stored token the command suggests copilot-relay auth and sends n
 
 test("an empty token file counts as no token", async (t) => {
   await storeToken("")
-  mockFetch(t, noNetwork)
+  mockGitHub(t, noNetwork)
 
   assert.match(await failure(), /^No GitHub token is stored at .+ Sign in with copilot-relay auth\.$/)
 })
@@ -408,7 +413,7 @@ test("an empty token file counts as no token", async (t) => {
 for (const status of [401, 403]) {
   test(`HTTP ${status} says GitHub rejected the token and suggests copilot-relay auth`, async (t) => {
     await storeToken(token)
-    mockFetch(t, () => new Response("Bad credentials", { status }))
+    mockGitHub(t, () => new Response("Bad credentials", { status }))
 
     assert.equal(
       await failure(),
@@ -419,25 +424,21 @@ for (const status of [401, 403]) {
 
 test("any other HTTP status is named", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => new Response("unavailable", { status: 500 }))
+  mockGitHub(t, () => new Response("unavailable", { status: 500 }))
 
   assert.equal(await failure(), "GitHub answered the usage request with HTTP 500.")
 })
 
 test("a network error names its cause", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => {
-    throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND api.github.com") })
-  })
+  failGitHub(t, () => new Error("getaddrinfo ENOTFOUND api.github.com"))
 
   assert.equal(await failure(), "Could not reach GitHub: getaddrinfo ENOTFOUND api.github.com")
 })
 
 test("a refused connection whose cause has no message is named by its code", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => {
-    throw new TypeError("fetch failed", { cause: Object.assign(new AggregateError([]), { code: "ECONNREFUSED" }) })
-  })
+  failGitHub(t, () => Object.assign(new AggregateError([]), { code: "ECONNREFUSED" }))
 
   assert.equal(await failure(), "Could not reach GitHub: ECONNREFUSED")
 })
@@ -446,9 +447,7 @@ test("an error that quotes the token is printed without it", async (t) => {
   await storeToken(token)
 
   // fetch quotes an invalid header value in its error, and the authorization header is one.
-  mockFetch(t, () => {
-    throw new TypeError(`Headers.append: "token ${token}" is an invalid header value.`)
-  })
+  failGitHub(t, () => new TypeError(`Headers.append: "token ${token}" is an invalid header value.`))
 
   assert.equal(await failure(), 'Could not reach GitHub: Headers.append: "token [redacted]" is an invalid header value.')
 })
@@ -458,27 +457,26 @@ test("an error that quotes the token around a hidden character is printed withou
 
   // terminalText drops the zero-width space and joins the token back up, so the line is redacted
   // after terminalText has run.
-  mockFetch(t, () => {
-    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 4)}\u200b${token.slice(4)}`) })
-  })
+  failGitHub(t, () => new Error(`upstream echoed ${token.slice(0, 4)}\u200b${token.slice(4)}`))
 
   assert.equal(await failure(), "Could not reach GitHub: upstream echoed [redacted]")
 })
 
 test("an error that quotes the token with a space inside it is printed without its reason", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => {
-    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 20)} ${token.slice(20)}`) })
-  })
+  failGitHub(t, () => new Error(`upstream echoed ${token.slice(0, 20)} ${token.slice(20)}`))
 
   assert.equal(await failure(), "Could not reach GitHub.")
 })
 
 test("a request that gets no answer in time says how long it waited", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => {
-    throw new DOMException("The operation was aborted due to timeout", "TimeoutError")
-  })
+
+  // The stand-in never answers. The command's 30-second deadline fires after 50 ms instead, with
+  // the TimeoutError AbortSignal.timeout gives.
+  const timeout = AbortSignal.timeout.bind(AbortSignal)
+  t.mock.method(AbortSignal, "timeout", () => timeout(50))
+  mockGitHub(t, () => new Promise<Response>(() => {}))
 
   assert.equal(await failure(), "GitHub did not answer within 30 seconds.")
 })
@@ -486,7 +484,7 @@ test("a request that gets no answer in time says how long it waited", async (t) 
 for (const body of ["<html>", "[]"]) {
   test(`an answer of ${body} is reported as not a JSON object`, async (t) => {
     await storeToken(token)
-    mockFetch(t, () => new Response(body, { headers: { "content-type": "application/json" } }))
+    mockGitHub(t, () => new Response(body, { headers: { "content-type": "application/json" } }))
 
     assert.equal(await failure(), "GitHub's answer to the usage request was not a JSON object.")
   })
@@ -506,7 +504,7 @@ const echoes: Array<[string, Record<string, unknown>]> = [
 for (const [where, body] of echoes) {
   test(`an answer that echoes the token in ${where} is refused, with none of it printed`, async (t) => {
     await storeToken(token)
-    mockFetch(t, () => Response.json(body))
+    mockGitHub(t, () => Response.json(body))
 
     assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
   })
@@ -516,7 +514,7 @@ test("a token with no visible character does not refuse every answer", async (t)
   // U+0085 is valid in a header value and terminalText removes it, so no printed text can show this
   // token, while every text contains its empty visible form.
   await storeToken("\u0085\u0085")
-  mockFetch(t, () => Response.json(account))
+  mockGitHub(t, () => Response.json(account))
 
   const usage = await loadCopilotUsage()
 
@@ -527,14 +525,14 @@ test("a stored token with a character terminalText removes is still found with a
   // U+0085 is valid in a header value and terminalText removes it, so the token is compared as a
   // terminal shows it.
   await storeToken(`${token.slice(0, 20)}\u0085${token.slice(20)}`)
-  mockFetch(t, () => Response.json({ ...account, copilot_plan: `${token.slice(0, 20)} ${token.slice(20)}` }))
+  mockGitHub(t, () => Response.json({ ...account, copilot_plan: `${token.slice(0, 20)} ${token.slice(20)}` }))
 
   assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
 })
 
 test("an answer that does not show the token passes both checks unchanged", async (t) => {
   await storeToken(token)
-  mockFetch(t, () => Response.json(account))
+  mockGitHub(t, () => Response.json(account))
 
   assert.deepEqual(await loadCopilotUsage(), parseCopilotUsage(account))
 })
@@ -543,7 +541,7 @@ test("a token with fewer than 16 letters and digits is matched only as an exact 
   // The fixture's SKU and reset date print "sku" and "2026" one after the other, so ordinary text
   // can spell a short token by chance.
   await storeToken("sku-2026")
-  mockFetch(t, () => Response.json(account))
+  mockGitHub(t, () => Response.json(account))
 
   const usage = await loadCopilotUsage()
 
@@ -556,7 +554,7 @@ const fifteenLettersAndDigits = "abcdefgh-1234567"
 
 test("a token with exactly 16 letters and digits is found with a space inside it", async (t) => {
   await storeToken(sixteenLettersAndDigits)
-  mockFetch(t, () => Response.json({ ...account, copilot_plan: `${sixteenLettersAndDigits.slice(0, 8)} ${sixteenLettersAndDigits.slice(8)}` }))
+  mockGitHub(t, () => Response.json({ ...account, copilot_plan: `${sixteenLettersAndDigits.slice(0, 8)} ${sixteenLettersAndDigits.slice(8)}` }))
 
   assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
 })
@@ -564,7 +562,7 @@ test("a token with exactly 16 letters and digits is found with a space inside it
 test("a token with exactly 15 letters and digits is not found with a space inside it, so the answer prints unchanged", async (t) => {
   const answer = { ...account, copilot_plan: `${fifteenLettersAndDigits.slice(0, 8)} ${fifteenLettersAndDigits.slice(8)}` }
   await storeToken(fifteenLettersAndDigits)
-  mockFetch(t, () => Response.json(answer))
+  mockGitHub(t, () => Response.json(answer))
 
   assert.deepEqual(await loadCopilotUsage(), parseCopilotUsage(answer))
 })
@@ -572,7 +570,7 @@ test("a token with exactly 15 letters and digits is not found with a space insid
 test("an exact copy of a token with fewer than 16 letters and digits is still refused", async (t) => {
   // Too short for the letters-and-digits comparison, so only the exact check can find it.
   await storeToken(fifteenLettersAndDigits)
-  mockFetch(t, () => Response.json({ ...account, copilot_plan: fifteenLettersAndDigits }))
+  mockGitHub(t, () => Response.json({ ...account, copilot_plan: fifteenLettersAndDigits }))
 
   assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
 })
@@ -580,7 +578,7 @@ test("an exact copy of a token with fewer than 16 letters and digits is still re
 test("a token file that cannot be read is reported by its error code", async (t) => {
   await fs.rm(paths.githubTokenPath, { recursive: true, force: true })
   await fs.mkdir(paths.githubTokenPath, { recursive: true })
-  mockFetch(t, noNetwork)
+  mockGitHub(t, noNetwork)
 
   assert.match(await failure(), /^Could not read the GitHub token at .+github_token: E[A-Z]+\.$/)
 })

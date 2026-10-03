@@ -183,7 +183,7 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/cache.ts` | `copilot-relay cache`: prompt-cache hit rate per model and upstream route. Reads only local logs; no HTTP route, no upstream call, no file written. |
 | `src/lib/cache-report.ts` | Parses upstream `completion` log entries, normalizes total input per route, buckets by local hour or day, and renders the report. |
 | `src/usage.ts` | `copilot-relay usage`: the Copilot plan and quota GitHub reports for the stored GitHub token. Needs no running relay; no HTTP route, no Copilot token exchange, no file written. |
-| `src/lib/usage.ts` | Reads the stored token, requests `copilot_internal/user` through `getCopilotUsage`, keeps only the plan and quota fields, renders the report, and turns each failure into one line. |
+| `src/lib/usage.ts` | Reads the stored token and `upstreamProxy` without rewriting `config.yaml`, requests `copilot_internal/user` through `getCopilotUsage`, keeps only the plan and quota fields, renders the report, and turns each failure into one line. |
 | `src/lib/atomic-file.ts` | Snapshot conflict checks and atomic target replacement for user-owned files. |
 | `src/lib/address.ts` | Safe listener/client URL formatting, including IPv6 and wildcard hosts. |
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
