@@ -158,6 +158,32 @@ test("nondebug observations create no capture directory", async () => {
   }
 })
 
+// Why: every upstream request body used to be copied into a Buffer just to count its bytes, even
+// when the trace records nothing (#141).
+test("an unrecorded upstream request body is counted without being copied", async (t) => {
+  const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000030", new Request("http://localhost/v1/messages"), config, {}, false)
+  const body = JSON.stringify({ content: "診断".repeat(1000) })
+  const from = t.mock.method(Buffer, "from")
+
+  await withRequestTrace(trace, async () => {
+    const response = await recordedFetch({
+      method: "POST",
+      path: "/chat/completions",
+      body,
+      headers: {},
+      upstreamRequestId: "10000000-0000-4000-8000-000000000031",
+    }, async () => Response.json({ choices: [{ finish_reason: "stop" }] }))
+    await response.text()
+  })
+  from.mock.restore()
+  trace.handlerSettled()
+  await trace.captureResponse(Response.json({ stop_reason: "end_turn" })).text()
+  await trace.finished
+
+  assert.equal(from.mock.calls.filter((call) => call.arguments[0] === body).length, 0)
+  assert.equal(trace.manifest.exchanges[0].request.bytes, Buffer.byteLength(body))
+})
+
 test("refresh failures are recorded without credentials or a fabricated retry", async () => {
   const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000003", new Request("http://localhost/v1/messages"), config, {}, true)
 
