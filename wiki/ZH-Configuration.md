@@ -580,7 +580,8 @@ token，因此修改之后：
 
 `upstreamProxy` 让 relay 的出站调用经过一个 HTTP 代理：每个 Copilot 请求、启动检查、
 token 刷新、GitHub 登录，以及 `copilot-relay usage` 的请求。调用 relay 自己监听器的
-请求（例如 `status` 探测）从不使用它。
+请求（例如 `status` 探测）从不使用它，也不使用环境中的代理，即使 `NODE_USE_ENV_PROXY=1`
+让 Node 自己的 `fetch` 使用 `HTTP_PROXY`。
 
 | 值 | 路由 |
 | --- | --- |

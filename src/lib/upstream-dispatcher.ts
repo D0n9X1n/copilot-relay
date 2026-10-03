@@ -1,5 +1,6 @@
-// The one undici dispatcher every upstream call goes through: the Copilot API and GitHub sign-in.
-// Calls to the relay's own listener, such as the status probes, use the global fetch instead.
+// The one undici dispatcher every upstream call goes through: the Copilot API and GitHub.
+// Calls to the relay's own listener, such as the status probes, use a direct dispatcher of their
+// own, relayListener in src/status.ts.
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici"
 
 import { log, registerLogSecret } from "~/lib/log"
@@ -138,7 +139,7 @@ const minimumRegisteredLength = 8
  * upstream call. Until one does, upstream calls connect directly, as they did before the key
  * existed. A config reload never calls it, which is why upstreamProxy, like host and port, takes
  * effect on restart, and why a reload registers no credentials. It is never undici's global
- * dispatcher, so calls to the relay itself stay direct.
+ * dispatcher, and calls to the relay itself never use it.
  *
  * Only the user:password pair and the Basic value are registered, never a user name or password
  * alone: registerLogSecret replaces a value in every log line, and a short or common user name such

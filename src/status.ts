@@ -1,5 +1,6 @@
 // `copilot-relay status`: report whether a relay is running, and whether it works.
 import { defineCommand } from "citty"
+import { Agent, fetch as undiciFetch, type RequestInit } from "undici"
 
 import type { AppConfig } from "~/lib/app-config"
 
@@ -349,13 +350,31 @@ export const renderStatus = (status: RelayStatus, color = false): Array<string> 
   return lines
 }
 
+let relayAgent: Agent | undefined
+
+/**
+ * How the probes reach the relay's own listener: undici's fetch with a direct Agent of their own,
+ * never the global dispatcher and never the upstream one. With NODE_USE_ENV_PROXY=1, Node's fetch
+ * sends even a request to localhost through HTTP_PROXY unless NO_PROXY exempts it, so through a
+ * proxy that refuses, status would report a healthy relay as unusable. upstreamProxy is for
+ * Copilot and GitHub, not for this machine.
+ *
+ * An object, so a test can replace fetch.
+ */
+export const relayListener = {
+  fetch: (url: string, init: RequestInit) => {
+    relayAgent ??= new Agent()
+    return undiciFetch(url, { ...init, dispatcher: relayAgent })
+  },
+}
+
 const probe = async (
   url: string,
   init: RequestInit,
   timeoutMs: number,
 ): Promise<{ body: unknown; ms: number; ok: boolean; status: number }> => {
   const started = performance.now()
-  const response = await fetch(url, {
+  const response = await relayListener.fetch(url, {
     ...init,
     signal: AbortSignal.timeout(timeoutMs),
   })

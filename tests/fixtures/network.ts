@@ -254,8 +254,9 @@ const parseUrl = (value: string): URL | undefined => {
  * A forward proxy that records every request it receives, in both forms a client may send: CONNECT
  * for a tunnel, which undici uses, and an absolute-form URL. It relays only to this machine and
  * answers 403 for any other host, so a call routed through it never reaches GitHub or Copilot.
+ * With refuseAll it answers 403 to every request, one for this machine included.
  */
-export const startRecordingProxy = async (): Promise<RecordingProxy> => {
+export const startRecordingProxy = async (options: { refuseAll?: boolean } = {}): Promise<RecordingProxy> => {
   const records: Array<ProxyRecord> = []
   const tunnels = new Set<Duplex>()
   const server = createServer((request, response) => {
@@ -265,7 +266,12 @@ export const startRecordingProxy = async (): Promise<RecordingProxy> => {
       target: request.url,
     })
     const target = parseUrl(request.url ?? "")
-    if (target === undefined || target.protocol !== "http:" || !loopbackHosts.has(target.hostname)) {
+    if (
+      options.refuseAll === true
+      || target === undefined
+      || target.protocol !== "http:"
+      || !loopbackHosts.has(target.hostname)
+    ) {
       response.writeHead(403)
       response.end()
       return
@@ -289,7 +295,7 @@ export const startRecordingProxy = async (): Promise<RecordingProxy> => {
     })
     socket.on("error", () => socket.destroy())
     const target = parseUrl(`http://${request.url ?? ""}`)
-    if (target === undefined || !loopbackHosts.has(target.hostname)) {
+    if (options.refuseAll === true || target === undefined || !loopbackHosts.has(target.hostname)) {
       socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
       return
     }

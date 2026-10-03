@@ -541,8 +541,12 @@ undici dispatchers, all with the same HTTP/1.1 and keep-alive options:
 and before the first upstream call: in `startRelay`, and in the `auth`, `models`
 and `usage` commands. `applyRuntimeConfig` never calls it, which is why
 `upstreamProxy`, like `host` and `port`, takes effect on restart. It is never
-undici's global dispatcher: the `status` probes call the relay's own listener with
-the global `fetch`, and stay direct.
+undici's global dispatcher. The `status` probes call the relay's own listener
+through `relayListener` in `src/status.ts`: undici's `fetch` with a direct `Agent`
+of their own, neither this dispatcher nor the global one. With
+`NODE_USE_ENV_PROXY=1`, Node's own `fetch` sends even a request to localhost
+through `HTTP_PROXY` unless `NO_PROXY` exempts it, and through a proxy that
+refuses, `status` would report a healthy relay as unusable.
 
 `usage` writes no file, so `loadCopilotUsage` in `src/lib/usage.ts` reads the
 config with `readExistingAppConfig` rather than `readAppConfig`, which creates or

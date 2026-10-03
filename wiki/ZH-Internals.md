@@ -450,7 +450,11 @@ type 和消息；路由追加 ` (request_id=<id>)`，计数模式不会读取它
 `configureUpstreamDispatcher` 在每个进程中构建一次，时机是读完配置之后、第一次上游
 调用之前：`startRelay` 中，以及 `auth`、`models` 和 `usage` 命令中。`applyRuntimeConfig`
 从不调用它，所以 `upstreamProxy` 与 `host`、`port` 一样在重启后生效。它从不作为 undici
-的全局 dispatcher：`status` 探测用全局 `fetch` 调用 relay 自己的监听器，保持直连。
+的全局 dispatcher。`status` 探测通过 `src/status.ts` 的 `relayListener` 调用 relay 自己的
+监听器：undici 的 `fetch` 加上它们自己的直连 `Agent`，既不用这个 dispatcher，也不用全局
+dispatcher。设置 `NODE_USE_ENV_PROXY=1` 时，Node 自己的 `fetch` 连发往 localhost 的请求
+也会经过 `HTTP_PROXY`，除非 `NO_PROXY` 豁免它；经过一个拒绝连接的代理时，`status` 会把
+健康的 relay 报告为不可用。
 
 `usage` 不写任何文件，所以 `src/lib/usage.ts` 的 `loadCopilotUsage` 用
 `readExistingAppConfig` 读取配置，而不是会创建或补全 `config.yaml` 的 `readAppConfig`。

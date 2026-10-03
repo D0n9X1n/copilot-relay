@@ -37,7 +37,7 @@ process.kill = (...args) => {
 
 syncBuiltinESMExports()
 
-const { checkDeep, hasVersionMismatch, readModels, renderStatus, resolveExitCode, toStatusConfig } =
+const { checkDeep, hasVersionMismatch, readModels, relayListener, renderStatus, resolveExitCode, toStatusConfig } =
   await import("../../src/status")
 const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
   await import("../../src/lib/lifecycle")
@@ -46,6 +46,12 @@ const { appVersion } = await import("../../src/lib/version")
 type RelayStatus = Awaited<
   ReturnType<typeof import("../../src/status").collectStatus>
 >
+
+// Every probe in this file is stubbed through relayListener. One that is not fails here instead
+// of reaching a relay listening on this machine, such as a developer's own on 4142.
+relayListener.fetch = async () => {
+  throw new Error("An unstubbed status probe")
+}
 
 // Routed through toStatusConfig so every render below exercises the real
 // AppConfig -> StatusConfig mapping rather than a hand-written parallel shape.
@@ -204,7 +210,7 @@ for (const [name, body, detail] of [
 ] as const) {
   test(`deep probe accepts ${name} without overriding effort`, async (t) => {
     let captured: { url: unknown; init?: RequestInit } | undefined
-    t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    t.mock.method(relayListener, "fetch", async (url: unknown, init?: RequestInit) => {
       captured = { url, init }
       return Response.json(body)
     })
@@ -249,7 +255,7 @@ for (const [name, body] of [
   ["missing response", null],
 ] as const) {
   test(`deep probe rejects ${name}`, async (t) => {
-    t.mock.method(globalThis, "fetch", async () => Response.json(body))
+    t.mock.method(relayListener, "fetch", async () => Response.json(body))
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
@@ -263,7 +269,7 @@ for (const [status, body, detail] of [
   [500, exhaustedProbeResponse, "http 500"],
 ] as const) {
   test(`deep probe rejects HTTP ${status} regardless of response content`, async (t) => {
-    t.mock.method(globalThis, "fetch", async () => Response.json(body, { status }))
+    t.mock.method(relayListener, "fetch", async () => Response.json(body, { status }))
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
@@ -282,7 +288,7 @@ for (const [name, response, detail] of [
   }, "timed out"],
 ] as const) {
   test(`deep probe rejects ${name}`, async (t) => {
-    t.mock.method(globalThis, "fetch", async () => response())
+    t.mock.method(relayListener, "fetch", async () => response())
     const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
@@ -821,7 +827,7 @@ test("shows whether an apiKey is set, never the key itself", () => {
 // probes of those routes send it, and only when one is configured.
 test("the models probe sends the apiKey only when one is configured", async (t) => {
   const calls: Array<{ url: unknown; headers: unknown }> = []
-  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+  t.mock.method(relayListener, "fetch", async (url: unknown, init?: RequestInit) => {
     calls.push({ url, headers: init?.headers })
     return Response.json({ data: [{ id: "gpt-6-astra" }] })
   })
@@ -836,7 +842,7 @@ test("the models probe sends the apiKey only when one is configured", async (t) 
 
 test("the deep probe sends the apiKey with its message request", async (t) => {
   let captured: RequestInit | undefined
-  t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
+  t.mock.method(relayListener, "fetch", async (_url: unknown, init?: RequestInit) => {
     captured = init
     return Response.json({
       ...exhaustedProbeResponse,

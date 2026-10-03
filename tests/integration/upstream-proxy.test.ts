@@ -34,6 +34,7 @@ const { buildUpstreamDispatcher, configureUpstreamDispatcher } = await import(".
 
 const entry = new URL("../../src/main.ts", import.meta.url)
 const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
+const statusModule = new URL("../../src/status.ts", import.meta.url)
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 
 // A safety net: a connection off this machine fails the test instead of reaching GitHub or Copilot.
@@ -204,7 +205,7 @@ test("a proxied connection idle for longer than undici's 4 s default is reused",
 })
 
 // Why: upstreamProxy is for Copilot and GitHub. The status probes call the relay's own listener on
-// this machine, so they keep the global fetch whatever upstreamProxy says.
+// this machine, so they use their own direct dispatcher whatever upstreamProxy says.
 test("status probes connect to the relay directly while upstreamProxy is set", async (t) => {
   const relay = await startJsonServer({
     content: [{ text: "ok", type: "text" }],
@@ -224,6 +225,72 @@ test("status probes connect to the relay directly while upstreamProxy is set", a
   assert.equal(result.ok, true, result.detail)
   assert.deepEqual(proxy.records, [])
   assert.deepEqual(relay.requests.map((request) => `${request.method} ${request.url}`), ["POST /v1/messages"])
+})
+
+// Why (#168): with NODE_USE_ENV_PROXY=1, Node's own fetch sends even a request to localhost through
+// HTTP_PROXY when NO_PROXY does not exempt it. Through a proxy that refuses, status would report a
+// healthy relay as unusable. The probes use a direct dispatcher of their own. On a Node without
+// that mode, this passes trivially.
+test("status probes reach the relay directly under NODE_USE_ENV_PROXY with HTTP_PROXY set", async (t) => {
+  const relay = await startJsonServer({
+    content: [{ text: "ok", type: "text" }],
+    data: [{ id: "claude-opus-5.5" }],
+    role: "assistant",
+    stop_reason: "end_turn",
+    type: "message",
+  })
+  const proxy = await startRecordingProxy({ refuseAll: true })
+  const childHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-env-proxy-status-"))
+  t.after(async () => {
+    await proxy.close()
+    await relay.close()
+    await fs.rm(childHome, { recursive: true, force: true })
+  })
+
+  // The probes status makes, run in a child so that Node reads NODE_USE_ENV_PROXY at startup.
+  const script = `
+    const network = await import(${JSON.stringify(networkFixture.href)});
+    network.refuseExternalConnections();
+    const { checkDeep, readModels } = await import(${JSON.stringify(statusModule.href)});
+    const deep = await checkDeep(${JSON.stringify(relay.origin)}, "claude-opus-5.5", "");
+    const models = await readModels(${JSON.stringify(relay.origin)}, "");
+    console.log("PROBES=" + JSON.stringify({ deep, models }));
+  `
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = execFile(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+      cwd,
+      env: {
+        ...withoutProxyVariables(process.env),
+        HOME: childHome,
+        HTTP_PROXY: proxy.url,
+        NODE_USE_ENV_PROXY: "1",
+        USERPROFILE: childHome,
+      },
+      timeout: 30_000,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(`${error.message}\n${stdout}${stderr}`))
+        return
+      }
+
+      resolve(stdout)
+    })
+    child.stdin?.end()
+  })
+
+  const line = output.split("\n").find((entry) => entry.startsWith("PROBES="))
+  assert.ok(line, output)
+  const probes = JSON.parse(line.slice("PROBES=".length)) as {
+    deep: { detail?: string; ok: boolean }
+    models: Array<string>
+  }
+  assert.equal(probes.deep.ok, true, probes.deep.detail)
+  assert.deepEqual(probes.models, ["claude-opus-5.5"])
+  assert.deepEqual(proxy.records, [])
+  assert.deepEqual(
+    relay.requests.map((request) => `${request.method} ${request.url}`),
+    ["POST /v1/messages", "GET /v1/models"],
+  )
 })
 
 interface RelayRun {

@@ -686,7 +686,8 @@ change:
 `upstreamProxy` sends the relay's outbound calls through an HTTP proxy: every
 Copilot request, the startup check, token refresh, GitHub sign-in, and the
 `copilot-relay usage` request. Calls to the relay's own listener, such as the
-`status` probes, never use it.
+`status` probes, never use it, nor a proxy from the environment, even when
+`NODE_USE_ENV_PROXY=1` makes Node's own `fetch` use `HTTP_PROXY`.
 
 | Value | Route |
 | --- | --- |
