@@ -386,13 +386,17 @@ const queueLogEntry = (entry: LogEntry): void => {
 }
 
 // Logging stays fire-and-forget on the request path; teardown can explicitly wait for queued
-// writes and close the log file before removing a temporary home or exiting.
+// writes and close the log file before removing a temporary home or exiting. Each call waits only
+// for the close it queued: waiting for the shared chain to stop changing made two overlapping calls
+// wait for each other's close forever.
 export const flushLogs = async (): Promise<void> => {
-  let flushed: Promise<void> | undefined
-  while (flushed !== logWriteChain) {
-    logWriteChain = logWriteChain.then(closeActiveLog)
-    flushed = logWriteChain
-    await flushed
+  let pending = true
+  while (pending) {
+    const closed = logWriteChain.then(closeActiveLog)
+    logWriteChain = closed
+    await closed
+    // Entries queued while this close was pending are drained after it, so close again.
+    pending = logQueue.length > 0
   }
 }
 

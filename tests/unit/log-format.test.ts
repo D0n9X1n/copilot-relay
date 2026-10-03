@@ -388,6 +388,34 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
   }
 })
 
+// Why: two overlapping flushLogs calls each waited for the close the other had just queued, so
+// neither resolved and the loop starved the process (#141 review). A child process keeps a
+// regression from hanging this suite.
+test("concurrent flushLogs calls both resolve", async () => {
+  const home = await fs.mkdtemp(path.join(tempHome, "concurrent-flush-"))
+  try {
+    const script = `
+      const { log, flushLogs } = await import(${JSON.stringify(new URL("../../src/lib/log.ts", import.meta.url).href)});
+      log.setReporters([]);
+      log.error("before concurrent flushes");
+      await Promise.all([flushLogs(), flushLogs()]);
+      process.stdout.write("flushed");
+    `
+
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      "--import", "tsx", "--input-type=module", "--eval", script,
+    ], {
+      cwd: fileURLToPath(new URL("../..", import.meta.url)),
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      timeout: 10_000,
+    })
+
+    assert.equal(stdout, "flushed")
+  } finally {
+    await fs.rm(home, { recursive: true, force: true })
+  }
+})
+
 // Why: each entry used to run its own directory checks, open, stat, chmod, append and close, and a
 // burst of them could finish out of order (#141). A burst now shares one open and keeps call order.
 test("a burst of entries is appended in call order through one open", async (t) => {
