@@ -1,5 +1,6 @@
 // Non-streaming protocol translation between Claude Messages and Copilot chat completions.
 import {
+  isClaudeModelId,
   normalizeClaudeModelId,
   routeModelId,
 } from "~/lib/models"
@@ -12,6 +13,7 @@ import type {
   Tool,
   ToolCall,
 } from "~/copilot/types"
+import type { CopilotEndpoint } from "~/copilot/endpoint"
 
 import {
   type ClaudeAssistantContentBlock,
@@ -39,10 +41,17 @@ export function translateModelName(model: string): string {
   return routeModelId(model)
 }
 
+export interface TranslateToOpenAIOptions {
+  // The endpoint createChatCompletions will select. Only a Claude model on
+  // /chat/completions gets in-place reminder turns and copilot_cache_control marks.
+  endpoint?: CopilotEndpoint
+}
+
 export function translateToOpenAI(
   payload: ClaudeMessagesPayload,
   _settings?: undefined,
   toolNameMapper?: ClaudeToolNameMapper,
+  options: TranslateToOpenAIOptions = {},
 ): ChatCompletionsPayload {
   const model = translateModelName(payload.model)
   const mapper = toolNameMapper ?? createClaudeToolNameMapper(payload.tools, {
@@ -57,6 +66,7 @@ export function translateToOpenAI(
     payload.messages,
     payload.system,
     mapper,
+    options.endpoint === "/chat/completions" && isClaudeModelId(model),
   )
 
   return {
@@ -107,32 +117,77 @@ function translateClaudeMessagesToOpenAI(
   claudeMessages: Array<ClaudeMessage>,
   system: string | Array<ClaudeTextBlock> | undefined,
   toolNameMapper: ClaudeToolNameMapper,
+  claudeChatRoute: boolean,
 ): Array<Message> {
-  const systemMessages = handleSystemPrompt(system)
-  const otherMessages = claudeMessages.flatMap((message): Array<Message> => {
-    switch (message.role) {
-      case "user":
-        return handleUserMessage(message)
-      case "assistant":
-        return handleAssistantMessage(message, toolNameMapper)
-      case "system":
-        // An empty control message carries only effort, which getClaudeTurnEffort reads.
-        if (
-          message.output_config !== undefined
-          && (typeof message.content === "string"
-            ? message.content.length === 0
-            : message.content.every((block) => block.text.length === 0))
-        ) {
-          return []
-        }
+  const translated = handleSystemPrompt(system)
+  if (claudeChatRoute && hasCacheBreakpoint(system)) {
+    markCacheBreakpoint(translated.at(-1))
+  }
 
-        return handleSystemPrompt(message.content)
-      default:
-        throw invalidMessage("Unsupported message role.")
+  for (const message of claudeMessages) {
+    translated.push(...translateClaudeMessage(message, toolNameMapper, claudeChatRoute))
+
+    // A breakpoint on a message that translates to nothing marks the previous one.
+    if (claudeChatRoute && hasCacheBreakpoint(message.content)) {
+      markCacheBreakpoint(translated.at(-1))
     }
-  })
+  }
 
-  return [...systemMessages, ...otherMessages]
+  return translated
+}
+
+function translateClaudeMessage(
+  message: ClaudeMessage,
+  toolNameMapper: ClaudeToolNameMapper,
+  claudeChatRoute: boolean,
+): Array<Message> {
+  switch (message.role) {
+    case "user":
+      return handleUserMessage(message)
+    case "assistant":
+      return handleAssistantMessage(message, toolNameMapper)
+    case "system":
+      // An empty control message carries only effort, which getClaudeTurnEffort reads.
+      if (
+        message.output_config !== undefined
+        && (typeof message.content === "string"
+          ? message.content.length === 0
+          : message.content.every((block) => block.text.length === 0))
+      ) {
+        return []
+      }
+
+      return claudeChatRoute ? toSystemReminder(message.content) : handleSystemPrompt(message.content)
+    default:
+      throw invalidMessage("Unsupported message role.")
+  }
+}
+
+// Copilot's chat route appears to fold system messages into Claude's system
+// prompt: while new system turns keep arriving later in a conversation, each
+// request reads only the tools and the original system prompt from cache. A user
+// turn holding a <system-reminder>, the form Claude Code uses for most harness
+// context, keeps the operator text in place and the prefix append-only. See
+// "Chat route: system turns and cache breakpoints" in wiki/EN-Internals.md.
+function toSystemReminder(content: string | Array<ClaudeTextBlock>): Array<Message> {
+  const text = typeof content === "string" ? content : content.map((block) => block.text).join("\n\n")
+  if (text.trim().length === 0) {
+    return []
+  }
+
+  return [{ role: "user", content: `<system-reminder>\n${text}\n</system-reminder>` }]
+}
+
+// Claude Code marks the end of each cached prefix with cache_control on a content block.
+const hasCacheBreakpoint = (content: string | ReadonlyArray<object> | undefined): boolean =>
+  typeof content === "object" && content.some((block) => "cache_control" in block && Boolean(block.cache_control))
+
+// Chat Completions has no cache_control. Copilot reads copilot_cache_control,
+// which VS Code Copilot Chat sets on the message that ends a cached prefix.
+const markCacheBreakpoint = (message: Message | undefined): void => {
+  if (message) {
+    message.copilot_cache_control = { type: "ephemeral" }
+  }
 }
 
 const invalidMessage = (message: string): HTTPError => new HTTPError(

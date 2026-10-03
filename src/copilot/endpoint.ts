@@ -1,5 +1,6 @@
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
+import { isClaudeModelId } from "~/lib/models"
 import { getCachedCopilotModel } from "./models"
 
 export const copilotEndpoints = [
@@ -45,7 +46,7 @@ export function selectCopilotEndpoint(
     return { reason: "unsupported-model-type" }
   }
 
-  const isClaude = model.startsWith("claude-")
+  const isClaude = isClaudeModelId(model)
   const protocolMode = config.claudeUpstreamApi ?? "chat-completions"
 
   // Explicit native selection remains authoritative even with an incomplete catalog.

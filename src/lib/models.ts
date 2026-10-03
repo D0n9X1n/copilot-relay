@@ -115,6 +115,8 @@ export const normalizeClaudeModelId = (
 export const normalizeCopilotModelId = (model: string): string =>
   normalizeOneMillionContextModel(model) ?? model
 
+export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
+
 const getConfiguredModelRouting = (): ModelRoutingConfig =>
   getRuntimeState().modelRouting ?? defaultModelRouting
 

@@ -37,7 +37,7 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getExposedModelIds, getRequestReasoningEffort } from "~/lib/models"
+import { getExposedModelIds, getRequestReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
 import { getClaudeTurnEffort, UpstreamToolInputError } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
@@ -49,7 +49,7 @@ import {
   pinCopilotModelCatalog,
   resolveModelReasoningEffort,
 } from "~/copilot/models"
-import { requireCopilotEndpoint } from "~/copilot/endpoint"
+import { requireCopilotEndpoint, selectCopilotEndpoint } from "~/copilot/endpoint"
 import {
   handleNativeMessages,
   shouldUseNativeMessages,
@@ -260,6 +260,11 @@ const writeClaudeStreamEvents = async (
   }
 }
 
+// translateToOpenAI shapes Claude chat-route history for the endpoint that
+// createChatCompletions selects for the same upstream model.
+const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: string) =>
+  selectCopilotEndpoint(config, normalizeCopilotModelId(model)).endpoint
+
 const handleClaudeMessageRequest = async (
   config: ProxyEnv["Variables"]["config"],
   claudePayload: ClaudeMessagesPayload,
@@ -290,6 +295,7 @@ const handleClaudeMessageRequest = async (
     decisionPayload,
     undefined,
     toolNameMapper,
+    { endpoint: translationEndpoint(config, upstreamModel) },
   )
   // Stream the preamble while waiting for a search call or terminal; an earlier ordinary tool does not rule search out.
   const canStreamWebSearchDecision = shouldLetModelDecideWebSearch && !!writeEvent
@@ -725,7 +731,10 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
           }),
         }
       : claudePayload
-    const openAIPayload = translateToOpenAI(countPayload)
+    // Count what the selected route sends, including reminder turns on the Claude chat route.
+    const openAIPayload = translateToOpenAI(countPayload, undefined, undefined, {
+      endpoint: translationEndpoint(c.get("config"), translateModelName(claudePayload.model)),
+    })
     const exposedModels = getExposedModelIds()
     const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
     const hasDiscoveredTokenizer =
