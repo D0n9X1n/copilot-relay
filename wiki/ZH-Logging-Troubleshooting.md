@@ -813,8 +813,9 @@ grep -n "authentication rejected\|token refresh completed\|token recovery failed
 
 当 `claudeSetup: true` 时，`copilot-relay start` 会更新 `~/.claude/settings.json`。
 设置了 `apiKey` 时，该文件以 `ANTHROPIC_AUTH_TOKEN` 保存密钥，所以不要打印这个文件，
-也不要整份分享。下面的检查打印其他值、是否设置了 token，以及 `ANTHROPIC_BASE_URL`
-上的中继如何应答这个 token，从不打印 token 本身：
+也不要整份分享。下面的检查只打印 `ANTHROPIC_BASE_URL` 的 origin、只显示为 `0`、`1`、
+未设置或其他值的 `CLAUDE_CODE_AUTO_MODE_SERVER`、是否设置了 token，以及该地址上的中继
+如何应答这个 token；打印内容中出现 token 的地方都会被替换：
 
 ```sh
 node - <<'EOF'
@@ -826,18 +827,42 @@ try {
   console.log(`${file}: missing or not valid JSON`)
 }
 if (env) {
-  const base = env.ANTHROPIC_BASE_URL
-  const token = env.ANTHROPIC_AUTH_TOKEN
-  console.log(`ANTHROPIC_BASE_URL: ${base ?? "(unset)"}`)
-  console.log(`CLAUDE_CODE_AUTO_MODE_SERVER: ${env.CLAUDE_CODE_AUTO_MODE_SERVER ?? "(unset)"}`)
-  console.log(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`)
-  if (base) {
-    fetch(`${base}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+  const token = typeof env.ANTHROPIC_AUTH_TOKEN === "string" ? env.ANTHROPIC_AUTH_TOKEN : ""
+  // Every printed line passes through hide, which replaces the token wherever it appears.
+  const secret = token && new RegExp(token.replace(/\W/g, "\\$&"), "gi")
+  const hide = (text) => secret ? text.replace(secret, "[redacted]") : text
+  let url
+  try {
+    url = new URL(env.ANTHROPIC_BASE_URL)
+  } catch {
+    url = undefined
+  }
+  if (url && !/^https?:$/.test(url.protocol)) {
+    url = undefined
+  }
+  // The origin only: a path, query or user name can hold anything.
+  let base = env.ANTHROPIC_BASE_URL === undefined ? "(unset)" : "(not an http or https URL)"
+  if (url) {
+    const extra = url.username || url.password || url.search || url.hash || url.pathname !== "/"
+    base = url.origin + (extra ? " (path, query or credentials hidden)" : "")
+  }
+  const mode = env.CLAUDE_CODE_AUTO_MODE_SERVER
+  let autoMode = "(set to another value)"
+  if (mode === undefined) {
+    autoMode = "(unset)"
+  } else if (mode === "0" || mode === "1") {
+    autoMode = mode
+  }
+  console.log(hide(`ANTHROPIC_BASE_URL: ${base}`))
+  console.log(hide(`CLAUDE_CODE_AUTO_MODE_SERVER: ${autoMode}`))
+  console.log(hide(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`))
+  if (url) {
+    fetch(`${env.ANTHROPIC_BASE_URL}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
       .then(async (response) => {
         await response.arrayBuffer()
-        console.log(`The relay answers with HTTP ${response.status}.`)
+        console.log(hide(`The relay answers with HTTP ${response.status}.`))
       })
-      .catch(() => console.log(`No relay answered at ${base}.`))
+      .catch(() => console.log(hide(`No relay answered at ${base}.`)))
   }
 }
 EOF
