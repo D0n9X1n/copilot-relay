@@ -530,7 +530,7 @@ const startMockCopilot = async (
   }
 }
 
-const createTestProxy = (baseUrl: string) => {
+const createTestProxy = (baseUrl: string, overrides: Partial<ProxyConfig> = {}) => {
   const config: ProxyConfig = {
     copilotBaseUrl: baseUrl,
     copilotToken: "test-token",
@@ -538,6 +538,7 @@ const createTestProxy = (baseUrl: string) => {
     port: 0,
     upstreamTimeoutMs: 180_000,
     vsCodeVersion: "1.99.3",
+    ...overrides,
   }
 
   return createServer(config)
@@ -909,6 +910,200 @@ test("relay-generated stream errors include their correlation ID without interna
     await mock.close()
   }
 })
+
+// #158: Copilot rejects a prompt over the model's max_prompt_tokens with HTTP 400 on every
+// inference route. The catalog request still succeeds, as it does on the live service.
+const startFailingCopilot = async (status: number, body: string) => {
+  const paths: Array<string> = []
+  const server = createHttpServer(async (request, response) => {
+    const path = request.url ?? "/"
+    paths.push(path)
+    // Read the whole request before replying, as the other mocks do.
+    await readJsonBody(request)
+    response.setHeader("content-type", "application/json")
+
+    if (path === "/models") {
+      response.end(JSON.stringify({
+        object: "list",
+        data: [{ id: "gpt-5.5" }, { id: "claude-opus-4.8" }],
+      }))
+      return
+    }
+
+    response.statusCode = status
+    response.end(body)
+  })
+
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
+    // The inference calls, without the catalog lookup.
+    inferencePaths: () => paths.filter((requestPath) => requestPath !== "/models"),
+  }
+}
+
+const postFixtureTurn = (
+  app: ReturnType<typeof createTestProxy>,
+  model: string,
+  stream: boolean,
+) => app.fetch(new Request("http://localhost/v1/messages", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    model,
+    stream,
+    max_tokens: 16,
+    messages: [{ role: "user", content: "Fixture turn" }],
+  }),
+}))
+
+// The stream opens before the inference call, so a call that fails is the stream's only event.
+const readOnlyErrorEvent = async (response: Response): Promise<unknown> => {
+  const frames = (await response.text()).split("\n\n").filter(Boolean)
+  assert.equal(frames.length, 1, frames.join("\n\n"))
+
+  const frame = /^event: error\ndata: (.+)$/.exec(frames[0])
+  assert.ok(frame, frames[0])
+  return JSON.parse(frame[1]) as unknown
+}
+
+const copilotOverflowBody = JSON.stringify({
+  error: {
+    message: "prompt token count of 131008 exceeds the limit of 128000",
+    code: "model_max_prompt_tokens_exceeded",
+  },
+})
+const overflowMessage = "prompt is too long: 131008 tokens > 128000 maximum"
+// Claude Code 2.1.288 reads the token count and the limit with this pattern.
+const claudeCodeCountPattern = /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i
+
+for (const [model, route] of [["opus", "/chat/completions"], ["default", "/responses"]] as const) {
+  test(`a prompt over the model's limit on ${route} reaches Claude Code as Anthropic's overflow error`, async () => {
+    const mock = await startFailingCopilot(400, copilotOverflowBody)
+    try {
+      const app = createTestProxy(mock.baseUrl)
+
+      const response = await postFixtureTurn(app, model, false)
+      assert.equal(response.status, 400)
+      assert.match(response.headers.get("content-type") ?? "", /application\/json/)
+      assert.deepEqual(await response.json(), {
+        type: "error",
+        error: { type: "invalid_request_error", message: overflowMessage },
+      })
+
+      const streamed = await postFixtureTurn(app, model, true)
+      const requestId = streamed.headers.get("x-copilot-relay-request-id")
+      assert.equal(streamed.status, 200)
+      assert.match(requestId ?? "", uuidPattern)
+
+      const event = await readOnlyErrorEvent(streamed)
+      assert.deepEqual(event, {
+        type: "error",
+        error: { type: "invalid_request_error", message: `${overflowMessage} (request_id=${requestId})` },
+      })
+      // Claude Code's SDK makes the event's JSON the error message; the request id is not read as a count.
+      assert.deepEqual(claudeCodeCountPattern.exec(JSON.stringify(event))?.slice(1), ["131008", "128000"])
+
+      assert.deepEqual(mock.inferencePaths(), [route, route])
+    } finally {
+      await mock.close()
+    }
+  })
+}
+
+test("other upstream errors keep their JSON body and stay generic on a stream", async () => {
+  const cases: Array<{ body: string; overrides: Partial<ProxyConfig>; route: string }> = [
+    // A Copilot rejection on the chat route, in Copilot's shape.
+    {
+      body: JSON.stringify({ error: { message: "Private fixture detail", code: "invalid_request_body" } }),
+      overrides: {},
+      route: "/chat/completions",
+    },
+    // Another invalid_request_error on the native route, in Anthropic's shape.
+    {
+      body: JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Private fixture detail" } }),
+      overrides: { claudeUpstreamApi: "messages" },
+      route: "/v1/messages",
+    },
+  ]
+
+  for (const { body, overrides, route } of cases) {
+    const mock = await startFailingCopilot(400, body)
+    try {
+      const app = createTestProxy(mock.baseUrl, overrides)
+
+      const response = await postFixtureTurn(app, "opus", false)
+      assert.equal(response.status, 400)
+      assert.equal(await response.text(), body)
+
+      const streamed = await postFixtureTurn(app, "opus", true)
+      const requestId = streamed.headers.get("x-copilot-relay-request-id")
+      assert.deepEqual(await readOnlyErrorEvent(streamed), {
+        type: "error",
+        error: {
+          type: "api_error",
+          message: `An unexpected error occurred during streaming. (request_id=${requestId})`,
+        },
+      })
+
+      assert.deepEqual(mock.inferencePaths(), [route, route])
+    } finally {
+      await mock.close()
+    }
+  }
+})
+
+// The native route can carry Anthropic's own overflow error, and Copilot's coded one is recognized there too.
+const nativeOverflowBodies = {
+  "Anthropic's shape": JSON.stringify({
+    type: "error",
+    error: { type: "invalid_request_error", message: "prompt is too long: 208310 tokens > 200000 maximum" },
+    request_id: "req_fixture",
+  }),
+  "Copilot's shape": JSON.stringify({
+    error: {
+      message: "prompt token count of 208310 exceeds the limit of 200000",
+      code: "model_max_prompt_tokens_exceeded",
+    },
+  }),
+}
+
+for (const [shape, body] of Object.entries(nativeOverflowBodies)) {
+  test(`the native route passes on a prompt overflow given in ${shape}`, async () => {
+    const mock = await startFailingCopilot(400, body)
+    try {
+      const app = createTestProxy(mock.baseUrl, { claudeUpstreamApi: "messages" })
+      const message = "prompt is too long: 208310 tokens > 200000 maximum"
+
+      const response = await postFixtureTurn(app, "opus", false)
+      assert.equal(response.status, 400)
+      assert.deepEqual(await response.json(), {
+        type: "error",
+        error: { type: "invalid_request_error", message },
+      })
+
+      const streamed = await postFixtureTurn(app, "opus", true)
+      const requestId = streamed.headers.get("x-copilot-relay-request-id")
+      assert.deepEqual(await readOnlyErrorEvent(streamed), {
+        type: "error",
+        error: { type: "invalid_request_error", message: `${message} (request_id=${requestId})` },
+      })
+
+      assert.deepEqual(mock.inferencePaths(), ["/v1/messages", "/v1/messages"])
+    } finally {
+      await mock.close()
+    }
+  })
+}
 
 test("rejects invalid request effort before SSE or upstream calls", async () => {
   const mock = await startMockCopilot()

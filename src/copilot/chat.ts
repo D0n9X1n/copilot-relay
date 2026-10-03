@@ -20,6 +20,7 @@ import {
   getCopilotProviderContext,
   readCopilotJson,
   readCopilotText,
+  toPromptTooLongError,
 } from "~/copilot/client"
 import type {
   ChatCompletionResponse,
@@ -364,7 +365,7 @@ export const createChatCompletions = async (
       }))
     }
 
-    const detail = await logUpstreamError(
+    throw await logUpstreamError(
       "Failed to create chat completions",
       response,
       {
@@ -375,11 +376,6 @@ export const createChatCompletions = async (
       },
       signal,
       options.timeoutMs,
-    )
-    throw new HTTPError(
-      "Failed to create chat completions",
-      response,
-      detail,
     )
   }
 
@@ -429,7 +425,7 @@ async function createResponses(
   )
 
   if (!response.ok) {
-    const detail = await logUpstreamError(
+    throw await logUpstreamError(
       "Failed to create responses",
       response,
       {
@@ -440,11 +436,6 @@ async function createResponses(
       },
       options.signal,
       options.timeoutMs,
-    )
-    throw new HTTPError(
-      "Failed to create responses",
-      response,
-      detail,
     )
   }
 
@@ -461,6 +452,8 @@ async function createResponses(
   )
 }
 
+// Logs a failed upstream response and returns the error to throw: a prompt over the model's
+// input limit becomes PromptTooLongError, and any other failure keeps the upstream response.
 async function logUpstreamError(
   message: string,
   response: Response,
@@ -472,7 +465,7 @@ async function logUpstreamError(
   },
   signal?: AbortSignal,
   timeoutMs?: number,
-): Promise<string | undefined> {
+): Promise<HTTPError> {
   const errorBody = await readCopilotText(
     response.clone(),
     signal,
@@ -496,7 +489,8 @@ async function logUpstreamError(
     request: context.request,
   })
 
-  return detail
+  return toPromptTooLongError(response.status, errorBody, detail)
+    ?? new HTTPError(message, response, detail)
 }
 
 function getUpstreamErrorDetail(
