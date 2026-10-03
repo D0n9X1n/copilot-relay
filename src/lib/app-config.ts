@@ -17,6 +17,7 @@ import {
 } from "~/lib/atomic-file"
 import { log } from "~/lib/log"
 import { paths } from "~/lib/paths"
+import { terminalText } from "~/lib/terminal"
 
 export const logLevels = ["error", "info", "debug"] as const
 export type LogLevelName = (typeof logLevels)[number]
@@ -76,8 +77,10 @@ export const normalizeLogLevel = (value: unknown): LogLevelName | undefined => {
 
   const normalized = value.toLowerCase()
   if (!isLogLevelName(normalized)) {
+    // Never repeat the value: this message is logged at startup and on hot reload, and a value
+    // typed under the wrong key can be a credential.
     throw new Error(
-      `Invalid logLevel "${value}": expected one of ${logLevels.join(", ")}`,
+      `Invalid logLevel: expected one of ${logLevels.join(", ")}`,
     )
   }
 
@@ -541,10 +544,50 @@ const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>
   && left.mode === right.mode
   && JSON.stringify(left.identity) === JSON.stringify(right.identity)
 
+// A reload failure the watcher has reported. snapshot is undefined when the file could not
+// be read at all.
+interface ReloadFailure {
+  reason: string
+  snapshot: FileSnapshot | undefined
+}
+
+const isSameFailure = (
+  reported: ReloadFailure | undefined,
+  reason: string,
+  snapshot: FileSnapshot | undefined,
+): boolean => {
+  if (!reported || reported.reason !== reason) {
+    return false
+  }
+
+  if (!reported.snapshot || !snapshot) {
+    return reported.snapshot === snapshot
+  }
+
+  return sameSnapshot(reported.snapshot, snapshot)
+}
+
+// One read of the config file for a reload. Returns undefined when the file changed while it was
+// read: that is a save in progress, not a failure, and the next tick reads the newer file.
+const readConfigSnapshot = async (): Promise<FileSnapshot | undefined> => {
+  try {
+    return await readFileSnapshot(paths.configPath)
+  } catch (error) {
+    if (error instanceof FileConflictError) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
 export const watchAppConfig = (
   onReload: (config: AppConfig) => void,
 ): ReturnType<typeof setInterval> => {
   let lastSnapshot: FileSnapshot | undefined
+  // The watcher retries an unchanged invalid file every tick. Logging every retry added one
+  // identical error per second, so each pair of file snapshot and reason is logged once.
+  let reportedFailure: ReloadFailure | undefined
   // setInterval does not wait for an async callback, so this keeps a slow reload from overlapping
   // the next tick.
   let reloading = false
@@ -555,9 +598,16 @@ export const watchAppConfig = (
     }
 
     reloading = true
+    let snapshot: FileSnapshot | undefined
     try {
-      const snapshot = await readFileSnapshot(paths.configPath)
+      snapshot = await readConfigSnapshot()
+      if (!snapshot) {
+        return
+      }
+
       if (lastSnapshot && sameSnapshot(lastSnapshot, snapshot)) {
+        // A clean read of the applied file ends any failure logged since it was applied.
+        reportedFailure = undefined
         return
       }
 
@@ -575,21 +625,29 @@ export const watchAppConfig = (
       const config = resolveConfig(raw)
 
       // A save that lands while this one is being validated is picked up on the next tick.
-      const current = await readFileSnapshot(paths.configPath)
-      if (!sameSnapshot(snapshot, current)) {
-        throw new FileConflictError()
+      const current = await readConfigSnapshot()
+      if (!current || !sameSnapshot(snapshot, current)) {
+        return
       }
 
       onReload(config)
 
       // Failed verification or application must remain retryable without a new edit.
       lastSnapshot = snapshot
+      reportedFailure = undefined
     } catch (error) {
-      if (error instanceof InvalidThinkEffortError) {
-        log.error(`${error.message} Keeping the previous runtime settings.`)
-      } else {
-        log.error(`Could not reload config. Check ${paths.configPath} for invalid values or file errors.`)
+      const reason = error instanceof Error ? error.message : String(error)
+      if (isSameFailure(reportedFailure, reason, snapshot)) {
+        return
       }
+
+      reportedFailure = { reason, snapshot }
+      // Validation messages name a key, a line or a rule and never repeat a value, because a value
+      // typed under the wrong key can be a credential. terminalText also drops C1 controls.
+      const sentence = /[.!?]$/.test(reason) ? reason : `${reason}.`
+      log.error(terminalText(
+        `Could not reload config (${paths.configPath}): ${sentence} Keeping the previous runtime settings.`,
+      ))
     } finally {
       reloading = false
     }

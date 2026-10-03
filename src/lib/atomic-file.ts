@@ -28,6 +28,15 @@ export class FileConflictError extends Error {
   }
 }
 
+// The path exists but is a directory or another non-file. Unlike a conflict, a later read
+// finds the same thing.
+export class NotRegularFileError extends Error {
+  constructor(filePath: string) {
+    super(`${filePath} is not a regular file`)
+    this.name = "NotRegularFileError"
+  }
+}
+
 const isMissing = (error: unknown): boolean =>
   (error as NodeJS.ErrnoException).code === "ENOENT"
 
@@ -104,7 +113,7 @@ const readStableSnapshot = async (filePath: string): Promise<FileSnapshot> => {
   }
 
   if (!before.isFile()) {
-    throw new FileConflictError()
+    throw new NotRegularFileError(resolvedPath)
   }
 
   let raw: string

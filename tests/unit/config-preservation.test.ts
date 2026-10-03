@@ -13,6 +13,7 @@ process.env.CONSOLA_LEVEL = "0"
 const { readAppConfig, watchAppConfig } = await import("../../src/lib/app-config")
 const { paths } = await import("../../src/lib/paths")
 const { log } = await import("../../src/lib/log")
+const { FileConflictError } = await import("../../src/lib/atomic-file")
 type AppConfig = Awaited<ReturnType<typeof readAppConfig>>
 
 const completeValues: Record<keyof AppConfig, string> = {
@@ -401,6 +402,127 @@ test("hot reload retries an unchanged valid edit after its callback throws", asy
   assert.equal(watcher.errors.length, 1)
   assert.equal(await readConfigFile(), edited)
   await assert.rejects(fs.stat(paths.logsDir), { code: "ENOENT" })
+})
+
+test("a failed reload is logged once, with its reason, until the file or the reason changes", async (t) => {
+  await writeConfigFile(completeDocument())
+  let active = await readAppConfig()
+  const watcher = await startWatcher(t, (next) => {
+    active = next
+  })
+
+  const message = (index: number): string => String(watcher.errors[index]?.[0])
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "-1" }))
+  await watcher.poll()
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "an unchanged invalid file is retried without logging again")
+  assert.match(message(0), /^Could not reload config \(/)
+  assert.ok(message(0).includes(paths.configPath), "the entry names the file")
+  assert.match(message(0), /Invalid upstreamTimeoutSeconds/)
+  assert.match(message(0), / Keeping the previous runtime settings\.$/)
+  assert.equal(active.upstreamTimeoutSeconds, 90)
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "-1" }))
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 2, "saving the same invalid content again logs again")
+
+  await writeConfigFile(completeDocument({ logRetentionDays: "0" }))
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 3, "a different reason is logged")
+  assert.match(message(2), /Invalid logRetentionDays/)
+
+  await fs.unlink(paths.configPath)
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 4, "a deleted file is logged once")
+  assert.match(message(3), /Config file is missing/)
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "45" }))
+  await watcher.poll()
+  assert.equal(active.upstreamTimeoutSeconds, 45)
+  assert.equal(watcher.errors.length, 4)
+
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "-1" }))
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 5, "a failure after a successful reload is logged again")
+  await assert.rejects(fs.stat(paths.logsDir), { code: "ENOENT" })
+})
+
+test("a read failure after the applied file reads cleanly again is logged again", async (t) => {
+  await writeConfigFile(completeDocument())
+  await readAppConfig()
+  const watcher = await startWatcher(t, () => {})
+
+  const resolvedPath = await fs.realpath(paths.configPath)
+  const realReadFile = fs.readFile
+  let busy = true
+  t.mock.method(fs, "readFile", async (...args: Parameters<typeof fs.readFile>) => {
+    if (busy && (args[0] === paths.configPath || args[0] === resolvedPath)) {
+      throw Object.assign(new Error("Config file temporarily busy"), { code: "EBUSY" })
+    }
+
+    return realReadFile(...args)
+  })
+
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "one busy episode is logged once")
+
+  busy = false
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "a clean read of the applied file logs nothing")
+
+  busy = true
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 2, "a later busy episode is logged again")
+})
+
+test("a config path that is a directory is logged once and recovers", async (t) => {
+  await writeConfigFile(completeDocument())
+  let active = await readAppConfig()
+  const watcher = await startWatcher(t, (next) => {
+    active = next
+  })
+
+  await fs.unlink(paths.configPath)
+  await fs.mkdir(paths.configPath)
+  await watcher.poll()
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "a lasting directory is reported once, not hidden")
+  assert.match(String(watcher.errors[0]?.[0]), /is not a regular file/)
+  assert.equal(active.upstreamTimeoutSeconds, 90)
+
+  await fs.rmdir(paths.configPath)
+  await writeConfigFile(completeDocument({ upstreamTimeoutSeconds: "45" }))
+  await watcher.poll()
+  assert.equal(active.upstreamTimeoutSeconds, 45)
+  assert.equal(watcher.errors.length, 1)
+})
+
+test("an error thrown while applying a reload is logged whatever its type, without terminal controls", async (t) => {
+  await writeConfigFile(completeDocument())
+  await readAppConfig()
+  const failures = [new FileConflictError(), new Error("apply failed \u009b2J here")]
+  const watcher = await startWatcher(t, () => {
+    const failure = failures.shift()
+    if (failure) {
+      throw failure
+    }
+  })
+
+  await writeConfigFile(completeDocument({ thinkEffort: "low" }))
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 1, "a FileConflictError from applying is not a save in progress")
+
+  await writeConfigFile(completeDocument({ thinkEffort: "medium" }))
+  await watcher.poll()
+  assert.equal(watcher.errors.length, 2)
+  const message = String(watcher.errors[1]?.[0])
+  assert.ok(!message.includes("\u009b"), "C1 controls are removed")
+  assert.match(message, /apply failed 2J here/)
 })
 
 const badReloads: Array<[string, string | null]> = [

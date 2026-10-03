@@ -109,12 +109,16 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 `ConfiguredReasoningEffort` 和 `configurableReasoningEfforts` 将合法配置默认值与请求级
 `ReasoningEffort` 分开。`normalizeThinkEffort` 在配置写回和认证之前拒绝 `none` 及
 其他格式错误的显式默认值；`startRelay` 也会校验程序直接传入的默认值。只有缺失的键
-使用发布默认值。无效重载会记录错误并保留当前设置；一般文件或语法错误不会回显可能
-含有敏感信息的配置内容。
+使用发布默认值。无效重载只记录一次原因并保留当前设置。校验信息只指出键、行或规则，
+从不回显值，因为写错键的值可能是凭据。
 
 `watchAppConfig` 只读：全部已知落盘键都必须存在，包括可选但留空的搜索后端。
 空文件/部分保存不会恢复默认值。应用前还会校验第二次快照，读取或应用失败不会被标为
-已接受，因此修正后可以重试。
+已接受，因此修正后可以重试。每个周期都会重试，但同一文件快照与原因的组合只记录一次
+（`isSameFailure`）。重载成功，或再次干净读到已应用的文件，都会清除该记录。读取或
+校验期间落盘的新保存不算失败（`readConfigSnapshot`），下一个周期会读取更新后的文件。
+路径不是普通文件（`NotRegularFileError`）时和其他失败一样记录，应用重载时抛出的任何
+错误也一样。
 
 新增一个键意味着同时更新 `config.default.yaml`、README，以及**两种语言**的
 [配置说明](ZH-Configuration.md)。
