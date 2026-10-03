@@ -445,20 +445,31 @@ both `/chat/completions` and `/responses`:
 {"error":{"message":"prompt token count of 131008 exceeds the limit of 128000","code":"model_max_prompt_tokens_exceeded"}}
 ```
 
+On `/v1/messages`, Copilot also answered with HTTP 400, but with Anthropic's
+envelope and wording plus its own code. `>` arrived escaped as `\u003e`; the
+request id here is a placeholder:
+
+```json
+{"error":{"code":"model_max_prompt_tokens_exceeded","message":"prompt is too long: 230024 tokens \u003e 200000 maximum","type":"invalid_request_error"},"request_id":"req_placeholder","type":"error"}
+```
+
+For `claude-haiku-4.5`, Copilot named a limit of 200000 on `/v1/messages`, while
+`/chat/completions` enforced the catalog's 136000.
+
 Claude Code 2.1.288 recognizes an overflow by the text `prompt is too long` or
 `input is too long for requested model`, and reads the two counts with
-`prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)`. Copilot's wording matches
-neither.
+`prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)`. The wording on
+`/chat/completions` and `/responses` matches neither.
 
 `toPromptTooLongError` in `src/copilot/client.ts` recognizes the rejection where a
 failed upstream response becomes an error: `logUpstreamError` in
 `src/copilot/chat.ts` for `/chat/completions` and `/responses`, and
 `createNativeMessages` in `src/copilot/native.ts` for `/v1/messages`. It requires
 HTTP 400 and a JSON body whose `error.code` is `model_max_prompt_tokens_exceeded`,
-or, as the native route can carry instead, Anthropic's own `invalid_request_error`
-envelope whose message starts with `prompt is too long`. It reads only the two
-counts, with anchored patterns, and returns `PromptTooLongError` from
-`src/lib/error.ts`: an `HTTPError` whose body is what Anthropic's API sends.
+or Anthropic's own `invalid_request_error` envelope whose message starts with
+`prompt is too long`. It reads only the two counts, with anchored patterns, and
+returns `PromptTooLongError` from `src/lib/error.ts`: an `HTTPError` whose body is
+what Anthropic's API sends.
 
 ```json
 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}

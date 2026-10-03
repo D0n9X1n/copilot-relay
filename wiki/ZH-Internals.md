@@ -373,17 +373,27 @@ Prompt 超出模型的 `max_prompt_tokens` 时，Copilot 在 `/chat/completions`
 {"error":{"message":"prompt token count of 131008 exceeds the limit of 128000","code":"model_max_prompt_tokens_exceeded"}}
 ```
 
+在 `/v1/messages` 上，Copilot 同样返回 HTTP 400，但用的是 Anthropic 的信封和措辞，并带上它
+自己的 code。`>` 以 `\u003e` 转义到达；这里的 request id 是占位符：
+
+```json
+{"error":{"code":"model_max_prompt_tokens_exceeded","message":"prompt is too long: 230024 tokens \u003e 200000 maximum","type":"invalid_request_error"},"request_id":"req_placeholder","type":"error"}
+```
+
+对 `claude-haiku-4.5`，Copilot 在 `/v1/messages` 上给出的上限是 200000，而
+`/chat/completions` 执行的是模型目录中的 136000。
+
 Claude Code 2.1.288 按文本 `prompt is too long` 或 `input is too long for requested model`
 识别超限，并用 `prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)` 读取两个数字。
-Copilot 的措辞两者都不匹配。
+`/chat/completions` 与 `/responses` 上的措辞两者都不匹配。
 
 `src/copilot/client.ts` 中的 `toPromptTooLongError` 在上游失败响应变成错误的位置识别这种
 拒绝：`/chat/completions` 与 `/responses` 在 `src/copilot/chat.ts` 的 `logUpstreamError`，
 `/v1/messages` 在 `src/copilot/native.ts` 的 `createNativeMessages`。它要求 HTTP 400，且
-JSON body 的 `error.code` 为 `model_max_prompt_tokens_exceeded`；或者是原生路由可能带来的
-Anthropic 自己的 `invalid_request_error` 信封，其消息以 `prompt is too long` 开头。它只用
-锚定的模式读取两个数字，并返回 `src/lib/error.ts` 中的 `PromptTooLongError`：一个 body 与
-Anthropic API 所发内容相同的 `HTTPError`。
+JSON body 的 `error.code` 为 `model_max_prompt_tokens_exceeded`；或者是 Anthropic 自己的
+`invalid_request_error` 信封，其消息以 `prompt is too long` 开头。它只用锚定的模式读取
+两个数字，并返回 `src/lib/error.ts` 中的 `PromptTooLongError`：一个 body 与 Anthropic API
+所发内容相同的 `HTTPError`。
 
 ```json
 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}
