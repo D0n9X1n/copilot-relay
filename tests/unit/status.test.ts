@@ -824,7 +824,7 @@ test("status command output never contains the configured apiKey", async (t) => 
   await fs.writeFile(paths.configPath, [
     "port: 4199",
     `apiKey: ${key}`,
-    "gptModel: STATUS_COMMAND_​KEY_SENTINEL",
+    "gptModel: STATUS_COMMAND_\u200bKEY_SENTINEL",
     "opusModel: STATUS_COMMAND_\u0085KEY_SENTINEL",
     "",
   ].join("\n"))

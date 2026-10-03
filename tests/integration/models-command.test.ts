@@ -301,7 +301,7 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
 // Why (#159 re-review): printable removed ANSI, C0 and DEL only, so a key split by U+200B or by a
 // C1 control such as U+0085 passed it and the final scrub unchanged, readable on screen and
 // recoverable from copied output.
-for (const [name, mark] of [["U+200B", "​"], ["U+0085", "\u0085"]] as const) {
+for (const [name, mark] of [["U+200B", "\u200b"], ["U+0085", "\u0085"]] as const) {
   test(`models never prints the relay apiKey split by ${name}`, async (t) => {
     const relayKey = "relay-fixture-key-0001"
     const split = `relay-${mark}fixture-key-0001`
