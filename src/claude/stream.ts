@@ -9,6 +9,7 @@ import {
 } from "~/claude/tool-names"
 import { mapOpenAIStopReasonToClaude, parseUpstreamToolInput, UpstreamToolInputError } from "~/claude/utils"
 import type { ChatCompletionChunk } from "~/copilot/types"
+import { PromptTooLongError } from "~/lib/error"
 import { normalizeClaudeModelId } from "~/lib/models"
 
 const closeOpenContentBlock = (
@@ -213,11 +214,19 @@ export function translateChunkToClaudeEvents(
 }
 
 export function translateErrorToClaudeErrorEvent(error?: unknown): ClaudeStreamEventData {
+  // A prompt over the input limit keeps Anthropic's type and wording, which Claude Code acts on.
+  if (error instanceof PromptTooLongError) {
+    return {
+      type: "error",
+      error: { type: "invalid_request_error", message: error.message },
+    }
+  }
+
   return {
     type: "error",
     error: {
       type: "api_error",
-      // Only this mapped error is known to be client-safe; anything else stays generic.
+      // Of the remaining errors, only this mapped one is known to be client-safe; anything else stays generic.
       message: error instanceof UpstreamToolInputError ? error.message : "An unexpected error occurred during streaming.",
     },
   }

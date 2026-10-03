@@ -525,6 +525,36 @@ Copilot，所以一个过期的 token、或者一个你的订阅无权访问的�
 `POST /v1/messages` 会真正触发 token 刷新和上游模型访问 —— 那正是 `status --deep`
 发出的请求，也是一次真实 Claude Code 请求所做的事。
 
+## Prompt 过长
+
+Prompt 超出模型的 `max_prompt_tokens` 时，Copilot 返回 HTTP 400 和
+`model_max_prompt_tokens_exceeded`。Relay 按 Anthropic API 所用的形状和措辞报告它，
+Claude Code 正是据此识别 prompt 过长。JSON 请求以 HTTP 400 收到这个 body，请求摘要保留
+上游措辞：
+
+```json
+{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}
+```
+
+```text
+info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 123ms error="prompt token count of 131008 exceeds the limit of 128000"
+```
+
+流式请求已经拿到 HTTP 200，因此摘要显示 `-> 200`；错误作为 SSE `error` 事件到达，消息
+末尾追加 ` (request_id=<id>)`。[内部实现](ZH-Internals.md)解释了为什么流在 Copilot 应答
+之前就已打开。
+
+```sh
+grep -n "prompt is too long\|prompt token count of" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+在 `/chat/completions` 和 `/responses` 上，`Failed to create ...` 条目保留 Copilot 的响应
+body。流式请求还会记录带有映射后错误的 `Error during Claude stream request:`。
+
+Relay 从不缩短 prompt。压缩对话（Claude Code 中的 `/compact`）、开始新对话，或选择上限
+更高的模型。缓存的 Copilot 模型目录报告上限时，`GET /v1/models` 会列出每个配置模型的
+`max_input_tokens`。
+
 ## 模型不对
 
 使用 `logLevel: info` 或 `debug` 时：

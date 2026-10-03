@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto"
 import { Agent, fetch as undiciFetch } from "undici"
 
 import type { ProxyConfig } from "~/lib/config"
-import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
+import { HTTPError, PromptTooLongError, ProxyNotImplementedError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
 import { getRequestTrace, markDiscardedResponse, recordedFetch, recordedRefresh } from "~/lib/request-trace"
 
@@ -137,6 +137,69 @@ export const toCopilotAbortHTTPError = (
       headers: { "content-type": "application/json" },
     }),
     message,
+  )
+}
+
+// Copilot answers a prompt over the model's max_prompt_tokens with HTTP 400, this code and this
+// wording. The native /v1/messages route can carry Anthropic's own wording instead.
+const copilotPromptTooLongPattern = /^prompt token count of (\d+) exceeds the limit of (\d+)$/
+const anthropicPromptTooLongPattern = /^prompt is too long: (\d+) tokens > (\d+) maximum$/
+
+const parseJsonBody = (body: string): unknown => {
+  try {
+    return JSON.parse(body) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+const isJsonObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+// A count is read only as a whole safe integer; anything else leaves it unread.
+const parseTokenCount = (digits: string | undefined): number | undefined => {
+  const count = Number(digits)
+  return Number.isSafeInteger(count) ? count : undefined
+}
+
+// Recognizes an upstream rejection of a prompt over the model's input limit, in either shape.
+// Only the two counts are read from the upstream message; no other upstream text reaches the client.
+export const toPromptTooLongError = (
+  status: number,
+  body: string,
+  detail?: string,
+): PromptTooLongError | undefined => {
+  if (status !== 400) {
+    return undefined
+  }
+
+  const payload = parseJsonBody(body)
+  const upstreamError = isJsonObject(payload) ? payload.error : undefined
+  if (!isJsonObject(payload) || !isJsonObject(upstreamError)) {
+    return undefined
+  }
+
+  const { code, message, type: errorType } = upstreamError
+  const upstreamMessage = typeof message === "string" ? message : ""
+  const isCopilotOverflow = code === "model_max_prompt_tokens_exceeded"
+  const isAnthropicOverflow =
+    payload.type === "error"
+    && errorType === "invalid_request_error"
+    && upstreamMessage.startsWith("prompt is too long")
+
+  if (!isCopilotOverflow && !isAnthropicOverflow) {
+    return undefined
+  }
+
+  const counts =
+    copilotPromptTooLongPattern.exec(upstreamMessage)
+    ?? anthropicPromptTooLongPattern.exec(upstreamMessage)
+
+  // The upstream wording stays in the log detail when the caller passes none of its own.
+  return new PromptTooLongError(
+    parseTokenCount(counts?.[1]),
+    parseTokenCount(counts?.[2]),
+    detail ?? (upstreamMessage || undefined),
   )
 }
 

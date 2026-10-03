@@ -210,7 +210,8 @@ parse the accumulated text and `""` is not a JSON object. Non-empty text that is
 not a JSON object raises `UpstreamToolInputError`: HTTP 502 `api_error` on the
 non-streaming path, and the same message in the SSE `error` event when streaming.
 The message names the tool and never echoes the argument text, which can carry
-user data. Other streaming failures keep the generic error message.
+user data. Other streaming failures keep the generic error message, except a
+prompt over the model's input limit (see "Prompt over the input limit" below).
 
 `getClaudeTurnEffort` first validates the initial top-level request effort, then
 walks messages without mutation. A valid system effort marker is pending until a
@@ -434,6 +435,68 @@ once, or when the `upstreamTimeoutSeconds` deadline passes first, which fails wi
 a 504 that is not retried. With the 4-second default, only a NAT or proxy that
 drops connections idle for less than 4 seconds could cause this; now one that
 drops them within 50 seconds can.
+
+### Prompt over the input limit
+
+Copilot answers a prompt over the model's `max_prompt_tokens` with HTTP 400 on
+both `/chat/completions` and `/responses`:
+
+```json
+{"error":{"message":"prompt token count of 131008 exceeds the limit of 128000","code":"model_max_prompt_tokens_exceeded"}}
+```
+
+On `/v1/messages`, Copilot also answered with HTTP 400, but with Anthropic's
+envelope and wording plus its own code. `>` arrived escaped as `\u003e`; the
+request id here is a placeholder:
+
+```json
+{"error":{"code":"model_max_prompt_tokens_exceeded","message":"prompt is too long: 230024 tokens \u003e 200000 maximum","type":"invalid_request_error"},"request_id":"req_placeholder","type":"error"}
+```
+
+For `claude-haiku-4.5`, Copilot named a limit of 200000 on `/v1/messages`, while
+`/chat/completions` enforced the catalog's 136000.
+
+Claude Code 2.1.288 recognizes an overflow by the text `prompt is too long` or
+`input is too long for requested model`, and reads the two counts with
+`prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)`. The wording on
+`/chat/completions` and `/responses` matches neither.
+
+`toPromptTooLongError` in `src/copilot/client.ts` recognizes the rejection where a
+failed upstream response becomes an error: `logUpstreamError` in
+`src/copilot/chat.ts` for `/chat/completions` and `/responses`, and
+`createNativeMessages` in `src/copilot/native.ts` for `/v1/messages`. It requires
+HTTP 400 and a JSON body whose `error.code` is `model_max_prompt_tokens_exceeded`,
+or Anthropic's own `invalid_request_error` envelope whose message starts with
+`prompt is too long`. It reads only the two counts, with anchored patterns, and
+returns `PromptTooLongError` from `src/lib/error.ts`: an `HTTPError` whose body is
+what Anthropic's API sends.
+
+```json
+{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}
+```
+
+When the counts cannot be read, the message is `prompt is too long`. No other
+upstream text reaches the client, so a recognized native body is rebuilt rather
+than passed on; the upstream wording stays in the error's `detail`, which only the
+logs show.
+
+A JSON request gets that body with HTTP 400. A streaming request already has
+HTTP 200: after admission and any catalog lookup, the inference call runs inside
+the open SSE response, so a slow upstream cannot hold back the response headers
+(the delayed-upstream streaming test in `tests/integration/claude-routes.test.ts`
+pins this). `translateErrorToClaudeErrorEvent` in `src/claude/stream.ts` sends the
+same type and message as the SSE `error` event; the route appends
+` (request_id=<id>)`, which the count pattern does not read. Claude Code 2.1.288
+acts on the message, not the HTTP status: its SDK turns an SSE `error` event into
+an error whose message is the event's JSON, and its overflow check reads only that
+message. A turn it retries without streaming gets the HTTP 400 above.
+
+Every other upstream error keeps its handling: a JSON request gets the upstream
+body and status, and a stream gets the generic message or
+`UpstreamToolInputError`'s own. An `error` event inside a native stream that has
+already started is not inspected. Coverage lives in
+`tests/unit/prompt-too-long.test.ts` and the #158 tests in
+`tests/integration/claude-routes.test.ts`.
 
 ## Streaming
 

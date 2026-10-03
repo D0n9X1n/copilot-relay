@@ -182,7 +182,8 @@ assistant 续写提示。它保持 `role: system`，但上游解析为 Claude �
 `partial_json: "{}"`，因为客户端会解析累积文本，而 `""` 不是 JSON 对象。非空但不是
 JSON 对象的文本会抛出 `UpstreamToolInputError`：非流式路径返回 HTTP 502
 `api_error`，流式路径在 SSE `error` 事件中给出同一消息。该消息只写明工具名，从不回显
-参数文本，因为其中可能包含用户数据。其他流式失败仍使用通用错误消息。
+参数文本，因为其中可能包含用户数据。其他流式失败仍使用通用错误消息，但 prompt 超出
+模型输入上限时除外（见下文“Prompt 超出输入上限”）。
 
 `getClaudeTurnEffort` 先校验初始顶层 effort，再只读遍历消息。合法的 system effort
 标记先处于待生效状态，直到后续 `role: user` 消息将它激活；仅包含工具结果的 user
@@ -362,6 +363,57 @@ FIN 或 RST，因此不会复用 Copilot 已关闭的连接。如果 relay 与 C
 操作系统放弃该连接才失败，这种失败同样重试一次；或者先到 `upstreamTimeoutSeconds` 截止
 时间，以 504 失败且不重试。使用 4 秒默认值时，只有丢弃空闲不足 4 秒连接的 NAT 或代理才会
 造成这种情况；现在丢弃空闲 50 秒以内连接的也会。
+
+### Prompt 超出输入上限
+
+Prompt 超出模型的 `max_prompt_tokens` 时，Copilot 在 `/chat/completions` 和
+`/responses` 上都返回 HTTP 400：
+
+```json
+{"error":{"message":"prompt token count of 131008 exceeds the limit of 128000","code":"model_max_prompt_tokens_exceeded"}}
+```
+
+在 `/v1/messages` 上，Copilot 同样返回 HTTP 400，但用的是 Anthropic 的信封和措辞，并带上它
+自己的 code。`>` 以 `\u003e` 转义到达；这里的 request id 是占位符：
+
+```json
+{"error":{"code":"model_max_prompt_tokens_exceeded","message":"prompt is too long: 230024 tokens \u003e 200000 maximum","type":"invalid_request_error"},"request_id":"req_placeholder","type":"error"}
+```
+
+对 `claude-haiku-4.5`，Copilot 在 `/v1/messages` 上给出的上限是 200000，而
+`/chat/completions` 执行的是模型目录中的 136000。
+
+Claude Code 2.1.288 按文本 `prompt is too long` 或 `input is too long for requested model`
+识别超限，并用 `prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)` 读取两个数字。
+`/chat/completions` 与 `/responses` 上的措辞两者都不匹配。
+
+`src/copilot/client.ts` 中的 `toPromptTooLongError` 在上游失败响应变成错误的位置识别这种
+拒绝：`/chat/completions` 与 `/responses` 在 `src/copilot/chat.ts` 的 `logUpstreamError`，
+`/v1/messages` 在 `src/copilot/native.ts` 的 `createNativeMessages`。它要求 HTTP 400，且
+JSON body 的 `error.code` 为 `model_max_prompt_tokens_exceeded`；或者是 Anthropic 自己的
+`invalid_request_error` 信封，其消息以 `prompt is too long` 开头。它只用锚定的模式读取
+两个数字，并返回 `src/lib/error.ts` 中的 `PromptTooLongError`：一个 body 与 Anthropic API
+所发内容相同的 `HTTPError`。
+
+```json
+{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 131008 tokens > 128000 maximum"}}
+```
+
+读不出数字时，消息为 `prompt is too long`。其他上游文本都不会到达客户端，因此识别出的原生
+body 会被重建而不是原样转发；上游措辞保留在错误的 `detail` 中，只有日志会显示它。
+
+JSON 请求以 HTTP 400 收到这个 body。流式请求已经拿到 HTTP 200：接入检查和可能的模型目录
+查询之后，推理调用在已打开的 SSE 响应中运行，因此慢的上游不会拖住响应头
+（`tests/integration/claude-routes.test.ts` 中延迟上游的流式测试固定了这一点）。
+`src/claude/stream.ts` 中的 `translateErrorToClaudeErrorEvent` 以 SSE `error` 事件发送相同的
+type 和消息；路由追加 ` (request_id=<id>)`，计数模式不会读取它。Claude Code 2.1.288 依据
+消息而不是 HTTP 状态行事：它的 SDK 把 SSE `error` 事件变成以事件 JSON 为消息的错误，超限
+检查只读这条消息。它改用非流式重试的回合会收到上面的 HTTP 400。
+
+其他上游错误的处理不变：JSON 请求收到上游 body 和状态，流式请求收到通用消息或
+`UpstreamToolInputError` 自己的消息。已经开始的原生流中的 `error` 事件不做检查。覆盖测试在
+`tests/unit/prompt-too-long.test.ts` 以及 `tests/integration/claude-routes.test.ts` 的 #158
+测试中。
 
 ## 流式
 

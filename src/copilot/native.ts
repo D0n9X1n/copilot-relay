@@ -33,6 +33,7 @@ import {
   fetchCopilot,
   getCopilotProviderContext,
   readCopilotText,
+  toPromptTooLongError,
 } from "./client"
 
 type NativeBlock = Record<string, unknown> & {
@@ -295,6 +296,11 @@ export async function createNativeMessages(
     // The decoded text no longer matches upstream framing headers, so keep only its type.
     const detail = await readCopilotText(response, options.signal, config.upstreamTimeoutMs)
     const contentType = response.headers.get("content-type") ?? "application/json"
+    const promptTooLong = toPromptTooLongError(response.status, detail)
+
+    if (promptTooLong) {
+      throw promptTooLong
+    }
 
     throw new HTTPError("Native upstream request failed", new Response(detail, {
       status: response.status,
