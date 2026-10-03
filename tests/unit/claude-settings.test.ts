@@ -83,6 +83,38 @@ test("preserves explicit client context and output overrides", async () => {
   })
 })
 
+// #162: through the relay, auto mode's server checks did not reach Claude Code, and it showed a
+// notice. The writer seeds CLAUDE_CODE_AUTO_MODE_SERVER=0, but only when the key is absent.
+test("seeds CLAUDE_CODE_AUTO_MODE_SERVER=0 only when it is absent", async () => {
+  const input = (configPath: string) => ({
+    baseUrl: "http://127.0.0.1:4142",
+    configPath,
+    gptModel: "gpt-6-astra",
+    gptLimits: astraLimits,
+    maxOutputTokens: 128_000,
+  })
+
+  await withTemporarySettings(async (configPath) => {
+    await applyClaudeConfig(input(configPath))
+    const env = (await readSettings(configPath)).env as Record<string, unknown>
+
+    assert.equal(env.CLAUDE_CODE_AUTO_MODE_SERVER, "0")
+    assert.equal((await applyClaudeConfig(input(configPath))).changed, false)
+  })
+
+  for (const value of ["0", "1"]) {
+    await withTemporarySettings(async (configPath) => {
+      await fs.mkdir(path.dirname(configPath), { recursive: true })
+      await fs.writeFile(configPath, JSON.stringify({ env: { CLAUDE_CODE_AUTO_MODE_SERVER: value } }))
+
+      await applyClaudeConfig(input(configPath))
+      const env = (await readSettings(configPath)).env as Record<string, unknown>
+
+      assert.equal(env.CLAUDE_CODE_AUTO_MODE_SERVER, value)
+    })
+  }
+})
+
 // Why: a fresh managed Claude Code setup must actually select the configured GPT
 // default and expose its 1M client-side context identity without changing the
 // canonical model that Copilot receives.
