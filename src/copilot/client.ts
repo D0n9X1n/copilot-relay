@@ -15,9 +15,13 @@ const userAgent = `GitHubCopilotChat/${copilotVersion}`
 const apiVersion = "2025-04-01"
 const maxFetchAttempts = 2
 export const copilotRequestTimeoutMs = 180_000
+// Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
+// default and the next request would pay for a new TCP and TLS handshake. In #141 Copilot reused a
+// connection idle for 60 s and had closed one idle for 120 s; 50 s stays under the reused gap.
 const copilotDispatcher = new Agent({
   allowH2: false,
   connect: { allowH2: false },
+  keepAliveTimeout: 50_000,
 })
 
 export interface CopilotProviderContext {

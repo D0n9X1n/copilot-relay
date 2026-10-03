@@ -20,15 +20,15 @@ test.after(async () => {
   await fs.rm(home, { recursive: true, force: true })
 })
 
-// An upstream that counts the TCP connections it accepts. Its own idle timeout is longer than any
-// gap below, so only the relay's client can close a connection.
+// An upstream that counts the TCP connections it accepts. Like Copilot, it sends no Keep-Alive
+// hint, and it never closes an idle connection itself, so only the relay's client can close one.
 const countingUpstream = async () => {
   let connections = 0
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/json" })
     response.end("{}")
   })
-  server.keepAliveTimeout = 30_000
+  server.keepAliveTimeout = 0
   server.on("connection", () => {
     connections++
   })
@@ -75,4 +75,17 @@ test("a request on a reused idle upstream connection does not wait for a zero-de
 
   assert.equal(upstream.connections(), 1, "the second request must reuse the idle connection")
   assert.deepEqual(delays.filter((delay) => !delay), [])
+})
+
+// Copilot sends no Keep-Alive hint, so undici's 4 s default closed every upstream connection idle
+// for longer, and the next request paid for a new TCP and TLS handshake (#141).
+test("an upstream connection idle for longer than undici's 4 s default is reused", async (t) => {
+  const upstream = await countingUpstream()
+  t.after(() => upstream.close())
+
+  await get(upstream.baseUrl)
+  await sleep(5_500)
+  await get(upstream.baseUrl)
+
+  assert.equal(upstream.connections(), 1)
 })
