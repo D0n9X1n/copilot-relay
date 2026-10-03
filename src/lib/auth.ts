@@ -73,6 +73,27 @@ const readGitHubToken = async () => {
   return token.trim()
 }
 
+// The stored token, or undefined when there is none, for a command that must not write. Unlike
+// readGitHubToken it creates no directory or file and migrates no legacy token.
+export const readStoredGitHubToken = async (): Promise<string | undefined> => {
+  let content: string
+
+  try {
+    content = await fs.readFile(paths.githubTokenPath, "utf8")
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined
+    }
+
+    throw error
+  }
+
+  const token = content.trim()
+  registerLogSecret(token)
+
+  return token === "" ? undefined : token
+}
+
 const writeGitHubToken = async (token: string) => {
   registerLogSecret(token.trim())
   await ensurePaths()
@@ -254,6 +275,25 @@ const getCopilotToken = async (
   }
 
   return (await response.json()) as CopilotTokenResponse
+}
+
+// The plan and quota behind `copilot-relay usage`. It is read with the GitHub token itself, so no
+// Copilot token is exchanged for it. The body is GitHub's internal format; the caller checks it.
+export const getCopilotUsage = async (
+  githubToken: string,
+  vsCodeVersion: string,
+  signal?: AbortSignal,
+): Promise<unknown> => {
+  const response = await fetch(`${githubApiBaseUrl}/copilot_internal/user`, {
+    headers: githubHeaders(githubToken, vsCodeVersion),
+    signal,
+  })
+
+  if (!response.ok) {
+    throw new HTTPError("Failed to get Copilot usage", response)
+  }
+
+  return response.json()
 }
 
 const isCopilotTokenError = (error: unknown): boolean =>

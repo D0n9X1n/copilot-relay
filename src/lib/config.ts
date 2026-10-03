@@ -3,7 +3,7 @@ import type { AppConfig } from "~/lib/app-config"
 import type { CopilotModelCatalog } from "~/copilot/models"
 import type { RequestTrace } from "./request-trace"
 
-const vscodeVersion = "1.99.3"
+export const vscodeVersion = "1.99.3"
 
 export interface ProxyConfig {
   host: string

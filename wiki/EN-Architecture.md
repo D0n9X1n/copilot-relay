@@ -177,12 +177,14 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/replay.ts` | Strictly validated offline captures replayed through the current in-process handler. |
 | `src/cache.ts` | `copilot-relay cache`: prompt-cache hit rate per model and upstream route. Reads only local logs; no HTTP route, no upstream call, no file written. |
 | `src/lib/cache-report.ts` | Parses upstream `completion` log entries, normalizes total input per route, buckets by local hour or day, and renders the report. |
+| `src/usage.ts` | `copilot-relay usage`: the Copilot plan and quota GitHub reports for the stored GitHub token. Needs no running relay; no HTTP route, no Copilot token exchange, no file written. |
+| `src/lib/usage.ts` | Reads the stored token, requests `copilot_internal/user` through `getCopilotUsage`, keeps only the plan and quota fields, renders the report, and turns each failure into one line. |
 | `src/lib/atomic-file.ts` | Snapshot conflict checks and atomic target replacement for user-owned files. |
 | `src/lib/address.ts` | Safe listener/client URL formatting, including IPv6 and wildcard hosts. |
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
 | `src/lib/app-config.ts` | Loads and writes `~/.copilot-relay/config.yaml`. Hot-reloads while running. |
 | `src/lib/models.ts` | Config-driven model routing and `thinkEffort` validation. |
-| `src/lib/auth.ts` | GitHub device login, token storage, Copilot bearer refresh before expiry. |
+| `src/lib/auth.ts` | GitHub device login, token storage, Copilot bearer refresh before expiry, and the `copilot_internal/user` request behind `copilot-relay usage`. |
 | `src/lib/preflight.ts` | Runs at startup before binding: verifies configured models exist and the configured effort is usable. |
 
 ## Startup flow

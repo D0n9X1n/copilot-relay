@@ -872,6 +872,67 @@ grep -h " completion path=" ~/.copilot-relay/logs/copilot-relay.*.log \
   | sort | uniq -c | sort -rn | head
 ```
 
+## Copilot plan and quota
+
+`copilot-relay usage` shows the Copilot plan of the account behind the stored
+GitHub token, and how much of each quota is left. It asks GitHub's
+`copilot_internal/user` endpoint with the token in `~/.copilot-relay/github_token`,
+so no relay needs to run. It exchanges no Copilot token and writes nothing, the
+log file included.
+
+```sh
+copilot-relay usage                      # plan, SKU, reset date, then one line per quota
+copilot-relay usage --json               # the same fields as one object, for scripts
+```
+
+```text
+Plan         <copilot_plan>
+SKU          <access_type_sku>
+Quota reset  <quota_reset_date>
+
+chat                  unlimited; overage not permitted, overage count <overage_count>
+completions           unlimited; overage not permitted, overage count <overage_count>
+premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining>%); overage permitted, overage count <overage_count>
+```
+
+Each quota line is built from that quota's entry in `quota_snapshots`:
+
+| Text | Fields |
+| --- | --- |
+| `unlimited` | `unlimited` is `true` |
+| `<remaining> of <entitlement> remaining (<percent_remaining>%)` | `remaining`, `entitlement` and `percent_remaining` |
+| `overage permitted`, `overage not permitted` | `overage_permitted` |
+| `overage count <n>` | `overage_count` |
+| `credits used <n>`, only when the entry has it | `credits_used` |
+
+Every number is printed as GitHub sent it. The command rounds nothing and works
+nothing out; the percentage is GitHub's `percent_remaining`. A field that is
+missing, or not of the type GitHub sends, prints as `?`; `credits_used` is then
+left out. A missing plan, SKU, reset date or quota prints as `not reported`.
+`chat`, `completions` and `premium_interactions` are always listed first; any
+other quota in the answer follows them.
+
+`--json` prints one object with `copilot_plan`, `access_type_sku`,
+`quota_reset_date` and `quota_snapshots`, which maps each quota id to an object
+with `unlimited`, `entitlement`, `remaining`, `percent_remaining`,
+`overage_permitted`, `overage_count`, `token_based_billing` and `credits_used`.
+Every key is always present; a value GitHub did not report, or sent with another
+type, is `null`. The rest of GitHub's answer, such as the login and organization
+lists, is never printed.
+
+Each failure prints one line on stderr and exits `1`; a report exits `0`. The
+token and the request headers are never printed.
+
+| Case | Message |
+| --- | --- |
+| No stored token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| The token file cannot be read | `Could not read the GitHub token at <path>: <code>.` |
+| HTTP 401 or 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
+| Any other HTTP status | `GitHub answered the usage request with HTTP <status>.` |
+| The answer is not a JSON object | `GitHub's answer to the usage request was not a JSON object.` |
+| A network error | `Could not reach GitHub: <reason>` |
+| No answer within 30 seconds | `GitHub did not answer within 30 seconds.` |
+
 ## Token cache problems
 
 ```text

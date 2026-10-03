@@ -161,12 +161,14 @@ opusModel: claude-opus-5.5
 | `src/replay.ts` | 严格校验捕获，用当前进程内 handler 离线重放。 |
 | `src/cache.ts` | `copilot-relay cache`：按模型与上游路由统计 prompt 缓存命中率。只读本地日志；不加 HTTP 路由，不调用上游，不写任何文件。 |
 | `src/lib/cache-report.ts` | 解析上游 `completion` 日志条目，按路由归一化总输入，按本地小时或日期分桶，并渲染报告。 |
+| `src/usage.ts` | `copilot-relay usage`：显示 GitHub 为已保存 GitHub token 报告的 Copilot 套餐与配额。不需要中继在运行；不加 HTTP 路由，不换取 Copilot token，不写任何文件。 |
+| `src/lib/usage.ts` | 读取已保存的 token，通过 `getCopilotUsage` 请求 `copilot_internal/user`，只保留套餐与配额字段，渲染报告，并把每种失败转换为一行消息。 |
 | `src/lib/atomic-file.ts` | 用户文件的快照冲突检查与原子目标替换。 |
 | `src/lib/address.ts` | 安全格式化监听/客户端 URL，包括 IPv6 与通配监听地址。 |
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |
 | `src/lib/models.ts` | 配置驱动的模型路由与 `thinkEffort` 校验。 |
-| `src/lib/auth.ts` | GitHub device login、token 存储、到期前刷新 Copilot bearer token。 |
+| `src/lib/auth.ts` | GitHub device login、token 存储、到期前刷新 Copilot bearer token，以及 `copilot-relay usage` 背后的 `copilot_internal/user` 请求。 |
 | `src/lib/preflight.ts` | 在绑定端口之前运行：验证配置的模型存在、配置的 effort 可用。 |
 
 ## 启动流程

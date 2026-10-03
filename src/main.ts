@@ -11,6 +11,7 @@ import { restart } from "./restart"
 import { start } from "./start"
 import { status } from "./status"
 import { stop } from "./stop"
+import { usage } from "./usage"
 
 const main = defineCommand({
   meta: {
@@ -18,7 +19,7 @@ const main = defineCommand({
     description:
       "Yet, just another relay for Claude Code to use a GitHub Copilot subscription.",
   },
-  subCommands: { auth, cache, models, replay, restart, start, status, stop },
+  subCommands: { auth, cache, models, replay, restart, start, status, stop, usage },
 })
 
 await runMain(main)
