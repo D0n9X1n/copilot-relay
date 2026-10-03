@@ -99,6 +99,25 @@ Windows 就停掉任务），`DisallowStartIfOnBatteries` 也默认为 `true`（
 `-MultipleInstances IgnoreNew` 本来就是默认值，这里显式写出来是为了表明意图：绝不允许
 第二个实例和第一个并存。
 
+### 在出站代理后面
+
+任务直接运行 `node.exe`，不在你的 PowerShell 会话里，所以使用 `upstreamProxy: env` 时，
+relay 看不到在该会话或 PowerShell 配置文件里设置的 `HTTPS_PROXY`。如果这台机器只能经代理
+访问互联网，请在 `%USERPROFILE%\.copilot-relay\config.yaml` 里写上代理地址：
+
+```yaml
+upstreamProxy: http://proxy.example:3128
+```
+
+`upstreamProxy` 在重启后生效：
+
+```powershell
+Stop-ScheduledTask -TaskName "copilot-relay"
+Start-ScheduledTask -TaskName "copilot-relay"
+```
+
+规则（包括凭据）见[配置说明](ZH-Configuration.md)。
+
 ## 如何确认它真的能用
 
 ### 最快的办法
@@ -122,10 +141,10 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
+    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
-上面的 `config` 块是节选；`status` 会打印全部 11 个解析后的配置项。参见
+上面的 `config` 块是节选；`status` 会打印全部解析后的配置项。参见
 [配置说明](ZH-Configuration.md)。
 
 `version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行

@@ -7,6 +7,7 @@ import {
   normalizeCopilotBaseUrl,
   normalizeLogLevel,
   normalizeThinkEffort,
+  normalizeUpstreamProxy,
   normalizeUpstreamTimeoutSeconds,
 } from "../../src/lib/app-config"
 import {
@@ -440,6 +441,78 @@ test("rejects a short, spaced, non-ASCII or non-string apiKey without repeating 
       () => normalizeApiKey(value),
       { message: "Invalid apiKey: expected empty, or at least 16 visible ASCII characters" },
       String(value),
+    )
+  }
+})
+
+// Why (#153): upstreamProxy takes three forms. Empty connects directly, env reads the proxy
+// variables, and a URL names one proxy. The accepted value is the trimmed original, because the
+// dispatcher is built from it.
+test("accepts an empty, env or URL upstream proxy", () => {
+  assert.equal(normalizeUpstreamProxy(undefined), undefined)
+  assert.equal(normalizeUpstreamProxy(""), undefined)
+  assert.equal(normalizeUpstreamProxy("   "), undefined)
+  assert.equal(normalizeUpstreamProxy("env"), "env")
+  assert.equal(normalizeUpstreamProxy("  env  "), "env")
+
+  for (const value of [
+    "http://proxy.example:3128",
+    "https://proxy.example:3128",
+    "http://proxy.example",
+    "http://proxy.example:3128/",
+    "HTTP://Proxy.Example:3128",
+    "http://[::1]:3128",
+    "http://user:p%40ss@proxy.example:3128",
+    "https://user:pass@proxy.example",
+  ]) {
+    assert.equal(normalizeUpstreamProxy(value), value)
+    assert.equal(normalizeUpstreamProxy(`  ${value}  `), value)
+  }
+})
+
+// Why (#153): each rejected form would otherwise fail later and less clearly. A bare host or a
+// scheme other than http(s) is not a proxy undici's ProxyAgent can use. A path, query or fragment
+// makes it throw "invalid url" when the relay starts. A user name without a password sends no
+// credentials at all. A malformed percent-escape makes it throw "URI malformed".
+test("rejects proxy URLs undici cannot use as written", () => {
+  const cases: Array<[string, RegExp]> = [
+    ["ENV", /expected empty, env, or an absolute http\(s\) proxy URL/],
+    ["socks5://proxy.example:1080", /expected empty, env, or an absolute http\(s\) proxy URL/],
+    ["ftp://proxy.example", /expected empty, env/],
+    ["proxy.example:3128", /expected empty, env/],
+    ["http:proxy.example:3128", /expected empty, env/],
+    ["http://", /expected empty, env/],
+    ["http://proxy.example:3128/path", /takes no path, query or fragment/],
+    ["http://proxy.example:3128/?q=1", /takes no path, query or fragment/],
+    ["http://proxy.example:3128/#fragment", /takes no path, query or fragment/],
+    ["http://user@proxy.example:3128", /need both a username and a password/],
+    ["http://:pass@proxy.example:3128", /need both a username and a password/],
+    ["http://user:pa%ZZss@proxy.example:3128", /need both a username and a password/],
+  ]
+
+  for (const [value, message] of cases) {
+    assert.throws(() => normalizeUpstreamProxy(value), message, value)
+  }
+})
+
+// Why (#153): a proxy URL can carry a password. The error reaches the terminal, and a failed hot
+// reload writes it to the log (#152), so it names the key and the rule, never the value.
+test("never echoes a rejected upstream proxy in the error", () => {
+  for (const value of [
+    "socks5://SECRET_USER:SECRET_PASS@SECRET_HOST:1080",
+    "http://SECRET_USER:SECRET_PASS@proxy.example:3128/SECRET_PATH",
+    "http://SECRET_USER@SECRET_HOST:3128",
+    "http://SECRET_USER:SECRET%ZZ@SECRET_HOST:3128",
+    "not a url SECRET_VALUE",
+  ]) {
+    assert.throws(
+      () => normalizeUpstreamProxy(value),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.match(error.message, /^Invalid upstreamProxy:/)
+        assert.ok(!error.message.includes("SECRET"), `error leaked part of ${value}: ${error.message}`)
+        return true
+      },
     )
   }
 })

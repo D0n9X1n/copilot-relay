@@ -830,12 +830,15 @@ for (const command of ["status", "restart", "stop"] as const) {
     await fs.mkdir(appDir)
     await fs.writeFile(configPath, original)
 
-    // The real CLI runs in a child process where execFile, kill and fetch fail
-    // loudly, except the answers stop needs to find and signal one fake relay.
+    // The real CLI runs in a child process where execFile, kill, fetch and undici's
+    // dispatch fail loudly, except the answers stop needs to find and signal one
+    // fake relay. The status probes and every upstream call go through undici's
+    // dispatch, not the global fetch.
     const script = `
       import childProcess from "node:child_process";
       import { syncBuiltinESMExports } from "node:module";
       import { promisify } from "node:util";
+      import { Agent } from "undici";
       const signals = [];
       let alive = true;
       const forbidden = () => { console.error("UNSAFE_ACCESS_FORBIDDEN"); throw new Error("UNSAFE_ACCESS_FORBIDDEN"); };
@@ -860,6 +863,7 @@ for (const command of ["status", "restart", "stop"] as const) {
         return true;
       };
       globalThis.fetch = forbidden;
+      Agent.prototype.dispatch = forbidden;
       process.on("exit", () => console.log("SIGNALS=" + JSON.stringify(signals)));
       process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(mainEntryUrl))}, ${JSON.stringify(command)}];
       await import(${JSON.stringify(mainEntryUrl.href)});

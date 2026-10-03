@@ -5,6 +5,14 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import {
+  redirectGitHubTo,
+  refuseExternalConnections,
+  replyJson,
+  replyWith,
+  startFakeGitHub,
+} from "../fixtures/network"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-auth-test-"))
@@ -22,7 +30,42 @@ const { runtimeState } = await import("../../src/lib/state")
 const { createClaudeWebSearchExecution } = await import("../../src/claude/web-search")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
+// Stands in for GitHub. The relay sends GitHub calls through its upstream dispatcher (#153), so
+// this is a local server behind redirectGitHubTo rather than a replaced global fetch. It answers
+// the user lookup itself and hands each token exchange to the running test's handler. Any other
+// GitHub call, device authorization included, is recorded and fails that test.
+let exchangeHandler: ((signal: AbortSignal) => Promise<Response> | Response) | undefined
+let exchanges = 0
+const unexpectedGitHubCalls: Array<string> = []
+const github = await startFakeGitHub(async (url, _request, response) => {
+  if (url.href === "https://api.github.com/user") {
+    replyJson(response, { login: "test" })
+    return
+  }
+
+  if (url.href !== "https://api.github.com/copilot_internal/v2/token" || exchangeHandler === undefined) {
+    unexpectedGitHubCalls.push(url.href)
+    replyJson(response, {}, 404)
+    return
+  }
+
+  exchanges++
+  // The relay abandons an exchange by closing the connection before the reply is written.
+  const abandoned = new AbortController()
+  response.once("close", () => {
+    if (!response.writableFinished) {
+      abandoned.abort(new Error("The relay abandoned the token exchange"))
+    }
+  })
+  await replyWith(response, await exchangeHandler(abandoned.signal))
+})
+const redirect = redirectGitHubTo(github.origin)
+const restoreConnections = refuseExternalConnections()
+
 test.after(async () => {
+  restoreConnections()
+  redirect.restore()
+  await github.close()
   await flushLogs()
   await fs.rm(home, { recursive: true, force: true })
 })
@@ -63,26 +106,21 @@ const seed = async () => {
   }))
 }
 
-// Stands in for GitHub: answers the user lookup and counts token exchanges.
-// Any other URL through global fetch, device authorization included, throws.
+// Hands this test's token exchanges to `exchange` and counts them. `exchange` gets a signal that
+// aborts when the relay abandons the exchange; one that throws drops the connection, which the
+// relay sees as a network error.
 const mockAuth = (
   t: import("node:test").TestContext,
-  exchange: (init?: RequestInit) => Promise<Response> | Response
+  exchange: (signal: AbortSignal) => Promise<Response> | Response
 ) => {
-  let exchanges = 0
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input)
-    if (url === "https://api.github.com/user") {
-      return Response.json({ login: "test" })
-    }
-
-    assert.equal(
-      url,
-      "https://api.github.com/copilot_internal/v2/token",
-      "No device authorization or unexpected network call"
-    )
-    exchanges++
-    return exchange(init)
+  exchanges = 0
+  exchangeHandler = exchange
+  t.mock.method(globalThis, "fetch", () => {
+    throw new Error("GitHub must not be called through the global fetch")
+  })
+  t.after(() => {
+    exchangeHandler = undefined
+    assert.deepEqual(unexpectedGitHubCalls.splice(0), [], "No device authorization or unexpected GitHub call")
   })
 
   return () => exchanges
@@ -310,16 +348,30 @@ for (const timedOut of [false, true]) {
 test("proactive timer and concurrent rejected requests share one refresh and renewal", async (t) => {
   await seed()
   const exchange = deferred<Response>()
-  const count = mockAuth(t, () => exchange.promise)
-
-  // Capture timers instead of running them, so the test fires the proactive
-  // refresh itself and can read the renewal delay.
-  const timers: Array<{ callback: () => Promise<void>; delay: number }> = []
-  t.mock.method(globalThis, "setTimeout", (callback: () => Promise<void>, delay: number) => {
-    timers.push({ callback, delay })
-    return { unref() {} } as ReturnType<typeof setTimeout>
+  const exchangeStarted = deferred<void>()
+  const count = mockAuth(t, () => {
+    exchangeStarted.resolve()
+    return exchange.promise
   })
-  t.mock.method(globalThis, "clearTimeout", () => {})
+
+  // Capture refresh timers instead of running them, so the test fires the
+  // proactive refresh itself and can read the renewal delay. A refresh is at
+  // least a minute away; undici's own connection timers are shorter and run
+  // as usual. clearTimeout stays real because undici clears those timers too.
+  const timers: Array<{ callback: () => Promise<void>; delay: number }> = []
+  const realSetTimeout = globalThis.setTimeout
+  t.mock.method(
+    globalThis,
+    "setTimeout",
+    (callback: () => Promise<void>, delay?: number, ...args: Array<unknown>) => {
+      if (delay === undefined || delay < 60_000) {
+        return Reflect.apply(realSetTimeout, globalThis, [callback, delay, ...args])
+      }
+
+      timers.push({ callback, delay })
+      return { unref() {} } as ReturnType<typeof setTimeout>
+    },
+  )
 
   const config = makeConfig("http://127.0.0.1:1")
   await setupProxyAuth(config)
@@ -330,12 +382,14 @@ test("proactive timer and concurrent rejected requests share one refresh and ren
   const timer = timers[0]!.callback()
   const first = config.refreshCopilotToken!(config.copilotToken!, 0)
   const second = config.refreshCopilotToken!(config.copilotToken!, 0)
+  await exchangeStarted.promise
   assert.equal(count(), 1)
 
   exchange.resolve(Response.json({ token: "new-private-sentinel", refresh_in: 7200 }))
   await Promise.all([timer, first, second])
 
-  // One renewal, one minute before refresh_in: (7200 - 60) * 1000.
+  // One exchange and one renewal, one minute before refresh_in: (7200 - 60) * 1000.
+  assert.equal(count(), 1)
   assert.equal(timers.length, 2)
   assert.equal(timers[1]?.delay, 7140000)
 })
@@ -544,18 +598,17 @@ test("incomplete forbidden body obeys original deadline without refreshing", asy
 
 test("shared exchange has a finite timeout and can recover after failure", async (t) => {
   await seed()
-  // The first exchange never answers, so the 50 ms upstreamTimeoutMs must
+  // The first exchange never answers, so the 250 ms upstreamTimeoutMs must
   // abort it before the request's 1000 ms deadline. Its failure is not kept:
   // the next request starts a fresh exchange.
   let hung = true
-  const count = mockAuth(t, (init) => {
+  const count = mockAuth(t, (signal) => {
     if (!hung) {
       return Response.json({ token: "new-private-sentinel", refresh_in: 86400 })
     }
 
     return new Promise<Response>((_resolve, reject) => {
-      assert(init?.signal)
-      init.signal.addEventListener("abort", () => reject(init.signal!.reason), { once: true })
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
     })
   })
   const server = await upstream((req, res) => {
@@ -565,7 +618,9 @@ test("shared exchange has a finite timeout and can recover after failure", async
   })
 
   try {
-    const config = { ...makeConfig(server.url), upstreamTimeoutMs: 50 }
+    // Long enough for the exchange to reach the stand-in, which now counts it
+    // on arrival rather than when fetch is called.
+    const config = { ...makeConfig(server.url), upstreamTimeoutMs: 250 }
     await setupProxyAuth(config)
 
     await assert.rejects(

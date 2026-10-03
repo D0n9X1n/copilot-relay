@@ -39,7 +39,8 @@ claude
 
 Configuration lives in `~/.copilot-relay/config.yaml`. Model access depends on your
 account and organization policy; if startup rejects a model, choose an available
-one using the [configuration guide](wiki/EN-Configuration.md).
+one using the [configuration guide](wiki/EN-Configuration.md). Behind a proxy, set
+`upstreamProxy` in `config.yaml` to its URL, or `env`, before `copilot-relay auth`.
 
 Discover models, find the config value for one, and optionally test it:
 
@@ -63,7 +64,7 @@ copilot-relay cache --json
 ```
 
 Check your Copilot plan and quota with `copilot-relay usage`; add `--json` for
-scripts. It asks GitHub directly with the stored token, so no relay needs to run.
+scripts. It asks GitHub with the stored token, so no relay needs to run.
 
 ## Go further
 

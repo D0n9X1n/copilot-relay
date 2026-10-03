@@ -22,6 +22,7 @@ import {
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
 import { paths } from "~/lib/paths"
 import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
+import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
 // A mistake in how the command was called. Its message replaces the generic connectivity advice.
 class ModelsUsageError extends Error {}
@@ -205,6 +206,8 @@ export const models = defineCommand({
         registerSensitiveOrigin(appConfig.copilotBaseUrl)
         // --deep probes send the relay's apiKey to the in-process app.
         registerLogSecret(appConfig.apiKey)
+        // Before authentication and the catalog request, this command's first upstream calls.
+        configureUpstreamDispatcher(appConfig.upstreamProxy)
         const config = readProxyConfig(appConfig)
 
         failure = "Could not authenticate with GitHub Copilot"

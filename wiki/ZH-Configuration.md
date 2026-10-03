@@ -29,6 +29,7 @@ host: 127.0.0.1
 port: 4142
 apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
+upstreamProxy:
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
@@ -48,6 +49,7 @@ opusModel: claude-opus-5.5
 | `port` | 本地端口，默认 `4142`。 |
 | `apiKey` | 可选的客户端密钥，客户端须以 `x-api-key` 或 `Authorization: Bearer` 发送。留空（默认）即关闭该检查。支持热重载。参见[要求客户端密钥](#要求客户端密钥)。 |
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
+| `upstreamProxy` | Copilot 与 GitHub 调用（包括登录）使用的出站代理。留空（默认）表示直连；`env` 表示使用 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`；否则写绝对的 `http://` 或 `https://` 代理地址。需要重启。参见 [upstreamProxy 规则](#upstreamproxy-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
 | `logRetentionDays` | 普通 relay 日志与 debug 捕获保留的本地日历天数，包含今天；正整数，默认 `3`。活动/未知捕获受到保护，清理规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。 |
@@ -574,6 +576,74 @@ token，因此修改之后：
    请在每个客户端中自行设置新密钥。
 3. 重启正在运行的 Claude Code 会话。重启之前，它们会继续发送旧密钥并收到 `401`。
 
+## upstreamProxy 规则
+
+`upstreamProxy` 让 relay 的出站调用经过一个 HTTP 代理：每个 Copilot 请求、启动检查、
+token 刷新、GitHub 登录，以及 `copilot-relay usage` 的请求。调用 relay 自己监听器的
+请求（例如 `status` 探测）从不使用它，也不使用环境中的代理，即使 `NODE_USE_ENV_PROXY=1`
+让 Node 自己的 `fetch` 使用 `HTTP_PROXY`。
+
+| 值 | 路由 |
+| --- | --- |
+| 空（默认） | 直连，忽略 `HTTPS_PROXY` 和 `HTTP_PROXY`。 |
+| `env` | 使用 `HTTPS_PROXY` 或 `HTTP_PROXY`，在 relay 启动时读取。只设置了 `HTTP_PROXY` 时，HTTPS 也用它。`NO_PROXY` 中列出的主机直连。小写变量名同样有效。 |
+| URL | 使用该代理，例如 `http://proxy.example:3128`。 |
+
+relay 通过 `CONNECT` 在代理中为每个调用建立隧道，所以 HTTPS 调用经过代理时仍然端到端
+加密。它不读取其他代理设置，例如操作系统的代理配置或 PAC 文件。
+
+`copilot-relay usage` 从 `config.yaml` 读取 `upstreamProxy`，但不写这个文件。没有
+`config.yaml` 时它直连；文件无法读取或无效时，它在发出任何请求之前就停止。见
+[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+
+`upstreamProxy` 会在加载配置时校验，不满足以下条件时启动会直接失败：
+
+- **留空、`env`，或绝对的 `http://`/`https://` 地址。** `env` 必须小写。`socks5://`
+  等其他协议、只写 `proxy.example:3128`，以及没有主机的地址都会被拒绝。
+- **不能带路径、查询参数或 fragment。** `http://proxy.example:3128/` 可以，
+  `http://proxy.example:3128/path` 不行。
+- **用户名和密码要么都写，要么都不写。** `http://user:password@proxy.example:3128` 会
+  发送 `Basic` `Proxy-Authorization`。只有用户名没有密码（或反过来）会被拒绝，因为那样
+  根本不会发送凭据。两者中的保留字符要用百分号编码，例如 `@` 写成 `%40`，`#` 写成 `%23`。
+
+与 `copilotBaseUrl` 一样，错误信息只说明字段和规则，不会重复你配置的值。这些规则针对
+`config.yaml` 中的 URL。使用 `env` 时，undici 按原样读取 `HTTPS_PROXY` 和 `HTTP_PROXY`，
+不做这些检查：带路径、查询参数或 fragment 的值、百分号转义格式错误的值，以及没有协议的
+值会让启动失败，错误信息只写变量名，不写变量值；只有用户名没有密码的值会被接受，且不发送
+凭据。
+
+用户名和密码属于凭据。relay 建立上游连接之后，日志中出现的 `user:password`（原始写法或
+解码后）以及它发送的 `Basic` 值都显示为 `[redacted]`。单独的用户名或密码在那里不会被
+脱敏：脱敏作用于每一行日志，较短或常见的值（例如 `copilot`）会把普通文本（例如
+`copilot-relay`）中的相同部分也去掉。出于同样的原因，短于 8 个字符的形式不会被脱敏。
+上游请求在没有响应的情况下失败时，它的错误在任何日志记录之前就会被清理：其中代理凭据的
+每种形式都会被替换，包括较短的形式以及单独的用户名或密码；relay 无法解析的回复的原始字节
+也会被丢弃。`copilot-relay status` 和启动日志只显示代理的 origin：
+
+```text
+Upstream proxy: http://proxy.example:3128 (credentials hidden)
+```
+
+### 为什么默认留空
+
+`readAppConfig()` 会把每个键写回 `config.yaml`。如果默认值是 `env`，升级时它会写进每个
+现有安装，shell 里为其他工具设置了 `HTTPS_PROXY` 的安装就会在没人要求的情况下改走代理。
+请用 `env` 或 URL 主动开启。
+
+`upstreamProxy` 为空、又设置了 `HTTPS_PROXY` 或 `HTTP_PROXY` 时，如果某个上游请求在没有
+响应的情况下失败，relay 每个进程只记录一次：
+
+```text
+Upstream request failed without a response. HTTPS_PROXY or HTTP_PROXY is set, but upstreamProxy is empty, so copilot-relay connected directly. To use that proxy, set upstreamProxy: env in <config.yaml 路径>, then run the command again or restart the relay.
+```
+
+### 后台服务
+
+服务管理器（launchd、任务计划程序、systemd）不是从你的 shell 启动 relay 的，所以 `env`
+看不到你在 shell 配置文件里导出的变量。优先在 `config.yaml` 里写 URL，或在服务定义里
+设置这些变量。见对应平台的服务页面：[macOS](ZH-macOS-LaunchAgent.md)、
+[Windows](ZH-Windows-Service.md)、[Linux](ZH-Linux-systemd.md)。
+
 ## 热重载与重启
 
 会热重载（对改动之后开始的请求生效）：
@@ -594,9 +664,11 @@ token，因此修改之后：
 - `host`
 - `port`
 - `claudeSetup`
+- `upstreamProxy`
 
 `host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
-host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。
+host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。`upstreamProxy`
+只在启动时建立一次 relay 的上游连接，重载不会改动它们。
 
 relay 每秒检查一次 `config.yaml`。未通过校验的修改会保留之前的运行时设置，并记录一条
 写明文件和原因的错误：

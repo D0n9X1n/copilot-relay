@@ -3,7 +3,7 @@
 # This file is copied to ~/.copilot-relay/config.yaml on first start.
 # Edit the user config file, not this template, for local changes.
 # Valid complete edits hot-reload without rewriting this file.
-# host, port, and claudeSetup require restart.
+# host, port, claudeSetup, and upstreamProxy require restart.
 #
 # Values here apply to a fresh install only. copilot-relay writes the resolved
 # config back to disk, so once a key exists in your config.yaml it is yours:
@@ -27,6 +27,14 @@ apiKey:
 # GitHub Copilot API base URL.
 # Keep this default unless you know your Copilot tenant uses a custom endpoint.
 copilotBaseUrl: https://api.githubcopilot.com
+
+# Outbound proxy for Copilot and GitHub calls, including sign-in.
+# Leave empty to connect directly.
+# env uses HTTPS_PROXY, HTTP_PROXY and NO_PROXY. A background service does not
+# inherit your shell's variables, so prefer a URL there.
+# A URL looks like http://proxy.example:3128 or https://user:password@proxy.example:3128;
+# percent-encode reserved characters in the user name and password.
+upstreamProxy:
 
 # When true, start updates ~/.claude/settings.json with ANTHROPIC_BASE_URL
 # and ANTHROPIC_AUTH_TOKEN so Claude Code can use this proxy. The token is

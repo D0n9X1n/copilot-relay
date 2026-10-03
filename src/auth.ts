@@ -5,6 +5,7 @@ import { setupProxyAuth } from "~/lib/auth"
 import { readAppConfig } from "~/lib/app-config"
 import { readProxyConfig } from "~/lib/config"
 import { log } from "~/lib/log"
+import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
 export const auth = defineCommand({
   meta: {
@@ -12,7 +13,12 @@ export const auth = defineCommand({
     description: "Run GitHub device auth and cache credentials for copilot-relay.",
   },
   async run() {
-    const config = readProxyConfig(await readAppConfig())
+    const appConfig = await readAppConfig()
+
+    // Before the first GitHub call: device login is how a user behind a proxy first signs in.
+    configureUpstreamDispatcher(appConfig.upstreamProxy)
+
+    const config = readProxyConfig(appConfig)
 
     config.copilotToken = undefined
 

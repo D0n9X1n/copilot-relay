@@ -2,16 +2,19 @@
 // them.
 //
 // The request is made with the stored GitHub token, so no relay needs to run and no Copilot token
-// is exchanged. This module writes no file and never logs. GitHub's answer also identifies the
-// account, with fields such as the login, organization lists and tracking ids, so only the plan
-// and quota fields are kept. Printed text is checked for the stored token: a failure line has it
-// redacted or loses its reason, and an answer that would show it is refused. showsToken says how
-// far the check reaches.
+// is exchanged. It goes through upstreamProxy, read from config.yaml without writing it. This
+// module writes no file and never logs. GitHub's answer also identifies the account, with fields
+// such as the login, organization lists and tracking ids, so only the plan and quota fields are
+// kept. Printed text is checked for the stored token: a failure line has it redacted or loses its
+// reason, and an answer that would show it is refused. showsToken says how far the check reaches.
+import { readExistingAppConfig } from "~/lib/app-config"
 import { getCopilotUsage, readStoredGitHubToken } from "~/lib/auth"
 import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
+import { withoutLogging } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { colorText, terminalText } from "~/lib/terminal"
+import { configureUpstreamDispatcher, InvalidProxyEnvironmentError } from "~/lib/upstream-dispatcher"
 
 // The quota ids GitHub sends today. They are always listed first, in this order; any other id the
 // response carries follows them.
@@ -323,13 +326,40 @@ const readToken = async (): Promise<string> => {
 }
 
 /**
- * The Copilot plan and quota of the stored GitHub token's account.
+ * Builds this process's upstream dispatcher from upstreamProxy, as start, auth and models do, but
+ * reads config.yaml without creating, completing or rewriting it. Without a config.yaml the
+ * request connects directly.
  *
- * Reads the token file and asks GitHub; writes nothing. Every failure becomes a CopilotUsageError
- * whose message is the line to print.
+ * A config.yaml that cannot be read or is invalid gets one fixed line, whatever the reason, so no
+ * text from that file can reach the terminal: it can hold credentials, such as an upstreamProxy
+ * password.
  */
-export const loadCopilotUsage = async (): Promise<CopilotUsage> => {
+const applyUpstreamProxy = async (): Promise<void> => {
+  let upstreamProxy: string | undefined
+
+  try {
+    upstreamProxy = (await readExistingAppConfig())?.upstreamProxy
+  } catch {
+    throw new CopilotUsageError(
+      terminalText(`Could not read the config at ${paths.configPath}; fix it, then run copilot-relay usage again.`),
+    )
+  }
+
+  try {
+    configureUpstreamDispatcher(upstreamProxy)
+  } catch (error) {
+    if (error instanceof InvalidProxyEnvironmentError) {
+      throw new CopilotUsageError(error.message)
+    }
+
+    throw error
+  }
+}
+
+// The request behind loadCopilotUsage.
+const requestCopilotUsage = async (): Promise<CopilotUsage> => {
   const token = await readToken()
+  await applyUpstreamProxy()
   let body: unknown
 
   try {
@@ -351,3 +381,13 @@ export const loadCopilotUsage = async (): Promise<CopilotUsage> => {
 
   return usage
 }
+
+/**
+ * The Copilot plan and quota of the stored GitHub token's account.
+ *
+ * Reads the token file and config.yaml, and asks GitHub through upstreamProxy; writes nothing.
+ * Logging is off throughout, so a line the upstream request would log, such as the hint about an
+ * ignored proxy variable, never reaches the log file. Every failure becomes a CopilotUsageError
+ * whose message is the line to print.
+ */
+export const loadCopilotUsage = (): Promise<CopilotUsage> => withoutLogging(requestCopilotUsage)

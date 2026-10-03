@@ -60,6 +60,7 @@ src/
     claude-settings.ts        ~/.claude/settings.json management
     tokenizer.ts              count_tokens heuristics
     upstream-diagnostics.ts   upstream error context capture
+    upstream-dispatcher.ts    one undici dispatcher for Copilot and GitHub calls, upstreamProxy
     error.ts                  error shaping
     state.ts                  runtime state
     version.ts                build version
@@ -103,11 +104,13 @@ Hot-reloaded — applies to work that starts after the change:
 
 Requires restart:
 
-`host`, `port`, `claudeSetup`
+`host`, `port`, `claudeSetup`, `upstreamProxy`
 
 `host` and `port` cannot move because the listening socket is already bound.
 `claudeSetup` is read once during startup, so toggling it changes nothing until
-the relay starts again. Changing `gptModel` reroutes upstream requests
+the relay starts again. `upstreamProxy` builds the upstream dispatcher once,
+before the first upstream call, and a reload never rebuilds it (see
+[Outbound proxy](#outbound-proxy)). Changing `gptModel` reroutes upstream requests
 immediately but does not rewrite the model already saved in
 `~/.claude/settings.json` — that is written at startup.
 
@@ -435,12 +438,14 @@ Claude's own blocks and uses none of these adapters.
 
 ### Upstream connections
 
-`fetchCopilot` in `src/copilot/client.ts` sends every upstream request through one
-undici `Agent` limited to HTTP/1.1. Copilot sends no `Keep-Alive` hint, so undici's
+`fetchCopilot` in `src/copilot/client.ts` and the GitHub calls in `src/lib/auth.ts`
+send every upstream request through `fetchUpstream` in
+`src/lib/upstream-dispatcher.ts`, which uses the process's one upstream undici
+dispatcher, limited to HTTP/1.1. Copilot sends no `Keep-Alive` hint, so undici's
 4-second default closed every connection idle for longer, and the next request
 paid for a new TCP and TLS handshake. In #141 Copilot reused a connection idle for
-60 seconds and had closed one idle for 120 seconds; the agent keeps idle
-connections for 50 seconds.
+60 seconds and had closed one idle for 120 seconds; the dispatcher keeps idle
+connections for 50 seconds, through a proxy too.
 
 `package.json` requires undici 7.30 or later. undici 7.28 checked an idle socket
 with an unref'd zero-delay timer before reusing it, and on Windows that timer can
@@ -520,6 +525,84 @@ body and status, and a stream gets the generic message or
 already started is not inspected. Coverage lives in
 `tests/unit/prompt-too-long.test.ts` and the #158 tests in
 `tests/integration/claude-routes.test.ts`.
+
+### Outbound proxy
+
+`buildUpstreamDispatcher` turns the resolved `upstreamProxy` into one of three
+undici dispatchers, all with the same HTTP/1.1 and keep-alive options:
+
+| `upstreamProxy` | Dispatcher |
+| --- | --- |
+| empty | `Agent`: direct, as in every release before #153 |
+| `env` | `EnvHttpProxyAgent`: `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` |
+| a URL | `ProxyAgent` for that proxy |
+
+`configureUpstreamDispatcher` builds it once per process, after the config is read
+and before the first upstream call: in `startRelay`, and in the `auth`, `models`
+and `usage` commands. `applyRuntimeConfig` never calls it, which is why
+`upstreamProxy`, like `host` and `port`, takes effect on restart. It is never
+undici's global dispatcher. The `status` probes call the relay's own listener
+through `relayListener` in `src/status.ts`: undici's `fetch` with a direct `Agent`
+of their own, neither this dispatcher nor the global one. With
+`NODE_USE_ENV_PROXY=1`, Node's own `fetch` sends even a request to localhost
+through `HTTP_PROXY` unless `NO_PROXY` exempts it, and through a proxy that
+refuses, `status` would report a healthy relay as unusable.
+
+`usage` writes no file, so `loadCopilotUsage` in `src/lib/usage.ts` reads the
+config with `readExistingAppConfig` rather than `readAppConfig`, which creates or
+completes `config.yaml`. It resolves an existing file without rewriting it and
+returns nothing when there is none, so the request then connects directly. The
+command runs under `withoutLogging`, so a line the request would log never reaches
+the log file.
+
+`EnvHttpProxyAgent` reads the proxy variables when it is built, the lower-case
+spelling first, and uses `HTTP_PROXY` for HTTPS targets when `HTTPS_PROXY` is
+unset. It checks `NO_PROXY` on each request. For a malformed variable undici
+throws an error that repeats the value, so `buildUpstreamDispatcher` replaces it
+with one that names the variables and the rule.
+
+`ProxyAgent` tunnels with `CONNECT`, for HTTP targets too, and sends a `Basic`
+`Proxy-Authorization` only when the URL has both a user name and a password. It
+rejects a proxy URL with a path, query or fragment, and a credential with a
+malformed percent-escape fails when it is decoded. `normalizeUpstreamProxy` in
+`src/lib/app-config.ts` applies those rules to the URL in `config.yaml` when the
+config is read, so the error comes at startup and never repeats the value. The
+proxy variables that `env` uses do not go through it: only undici's own checks
+apply when `buildUpstreamDispatcher` builds the `EnvHttpProxyAgent`, and they
+accept a user name without a password. `formatUpstreamProxyForDisplay` in
+`src/lib/redact.ts` shows only the proxy's origin in `status` and the startup log.
+
+`configureUpstreamDispatcher` registers the credentials of each proxy URL the
+dispatcher can use, the one in `config.yaml` or each proxy variable that
+`EnvHttpProxyAgent` reads, with `registerLogSecret`: `user:password` as written
+and decoded, and the `Basic` value undici sends, each when it is at least 8
+characters long. It never registers a user name or password alone.
+`registerLogSecret` replaces a value in every log line, so a short or common one
+would cut ordinary text: a user name `copilot` would turn `copilot-relay` into
+`[redacted]-relay`, and a user name `a` would break the `completion path=` entries
+that `copilot-relay cache` reads. A config reload registers nothing, because it
+never rebuilds the dispatcher.
+
+`fetchUpstream` cleans the error of a request that fails without a response in
+place, before it rethrows it (`sanitizeTransportError`). Anywhere in the cause
+chain it drops `data` and `body`, where undici keeps raw bytes from the peer:
+`HTTPParserError` keeps the unparsed rest of a reply, so a proxy that answers
+`CONNECT` with a malformed reply that echoes `Proxy-Authorization` would carry
+the password into every log line that prints the error. It also replaces every
+form of the active proxy's credentials, short ones and a user name or password
+alone included, in each message and in the head of each stack: only this one
+error changes. The error keeps its type, `code` and `cause`, which callers read,
+such as `failureReason` in `src/lib/usage.ts`.
+
+When an upstream request fails without a response while `upstreamProxy` is empty
+and `HTTPS_PROXY` or `HTTP_PROXY` is set, `fetchUpstream` logs once per process
+that the variable was not used and how to opt in. A failure under
+`withoutLogging`, such as a `models --deep` probe, writes nothing and leaves the
+hint for a later failure. The default is not `env`:
+`readAppConfig` writes every key back to disk, so an `env` default would reroute an
+existing install that sets those variables for other tools.
+`tests/integration/upstream-proxy.test.ts` runs each mode against a local
+recording proxy.
 
 ## Streaming
 
@@ -1133,8 +1216,8 @@ query string, or fragment. A secret-bearing gateway tail must not survive into
 normal logs. `copilotBaseUrl` validation rejects raw quotes, angle brackets,
 whitespace and control characters because they make whole-URL recognition
 ambiguous. `registerLogSecret` in `src/lib/log.ts` keeps known authentication
-credentials in memory, including rotated values, and removes raw/escaped echoes
-from ordinary logs. Nested adjacent URLs are scrubbed independently even after
+credentials in memory, including rotated values and the `upstreamProxy`
+`user:password` and `Basic` value, and removes raw/escaped echoes from ordinary logs. Nested adjacent URLs are scrubbed independently even after
 inspection escapes their separators. This is not a promise to remove arbitrary
 prompt/tool secrets; review bounded excerpts before sharing, and never upload raw
 captures wholesale. See [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
@@ -1175,6 +1258,22 @@ ineffective there. Without this the suite writes into the developer's live
 
 Integration tests run the Hono app against a local mocked Copilot HTTP server.
 They must never call the real service — not from CI, not locally.
+
+GitHub calls go through the relay's upstream dispatcher, not the global `fetch`,
+so replacing `fetch` does not fake them. `tests/fixtures/network.ts` provides the
+stand-ins: `startFakeGitHub` answers GitHub locally, `redirectGitHubTo` patches
+undici's `Agent` so requests for `github.com` and `api.github.com` reach it, and
+`refuseExternalConnections` makes any other connection off the machine throw.
+`withProxyEnvironment` sets proxy variables for one test and restores them.
+`startRecordingProxy` records the requests a proxy receives, and
+`startEchoingProxy` answers each `CONNECT` with a reply undici cannot parse that
+echoes the credentials it received.
+
+Start such a stand-in before the first `test()` in the file. `node:test` runs the
+global `after()` hooks as soon as every test registered so far has finished, which
+can happen during a top-level `await` placed between tests, and an `after()` hook
+registered later never runs. The stand-in then keeps listening and the test process
+never exits.
 
 ### Structural documentation tests
 

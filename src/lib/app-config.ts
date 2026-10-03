@@ -35,6 +35,7 @@ export interface AppConfig {
   thinkEffort: ConfiguredReasoningEffort
   upstreamTimeoutSeconds: number
   webSearchBackend?: string
+  upstreamProxy?: string
   claudeUpstreamApi?: "auto" | "messages" | "chat-completions"
 }
 
@@ -59,6 +60,9 @@ const defaultConfig: AppConfig = {
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,
   webSearchBackend: undefined,
+  // Empty, not "env": this default is written into every existing config on upgrade, and an
+  // install with an unrelated HTTPS_PROXY set must not silently change its route (#153).
+  upstreamProxy: undefined,
   claudeUpstreamApi: "chat-completions",
 }
 
@@ -301,6 +305,75 @@ export const normalizeCopilotBaseUrl = (value: unknown): string | undefined => {
   return trimmed
 }
 
+/**
+ * Fixed strings, like the copilotBaseUrl messages: a proxy URL can carry a password, and these
+ * messages reach the terminal and the log, so the rejected value is never repeated.
+ */
+const invalidUpstreamProxyMessage =
+  "Invalid upstreamProxy: expected empty, env, or an absolute http(s) proxy URL such as http://proxy.example:3128"
+const upstreamProxyPathMessage =
+  "Invalid upstreamProxy: a proxy URL takes no path, query or fragment"
+const upstreamProxyCredentialsMessage =
+  "Invalid upstreamProxy: credentials need both a username and a password, with reserved characters percent-encoded"
+
+const canDecodeURIComponent = (value: string): boolean => {
+  try {
+    decodeURIComponent(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Validates upstreamProxy: empty, the literal "env", or an absolute http(s) proxy URL.
+ *
+ * Each rule stops a value that undici's ProxyAgent would turn into a confusing failure. A path,
+ * query or fragment makes it throw "invalid url" when the relay builds its dispatcher. A username
+ * without a password, or the reverse, makes it send no Proxy-Authorization at all. A malformed
+ * percent-escape in the credentials makes its decodeURIComponent throw. The explicit "http://" or
+ * "https://" prefix is required for the reason copilotBaseUrl requires it: the shorthand forms
+ * WHATWG also accepts are not URLs anyone would recognize in a log line.
+ *
+ * Userinfo is accepted, unlike in copilotBaseUrl: it is how a proxy takes Basic credentials, and
+ * configureUpstreamDispatcher registers it with the log redaction when it builds the dispatcher.
+ *
+ * The accepted value is the trimmed original, which is what the dispatcher is built from.
+ */
+export const normalizeUpstreamProxy = (value: unknown): string | undefined => {
+  const trimmed = normalizeString(value)
+  if (trimmed === undefined || trimmed === "env") {
+    return trimmed
+  }
+
+  if (!conventionalHttpUrlPattern.test(trimmed)) {
+    throw new Error(invalidUpstreamProxyMessage)
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error(invalidUpstreamProxyMessage)
+  }
+
+  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error(upstreamProxyPathMessage)
+  }
+
+  const hasUsername = parsed.username !== ""
+  const hasPassword = parsed.password !== ""
+  if (
+    hasUsername !== hasPassword
+    || !canDecodeURIComponent(parsed.username)
+    || !canDecodeURIComponent(parsed.password)
+  ) {
+    throw new Error(upstreamProxyCredentialsMessage)
+  }
+
+  return trimmed
+}
+
 class InvalidThinkEffortError extends Error {
   constructor() {
     super(`Invalid thinkEffort. Valid values: ${configurableReasoningEfforts.join(", ")}. "none" is not allowed as a configured default.`)
@@ -387,6 +460,7 @@ const configAliases: Record<string, keyof AppConfig> = {
   log_retention_days: "logRetentionDays",
   opus_model: "opusModel",
   think_effort: "thinkEffort",
+  upstream_proxy: "upstreamProxy",
   upstream_timeout_seconds: "upstreamTimeoutSeconds",
   web_search_backend: "webSearchBackend",
   claude_upstream_api: "claudeUpstreamApi",
@@ -491,7 +565,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# copilot-relay configuration",
     "#",
     "# Valid complete edits hot-reload without rewriting this file.",
-    "# host, port, and claudeSetup require restart.",
+    "# host, port, claudeSetup, and upstreamProxy require restart.",
     "",
     "# Local host for the Claude Code-compatible HTTP server.",
     `host: ${config.host}`,
@@ -505,6 +579,10 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# GitHub Copilot API base URL.",
     `copilotBaseUrl: ${config.copilotBaseUrl}`,
+    "",
+    "# Outbound proxy for Copilot and GitHub calls. Empty connects directly; env uses",
+    "# HTTPS_PROXY, HTTP_PROXY and NO_PROXY; or a URL such as http://proxy.example:3128.",
+    `upstreamProxy: ${config.upstreamProxy ?? ""}`,
     "",
     "# Update ~/.claude/settings.json on start.",
     `claudeSetup: ${config.claudeSetup}`,
@@ -557,6 +635,7 @@ const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
   upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)
     ?? defaultConfig.upstreamTimeoutSeconds,
   webSearchBackend: normalizeString(raw.webSearchBackend),
+  upstreamProxy: normalizeUpstreamProxy(raw.upstreamProxy),
   claudeUpstreamApi: normalizeClaudeUpstreamApi(raw.claudeUpstreamApi) ?? defaultConfig.claudeUpstreamApi,
 })
 
@@ -572,6 +651,21 @@ export async function readAppConfig(): Promise<AppConfig> {
   }
 
   return config
+}
+
+/**
+ * Reads and resolves config.yaml without creating, completing or rewriting it, for a command that
+ * writes no file, such as `usage`. Returns undefined when there is no config.yaml; unlike
+ * readAppConfig, it consults neither a legacy config file nor the default template. An invalid
+ * file throws the error readAppConfig would.
+ */
+export const readExistingAppConfig = async (): Promise<AppConfig | undefined> => {
+  const snapshot = await readFileSnapshot(paths.configPath)
+  if (snapshot.raw === null) {
+    return undefined
+  }
+
+  return resolveConfig(parseConfigYaml(snapshot.raw))
 }
 
 const sameSnapshot = (left: FileSnapshot, right: FileSnapshot): boolean =>

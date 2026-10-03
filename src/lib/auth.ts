@@ -6,12 +6,14 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
 import { paths, ensurePaths } from "~/lib/paths"
+import { fetchUpstream } from "~/lib/upstream-dispatcher"
 
 const copilotVersion = "0.26.7"
 const editorPluginVersion = `copilot-chat/${copilotVersion}`
 const userAgent = `GitHubCopilotChat/${copilotVersion}`
 const githubApiVersion = "2022-11-28"
 
+// GitHub calls use the upstream dispatcher too, so upstreamProxy covers sign-in and token refresh.
 const githubApiBaseUrl = "https://api.github.com"
 const githubBaseUrl = "https://github.com"
 const githubClientId = "Iv1.b507a08c87ecfe98"
@@ -191,7 +193,7 @@ const githubHeaders = (githubToken: string, vsCodeVersion: string) => ({
 })
 
 const getDeviceCode = async (): Promise<DeviceCodeResponse> => {
-  const response = await fetch(`${githubBaseUrl}/login/device/code`, {
+  const response = await fetchUpstream(`${githubBaseUrl}/login/device/code`, {
     method: "POST",
     headers: standardHeaders(),
     body: JSON.stringify({
@@ -218,7 +220,7 @@ const pollAccessToken = async (
   // finishes authorization in the browser instead of treating pending states
   // as fatal startup errors.
   while (true) {
-    const response = await fetch(`${githubBaseUrl}/login/oauth/access_token`, {
+    const response = await fetchUpstream(`${githubBaseUrl}/login/oauth/access_token`, {
       method: "POST",
       headers: standardHeaders(),
       body: JSON.stringify({
@@ -246,7 +248,7 @@ const getGitHubUser = async (
   githubToken: string,
   vsCodeVersion: string,
 ): Promise<GitHubUserResponse> => {
-  const response = await fetch(`${githubApiBaseUrl}/user`, {
+  const response = await fetchUpstream(`${githubApiBaseUrl}/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
   })
 
@@ -262,7 +264,7 @@ const getCopilotToken = async (
   vsCodeVersion: string,
   signal?: AbortSignal,
 ): Promise<CopilotTokenResponse> => {
-  const response = await fetch(
+  const response = await fetchUpstream(
     `${githubApiBaseUrl}/copilot_internal/v2/token`,
     {
       headers: githubHeaders(githubToken, vsCodeVersion),
@@ -278,13 +280,14 @@ const getCopilotToken = async (
 }
 
 // The plan and quota behind `copilot-relay usage`. It is read with the GitHub token itself, so no
-// Copilot token is exchanged for it. The body is GitHub's internal format; the caller checks it.
+// Copilot token is exchanged for it. Like every GitHub call it goes through the upstream
+// dispatcher, so upstreamProxy applies. The body is GitHub's internal format; the caller checks it.
 export const getCopilotUsage = async (
   githubToken: string,
   vsCodeVersion: string,
   signal?: AbortSignal,
 ): Promise<unknown> => {
-  const response = await fetch(`${githubApiBaseUrl}/copilot_internal/user`, {
+  const response = await fetchUpstream(`${githubApiBaseUrl}/copilot_internal/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
     signal,
   })

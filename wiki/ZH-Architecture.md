@@ -166,13 +166,14 @@ opusModel: claude-opus-5.5
 | `src/cache.ts` | `copilot-relay cache`：按模型与上游路由统计 prompt 缓存命中率。只读本地日志；不加 HTTP 路由，不调用上游，不写任何文件。 |
 | `src/lib/cache-report.ts` | 解析上游 `completion` 日志条目，按路由归一化总输入，按本地小时或日期分桶，并渲染报告。 |
 | `src/usage.ts` | `copilot-relay usage`：显示 GitHub 为已保存 GitHub token 报告的 Copilot 套餐与配额。不需要中继在运行；不加 HTTP 路由，不换取 Copilot token，不写任何文件。 |
-| `src/lib/usage.ts` | 读取已保存的 token，通过 `getCopilotUsage` 请求 `copilot_internal/user`，只保留套餐与配额字段，渲染报告，并把每种失败转换为一行消息。 |
+| `src/lib/usage.ts` | 读取已保存的 token 和 `upstreamProxy`（不改写 `config.yaml`），通过 `getCopilotUsage` 请求 `copilot_internal/user`，只保留套餐与配额字段，渲染报告，并把每种失败转换为一行消息。 |
 | `src/lib/atomic-file.ts` | 用户文件的快照冲突检查与原子目标替换。 |
 | `src/lib/address.ts` | 安全格式化监听/客户端 URL，包括 IPv6 与通配监听地址。 |
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |
 | `src/lib/models.ts` | 配置驱动的模型路由与 `thinkEffort` 校验。 |
 | `src/lib/auth.ts` | GitHub device login、token 存储、到期前刷新 Copilot bearer token，以及 `copilot-relay usage` 背后的 `copilot_internal/user` 请求。 |
+| `src/lib/upstream-dispatcher.ts` | Copilot 与 GitHub 调用共用的那个 undici dispatcher，按 `upstreamProxy` 构建：直连、代理变量或单个代理 URL。 |
 | `src/lib/preflight.ts` | 在绑定端口之前运行：验证配置的模型存在、配置的 effort 可用。 |
 
 ## 启动流程
@@ -180,7 +181,8 @@ opusModel: claude-opus-5.5
 ```mermaid
 flowchart TD
     A[启动命令] --> B[校验配置，只追加缺失键]
-    B --> C[应用运行期配置]
+    B --> U[按 upstreamProxy 构建上游 dispatcher]
+    U --> C[应用运行期配置]
     C --> D[读取或刷新 GitHub 与 Copilot token]
     D --> E[Preflight 校验两个模型 ID 和 thinking effort]
     E --> F[绑定 HTTP 服务]
@@ -189,8 +191,9 @@ flowchart TD
     H --> I[监听配置并处理请求]
 ```
 
-源码：`src/start.ts`（`startRelay`）依次编排 `readAppConfig`、`setupProxyAuth`、
-`validateUpstream`、`preloadTokenizers`、`startServer`、`writeRelayPidFile`、`applyClaudeConfig` 和
+源码：`src/start.ts`（`startRelay`）依次编排 `readAppConfig`、
+`configureUpstreamDispatcher`、`setupProxyAuth`、`validateUpstream`、`preloadTokenizers`、
+`startServer`、`writeRelayPidFile`、`applyClaudeConfig` 和
 `watchAppConfig`。`src/lib/preflight.ts`（`validateUpstream`）检查模型目录，并对每个
 配置模型发出一次小型真实请求。`startServer` 只在监听器就绪后才完成；自动管理设置失败
 会记录日志，不会让服务停止。
@@ -266,6 +269,7 @@ token 及其刷新元数据。
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
+upstreamProxy:
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
@@ -277,9 +281,10 @@ gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
 
-`host`、`port`、`claudeSetup` 在启动时生效，其余键对新接入的请求热重载。
-`webSearchBackend` 为空表示使用 `gptModel`。`upstreamTimeoutSeconds` 限制单个请求
-在上游上的总等待预算；`0` 禁用 relay 的这项总超时。
+`host`、`port`、`claudeSetup`、`upstreamProxy` 在启动时生效，其余键对新接入的请求
+热重载。`webSearchBackend` 为空表示使用 `gptModel`；`upstreamProxy` 为空表示直连。
+`upstreamTimeoutSeconds` 限制单个请求在上游上的总等待预算；`0` 禁用 relay 的这项
+总超时。
 
 `readAppConfig()` 保留已有文本，只通过快照检查后的原子替换追加缺失默认值。
 显式无效值报错，不改写文件。只读 watcher 在全部键齐备前拒绝片段或空文档，保留
@@ -321,6 +326,7 @@ Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留�
 单元测试覆盖纯粹的路由行为、配置校验，以及不该依赖 mock 上游的协议翻译边界情况。
 
 集成测试让 Hono app 跑在本地 mock 的 Copilot 上游之上。CI 绝不可以调用真实的
-GitHub Copilot 服务。
+GitHub Copilot 服务。GitHub 调用（包括登录）发往本地替身或被拒绝；做法见
+[内部实现](ZH-Internals.md)。
 
 命令、CI 矩阵和发布关卡见[开发指南](ZH-Development.md)。

@@ -64,6 +64,28 @@ That converts an invisible loop into a visible, diagnosable state.
 `After=network-online.target` orders startup but does not guarantee reachability,
 so the retry policy still matters.
 
+### Behind an outbound proxy
+
+A `systemd --user` service does not read your shell profile, so with
+`upstreamProxy: env` the relay does not see an `HTTPS_PROXY` you exported there.
+If this machine reaches the internet only through a proxy, set its URL in
+`~/.copilot-relay/config.yaml`:
+
+```yaml
+upstreamProxy: http://proxy.example:3128
+```
+
+To keep `upstreamProxy: env` instead, set the variables in the unit's
+`[Service]` section:
+
+```ini
+Environment=HTTPS_PROXY=http://proxy.example:3128
+```
+
+`upstreamProxy` takes effect on restart. After editing the unit, `daemon-reload`
+before restarting, as below. See [Configuration](EN-Configuration.md) for the
+rules, credentials included.
+
 ## Enable and start
 
 ```sh
@@ -106,10 +128,10 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port and claudeSetup take effect on restart; the rest hot-reload.
+    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
-The `config` block is abridged above; `status` prints all eleven resolved keys.
+The `config` block is abridged above; `status` prints every resolved key.
 See [Configuration](EN-Configuration.md).
 
 The `version` row is the build the running daemon reports about itself, which is

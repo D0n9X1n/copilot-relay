@@ -183,13 +183,14 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/cache.ts` | `copilot-relay cache`: prompt-cache hit rate per model and upstream route. Reads only local logs; no HTTP route, no upstream call, no file written. |
 | `src/lib/cache-report.ts` | Parses upstream `completion` log entries, normalizes total input per route, buckets by local hour or day, and renders the report. |
 | `src/usage.ts` | `copilot-relay usage`: the Copilot plan and quota GitHub reports for the stored GitHub token. Needs no running relay; no HTTP route, no Copilot token exchange, no file written. |
-| `src/lib/usage.ts` | Reads the stored token, requests `copilot_internal/user` through `getCopilotUsage`, keeps only the plan and quota fields, renders the report, and turns each failure into one line. |
+| `src/lib/usage.ts` | Reads the stored token and `upstreamProxy` without rewriting `config.yaml`, requests `copilot_internal/user` through `getCopilotUsage`, keeps only the plan and quota fields, renders the report, and turns each failure into one line. |
 | `src/lib/atomic-file.ts` | Snapshot conflict checks and atomic target replacement for user-owned files. |
 | `src/lib/address.ts` | Safe listener/client URL formatting, including IPv6 and wildcard hosts. |
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
 | `src/lib/app-config.ts` | Loads and writes `~/.copilot-relay/config.yaml`. Hot-reloads while running. |
 | `src/lib/models.ts` | Config-driven model routing and `thinkEffort` validation. |
 | `src/lib/auth.ts` | GitHub device login, token storage, Copilot bearer refresh before expiry, and the `copilot_internal/user` request behind `copilot-relay usage`. |
+| `src/lib/upstream-dispatcher.ts` | The one undici dispatcher for Copilot and GitHub calls, built from `upstreamProxy`: direct, the proxy variables, or one proxy URL. |
 | `src/lib/preflight.ts` | Runs at startup before binding: verifies configured models exist and the configured effort is usable. |
 
 ## Startup flow
@@ -197,7 +198,8 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 ```mermaid
 flowchart TD
     A[Start command] --> B[Validate config and append only absent keys]
-    B --> C[Apply runtime config]
+    B --> U[Build the upstream dispatcher from upstreamProxy]
+    U --> C[Apply runtime config]
     C --> D[Load or refresh GitHub and Copilot tokens]
     D --> E[Preflight both model IDs and thinking effort]
     E --> F[Bind HTTP server]
@@ -206,9 +208,10 @@ flowchart TD
     H --> I[Watch config and serve requests]
 ```
 
-Source: `src/start.ts` (`startRelay`) orders `readAppConfig`, `setupProxyAuth`,
-`validateUpstream`, `preloadTokenizers`, `startServer`, `writeRelayPidFile`,
-`applyClaudeConfig`, and `watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
+Source: `src/start.ts` (`startRelay`) orders `readAppConfig`,
+`configureUpstreamDispatcher`, `setupProxyAuth`, `validateUpstream`,
+`preloadTokenizers`, `startServer`, `writeRelayPidFile`, `applyClaudeConfig`, and
+`watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
 catalog and makes a small real request for each configured model. `startServer`
 resolves only once the listener is ready; managed-settings failures are logged
 without stopping the server.
@@ -291,6 +294,7 @@ user, it goes in `config.yaml` rather than being hardcoded.
 host: 127.0.0.1
 port: 4142
 copilotBaseUrl: https://api.githubcopilot.com
+upstreamProxy:
 claudeSetup: true
 logLevel: info
 logRetentionDays: 3
@@ -302,8 +306,9 @@ gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
 ```
 
-`host`, `port`, and `claudeSetup` take effect at startup. The other keys hot-reload
-for newly admitted requests. Empty `webSearchBackend` uses `gptModel`.
+`host`, `port`, `claudeSetup`, and `upstreamProxy` take effect at startup. The
+other keys hot-reload for newly admitted requests. Empty `webSearchBackend` uses
+`gptModel`; empty `upstreamProxy` connects directly.
 `upstreamTimeoutSeconds` caps one request's total upstream wait; `0` disables
 that relay deadline.
 
@@ -361,7 +366,8 @@ Unit tests cover pure routing behavior, config validation, and protocol
 translation edge cases that should not require a mocked upstream.
 
 Integration tests run the Hono app against a local mocked Copilot upstream. CI
-must never call real GitHub Copilot services.
+must never call real GitHub Copilot services. GitHub calls, sign-in included, go
+to a local stand-in or are refused; [Internals](EN-Internals.md) describes how.
 
 Commands, the CI matrix, and the release gate are in
 [Development](EN-Development.md).

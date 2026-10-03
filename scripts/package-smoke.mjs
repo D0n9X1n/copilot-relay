@@ -141,13 +141,26 @@ try {
     }
 
     // Preloaded into each child with --import. Sockets may reach only the mock
-    // upstream, fetch answers only GitHub's user lookup, every listener takes a
-    // kernel-chosen port and reports it over IPC, and "shutdown" raises SIGTERM.
+    // upstream, the mock upstream answers GitHub's user lookup, the global fetch
+    // is never allowed, every listener takes a kernel-chosen port and reports it
+    // over IPC, and "shutdown" raises SIGTERM.
     const guard = path.join(installed, "smoke-guard.mjs")
     await fs.writeFile(guard, `
       import fs from "node:fs/promises";
       import net from "node:net";
       import { syncBuiltinESMExports } from "node:module";
+      import { Agent } from "undici";
+      // The relay sends Copilot and GitHub calls through its own undici dispatcher, not the
+      // global fetch (#153). Its GitHub user lookup goes to the mock upstream; any other
+      // request off this machine is left to the socket guard below, which blocks it.
+      const dispatch = Agent.prototype.dispatch;
+      Agent.prototype.dispatch = function (options, handler) {
+        const github = new URL(String(options.origin)).origin === "https://api.github.com";
+        if (github && options.method === "GET" && options.path === "/user") {
+          options = { ...options, origin: "http://127.0.0.1:" + process.env.SMOKE_UPSTREAM_PORT, path: "/github/user" };
+        }
+        return dispatch.call(this, options, handler);
+      };
       // Guard the socket layer too: the relay uses its own undici dispatcher.
       const connect = net.Socket.prototype.connect;
       net.Socket.prototype.connect = function (...args) {
@@ -161,8 +174,7 @@ try {
         return connect.apply(this, args);
       };
       syncBuiltinESMExports();
-      globalThis.fetch = async (input) => {
-        if (String(input) === "https://api.github.com/user") return Response.json({ login: "offline-smoke" });
+      globalThis.fetch = async () => {
         await fs.writeFile(process.env.SMOKE_VIOLATION, "blocked fetch");
         throw new Error("SMOKE_BLOCKED_NETWORK");
       };
@@ -224,6 +236,9 @@ try {
             },
           })),
         }))
+      } else if (request.method === "GET" && request.url === "/github/user") {
+        // The relay's GitHub user lookup, sent here by the guard.
+        response.end(JSON.stringify({ login: "offline-smoke" }))
       } else if (request.url === "/responses") {
         response.end(JSON.stringify({
           id: "resp_smoke",
@@ -271,6 +286,7 @@ try {
       "host: 127.0.0.1",
       "port: 65535",
       `copilotBaseUrl: http://127.0.0.1:${upstreamPort}`,
+      "upstreamProxy: ",
       "claudeSetup: false",
       "logLevel: info",
       "logRetentionDays: 3",
@@ -361,12 +377,19 @@ try {
 
     assert.ok(requests.includes("POST /responses"))
     assert.ok(requests.includes("POST /chat/completions"))
+    // The guard answers the GitHub user lookup only at the undici dispatcher, so this request
+    // shows that the packed relay sends GitHub calls through it.
+    assert.ok(requests.includes("GET /github/user"))
 
     // start loads the configured models' tokenizers before its server listens. The guard writes
     // SMOKE_LISTENING to stdout when the server listens, after every line logged before that;
-    // logLevel: info in the config above makes the startup lines print.
+    // logLevel: info in the config above makes the startup lines print. The GitHub user line
+    // comes after the server listens.
     const settle = Date.now() + 5000
-    while (!output.includes("SMOKE_LISTENING") && Date.now() < settle) {
+    while (
+      !(output.includes("SMOKE_LISTENING") && output.includes("GitHub user:"))
+      && Date.now() < settle
+    ) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
 
@@ -376,6 +399,7 @@ try {
       loaded !== -1 && loaded < startup.indexOf("SMOKE_LISTENING"),
       `tokenizers must load before the server listens:\n${startup}`,
     )
+    assert.match(startup, /GitHub user: offline-smoke/)
 
     // claudeSetup is false, so ~/.claude must not exist; the guard writes the
     // violation file only when it blocks network access.
