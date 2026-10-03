@@ -575,6 +575,25 @@ test("the log file is closed after a second without entries", async (t) => {
   assert.equal(handle.fd, -1)
 })
 
+// Why: tests replace the global setTimeout to capture or run the timers of the code they drive. The
+// idle close used it, so an entry drained during such a test added a timer the test then counted or
+// ran: auth-recovery.test.ts captured two timers where it expects the token refresh alone.
+test("the idle close timer does not use the global setTimeout", async (t) => {
+  const original = globalThis.setTimeout
+  const delays: Array<number | undefined> = []
+  const recording = ((callback: (...args: Array<unknown>) => void, delay?: number, ...args: Array<unknown>) => {
+    delays.push(delay)
+    return original(callback, delay, ...args)
+  }) as typeof setTimeout
+  t.mock.method(globalThis, "setTimeout", recording)
+
+  log.info("idle timer source")
+  await flushLogs()
+  t.mock.restoreAll()
+
+  assert.deepEqual(delays, [])
+})
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })

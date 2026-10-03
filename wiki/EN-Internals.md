@@ -861,7 +861,9 @@ between two of them.
 The handle is closed once no entry has been written for a second, because Windows
 cannot rename or move a folder while a file in it is open. The next entry reopens
 the file with the full checks below. The close goes through the same write chain,
-so it never runs during a drain.
+so it never runs during a drain. Its timer comes from `node:timers`, not the
+global `setTimeout`: tests replace the global to capture or run the timers of the
+code they drive, and a log entry must not add one to theirs.
 
 The handle is reused only while its path still names the same private file with
 one link and, on POSIX, mode 0600, and the app and logs directories are still the
