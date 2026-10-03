@@ -294,15 +294,18 @@ test("the usage request sends the headers the Copilot token exchange sends", asy
   assert.deepEqual(headersOf(usageUrl), exchange)
 })
 
+// The ASCII letters and digits of a text, so a check also finds the token with separators inside.
+const lettersAndDigits = (text: string): string => text.replace(/[^A-Za-z0-9]/g, "")
+
 // Runs the request and returns the line the command would print, which must be a single line
-// without the token.
+// without the token, even with other characters inside it.
 const failure = async (): Promise<string> => {
   try {
     await loadCopilotUsage()
   } catch (error) {
     assert.ok(error instanceof CopilotUsageError, String(error))
     assert.doesNotMatch(error.message, /[\r\n]/)
-    assert.ok(!error.message.includes(token), "the token must never be printed")
+    assert.ok(!lettersAndDigits(error.message).includes(lettersAndDigits(token)), "the token must never be printed")
 
     return error.message
   }
@@ -393,6 +396,15 @@ test("an error that quotes the token around a hidden character is printed withou
   assert.equal(await failure(), "Could not reach GitHub: upstream echoed [redacted]")
 })
 
+test("an error that quotes the token with a space inside it is printed without its reason", async (t) => {
+  await storeToken(token)
+  mockFetch(t, () => {
+    throw new TypeError("fetch failed", { cause: new Error(`upstream echoed ${token.slice(0, 20)} ${token.slice(20)}`) })
+  })
+
+  assert.equal(await failure(), "Could not reach GitHub.")
+})
+
 test("a request that gets no answer in time says how long it waited", async (t) => {
   await storeToken(token)
   mockFetch(t, () => {
@@ -418,6 +430,8 @@ const echoes: Array<[string, Record<string, unknown>]> = [
   ["quota_reset_date", { ...account, quota_reset_date: token }],
   ["a quota id", { ...account, quota_snapshots: { ...account.quota_snapshots, [`quota-${token}`]: { unlimited: true } } }],
   ["copilot_plan behind a hidden character", { ...account, copilot_plan: `${token.slice(0, 4)}\u200b${token.slice(4)}` }],
+  ["copilot_plan with a space inserted", { ...account, copilot_plan: `${token.slice(0, 20)} ${token.slice(20)}` }],
+  ["copilot_plan and access_type_sku together", { ...account, copilot_plan: token.slice(0, 20), access_type_sku: token.slice(20) }],
 ]
 
 for (const [where, body] of echoes) {
@@ -438,6 +452,33 @@ test("a token with no visible character does not refuse every answer", async (t)
   const usage = await loadCopilotUsage()
 
   assert.equal(usage.copilot_plan, "fixture-plan")
+})
+
+test("a stored token with a character terminalText removes is still found with a space inside it", async (t) => {
+  // U+0085 is valid in a header value and terminalText removes it, so the token is compared as a
+  // terminal shows it.
+  await storeToken(`${token.slice(0, 20)}\u0085${token.slice(20)}`)
+  mockFetch(t, () => Response.json({ ...account, copilot_plan: `${token.slice(0, 20)} ${token.slice(20)}` }))
+
+  assert.equal(await failure(), "GitHub's answer to the usage request contains the stored token, so none of it is printed.")
+})
+
+test("an answer that does not show the token passes both checks unchanged", async (t) => {
+  await storeToken(token)
+  mockFetch(t, () => Response.json(account))
+
+  assert.deepEqual(await loadCopilotUsage(), parseCopilotUsage(account))
+})
+
+test("a token with fewer than 16 letters and digits is matched only as an exact copy", async (t) => {
+  // The fixture's SKU and reset date print "sku" and "2026" one after the other, so ordinary text
+  // can spell a short token by chance.
+  await storeToken("sku-2026")
+  mockFetch(t, () => Response.json(account))
+
+  const usage = await loadCopilotUsage()
+
+  assert.equal(usage.access_type_sku, "fixture-sku")
 })
 
 test("a token file that cannot be read is reported by its error code", async (t) => {

@@ -813,8 +813,13 @@ premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining
 `overage_permitted`、`overage_count`、`token_based_billing` 和 `credits_used`。缺少的字段，
 或以其他类型发送的字段，为 `null`。GitHub 回答中的其余部分，例如登录名和组织列表，从不打印。
 
-每种失败都在 stderr 打印一行并以 `1` 退出；输出报告时以 `0` 退出。token 和请求 header
-从不打印。
+每种失败都在 stderr 打印一行并以 `1` 退出；输出报告时以 `0` 退出。请求 header 从不打印。
+GitHub 的回答和网络错误的原因，在打印任何内容之前都会检查是否含有已保存的 token。检查能找到
+原样写出的 token、字母和数字之间插入了其他字符的 token，以及（仅限回答）按 `--json` 的打印
+顺序分散在套餐、SKU、重置日期和配额 id 中的 token。后两种形式只在 token 至少有 16 个字母和
+数字时才查找；GitHub token 远多于此。网络错误原因中原样出现的 token 打印为 `[redacted]`；
+其他匹配则改为打印下表中的固定一行。以其他方式写出的 token，例如大小写不同或经过编码的，
+不会被找到。
 
 | 情况 | 消息 |
 | --- | --- |
@@ -823,8 +828,9 @@ premium_interactions  <remaining> of <entitlement> remaining (<percent_remaining
 | HTTP 401 或 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
 | 其他 HTTP 状态 | `GitHub answered the usage request with HTTP <status>.` |
 | 回答不是 JSON 对象 | `GitHub's answer to the usage request was not a JSON object.` |
-| 套餐、SKU、重置日期或某个配额 id 中含有已保存的 token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
+| 套餐、SKU、重置日期或配额 id 显示出已保存的 token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
 | 网络错误 | `Could not reach GitHub: <reason>` |
+| 网络错误，且原因显示出中间插入了其他字符的已保存 token | `Could not reach GitHub.` |
 | 30 秒内没有回答 | `GitHub did not answer within 30 seconds.` |
 
 ## Token 缓存问题

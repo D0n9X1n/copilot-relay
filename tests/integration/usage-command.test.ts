@@ -27,6 +27,9 @@ const cwd = fileURLToPath(new URL("../../", import.meta.url))
 // Never a real token. Every run checks that it is not printed.
 const token = "gho_fixture-private-token-sentinel"
 
+// The ASCII letters and digits of a text, so a check also finds the token with separators inside.
+const lettersAndDigits = (text: string): string => text.replace(/[^A-Za-z0-9]/g, "")
+
 // A copilot_internal/user answer with made-up values. The account fields must never be printed.
 const account = {
   login: "private-login-sentinel",
@@ -43,8 +46,8 @@ const account = {
 }
 
 // How the child's fetch answers the usage URL in each scenario. The quota answer is given only to
-// a request that carries the stored token; the echoed answers repeat the token where the report and
-// --json would print it.
+// a request that carries the stored token. The echoed and spread answers put the token, whole or
+// in two pieces, where the report and --json would print it.
 const scenarios = {
   quota: `
     if (new Headers(init?.headers).get("authorization") !== ${JSON.stringify(`token ${token}`)}) {
@@ -54,6 +57,7 @@ const scenarios = {
   `,
   echoedInPlan: `return Response.json(${JSON.stringify({ ...account, copilot_plan: token })});`,
   echoedInQuotaId: `return Response.json(${JSON.stringify({ ...account, quota_snapshots: { ...account.quota_snapshots, [token]: { unlimited: true } } })});`,
+  spreadOverPlanAndSku: `return Response.json(${JSON.stringify({ ...account, copilot_plan: token.slice(0, 20), access_type_sku: token.slice(20) })});`,
   rejected: `return new Response("Bad credentials", { status: 401 });`,
   offline: `throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND api.github.com") });`,
 }
@@ -118,7 +122,7 @@ const run = async (args: Array<string>, scenario: keyof typeof scenarios): Promi
   // the config included.
   assert.deepEqual(await snapshot(home), before)
   assert.doesNotMatch(result.stdout + result.stderr, /UNEXPECTED_/)
-  assert.ok(!(result.stdout + result.stderr).includes(token), "the token must never be printed")
+  assert.ok(!lettersAndDigits(result.stdout + result.stderr).includes(lettersAndDigits(token)), "the token must never be printed")
 
   return result
 }
@@ -216,3 +220,15 @@ test("usage --json refuses an answer that echoes the token in a quota id, and pr
   assert.equal(result.stdout, "")
   assert.match(result.stderr, /^GitHub's answer to the usage request contains the stored token, so none of it is printed\.$/m)
 })
+
+for (const args of [["usage"], ["usage", "--json"]]) {
+  test(`${args.join(" ")} refuses an answer that spreads the token over the plan and the SKU, and prints none of it`, async () => {
+    await storeToken()
+
+    const result = await run(args, "spreadOverPlanAndSku")
+
+    assert.equal(result.code, 1)
+    assert.equal(result.stdout, "")
+    assert.match(result.stderr, /^GitHub's answer to the usage request contains the stored token, so none of it is printed\.$/m)
+  })
+}

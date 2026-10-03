@@ -924,7 +924,15 @@ missing, or sent with another type, is `null`. The rest of GitHub's answer, such
 as the login and organization lists, is never printed.
 
 Each failure prints one line on stderr and exits `1`; a report exits `0`. The
-token and the request headers are never printed.
+request headers are never printed. GitHub's answer, and a network error's reason,
+are checked for the stored token before anything is printed. The check finds the
+token written exactly, written with other characters between its letters and
+digits, or, in an answer, spread over the plan, SKU, reset date and quota ids in
+the order `--json` prints them. The last two forms are searched for only when the
+token has at least 16 letters and digits; a GitHub token has far more. An exact
+copy in a network error's reason prints as `[redacted]`; any other match prints
+the fixed line from the table instead. A token written any other way, such as in
+another case or encoding, is not found.
 
 | Case | Message |
 | --- | --- |
@@ -933,8 +941,9 @@ token and the request headers are never printed.
 | HTTP 401 or 403 | `GitHub rejected the stored token (HTTP <status>). Sign in again with copilot-relay auth.` |
 | Any other HTTP status | `GitHub answered the usage request with HTTP <status>.` |
 | The answer is not a JSON object | `GitHub's answer to the usage request was not a JSON object.` |
-| The plan, SKU, reset date or a quota id contains the stored token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
+| The plan, SKU, reset date or quota ids show the stored token | `GitHub's answer to the usage request contains the stored token, so none of it is printed.` |
 | A network error | `Could not reach GitHub: <reason>` |
+| A network error whose reason shows the stored token with other characters inside it | `Could not reach GitHub.` |
 | No answer within 30 seconds | `GitHub did not answer within 30 seconds.` |
 
 ## Token cache problems

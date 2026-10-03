@@ -4,8 +4,9 @@
 // The request is made with the stored GitHub token, so no relay needs to run and no Copilot token
 // is exchanged. This module writes no file and never logs. GitHub's answer also identifies the
 // account, with fields such as the login, organization lists and tracking ids, so only the plan
-// and quota fields are kept. No printed line shows the token: it is redacted from a failure line,
-// and an answer that would show it is refused.
+// and quota fields are kept. Printed text is checked for the stored token: a failure line has it
+// redacted or loses its reason, and an answer that would show it is refused. showsToken says how
+// far the check reaches.
 import { getCopilotUsage, readStoredGitHubToken } from "~/lib/auth"
 import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
@@ -201,25 +202,44 @@ const withoutToken = (line: string, token: string): string => {
   return visible === "" ? line : line.replaceAll(visible, "[redacted]")
 }
 
+// The ASCII letters and digits of a text, in order. Any other character, a space or a letter of
+// another script included, counts as a separator, so inserting one cannot hide the token.
+const lettersAndDigits = (text: string): string => text.replace(/[^A-Za-z0-9]/g, "")
+
+// A token is matched by its letters and digits alone only when it has at least this many: a
+// shorter run could occur in ordinary text by chance. A GitHub token has far more.
+const minimumSpelledLength = 16
+
+// True when the text holds the token's letters and digits in order, with only other characters
+// between them.
+const spellsToken = (text: string, token: string): boolean => {
+  const spelled = lettersAndDigits(visibleToken(token))
+
+  return spelled.length >= minimumSpelledLength && lettersAndDigits(text).includes(spelled)
+}
+
 // True when the report or --json would show the token. terminalText makes the answer's strings
-// safe but does not redact them, and GitHub, or a proxy in the way, can echo credentials back. The
-// answer's text reaches the output only through these strings and the quota ids; its numbers and
-// booleans print in the command's own format.
+// safe but does not redact them, and GitHub, or a proxy in the way, can echo credentials back.
+//
+// The check is bounded. It finds the token written exactly, written with other characters between
+// its letters and digits, or spread over the plan, SKU, reset date and quota ids, which are joined
+// in the order --json prints them. A token written any other way, such as in another case or
+// encoding, is not found. The answer's numbers and booleans are not searched; they print in the
+// command's own format.
 const showsToken = (usage: CopilotUsage, token: string): boolean => {
   const visible = visibleToken(token)
-
-  if (visible === "") {
-    return false
-  }
-
-  const answerText = [
+  const printed = [
     usage.copilot_plan,
     usage.access_type_sku,
     usage.quota_reset_date,
     ...Object.keys(usage.quota_snapshots),
-  ]
+  ].filter((text) => text !== null)
 
-  return answerText.some((text) => text !== null && text.includes(visible))
+  if (visible !== "" && printed.some((text) => text.includes(visible))) {
+    return true
+  }
+
+  return spellsToken(printed.join(""), token)
 }
 
 // The most specific reason a request failed. fetch rejects with a bare "fetch failed" and keeps the
@@ -272,9 +292,11 @@ const describeRequestFailure = async (error: unknown, token: string): Promise<Co
     return new CopilotUsageError(notAnObject)
   }
 
-  const line = terminalText(`Could not reach GitHub: ${failureReason(error)}`)
+  const line = withoutToken(terminalText(`Could not reach GitHub: ${failureReason(error)}`), token)
 
-  return new CopilotUsageError(withoutToken(line, token))
+  // A reason that still spells the token, with a separator inside it, cannot be cut out the way an
+  // exact copy is, so the reason is left out.
+  return new CopilotUsageError(spellsToken(line, token) ? "Could not reach GitHub." : line)
 }
 
 // A read failure is reported by its error code, such as EACCES. The message of a file error only
