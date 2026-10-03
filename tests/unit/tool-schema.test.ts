@@ -217,6 +217,23 @@ test("copies only the path to an omitted pattern and never changes the input", (
   assert.deepEqual(schema, original)
 })
 
+// Why: the array copy replaced Array.prototype.map, which keeps holes and the array length. Holes
+// written as undefined would make the copy differ from the input in more than the omitted pattern.
+test("keeps the holes and length of a copied array", () => {
+  const anyOf: Array<unknown> = []
+  anyOf[0] = { type: "string", pattern: artifactFieldPattern }
+  anyOf[2] = { type: "number" }
+  anyOf.length = 4
+
+  const copied = normalizeResponsesToolSchema({ anyOf }).anyOf as Array<unknown>
+
+  assert.deepEqual(copied[0], { type: "string" })
+  assert.equal(copied[2], anyOf[2])
+  assert.equal(copied.length, 4)
+  assert.ok(!(1 in copied))
+  assert.ok(!(3 in copied))
+})
+
 test("keeps a __proto__ property name as data when copying", () => {
   const properties = JSON.parse('{"__proto__":{"type":"string"}}') as Record<string, unknown>
   properties.field = { type: "string", pattern: artifactFieldPattern }

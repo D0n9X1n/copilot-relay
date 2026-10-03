@@ -91,10 +91,14 @@ function mapRecord(
   return entries ? Object.fromEntries(entries) : record
 }
 
-// Copy-on-write, like mapRecord.
+// Copy-on-write, like mapRecord. Holes and the length are kept, as Array.prototype.map keeps them.
 function mapArray(values: Array<unknown>): Array<unknown> {
   let copy: Array<unknown> | undefined
   for (let index = 0; index < values.length; index++) {
+    if (!(index in values)) {
+      continue
+    }
+
     const value = values[index]
     const mapped = normalizeSchemaValue(value)
     if (!copy && Object.is(mapped, value)) {
@@ -102,10 +106,16 @@ function mapArray(values: Array<unknown>): Array<unknown> {
     }
 
     copy ??= values.slice(0, index)
-    copy.push(mapped)
+    copy[index] = mapped
   }
 
-  return copy ?? values
+  if (!copy) {
+    return values
+  }
+
+  copy.length = values.length
+
+  return copy
 }
 
 function normalizeSchemaValue(value: unknown): unknown {
