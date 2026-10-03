@@ -731,3 +731,54 @@ test("passes prior conversation history through unchanged", () => {
 
   assert.deepEqual(result.messages.slice(0, -1), history)
 })
+
+// #161: a tool result can hold an array of blocks, such as text and an image. Its text reaches the
+// search request as text, not as "[object Object]".
+test("a tool result with array content reaches the search request as text", async () => {
+  const { withRecordedTransport } = await import("../../src/lib/request-trace")
+  const baseUrl = "https://search-tool-result.invalid"
+  const backend: CopilotModel = { supportedEndpoints: ["/responses"], reasoningEfforts: [] }
+  const config = {
+    ...createConfig(baseUrl),
+    webSearchBackend: "future-search",
+    modelCatalog: { baseUrl, models: new Map([["future-search", backend]]) },
+  }
+  const toolResultPayload: ClaudeMessagesPayload = {
+    ...payload,
+    messages: [
+      { role: "user", content: "List the fixtures." },
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Glob", input: { pattern: "*.ts" } }] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_1",
+            content: [
+              { type: "text", text: "Found 2 files" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+            ],
+          },
+          { type: "text", text: "search the web for copilot docs" },
+        ],
+      },
+    ],
+  }
+  const inputs: Array<string> = []
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      const { input } = JSON.parse(request.body!) as { input: unknown }
+      assert.equal(typeof input, "string")
+      inputs.push(input as string)
+      return Response.json({ id: "resp_search", model: "future-search", status: "completed", output: [] })
+    },
+    refresh: async () => {},
+  }, async () => {
+    await createClaudeWebSearchExecution(config, toolResultPayload, "copilot docs")
+  })
+
+  assert.equal(inputs.length, 1)
+  assert.ok(inputs[0].includes("user: Found 2 files\n\n[image]\n\nsearch the web for copilot docs"))
+  assert.equal(inputs[0].includes("[object Object]"), false)
+})

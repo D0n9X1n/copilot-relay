@@ -7,6 +7,7 @@ import type {
   ClaudeResponse,
   ClaudeTextBlock,
   ClaudeTool,
+  ClaudeToolResultBlock,
   ClaudeWebSearchResultBlock,
 } from "~/claude/types"
 import type { ClaudeToolNameMapper } from "~/claude/tool-names"
@@ -127,6 +128,23 @@ export const prepareClaudeWebSearchDecisionPayload = (
   }
 }
 
+// A tool result holds a string or an array of blocks, such as text and an image (#150). Each text
+// block keeps its text and any other block is named by its type, so an image reads as "[image]"
+// rather than "[object Object]" (#161). A client can omit the content.
+const toolResultText = (content: ClaudeToolResultBlock["content"] | undefined): string => {
+  if (typeof content === "string") {
+    return content
+  }
+
+  if (!Array.isArray(content)) {
+    return ""
+  }
+
+  return content
+    .map((block) => (block.type === "text" ? block.text : `[${block.type}]`))
+    .join("\n\n")
+}
+
 const textFromMessageContent = (content: ClaudeMessage["content"]): string => {
   if (typeof content === "string") {
     return content
@@ -139,7 +157,7 @@ const textFromMessageContent = (content: ClaudeMessage["content"]): string => {
       }
 
       if (block.type === "tool_result") {
-        return [block.content]
+        return [toolResultText(block.content)]
       }
 
       return []
