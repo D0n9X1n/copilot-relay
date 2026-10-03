@@ -97,10 +97,14 @@ that pass admission return `500` with bounded diagnostics for compatibility work
 
 `src/server.ts` validates the request authority/Host against loopback or the
 configured hostname and actual listener port. A supplied Origin must match that
-origin; mismatches return `403`. Nonempty Messages/count-token POST bodies require
-`application/json` (`415` otherwise). These are **local admission controls, not
-network authentication**: the dummy Claude token does not protect a LAN listener.
-Keep the bind address on loopback.
+origin; mismatches return `403`. When `apiKey` is set, every request except
+`GET /healthz` and `GET`/`HEAD /api/hello` must then carry the key as `x-api-key`
+or `Authorization: Bearer`, or it gets `401` before its body is read or any route
+runs. Nonempty Messages/count-token POST bodies require `application/json` (`415`
+otherwise). Without `apiKey` these are **local admission controls, not network
+authentication**: the dummy Claude token does not protect a LAN listener. Keep the
+bind address on loopback, or set `apiKey` first; see
+[Configuration](EN-Configuration.md).
 
 ### What the cheap endpoints do and do not prove
 

@@ -127,9 +127,21 @@ info Config reloaded: logLevel=debug thinkEffort=xhigh upstreamTimeoutSeconds=18
 
 ### 接入检查与请求策略
 
-`src/server.ts` 在推理前检查 Host/authority、显式 Origin 及 JSON content type。
-这是浏览器来源/本地请求检查，**不是认证**；可从网络访问的非 loopback 监听器不受
-Claude 占位 token 保护。
+`src/server.ts` 在推理前依次检查 Host/authority、显式 Origin、可选的 `apiKey` 及
+JSON content type。Host/authority、Origin 和 content type 是浏览器来源/本地请求检查，
+**不是认证**；没有 `apiKey` 时，可从网络访问的非 loopback 监听器不受 Claude 占位
+token 保护。
+
+`apiKey` 在每个请求中从实时的 `ProxyConfig` 读取，因此热重载对下一个请求生效。
+`isOpenProbe` 豁免 `GET /healthz` 和 `GET`/`HEAD /api/hello`；其他所有路由（包括未知
+路由）都需要密钥。`presentsApiKey` 用 SHA-256 分别对配置的密钥和每个出示的值
+（`x-api-key` 及 `Authorization: Bearer` token）求摘要，再用 `timingSafeEqual` 比较，
+因此耗时既不泄露密钥，也不泄露其长度。拒绝时返回 HTTP `401` `authentication_error`
+及 `WWW-Authenticate: Bearer`，发生在读取正文之前，也在未知路由处理器可能记录 payload
+之前；响应从不回显出示的值。`src/start.ts` 的 `applyRuntimeConfig` 在启动时和每次
+重载时用 `registerLogSecret` 登记密钥，`status` 和 `models` 在使用前也会登记。无论
+密钥由哪个 header 携带，`RequestTrace` 都在捕获元数据中保护它；`toStatusConfig` 把它
+显示为 `[redacted]`。
 
 读取 POST 正文之前，`src/lib/config.ts` 的 `snapshotProxyConfig` 及
 `src/lib/state.ts` 的 `snapshotRuntimeState` / `withRuntimeState` 为该请求固定路由、

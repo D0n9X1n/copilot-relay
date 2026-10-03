@@ -16,6 +16,9 @@ the log format is the way it is see [Internals](EN-Internals.md).
    curl -sS http://127.0.0.1:4142/v1/models
    ```
 
+   With `apiKey` set, `/v1/models` answers `401` unless the request carries the
+   key, for example `-H "x-api-key: <key>"`. `/healthz` needs no key.
+
 2. Follow today's log:
 
    ```sh
@@ -578,7 +581,10 @@ strip signed history to hide these errors; see [Internals](EN-Internals.md).
 
 Host/Origin rejection is `403`; a nonempty inference/token-count POST without
 `application/json` is `415`. These are local admission errors, not Copilot auth
-failures, and do not make a non-loopback listener authenticated.
+failures, and do not make a non-loopback listener authenticated. With `apiKey`
+set, a request without that key, or with a different one, is `401`
+`authentication_error`, also from the relay before any Copilot call; see
+[Claude Code settings are wrong](#claude-code-settings-are-wrong).
 
 An upstream HTTP 400 can also be a client/provider capability mismatch. In the
 isolated 2026-09-30 Claude Code 2.1.285 native check, the first two requests were
@@ -923,11 +929,23 @@ cat ~/.claude/settings.json
 Expected values:
 
 - `ANTHROPIC_BASE_URL` points at `http://127.0.0.1:4142`
-- `ANTHROPIC_AUTH_TOKEN` exists; it is a dummy value for local relay use
+- `ANTHROPIC_AUTH_TOKEN` is the relay's `apiKey` when one is set; otherwise it
+  exists as a dummy value for local relay use
 - `CLAUDE_CODE_AUTO_MODE_SERVER` is `0`, unless you set another value
 
 Changing `host` or `port` requires restarting the relay, because the listening
 socket cannot move during hot reload.
+
+With `apiKey` set, a client whose token differs from it gets `401`, and the relay
+logs `error="Missing or invalid API key: ..."`:
+
+```sh
+grep -n "Missing or invalid API key" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+The settings writer runs only at startup, and a running client keeps the token it
+loaded. After changing `apiKey`, restart the relay, or set the token yourself, and
+then restart Claude Code. See [Configuration](EN-Configuration.md).
 
 ## Claude Code says the session isn't eligible for auto mode
 

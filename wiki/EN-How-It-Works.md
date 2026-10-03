@@ -10,7 +10,9 @@ http://127.0.0.1:4142/v1/messages
 
 `copilot-relay` routes the request to GitHub Copilot, either translating it or
 preserving native Claude Messages. Keep it on loopback: Host/Origin/JSON checks
-are local admission controls, not network authentication.
+are local admission controls, not network authentication. To serve other
+machines, set `apiKey` before binding `host` beyond loopback; see
+[Configuration](EN-Configuration.md).
 
 This page is the short version. For the design map see
 [Architecture](EN-Architecture.md); for the mechanics and invariants behind it

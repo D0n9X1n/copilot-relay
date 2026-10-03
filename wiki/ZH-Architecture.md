@@ -90,9 +90,12 @@ sequenceDiagram
 OpenAI 兼容路由。通过接入检查的未知路由返回 `500`，并记录有界诊断供兼容性排查。
 
 `src/server.ts` 校验请求 authority/Host 是否为 loopback 或配置的主机名，以及是否匹配
-实际监听端口。若携带 Origin，必须与该 origin 一致；不匹配返回 `403`。Messages/token
-计数的非空 POST 正文必须使用 `application/json`，否则返回 `415`。这些是**本地接入
-控制，不是网络认证**：Claude 占位 token 不能保护 LAN 监听器。请保持 loopback 绑定。
+实际监听端口。若携带 Origin，必须与该 origin 一致；不匹配返回 `403`。设置了 `apiKey`
+时，除 `GET /healthz` 和 `GET`/`HEAD /api/hello` 外，每个请求随后都必须以 `x-api-key`
+或 `Authorization: Bearer` 携带该密钥，否则在读取正文、执行任何路由之前返回 `401`。
+Messages/token 计数的非空 POST 正文必须使用 `application/json`，否则返回 `415`。没有
+`apiKey` 时，这些是**本地接入控制，不是网络认证**：Claude 占位 token 不能保护 LAN
+监听器。请保持 loopback 绑定，或先设置 `apiKey`；见[配置](ZH-Configuration.md)。
 
 ### 廉价接口能证明什么，不能证明什么
 

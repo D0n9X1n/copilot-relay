@@ -16,7 +16,7 @@
 - **Use advertised chat models** — catalog-driven endpoint selection, optional effort support, and clear opt-in per-model deep checks.
 - **Choose Claude's upstream protocol** — `claudeUpstreamApi: chat-completions` stays the default; opt into `auto` or `messages` for native Claude transport.
 - **Diagnose offline** — debug mode captures full observed bodies for `copilot-relay replay`; captures contain unredacted prompts and must never be shared wholesale.
-- **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux.
+- **Run it your way** — foreground CLI or background service on macOS, Windows, and Linux; set `apiKey` to require a client key before binding beyond loopback.
 
 ## Quick start
 
