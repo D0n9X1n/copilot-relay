@@ -400,3 +400,37 @@ test("ctime-only reacquisition cannot accept different bytes with matching metad
   assert.equal(reads, 2)
   assert.equal(await realRead(file, "utf8"), "original\n")
 })
+
+// Why (#159 review): publication kept the existing mode, so a 0644 settings file that gained the
+// relay's apiKey stayed readable by other local users.
+test("an owner-only write publishes 0600 and still checks the mode it read", {
+  skip: process.platform === "win32",
+}, async () => {
+  for (const mode of [0o644, 0o640]) {
+    const file = await fixture()
+    await fs.writeFile(file, "before\n")
+    await fs.chmod(file, mode)
+
+    // Without the option the mode the file had is kept.
+    await writeFileSnapshot(await readFileSnapshot(file), "kept\n")
+    assert.equal((await fs.stat(file)).mode & 0o777, mode)
+
+    const snapshot = await readFileSnapshot(file)
+    await writeFileSnapshot(snapshot, "after\n", { ownerOnly: true })
+
+    assert.equal(await fs.readFile(file, "utf8"), "after\n")
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600)
+    assert.equal(snapshot.mode, mode)
+  }
+
+  // The snapshot read 0600; a chmod after that read is a concurrent edit, owner-only or not.
+  const edited = await fixture()
+  await fs.writeFile(edited, "original\n")
+  await fs.chmod(edited, 0o600)
+  const stale = await readFileSnapshot(edited)
+  await fs.chmod(edited, 0o644)
+
+  await assert.rejects(writeFileSnapshot(stale, "must not land\n", { ownerOnly: true }), FileConflictError)
+  assert.equal(await fs.readFile(edited, "utf8"), "original\n")
+  assert.equal((await fs.stat(edited)).mode & 0o777, 0o644)
+})

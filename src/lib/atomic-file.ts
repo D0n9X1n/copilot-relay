@@ -21,6 +21,12 @@ export interface FileSnapshot {
   identity: FileIdentity | null
 }
 
+export interface WriteFileSnapshotOptions {
+  // Publish the file owner-only (0600) whatever mode it had, for content that holds a credential.
+  // The snapshot keeps the mode it read, which is what the concurrent-edit checks compare.
+  ownerOnly?: boolean
+}
+
 export class FileConflictError extends Error {
   constructor() {
     super("File changed since it was read; refusing to overwrite a concurrent edit")
@@ -225,7 +231,11 @@ const assertUnchanged = async (expected: FileSnapshot): Promise<void> => {
 // final check and rename remains possible. Never claim an OS-wide CAS guarantee.
 const pendingWrites = new Map<string, Promise<void>>()
 
-const publish = async (snapshot: FileSnapshot, content: string): Promise<void> => {
+const publish = async (
+  snapshot: FileSnapshot,
+  content: string,
+  options: WriteFileSnapshotOptions,
+): Promise<void> => {
   // Checked first, again after creating the directory, and again once the temporary file is
   // written and closed, so the last check sits directly before the link or rename that publishes.
   await assertUnchanged(snapshot)
@@ -245,7 +255,7 @@ const publish = async (snapshot: FileSnapshot, content: string): Promise<void> =
 
       // Windows keeps no POSIX mode bits; chmod there only toggles the read-only flag.
       if (process.platform !== "win32") {
-        await handle.chmod(snapshot.mode)
+        await handle.chmod(options.ownerOnly ? 0o600 : snapshot.mode)
       }
 
       await handle.sync()
@@ -274,10 +284,14 @@ const publish = async (snapshot: FileSnapshot, content: string): Promise<void> =
   }
 }
 
-export const writeFileSnapshot = async (snapshot: FileSnapshot, content: string): Promise<void> => {
+export const writeFileSnapshot = async (
+  snapshot: FileSnapshot,
+  content: string,
+  options: WriteFileSnapshotOptions = {},
+): Promise<void> => {
   const previous = pendingWrites.get(snapshot.resolvedPath) ?? Promise.resolve()
   // A failed earlier write has already been reported to its own caller; it must not block this one.
-  const current = previous.catch(() => undefined).then(() => publish(snapshot, content))
+  const current = previous.catch(() => undefined).then(() => publish(snapshot, content, options))
   pendingWrites.set(snapshot.resolvedPath, current)
 
   try {
