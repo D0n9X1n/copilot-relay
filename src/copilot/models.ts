@@ -21,6 +21,8 @@ export interface CopilotModel {
   supportedEndpoints?: string[]
   type?: string
   reasoningEfforts?: string[]
+  // The catalog's display name. Only `copilot-relay models` prints it; routing never reads it.
+  name?: string
 }
 
 export interface CopilotModelCatalog {
@@ -201,6 +203,7 @@ export async function loadCopilotModelCatalog(
         ...(supportedEndpoints !== undefined && { supportedEndpoints }),
         ...(typeof capabilities?.type === "string" && { type: capabilities.type }),
         ...(reasoningEfforts !== undefined && { reasoningEfforts }),
+        ...(typeof model.name === "string" && model.name !== "" && { name: model.name }),
       })
     }
 

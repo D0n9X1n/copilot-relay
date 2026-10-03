@@ -197,6 +197,7 @@ test("models help is registered without upstream access in CI rendering", async 
   assert.equal(commandHelp.code, 0)
   assert.match(commandHelp.stdout, /upstream/i)
   assert.match(commandHelp.stdout, /--deep/)
+  assert.match(commandHelp.stdout, /\[SEARCH\]/)
   assert.equal(harness.requests.length, 0)
 })
 
@@ -213,7 +214,12 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   assert.equal(result.code, 0)
   assert.match(result.stdout, /Upstream-advertised models \(4\):\na-embedding\nb-no-limits\ngpt-example\nz-chat\n/)
   assert.match(result.stdout, /not verified/i)
-  assert.doesNotMatch(result.stdout, /\[1m\]|missing-gpt-model|missing-opus-model/)
+
+  // Configured IDs appear only in the config guide after the list, flagged when not advertised.
+  const [listing, guide] = result.stdout.split("Config file:")
+
+  assert.doesNotMatch(listing, /\[1m\]|missing-gpt-model|missing-opus-model/)
+  assert.match(guide, /Warning: gptModel missing-gpt-model is not advertised by upstream/)
   assert.deepEqual(harness.requests.map((request) => request.authorization), [`Bearer ${oldToken}`])
 
   // A second run must fetch the catalog again rather than reuse the first listing.
@@ -226,9 +232,10 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   assert.equal(harness.requests.length, 2)
 })
 
-test("models sanitizes terminal controls and redacts sensitive URLs in upstream IDs", async (t) => {
+test("models sanitizes terminal controls and redacts sensitive URLs in upstream IDs and names", async (t) => {
   const harness = await fixture(t, (request, response) => respond(response, { data: [
     { id: "a-\u001b[2K\u001b[1Aexample\r\nforged-row" },
+    { id: "b-named", name: "Evil\u001b[31m\r\nName" },
     { id: `http://${request.headers.host}${secretPath}/model` },
   ] }))
 
@@ -238,7 +245,80 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   const listing = result.rawStdout.slice(result.rawStdout.indexOf("Upstream-advertised models"))
   assert.doesNotMatch(listing, /\u001b|\r/)
   assert.match(listing, /a-exampleforged-row\n/)
+  assert.match(listing, /\nb-named {2}EvilName\n/)
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
+})
+
+test("models shows display names, marks IDs that cannot be configured, and explains the config lines", async (t) => {
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [
+    { id: "gpt-6-astra", name: "GPT-6 Astra", supported_endpoints: ["/responses"], capabilities: { type: "chat" } },
+    { id: "text-embedding-ada-002", name: "Embedding V2 Ada", capabilities: { type: "embeddings" } },
+    { id: "unnamed-chat", name: 7 },
+  ] }))
+
+  const result = await harness.run()
+
+  assert.equal(result.code, 0, result.output)
+  assert.match(result.stdout, /Upstream-advertised models \(3\):\ngpt-6-astra {13}GPT-6 Astra\ntext-embedding-ada-002 {2}Embedding V2 Ada · cannot be gptModel or opusModel: not a chat model\nunnamed-chat\n/)
+  assert.ok(result.stdout.includes(`Config file: ${path.join(harness.home, ".copilot-relay", "config.yaml")}`))
+  assert.match(result.stdout, /^ {2}gptModel: missing-gpt-model {4}# requests without "opus" in the model name$/m)
+  assert.match(result.stdout, /^ {2}opusModel: missing-opus-model {2}# requests with "opus" in the model name$/m)
+  assert.match(result.stdout, /Warning: gptModel missing-gpt-model is not advertised by upstream; the startup check rejects it\./)
+  assert.match(result.stdout, /Warning: opusModel missing-opus-model is not advertised by upstream; the startup check rejects it\./)
+  assert.match(result.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
+  assert.match(result.stdout, /A running relay applies the change to new requests; restarting reruns the startup check\./)
+  assert.equal(harness.requests.length, 1)
+})
+
+test("models search prints the config line for one match and suggests the closest IDs for none", async (t) => {
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
+    { id: "gpt-5.6-sol-fast", name: "GPT-5.6 Sol Fast (Internal only)" },
+    { id: "gpt-6-astra", name: "GPT-6 Astra" },
+    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol" },
+  ] }))
+
+  // Unquoted words form one search.
+  const single = await harness.run(["models", "sol", "fast"])
+
+  assert.equal(single.code, 0, single.output)
+  assert.match(single.stdout, /Upstream models matching "sol fast" \(1\):\ngpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\)\n/)
+  assert.match(single.stdout, /To use gpt-5\.6-sol-fast, set this line in the config file:\n {2}gptModel: gpt-5\.6-sol-fast\n/)
+  assert.match(single.stdout, /copilot-relay models --deep --model gpt-5\.6-sol-fast/)
+
+  const opus = await harness.run(["models", "Claude Opus 5.5"])
+
+  assert.equal(opus.code, 0, opus.output)
+  assert.match(opus.stdout, /\n {2}opusModel: claude-opus-5\.5\n/)
+
+  // The catalog has no gpt-6 fast model; the closest IDs show what it does have.
+  const none = await harness.run(["models", "gpt6-fast"])
+
+  assert.equal(none.code, 1)
+  assert.match(none.stdout, /No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\ngpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\)\ngpt-6-astra {7}GPT-6 Astra\ngpt-6\.1-sol {7}GPT-6\.1 Sol\n/)
+  assert.match(none.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
+  assert.equal(harness.requests.length, 3)
+})
+
+test("models rejects a search with --deep or without letters or digits before any request", async (t) => {
+  const harness = await fixture(t, (_request, response) => respond(response, deepCatalog), { deep: true })
+
+  const deep = await harness.run(["models", "fast", "--deep"])
+
+  assert.equal(deep.code, 1)
+  assert.match(deep.output, /A search lists models; check one with copilot-relay models --deep --model <id>\./)
+
+  const empty = await harness.run(["models", "."])
+
+  assert.equal(empty.code, 1)
+  assert.match(empty.output, /A search needs at least one letter or digit\./)
+  assert.equal(harness.requests.length, 0)
+
+  // An unknown exact ID points to the search.
+  const unknown = await harness.run(["models", "--deep", "--model", "gpt6-fast"])
+
+  assert.equal(unknown.code, 1)
+  assert.match(unknown.output, /Selected model is not advertised by upstream: Find the exact ID with copilot-relay models <search>\./)
 })
 
 test("models reports an empty catalog successfully", async (t) => {

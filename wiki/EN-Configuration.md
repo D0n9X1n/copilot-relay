@@ -128,17 +128,44 @@ The command makes a fresh authenticated `GET /models` at the configured
 login flow may ask you to authenticate. All valid upstream IDs are printed in
 sorted order, with duplicates removed; relay aliases such as `[1m]` are not added.
 Models outside the configured `gptModel` and `opusModel` mappings are included.
-Terminal control characters are stripped and sensitive gateway URL tails are
-redacted for safe display; ordinary model IDs are unchanged.
-An empty catalog is reported explicitly with exit code `0`; configuration,
-authentication, network, HTTP, timeout, and malformed-catalog failures exit `1`.
-A local timeout is reported separately from a real upstream HTTP 504.
+
+Each row starts with the exact ID that `gptModel` or `opusModel` takes, followed by
+the catalog's display name. An ID that request admission would refuse is marked
+`cannot be gptModel or opusModel` with the reason, such as `not a chat model`; the
+decision is the same `selectCopilotEndpoint` that real requests use. Terminal
+control characters are stripped and sensitive gateway URL tails are redacted for
+safe display; ordinary model IDs are unchanged. After the list, the command prints
+the config file path and the current `gptModel` and `opusModel` lines with the
+requests each serves. It warns when a configured ID is not advertised or cannot be
+used, because the startup check rejects it.
+
+To find the value for a model, search by ID or display name. The search ignores
+case, spaces and punctuation:
+
+```sh
+copilot-relay models sol fast
+```
+
+When the search names one routable model, or one ID exactly, the command prints
+the line to put in `config.yaml`, such as `gptModel: gpt-5.6-sol-fast`; an ID
+containing `opus` is offered as `opusModel`, matching the routing rule. When
+nothing matches, it lists the IDs sharing the search's longest start or end and
+exits `1`. In the catalog checked on 2026-10-02, `gpt6-fast` matched nothing and
+suggested `gpt-5.6-sol-fast` and the `gpt-6` models. A search cannot be combined
+with `--deep`; check one model with `--deep --model <id>`.
+
+A running relay applies a `gptModel` or `opusModel` change to new requests;
+restarting reruns the startup check (see "Hot reload vs restart" below). An empty
+catalog is reported explicitly with exit code `0`. A search that matches nothing,
+and configuration, authentication, network, HTTP, timeout, and malformed-catalog
+failures exit `1`. A local timeout is reported separately from a real upstream
+HTTP 504.
 
 It works while the relay is stopped and when a configured model ID is absent
-upstream. It does not bind a port, run startup preflight or inference probes,
-change your selected models, or alter Claude settings. The config loader still
-materializes resolved keys in `config.yaml`, and authentication may update its
-token cache, just as with other commands.
+upstream, which it reports as a warning. It does not bind a port, run startup
+preflight or inference probes, change your selected models, or alter Claude
+settings. The config loader still materializes resolved keys in `config.yaml`, and
+authentication may update its token cache, just as with other commands.
 
 **Advertised does not mean verified.** A catalog entry is not proof of successful
 inference or compatibility with relay requests, tools, or a particular effort.
