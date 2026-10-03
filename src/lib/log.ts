@@ -260,6 +260,7 @@ interface ActiveLog {
 let logQueue: Array<LogEntry> = []
 let logWriteChain: Promise<void> = Promise.resolve()
 let activeLog: ActiveLog | undefined
+let logIdleClose: ReturnType<typeof setTimeout> | undefined
 
 // FileHandle.appendFile writes a larger buffer in 512 KiB pieces, and another process appending to
 // the same file could land between two of them. Each write ends on an entry boundary and every
@@ -343,6 +344,19 @@ const closeActiveLog = async (): Promise<void> => {
   await closing?.handle.close().catch(() => undefined)
 }
 
+// Windows cannot rename or move a folder while a file in it is open, so the file is closed once
+// no entry has been written for a second; the next entry reopens it with the full checks. The
+// close goes through the write chain, so it never runs during a drain.
+const logIdleCloseMs = 1000
+
+const scheduleLogIdleClose = (): void => {
+  clearTimeout(logIdleClose)
+  logIdleClose = setTimeout(() => {
+    logWriteChain = logWriteChain.then(closeActiveLog)
+  }, logIdleCloseMs)
+  logIdleClose.unref()
+}
+
 const openActiveLog = async (filePath: string): Promise<FileHandle> => {
   if (activeLog?.filePath === filePath && await isStillActive(activeLog)) {
     return activeLog.handle
@@ -401,6 +415,8 @@ const drainLogQueue = async (): Promise<void> => {
       await closeActiveLog()
     }
   }
+
+  scheduleLogIdleClose()
 }
 
 // Only the push that finds the queue empty schedules a drain; later entries join that drain or the
@@ -408,6 +424,8 @@ const drainLogQueue = async (): Promise<void> => {
 const queueLogEntry = (entry: LogEntry): void => {
   logQueue.push(entry)
   if (logQueue.length === 1) {
+    // The drain this schedules sets the next idle close.
+    clearTimeout(logIdleClose)
     logWriteChain = logWriteChain.then(drainLogQueue).catch(() => undefined)
   }
 }
@@ -425,6 +443,9 @@ export const flushLogs = async (): Promise<void> => {
     // Entries queued while this close was pending are drained after it, so close again.
     pending = logQueue.length > 0
   }
+
+  // The file is closed; a pending idle close would only close it again.
+  clearTimeout(logIdleClose)
 }
 
 const cleanupLogsIfDue = async (): Promise<void> => {

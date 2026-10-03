@@ -527,6 +527,21 @@ test("a loosened logs folder mode is restored before the next append", {
   assert.match(await fs.readFile(getLogPath(), "utf8"), /before folder chmod\n.*after folder chmod\n$/)
 })
 
+// Why: Windows cannot rename or move a folder while a file in it is open, and the kept-open handle
+// locked the logs folder for as long as the relay ran (#141 review).
+test("the log file is closed after a second without entries", async (t) => {
+  const open = t.mock.method(fs, "open")
+  log.info("before idle")
+  await readActiveLog()
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  const calls = open.mock.calls.filter((call) => call.arguments[0] === getLogPath())
+  assert.equal(calls.length, 1)
+  const handle = await calls[0].result
+  assert.ok(handle)
+  assert.equal(handle.fd, -1)
+})
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })

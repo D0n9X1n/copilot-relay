@@ -846,6 +846,11 @@ that end on entry boundaries: `FileHandle.appendFile` writes a larger buffer in
 512 KiB pieces, and another process appending to the same file could land
 between two of them.
 
+The handle is closed once no entry has been written for a second, because Windows
+cannot rename or move a folder while a file in it is open. The next entry reopens
+the file with the full checks below. The close goes through the same write chain,
+so it never runs during a drain.
+
 The handle is reused only while its path still names the same private file with
 one link and, on POSIX, mode 0600, and the app and logs directories are still the
 directories checked when it was opened: real directories, not links, with mode

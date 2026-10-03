@@ -136,9 +136,12 @@ drift. Local rather than UTC on purpose: `logRetentionDays` is a human-facing
 "how many days do I keep" setting, and a UTC stamp would roll the file over in
 the middle of the local afternoon for anyone west of Greenwich.
 
-The relay keeps the active file open between writes. If you move or delete it
-while the relay runs, the next entry creates a new file at the dated path; nothing
-more is written to the moved file.
+The relay keeps the active file open while it writes and closes it a second after
+the last entry. If you move or delete the file while the relay runs, the next
+entry creates a new file at the dated path; nothing more is written to the moved
+file. On Windows, renaming or moving the logs folder fails with an access-denied
+error while the file is open: wait a second after the last entry, or stop the
+relay first.
 
 ### Retention
 
