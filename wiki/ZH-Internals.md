@@ -284,6 +284,38 @@ schema 作为同一个对象发送，省略 pattern 时只复制通往它的路�
 以及嵌套属性的可选语义，不注入 null 或默认值，也不删除或改写返回的参数。
 该设置不用于内置 `web_search_preview`，也不影响 `/chat/completions` 工具。
 
+### 工具结果中的图片
+
+Claude Code 把工具返回的图片（例如 `Read` 打开一张 PNG）放在 `tool_result` 内的
+`image` block 中。`src/claude/translate.ts` 的 `mapContent` 和 `handleUserMessage`
+把它转换为 `role: "tool"` 消息，其内容包含 `image_url` part。各路由再把图片放到其模型
+读取的位置（#150）：
+
+- **`/responses`。** gpt-6-astra、gpt-5.4 和 gpt-5.5 从 `function_call_output.output`
+  内的 `input_image` 条目读取工具图片。`stringifyToolOutput` 只保留文本 part，没有文本时
+  把整个结果作为 JSON 文本发送：图片要么被丢弃，要么以 base64 文本到达。因此
+  `src/copilot/responses.ts` 的 `translateToolOutput` 把含图片的工具消息发送为由
+  `translateContentPart` 生成的 `input_text` 与 `input_image` 条目数组，保持原有顺序。
+  其他工具消息仍使用 `stringifyToolOutput` 的纯字符串，因此已有历史发送相同的字节，
+  保留其 prompt 缓存前缀。从 `/chat/completions` 发起的 `unsupported_api_for_model`
+  重试重新发送未适配的 payload，走同一路径。
+- **`/chat/completions`，非 Claude 模型。** Copilot 接受工具消息中的 `image_url` part，
+  但在 #150 中 gpt-5-mini 回复 `NO IMAGE`，gemini-3.8-flash 说出了它从未看到的颜色。
+  同一张图片位于随后的 user 消息中时，两者都能读取。`src/copilot/chat.ts` 的
+  `moveToolImagesToUserMessages` 在 `normalizeFinalAssistantPrefill` 之前运行。在每段
+  连续的工具消息中，含图片的工具消息只保留文本 part，像纯文本工具内容一样以空行连接；
+  没有文本时改为固定说明 `Image output follows in the next user message.`。其图片移到
+  该段之后 user 消息的开头，或移到在该段之后插入的新 user 消息中，每个调用的图片前带有
+  `Image output of tool call <id>:`。不含图片的工具消息保持原样。没有工具消息含图片的
+  payload 原样返回。
+- **`/chat/completions`，Claude 模型。** 当 `isClaudeModelId` 匹配上游模型时，payload
+  保持原有形状：在 #150 中 claude-opus-5.5 读取了工具消息内的图片，而 Prompt 缓存下
+  “Chat 路由：system 回合与缓存断点”所述的 `copilot_cache_control` 标记放在这一形状上。
+
+`src/copilot/chat.ts` 的 `messagesIncludeImage` 检查实际发送的 payload，因此图片被移动的
+请求仍带有 `copilot-vision-request: true`；`/responses` 重试检查它重新发送的 payload。
+原生 `/v1/messages` 路由发送 Claude 自己的 block，不使用这些适配器。
+
 ### 上游连接
 
 `src/copilot/client.ts` 中的 `fetchCopilot` 通过同一个只用 HTTP/1.1 的 undici

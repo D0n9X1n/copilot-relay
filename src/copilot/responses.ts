@@ -83,7 +83,8 @@ type ResponsesFunctionCallInput = {
 type ResponsesFunctionCallOutputInput = {
   type: "function_call_output"
   call_id: string
-  output: string
+  // A plain string unless the tool result holds an image; see translateToolOutput.
+  output: string | Array<ResponsesInputContentPart>
 }
 
 type ResponsesToolChoice =
@@ -735,7 +736,7 @@ function translateMessage(message: Message): Array<ResponsesInputItem> {
       {
         type: "function_call_output",
         call_id: message.tool_call_id ?? "",
-        output: stringifyToolOutput(message.content),
+        output: translateToolOutput(message.content),
       },
     ]
   }
@@ -802,6 +803,20 @@ function translateContentPart(part: ContentPart): ResponsesInputContentPart {
     image_url: part.image_url.url,
     detail: part.image_url.detail ?? "auto",
   }
+}
+
+// In #150, gpt-6-astra, gpt-5.4 and gpt-5.5 read a tool's image as an input_image item inside
+// function_call_output.output. stringifyToolOutput drops the image, or sends the whole result as
+// JSON text when it has no text part. A result without images keeps that plain string, so an
+// existing history sends the same bytes and keeps its prompt-cache prefix.
+function translateToolOutput(
+  content: Message["content"],
+): ResponsesFunctionCallOutputInput["output"] {
+  if (Array.isArray(content) && content.some((part) => part.type === "image_url")) {
+    return content.map((part) => translateContentPart(part))
+  }
+
+  return stringifyToolOutput(content)
 }
 
 function stringifyToolOutput(content: Message["content"]): string {

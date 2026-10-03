@@ -7,6 +7,7 @@ import { log } from "~/lib/log"
 import { sanitizeTerminalString } from "~/lib/redact"
 import {
   getRequestReasoningEffort,
+  isClaudeModelId,
   normalizeCopilotModelId,
 } from "~/lib/models"
 import { boundModelOutputTokens, getCachedCopilotModel, resolveModelReasoningEffort } from "~/copilot/models"
@@ -23,6 +24,9 @@ import {
 import type {
   ChatCompletionResponse,
   ChatCompletionsPayload,
+  ContentPart,
+  Message,
+  TextPart,
 } from "~/copilot/types"
 
 import {
@@ -159,14 +163,83 @@ const isAgentInitiator = (
     "agent"
   : "user"
 
+const holdsImage = (message: Message): boolean =>
+  Array.isArray(message.content) && message.content.some((part) => part.type === "image_url")
+
 const messagesIncludeImage = (
   messages: ChatCompletionsPayload["messages"],
-): boolean =>
-  messages.some(
-    (message) =>
-      typeof message.content !== "string"
-      && message.content?.some((part) => part.type === "image_url"),
-  )
+): boolean => messages.some(holdsImage)
+
+type ToolImageMessage = Message & { role: "tool"; content: Array<ContentPart> }
+
+const isToolImageMessage = (message: Message): message is ToolImageMessage =>
+  message.role === "tool" && holdsImage(message)
+
+// Joined as text-only tool content is: mapContent and stringifyToolOutput use blank lines.
+const joinTextParts = (parts: Array<ContentPart>): string =>
+  parts
+    .filter((part): part is TextPart => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n")
+
+const toContentParts = (content: Message["content"]): Array<ContentPart> => {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }]
+  }
+
+  return content ?? []
+}
+
+// Replaces the content of a tool result that held only images.
+const toolImageNote = "Image output follows in the next user message."
+
+// Copilot accepts image_url parts in a tool message, but in #150 only claude-opus-5.5 read them
+// there: gpt-5-mini answered that no image arrived, and gemini-3.8-flash named colors it never saw.
+// Both read the same image when it follows in a user message. So a tool message keeps its text, and
+// its images move to the user message that follows its run of tool messages, each call's images led
+// by a label naming the tool call. Claude models keep the original shape: they read it, and the #147
+// cache marks rely on it.
+export const moveToolImagesToUserMessages = (
+  payload: ChatCompletionsPayload,
+): ChatCompletionsPayload => {
+  if (isClaudeModelId(payload.model) || !payload.messages.some(isToolImageMessage)) {
+    return payload
+  }
+
+  const messages: Array<Message> = []
+  let movedImages: Array<ContentPart> = []
+
+  for (const message of payload.messages) {
+    if (isToolImageMessage(message)) {
+      messages.push({ ...message, content: joinTextParts(message.content) || toolImageNote })
+      movedImages.push(
+        { type: "text", text: `Image output of tool call ${message.tool_call_id ?? ""}:` },
+        ...message.content.filter((part) => part.type === "image_url"),
+      )
+      continue
+    }
+
+    // A tool result without an image keeps its content, and the run goes on.
+    if (message.role === "tool" || movedImages.length === 0) {
+      messages.push(message)
+      continue
+    }
+
+    if (message.role === "user") {
+      messages.push({ ...message, content: [...movedImages, ...toContentParts(message.content)] })
+    } else {
+      messages.push({ role: "user", content: movedImages }, message)
+    }
+
+    movedImages = []
+  }
+
+  if (movedImages.length > 0) {
+    messages.push({ role: "user", content: movedImages })
+  }
+
+  return { ...payload, messages }
+}
 
 export const createChatCompletions = async (
   config: ProxyConfig,
@@ -217,8 +290,9 @@ export const createChatCompletions = async (
     stream: bufferResponse ? true : payload.stream,
   }
   const useResponsesApi = selection.endpoint === "/responses"
+  // /responses carries tool-result images in function_call_output; only the chat route moves them.
   const compatiblePayload =
-    useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(upstreamPayload)
+    useResponsesApi ? upstreamPayload : normalizeFinalAssistantPrefill(moveToolImagesToUserMessages(upstreamPayload))
 
   const provider = getCopilotProviderContext(config)
   const enableVision = messagesIncludeImage(compatiblePayload.messages)
@@ -280,8 +354,9 @@ export const createChatCompletions = async (
       markDiscardedResponse(response)
       await response.body?.cancel()
 
+      // The retry resends upstreamPayload, not the chat-adapted payload, so its header follows it.
       return completeResponse(await createResponses(provider, upstreamPayload, {
-        vision: enableVision,
+        vision: messagesIncludeImage(upstreamPayload.messages),
         initiator,
         requestId: options.requestId,
         signal,
