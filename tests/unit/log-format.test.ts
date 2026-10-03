@@ -388,6 +388,81 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
   }
 })
 
+// Why: each entry used to run its own directory checks, open, stat, chmod, append and close, and a
+// burst of them could finish out of order (#141). A burst now shares one open and keeps call order.
+test("a burst of entries is appended in call order through one open", async (t) => {
+  const open = t.mock.method(fs, "open")
+
+  for (let index = 0; index < 50; index += 1) {
+    log.info(`burst entry ${index}`)
+  }
+
+  await flushLogs()
+
+  const lines = (await fs.readFile(getLogPath(), "utf8")).trimEnd().split("\n")
+  assert.deepEqual(
+    lines.map((line) => line.replace(/^\S+ info /, "")),
+    Array.from({ length: 50 }, (_, index) => `burst entry ${index}`),
+  )
+  assert.equal(open.mock.calls.filter((call) => call.arguments[0] === getLogPath()).length, 1)
+})
+
+// Why: the timestamp and the dated file used to be read after the write's own awaits, so a slow
+// disk could stamp an entry late or file it under the next day. Both now come from the call.
+test("an entry is stamped when it is logged, not when it is written", async (t) => {
+  const loggedAt = new Date()
+  t.mock.timers.enable({ apis: ["Date"], now: loggedAt })
+
+  log.info("stamped at call time")
+  t.mock.timers.setTime(loggedAt.getTime() + 60_000)
+  await flushLogs()
+
+  assert.equal(
+    await fs.readFile(getLogPath(loggedAt), "utf8"),
+    `${loggedAt.toISOString()} info stamped at call time\n`,
+  )
+})
+
+// Why: the log file stays open between batches. A file that was renamed, linked elsewhere or
+// loosened must not keep receiving entries through the reused handle.
+test("an entry logged after the active file is renamed goes to a new file", async () => {
+  log.info("before rename")
+  await readActiveLog()
+  await fs.rename(getLogPath(), `${getLogPath()}.old`)
+
+  log.info("after rename")
+  await flushLogs()
+
+  assert.match(await fs.readFile(`${getLogPath()}.old`, "utf8"), /^\S+ info before rename\n$/)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /^\S+ info after rename\n$/)
+})
+
+test("an entry is not appended through a second hard link to the active file", async () => {
+  log.info("before link")
+  await readActiveLog()
+  const linked = path.join(paths.logsDir, "linked.log")
+  await fs.link(getLogPath(), linked)
+
+  log.info("after link")
+  await flushLogs()
+
+  assert.match(await fs.readFile(linked, "utf8"), /^\S+ info before link\n$/)
+})
+
+test("a loosened active log mode is restored before the next append", {
+  skip: process.platform === "win32",
+}, async () => {
+  log.info("before chmod")
+  await readActiveLog()
+  await fs.chmod(getLogPath(), 0o644)
+
+  log.info("after chmod")
+  await flushLogs()
+
+  assert.equal((await fs.stat(getLogPath())).mode & 0o777, 0o600)
+  assert.match(await fs.readFile(getLogPath(), "utf8"), /before chmod\n.*after chmod\n$/)
+})
+
 test.after(async () => {
   await flushLogs()
   await fs.rm(tempHome, { force: true, recursive: true })
