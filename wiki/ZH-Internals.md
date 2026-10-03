@@ -294,8 +294,11 @@ Claude Code 把工具返回的图片（例如 `Read` 打开一张 PNG）放在 `
 - **`/responses`。** gpt-6-astra、gpt-5.4 和 gpt-5.5 从 `function_call_output.output`
   内的 `input_image` 条目读取工具图片。`stringifyToolOutput` 只保留文本 part，没有文本时
   把整个结果作为 JSON 文本发送：图片要么被丢弃，要么以 base64 文本到达。因此
-  `src/copilot/responses.ts` 的 `translateToolOutput` 把含图片的工具消息发送为由
-  `translateContentPart` 生成的 `input_text` 与 `input_image` 条目数组，保持原有顺序。
+  `src/copilot/responses.ts` 的 `translateToolOutput` 把含图片的工具消息发送为
+  `input_text` 与 `input_image` 条目数组，保持原有顺序。`translateToolOutputPart` 省略
+  空文本 part，且不给 `input_image` 条目设置 `detail`：Claude image block 没有该字段，
+  在 #150 中验证过的形状也没有。caozhiyuan/copilot-api 的 issue 361 和 362 报告 Copilot
+  在工具输出中拒绝 `low`、`high` 以外的 `detail`，也拒绝空文本 part。
   其他工具消息仍使用 `stringifyToolOutput` 的纯字符串，因此已有历史发送相同的字节，
   保留其 prompt 缓存前缀。从 `/chat/completions` 发起的 `unsupported_api_for_model`
   重试重新发送未适配的 payload，走同一路径。

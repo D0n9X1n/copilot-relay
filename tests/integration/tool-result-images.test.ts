@@ -71,7 +71,7 @@ const responsesInput = [
     call_id: "toolu_test_1",
     output: [
       { type: "input_text", text: "Loaded /tmp/test.png." },
-      { type: "input_image", image_url: pngUrl, detail: "auto" },
+      { type: "input_image", image_url: pngUrl },
     ],
   },
 ]

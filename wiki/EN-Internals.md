@@ -346,9 +346,13 @@ block inside a `tool_result`. `mapContent` and `handleUserMessage` in
   only the text parts, or sends the whole result as JSON text when it has none: the image
   is dropped, or arrives as base64 text. `translateToolOutput` in
   `src/copilot/responses.ts` therefore sends a tool message that holds an image as an
-  array of `input_text` and `input_image` items from `translateContentPart`, in their
-  original order. Every other tool message keeps the plain `stringifyToolOutput` string,
-  so an existing history sends the same bytes and keeps its prompt-cache prefix. The
+  array of `input_text` and `input_image` items, in their original order.
+  `translateToolOutputPart` leaves out an empty text part and gives an `input_image`
+  item no `detail`: a Claude image block has none, and the shape verified in #150 had
+  none. caozhiyuan/copilot-api issues 361 and 362 report that Copilot rejects, in tool
+  output, a `detail` other than `low` or `high`, and an empty text part. Every other
+  tool message keeps the plain `stringifyToolOutput` string, so an existing history
+  sends the same bytes and keeps its prompt-cache prefix. The
   `unsupported_api_for_model` retry from `/chat/completions` resends the unadapted
   payload and takes the same path.
 - **`/chat/completions`, non-Claude models.** Copilot accepts `image_url` parts in a tool

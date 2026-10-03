@@ -80,11 +80,23 @@ type ResponsesFunctionCallInput = {
   arguments: string
 }
 
+// An item of function_call_output.output. Unlike ResponsesInputContentPart, an image carries no
+// detail; see translateToolOutputPart.
+type ResponsesToolOutputPart =
+  | {
+      type: "input_text"
+      text: string
+    }
+  | {
+      type: "input_image"
+      image_url: string
+    }
+
 type ResponsesFunctionCallOutputInput = {
   type: "function_call_output"
   call_id: string
   // A plain string unless the tool result holds an image; see translateToolOutput.
-  output: string | Array<ResponsesInputContentPart>
+  output: string | Array<ResponsesToolOutputPart>
 }
 
 type ResponsesToolChoice =
@@ -813,10 +825,25 @@ function translateToolOutput(
   content: Message["content"],
 ): ResponsesFunctionCallOutputInput["output"] {
   if (Array.isArray(content) && content.some((part) => part.type === "image_url")) {
-    return content.map((part) => translateContentPart(part))
+    return content.flatMap((part) => translateToolOutputPart(part))
   }
 
   return stringifyToolOutput(content)
+}
+
+// caozhiyuan/copilot-api issues 361 and 362 report Copilot rejecting, in tool output, an image
+// detail other than "low" or "high", and an empty text part. A Claude image block has no detail,
+// so the item carries none, as in the shape #150 verified; an empty text part is left out.
+function translateToolOutputPart(part: ContentPart): Array<ResponsesToolOutputPart> {
+  if (part.type === "image_url") {
+    return [{ type: "input_image", image_url: part.image_url.url }]
+  }
+
+  if (part.text === "") {
+    return []
+  }
+
+  return [{ type: "input_text", text: part.text }]
 }
 
 function stringifyToolOutput(content: Message["content"]): string {

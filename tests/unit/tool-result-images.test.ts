@@ -27,12 +27,17 @@ const responsesToolOutput = (content: Message["content"]) => {
   return JSON.parse(JSON.stringify(payload)).input.at(-1)
 }
 
-test("/responses sends an image-only tool result as an input_image item", () => {
+test("/responses sends an image-only tool result as an input_image item with no detail", () => {
   assert.deepEqual(responsesToolOutput([image(pngA)]), {
     type: "function_call_output",
     call_id: "call_1",
-    output: [{ type: "input_image", image_url: pngA, detail: "auto" }],
+    output: [{ type: "input_image", image_url: pngA }],
   })
+
+  // Copilot is reported to reject detail "auto" in tool output, so not even a requested one is sent.
+  const autoDetail: ContentPart = { type: "image_url", image_url: { url: pngA, detail: "auto" } }
+
+  assert.deepEqual(responsesToolOutput([autoDetail]).output, [{ type: "input_image", image_url: pngA }])
 })
 
 test("/responses keeps the text and images of a tool result in their original order", () => {
@@ -40,9 +45,19 @@ test("/responses keeps the text and images of a tool result in their original or
 
   assert.deepEqual(output, [
     { type: "input_text", text: "Loaded a.png." },
-    { type: "input_image", image_url: pngA, detail: "auto" },
+    { type: "input_image", image_url: pngA },
     { type: "input_text", text: "Loaded b.png." },
-    { type: "input_image", image_url: pngB, detail: "auto" },
+    { type: "input_image", image_url: pngB },
+  ])
+})
+
+test("/responses leaves empty text parts out of a tool result that holds an image", () => {
+  // Copilot is reported to reject an empty text part in tool output.
+  const output = responsesToolOutput([text(""), image(pngA), text("Loaded a.png."), text("")]).output
+
+  assert.deepEqual(output, [
+    { type: "input_image", image_url: pngA },
+    { type: "input_text", text: "Loaded a.png." },
   ])
 })
 
@@ -53,6 +68,8 @@ test("/responses keeps the plain output string for a tool result without images"
     '{"type":"function_call_output","call_id":"call_1","output":"Loaded notes.txt."}',
   )
   assert.equal(responsesToolOutput([text("Part one."), text("Part two.")]).output, "Part one.\n\nPart two.")
+  // Without an image, an empty text part stays in the joined string as before.
+  assert.equal(responsesToolOutput([text(""), text("Part two.")]).output, "\n\nPart two.")
   assert.equal(responsesToolOutput(null).output, "")
 })
 
