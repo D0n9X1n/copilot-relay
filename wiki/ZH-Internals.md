@@ -141,8 +141,8 @@ token 计数仍完全本地，不会固定或刷新推理目录。
 `src/claude/translate.ts` 处理双向非流式 payload：Claude 请求 -> Copilot chat 请求，
 以及 Copilot 响应 -> Claude 响应。它在两种协议形状之间映射 tool call 和
 thinking/text block。消息内的 system 文本保持原位置，包括工具结果之后；不能变成 assistant 发言，也不能附加
-assistant 续写提示。它保持 `role: system`，但上游解析为 Claude 模型且使用
-`/chat/completions` 时例外：此时它变为包含 `<system-reminder>…</system-reminder>` 的
+assistant 续写提示。它保持 `role: system`，但上游解析为 Claude 模型、发往 `/chat/completions`
+且不会回退到 `/responses` 时例外：此时它变为包含 `<system-reminder>…</system-reminder>` 的
 `role: user` 回合，因为不断变化的 system 回合会使 Copilot chat 路由无法缓存其后的历史
 （见 Prompt 缓存下的“Chat 路由：system 回合与缓存断点”）。`validateClaudeMessages`
 在翻译路径上只接受唯一键为 `effort` 的 system `output_config`，其值必须为
@@ -540,11 +540,17 @@ system 回合，会把缓存读取限制在工具加原始 system prompt；只�
 则不会。这与 Copilot 把 chat `system` 消息并入 Claude 的 system prompt、使其在历史之前
 发生变化的情况相符。这是根据缓存大小作出的推断，并未观察到上游请求。
 
-因此，当上游解析为 Claude 模型且 `selectCopilotEndpoint` 选中 `/chat/completions` 时，
-`translateClaudeMessagesToOpenAI` 把每条会话中途的 system 消息按原位置发送为包含
-`<system-reminder>…</system-reminder>` 的 `role: "user"` 回合，即 Claude Code 传递大部分
-harness 上下文所用的形式。Claude 路由在请求和 token 计数中都把选中的端点传给
-`translateToOpenAI`。校验和 effort 选择先基于原始消息执行。GPT 模型保留 `role: "system"`：
+因此，当上游解析为 Claude 模型、`selectCopilotEndpoint` 选中 `/chat/completions` 且没有
+`/responses` 回退时，`translateClaudeMessagesToOpenAI` 把每条会话中途的 system 消息按原位置
+发送为包含 `<system-reminder>…</system-reminder>` 的 `role: "user"` 回合，即 Claude Code
+传递大部分 harness 上下文所用的形式。`src/routes/claude.ts` 中的 `translationEndpoint` 在
+请求和 token 计数中都把该端点传给 `translateToOpenAI`。若 `createChatCompletions` 可能把
+`unsupported_api_for_model` 失败改在 `/responses` 上重试，它就不传端点，因为重试会重新发送
+同一份翻译后的 payload。这只发生在 `auto` 模式下：模型目录中没有端点元数据的 Claude 模型，
+或目录条目列出 `/chat/completions` 和 `/responses` 但没有 `/v1/messages` 的 Claude 模型。
+这些请求与 v0.4.4 一样保留 `role: "system"`，也不带缓存标记。在默认的
+`claudeUpstreamApi: chat-completions` 下，Claude 模型从不回退。校验和 effort 选择先基于
+原始消息执行。GPT 模型保留 `role: "system"`：
 每次请求都以 `role: "system"` 发送提醒时，`/responses` 上的 gpt-6-astra 每个热请求仍有
 98.16–98.25% 的输入来自缓存。原生路由按原样转发原始角色和断点。
 
@@ -553,10 +559,13 @@ harness 上下文所用的形式。Claude 路由在请求和 token 计数中都�
 回合的权限到达。上述测量只涉及缓存，不涉及模型如何权衡后来的操作者指令。
 `claudeUpstreamApi: messages` 会保留 system 角色。
 
-Chat Completions 没有 `cache_control`。在同一路由上，relay 在 system 块带断点时给合并后的
-system 消息、并给每条带断点的 Claude 消息翻译出的最后一条消息设置
-`copilot_cache_control: { "type": "ephemeral" }`，即 VS Code Copilot Chat 发送的字段。
-带断点的消息翻译后为空时，标记前一条消息。合并 system 块只会减少标记数量。有标记且
+Chat Completions 没有 `cache_control`。在同一路由上，relay 给包含各断点所在块的那条翻译后
+消息设置 `copilot_cache_control: { "type": "ephemeral" }`，即 VS Code Copilot Chat 发送的
+字段（`src/claude/translate.ts` 中的 `markMessageBreakpoints`），因此缓存前缀不会越过客户端
+设定的边界。`handleUserMessage` 把每个 `tool_result` 变成单独的 tool 消息，所以带标记的
+工具结果标记它自己的 tool 消息，其他带标记的块标记由其余块组成的 user 消息。带断点的消息
+翻译后为空时，标记前一条消息。system 块会合并为一条消息，所以任一 system 块上的断点都会
+标记整个 system prompt；Claude Code 标记的是最后一个 system 块，此时两种边界一致。有标记且
 无提醒时，请求 2 从缓存读取 29,422 token 而不是 29,242，因为第一条 user 消息也被缓存了。
 
 含此改动的构建在同一天的测量：每次请求都以 `role: "system"` 发送提醒时，五回合 harness
@@ -568,9 +577,12 @@ Claude Code 2.1.288 以同样的三轮各 14 个并行 `Read` 调用经过该构
 
 `tests/unit/chat-route-cache.test.ts` 重放这一 Claude Code 请求形状。若翻译后的请求在
 prompt 开始后仍带 system 回合，或去掉缓存标记后某个请求的消息不再是下一个请求消息的
-前缀，测试就会失败。Claude Code 改变 harness 文本或断点的发送方式时，需重新捕获请求
-形状：让客户端经由捕获代理连接隔离的测试 relay，使用临时 HOME 和假凭据，只记录角色、
-块类型和 `cache_control` 位置，然后更新该测试。
+前缀，测试就会失败。它还固定了上述回退规则和每个断点落在哪条消息上。Claude Code 改变
+harness 文本或断点的发送方式时，需重新捕获请求形状：让客户端使用占位 API key，经由捕获
+代理连接一个使用独立端口的隔离测试 relay，绝不使用日常在用的 relay。该 relay 使用保存
+Copilot 登录的临时 HOME，使工具循环得到真实回复。只记录角色、块类型和 `cache_control`
+位置，不记录文本或凭据；完成后删除该临时 HOME，然后更新该测试。测试本身与其他测试一样
+模拟上游。
 
 ## Token
 

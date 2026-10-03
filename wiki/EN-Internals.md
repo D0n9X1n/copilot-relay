@@ -159,8 +159,8 @@ Claude request -> Copilot chat request, and Copilot response -> Claude response.
 It maps tool calls and thinking/text blocks between the two protocol shapes.
 In-message system text keeps its original position, including after tool results; it
 must not become assistant speech or acquire an assistant continuation prompt. It stays
-`role: system`, except when the resolved upstream model is a Claude model on
-`/chat/completions`: there it becomes a `role: user` turn holding
+`role: system`, except when the resolved upstream model is a Claude model sent to
+`/chat/completions` with no `/responses` fallback: there it becomes a `role: user` turn holding
 `<system-reminder>…</system-reminder>`, because a changing system turn stops Copilot's chat
 route from caching the history after it (see "Chat route: system turns and cache
 breakpoints" under Prompt caching). `validateClaudeMessages` accepts translated system controls
@@ -641,11 +641,18 @@ messages into Claude's system prompt, which then changes in front of the history
 inference from cache sizes, not an observed upstream request.
 
 When the resolved upstream model is a Claude model and `selectCopilotEndpoint` picks
-`/chat/completions`, `translateClaudeMessagesToOpenAI` therefore sends each mid-conversation
-system message as a `role: "user"` turn holding `<system-reminder>…</system-reminder>` in its
-original position, the form Claude Code uses for most harness context. The Claude route passes
-the selected endpoint to `translateToOpenAI` for both requests and token counts. Validation and
-effort selection run on the original messages first. GPT models keep `role: "system"`: with the
+`/chat/completions` with no `/responses` fallback, `translateClaudeMessagesToOpenAI` therefore
+sends each mid-conversation system message as a `role: "user"` turn holding
+`<system-reminder>…</system-reminder>` in its original position, the form Claude Code uses for
+most harness context. `translationEndpoint` in `src/routes/claude.ts` passes that endpoint to
+`translateToOpenAI` for both requests and token counts. It passes none when
+`createChatCompletions` may retry an `unsupported_api_for_model` failure on `/responses`,
+because the retry resends the same translated payload. That happens only in `auto` mode, for a
+Claude model with no endpoint metadata in the model catalog, or whose catalog entry lists
+`/chat/completions` and `/responses` but not `/v1/messages`. Those requests keep
+`role: "system"` and carry no cache marks, as in v0.4.4. With the default
+`claudeUpstreamApi: chat-completions`, a Claude model never falls back. Validation and effort
+selection run on the original messages first. GPT models keep `role: "system"`: with the
 reminder sent as `role: "system"` on every request, gpt-6-astra on `/responses` read
 98.16–98.25% of each warm request from cache. The native route forwards the original roles and
 breakpoints unchanged.
@@ -658,11 +665,15 @@ measurements cover caching, not how the model weighs a later operator instructio
 
 Chat Completions has no `cache_control`. On the same route the relay sets
 `copilot_cache_control: { "type": "ephemeral" }`, the field VS Code Copilot Chat sends, on the
-joined system message when a system block carries a breakpoint, and on the last translated
-message of each Claude message that carries one. A breakpoint on a message that translates to
-nothing marks the previous message. Joining system blocks only lowers the number of marks.
-With marks and no reminder, request 2 read 29,422 tokens instead of 29,242, because the first
-user message was cached too.
+translated message that holds each breakpoint's block (`markMessageBreakpoints` in
+`src/claude/translate.ts`), so a cached prefix never extends past the client's boundary.
+`handleUserMessage` turns each `tool_result` into its own tool message, so a marked result
+marks that tool message, and any other marked block marks the user message built from the
+remaining blocks. A breakpoint on a message that translates to nothing marks the previous
+message. System blocks join into one message, so a breakpoint on any of them marks the whole
+system prompt; Claude Code marks its last system block, where both boundaries agree. With marks
+and no reminder, request 2 read 29,422 tokens instead of 29,242, because the first user message
+was cached too.
 
 A build with this change, measured the same day: with the reminder sent as `role: "system"` on
 every request, the five-turn harness read 98.21% of request 2 and 98.30% of request 5 from cache
@@ -673,10 +684,14 @@ to a small prompt, so their per-request rates were 93.39–94.16%.
 
 `tests/unit/chat-route-cache.test.ts` replays this Claude Code request shape. It fails if a
 translated request carries a system turn after the prompt starts, or if, with cache marks
-removed, a request's messages stop being a prefix of the next request's messages. When Claude
-Code changes how it sends harness text or breakpoints, capture a new request shape: run the
-client through a capture proxy to an isolated test relay with a temporary HOME and fake
-credentials, record only roles, block types and `cache_control` placement, and update the test.
+removed, a request's messages stop being a prefix of the next request's messages. It also pins
+the fallback rule above and where each breakpoint lands. When Claude Code changes how it sends
+harness text or breakpoints, capture a new request shape: run the client, with a placeholder API
+key, through a capture proxy to an isolated test relay on its own port, never the relay in daily
+use. That relay runs with a temporary HOME holding a Copilot login, so the tool loop gets real
+replies. Record only roles, block types and `cache_control` placement, never text or
+credentials; delete the temporary HOME afterwards and update the test. The test itself mocks
+upstream like every other test.
 
 ## Tokens
 

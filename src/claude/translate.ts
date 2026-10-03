@@ -42,8 +42,9 @@ export function translateModelName(model: string): string {
 }
 
 export interface TranslateToOpenAIOptions {
-  // The endpoint createChatCompletions will select. Only a Claude model on
-  // /chat/completions gets in-place reminder turns and copilot_cache_control marks.
+  // The endpoint the request will reach; unset when createChatCompletions may retry it
+  // on /responses. Only a Claude model sent to /chat/completions with no such fallback
+  // gets in-place reminder turns and copilot_cache_control marks.
   endpoint?: CopilotEndpoint
 }
 
@@ -120,20 +121,51 @@ function translateClaudeMessagesToOpenAI(
   claudeChatRoute: boolean,
 ): Array<Message> {
   const translated = handleSystemPrompt(system)
+
+  // System blocks join into one message, so a breakpoint on any block marks the whole
+  // prompt. Claude Code marks its last system block, where both boundaries agree.
   if (claudeChatRoute && hasCacheBreakpoint(system)) {
     markCacheBreakpoint(translated.at(-1))
   }
 
   for (const message of claudeMessages) {
+    const start = translated.length
     translated.push(...translateClaudeMessage(message, toolNameMapper, claudeChatRoute))
 
-    // A breakpoint on a message that translates to nothing marks the previous one.
-    if (claudeChatRoute && hasCacheBreakpoint(message.content)) {
-      markCacheBreakpoint(translated.at(-1))
+    if (claudeChatRoute) {
+      markMessageBreakpoints(message, translated, start)
     }
   }
 
   return translated
+}
+
+// Put each breakpoint on the translated message that holds its block, so a cached
+// prefix never extends past the client's boundary. handleUserMessage emits one tool
+// message per tool_result, in order, then one user message for the remaining blocks.
+function markMessageBreakpoints(message: ClaudeMessage, translated: Array<Message>, start: number): void {
+  if (message.role !== "user" || !Array.isArray(message.content)) {
+    // These translate to at most one message. A breakpoint on a turn that translates
+    // to nothing marks the previous message.
+    if (hasCacheBreakpoint(message.content)) {
+      markCacheBreakpoint(translated.at(-1))
+    }
+
+    return
+  }
+
+  let toolIndex = start
+  for (const block of message.content) {
+    if (block.type === "tool_result") {
+      if (isCacheBreakpoint(block)) {
+        markCacheBreakpoint(translated[toolIndex])
+      }
+
+      toolIndex += 1
+    } else if (isCacheBreakpoint(block)) {
+      markCacheBreakpoint(translated.at(-1))
+    }
+  }
 }
 
 function translateClaudeMessage(
@@ -179,8 +211,10 @@ function toSystemReminder(content: string | Array<ClaudeTextBlock>): Array<Messa
 }
 
 // Claude Code marks the end of each cached prefix with cache_control on a content block.
-const hasCacheBreakpoint = (content: string | ReadonlyArray<object> | undefined): boolean =>
-  typeof content === "object" && content.some((block) => "cache_control" in block && Boolean(block.cache_control))
+const isCacheBreakpoint = (block: object): boolean => "cache_control" in block && Boolean(block.cache_control)
+
+// Content is a string, an array of blocks, or a null that a client sent for an absent field.
+const hasCacheBreakpoint = (content: unknown): boolean => Array.isArray(content) && content.some(isCacheBreakpoint)
 
 // Chat Completions has no cache_control. Copilot reads copilot_cache_control,
 // which VS Code Copilot Chat sets on the message that ends a cached prefix.

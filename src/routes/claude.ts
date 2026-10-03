@@ -260,10 +260,14 @@ const writeClaudeStreamEvents = async (
   }
 }
 
-// translateToOpenAI shapes Claude chat-route history for the endpoint that
-// createChatCompletions selects for the same upstream model.
-const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: string) =>
-  selectCopilotEndpoint(config, normalizeCopilotModelId(model)).endpoint
+// translateToOpenAI shapes Claude chat-route history only for a request that can
+// reach nothing but /chat/completions. When createChatCompletions may retry an
+// unsupported_api_for_model failure on /responses, it resends the same translated
+// payload, so that history keeps its original roles and carries no chat marks.
+const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: string) => {
+  const selection = selectCopilotEndpoint(config, normalizeCopilotModelId(model))
+  return selection.endpoint && !selection.responsesFallback ? selection.endpoint : undefined
+}
 
 const handleClaudeMessageRequest = async (
   config: ProxyEnv["Variables"]["config"],
