@@ -27,6 +27,7 @@
 ```yaml
 host: 127.0.0.1
 port: 4142
+apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
@@ -43,8 +44,9 @@ opusModel: claude-opus-5.5
 
 | 字段 | 作用 |
 | --- | --- |
-| `host` | 本地 Claude 兼容 HTTP 服务监听地址。建议保持 `127.0.0.1`，只允许本机访问。 |
+| `host` | 本地 Claude 兼容 HTTP 服务监听地址。建议保持 `127.0.0.1`，只允许本机访问；绑定到 loopback 以外的地址前先设置 `apiKey`。 |
 | `port` | 本地端口，默认 `4142`。 |
+| `apiKey` | 可选的客户端密钥，客户端须以 `x-api-key` 或 `Authorization: Bearer` 发送。留空（默认）即关闭该检查。支持热重载。参见[要求客户端密钥](#要求客户端密钥)。 |
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
@@ -517,6 +519,61 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 不带路径的地址（比如默认的 `https://api.githubcopilot.com`）会完整显示——它里面没有
 需要隐藏的内容。
 
+## 要求客户端密钥
+
+默认情况下 relay 不认证调用方。默认的 `host: 127.0.0.1` 只允许本机进程连接。改成
+`0.0.0.0` 或局域网地址后，任何能访问到该端口的客户端都能发请求，每个请求都使用你的
+Copilot 账号。把 `host` 绑定到 loopback 以外之前，先设置 `apiKey`：
+
+```yaml
+apiKey: <一个足够长的随机值>
+```
+
+生成随机值的一种方式：
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+设置 `apiKey` 后，除 `GET /healthz` 和 `GET`/`HEAD /api/hello` 外的每个请求都必须以
+`x-api-key: <key>` 或 `Authorization: Bearer <key>` 携带该密钥。缺少密钥或密钥不符时，
+relay 在读取正文、执行任何路由之前返回 HTTP `401` 及 Anthropic 风格的
+`authentication_error`。`apiKey` 留空（默认）即关闭该检查。
+
+- 密钥至少 16 个可见 ASCII 字符，不含空格。像上面那样只由字母和数字组成时不需要加
+  引号。以 `#` 开头的密钥必须加引号：不加引号时 YAML 会把它当作注释，密钥变成空值，
+  检查随之关闭。
+- 密钥不会写入日志，也不会显示。`copilot-relay status` 在文本和 `--json` 输出中都把它
+  显示为 `[redacted]`，并在 `GET /v1/models` 探测和 `--deep` 的 `POST /v1/messages`
+  探测中发送它。模型 ID、显示名称、配置的模型或搜索中含有密钥时，`copilot-relay models`
+  打印 `[redacted]`，`--deep` 也不会探测含有密钥的 ID。
+- Debug 捕获不记录携带密钥的 header，但请求和响应正文不脱敏，所以客户端放进提示词的
+  密钥会保存在其中；见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+- 此时 `config.yaml` 保存着密钥。新建的 `config.yaml` 模式为 `0600`，只有你能读取；
+  已有的文件保留原来的模式，relay 从不修改它。在 Linux 和 macOS 上，设置了 `apiKey`
+  且 `config.yaml`（或它链接到的文件）允许其他本地用户进行任何访问时，启动以及每次
+  设置或修改密钥的重载都会记录一条错误，写明该文件及其模式，并提示对它运行
+  `chmod 600`。Windows 没有这类模式位。
+- `claudeSetup: true` 时，`start` 会把密钥写成 Claude Code 的 `ANTHROPIC_AUTH_TOKEN`；
+  见 [Claude Code 配置](#claude-code-配置)。
+- `host` 不是 loopback 地址且 `apiKey` 为空时，启动会记录一条提到 `apiKey` 的警告。
+  relay 仍会启动，已有的 `0.0.0.0` 配置继续可用。
+- 接入检查还会校验请求的 Host。远程客户端必须使用 `host` 中设置的地址；`0.0.0.0` 这类
+  通配监听地址只接受 loopback 名称。见[架构](ZH-Architecture.md)。
+- relay 使用明文 HTTP。在不受信任的网络上，密钥和提示词可能在传输中被读取。
+
+### 轮换密钥
+
+`apiKey` 支持热重载：relay 应用一次有效修改后，下一个请求就必须携带新密钥。未通过
+校验的修改会保留之前的密钥，并记录原因，但不会记录值。客户端会一直使用它已经加载的
+token，因此修改之后：
+
+1. 编辑 `~/.copilot-relay/config.yaml` 中的 `apiKey`。
+2. 更新每个客户端。`claudeSetup: true` 时，运行 `copilot-relay restart` 或通过服务
+   管理器重启，让启动流程重写 `ANTHROPIC_AUTH_TOKEN`；设置写入只在启动时运行。否则
+   请在每个客户端中自行设置新密钥。
+3. 重启正在运行的 Claude Code 会话。重启之前，它们会继续发送旧密钥并收到 `401`。
+
 ## 热重载与重启
 
 会热重载（对改动之后开始的请求生效）：
@@ -530,6 +587,7 @@ copilot base url: https://gateway.example (path/query/fragment hidden)
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
+- `apiKey`
 
 需要重启：
 
@@ -569,14 +627,18 @@ token 设置。切换模型时应检查这些设置；自动设置只补充缺�
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4142
-ANTHROPIC_AUTH_TOKEN=<dummy local token>
+ANTHROPIC_AUTH_TOKEN=<apiKey，或文件中没有 token 时的本地占位 token>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<发现的 GPT context 窗口>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<两个配置模型中最大的已公布输出预算>
 CLAUDE_CODE_AUTO_MODE_SERVER=0
 ```
 
-这里的 token 是本地 relay 占位值。真正访问 GitHub Copilot 用的是
-`~/.copilot-relay/` 里的 GitHub/Copilot token。
+设置了 `apiKey` 时，token 就是该密钥，会替换占位值或旧密钥，因为 relay 要求每个请求
+都携带它；见[要求客户端密钥](#要求客户端密钥)。之后 `start` 把该文件发布为只有你能读取
+（模式 `0600`；Windows 没有这类模式位），文件模式允许其他本地用户读取时也会重新发布。
+未设置 `apiKey` 时，`start` 保留已有的 `ANTHROPIC_AUTH_TOKEN`，即使它是之前的 `apiKey`
+写入的密钥，也不改变文件模式；只有 token 缺失或为空时才设为 `dummy`。此时任何值都可以，
+因为真正访问 GitHub Copilot 用的是 `~/.copilot-relay/` 里的 GitHub/Copilot token。
 两个预算变量仅在缺失时写入；明确设置的较小值会被保留。Relay 会按实际路由到的模型
 限制每个请求的输出预算，因此从 Astra 切换到 Opus 时，共用的客户端设置不会让请求
 超过 Opus 的上限。若网关没有提供有效的限制元数据，启动日志会说明限制不可用，
@@ -594,8 +656,9 @@ CLAUDE_CODE_AUTO_MODE_SERVER=0
 网关时，请删除或修改它。Claude Code 文档说明该变量是临时的，见
 [auto mode classifier billing](https://code.claude.com/docs/en/auto-mode-classifier-billing)。
 
-本地占位 token **不是网络认证**。Host/Origin 与 JSON content-type 检查减少的是浏览器
-来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，见[架构](ZH-Architecture.md)。
+占位 token **不是网络认证**。Host/Origin 与 JSON content-type 检查减少的是浏览器
+来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，或在绑定到 loopback 以外的
+地址前设置 `apiKey`；见[要求客户端密钥](#要求客户端密钥)和[架构](ZH-Architecture.md)。
 
 ### 模型选择器只保留 Opus 和 GPT-6 Astra
 

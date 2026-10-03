@@ -454,3 +454,23 @@ test("capture retention keeps the cutoff local calendar day", async () => {
   assert.equal((await fs.stat(keep)).isDirectory(), true)
   assert.equal(await fs.stat(remove).then(() => true, () => false), false)
 })
+
+// Why (#159): admission accepts the relay's apiKey in either header, and a copy
+// of it in any other allowlisted header must still be withheld from metadata.
+// The configured key is protected whichever header carried it.
+test("capture metadata never records the relay apiKey, whichever header carried it", async () => {
+  const relayKey = "RELAY_CONFIGURED_KEY_SENTINEL"
+  const attempts: Array<[string, Record<string, string>]> = [
+    ["10000000-0000-4000-8000-000000000101", { authorization: `Bearer ${relayKey}` }],
+    ["10000000-0000-4000-8000-000000000102", { "x-api-key": relayKey }],
+    ["10000000-0000-4000-8000-000000000103", { "anthropic-beta": relayKey }],
+  ]
+
+  for (const [requestId, headers] of attempts) {
+    const request = new Request("http://localhost/v1/messages", { headers })
+    const trace = await RequestTrace.create(requestId, request, { ...config, apiKey: relayKey }, {}, true)
+    const meta = await finishTrace(trace)
+
+    assert.ok(!JSON.stringify(meta).includes(relayKey), JSON.stringify(headers))
+  }
+})

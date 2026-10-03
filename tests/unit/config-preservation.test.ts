@@ -19,6 +19,7 @@ type AppConfig = Awaited<ReturnType<typeof readAppConfig>>
 const completeValues: Record<keyof AppConfig, string> = {
   host: "127.0.0.1",
   port: "4193",
+  apiKey: "",
   copilotBaseUrl: "https://config-fixture.invalid",
   claudeSetup: "false",
   logLevel: "info",
@@ -109,6 +110,8 @@ for (const [key, value] of [
   ["copilotBaseUrl", ""],
   ["gptModel", "''"],
   ["opusModel", ""],
+  ["apiKey", "short-key-15chr"],
+  ["apiKey", "\"two words key value\""],
 ] as const) {
   test(`readAppConfig rejects explicit ${key}=${value || "(empty)"} without changing the file`, async () => {
     const original = `# keep this document\n${key}: ${value}\n`
@@ -328,6 +331,37 @@ test("hot reload applies a complete valid edit without rewriting the document", 
   assert.equal(await readConfigFile(), edited)
   assert.equal((await fs.stat(paths.configPath)).mtimeMs, before.mtimeMs)
   assert.deepEqual(watcher.errors, [])
+})
+
+// Admission reads the live key on every request (#159), so a valid edit must reach it at once. A
+// rejected edit keeps the previous key: dropping it would leave the relay open.
+test("hot reload applies a changed or cleared apiKey and keeps the previous key through a rejected edit", async (t) => {
+  const firstKey = "reload-fixture-key-0001"
+  const secondKey = "reload-fixture-key-0002"
+  const rejected = "REJECTED KEY SENTINEL"
+  await writeConfigFile(completeDocument({ apiKey: firstKey }))
+  let active = await readAppConfig()
+  const watcher = await startWatcher(t, (next) => {
+    active = next
+  })
+
+  assert.equal(active.apiKey, firstKey)
+
+  await writeConfigFile(completeDocument({ apiKey: secondKey }))
+  await watcher.poll()
+  assert.equal(active.apiKey, secondKey)
+
+  await writeConfigFile(completeDocument({ apiKey: `"${rejected}"` }))
+  await watcher.poll()
+  assert.equal(active.apiKey, secondKey, "a rejected edit keeps the previous key")
+  assert.equal(watcher.errors.length, 1)
+  assert.match(String(watcher.errors[0]?.[0]), /Invalid apiKey/)
+  assert.ok(!String(watcher.errors[0]?.[0]).includes(rejected), "the error never repeats the value")
+
+  await writeConfigFile(completeDocument({ apiKey: "" }))
+  await watcher.poll()
+  assert.equal(active.apiKey, "", "an empty key disables the check")
+  assert.equal(watcher.errors.length, 1)
 })
 
 test("hot reload retries an unchanged valid edit after snapshot verification fails", async (t) => {

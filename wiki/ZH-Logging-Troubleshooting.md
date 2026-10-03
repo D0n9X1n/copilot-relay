@@ -15,6 +15,9 @@
    curl -sS http://127.0.0.1:4142/v1/models
    ```
 
+   设置了 `apiKey` 时，`/v1/models` 请求必须携带密钥，否则返回 `401`，例如加上
+   `-H "x-api-key: <key>"`。`/healthz` 不需要密钥。
+
 2. 跟踪当天日志：
 
    ```sh
@@ -504,6 +507,8 @@ effort 完全相同时接受它，system 文本和顺序不变。不同的历史
 
 Host/Origin 拒绝为 `403`，非空推理/token 计数 POST 缺少 `application/json` 时为 `415`。
 这些是本地接入错误，不是 Copilot 认证失败，也不会使非 loopback 监听器获得认证保护。
+设置了 `apiKey` 时，请求不带该密钥或密钥不符为 `401` `authentication_error`，同样由
+中继在调用 Copilot 之前返回；见 [Claude Code 设置不对](#claude-code-设置不对)。
 
 上游 HTTP 400 也可能是客户端/provider 能力不匹配。2026-09-30 的隔离 Claude Code
 2.1.285 原生检查中，最初两次请求因不支持 `safeguards` 被拒绝，随后客户端自行降低
@@ -902,18 +907,89 @@ grep -n "authentication rejected\|token refresh completed\|token recovery failed
 ## Claude Code 设置不对
 
 当 `claudeSetup: true` 时，`copilot-relay start` 会更新 `~/.claude/settings.json`。
+设置了 `apiKey` 时，该文件以 `ANTHROPIC_AUTH_TOKEN` 保存密钥，所以不要打印这个文件，
+也不要整份分享。下面的检查只打印 `ANTHROPIC_BASE_URL` 的 origin、只显示为 `0`、`1`、
+未设置或其他值的 `CLAUDE_CODE_AUTO_MODE_SERVER`、是否设置了 token，以及该地址上的中继
+如何应答这个 token；打印内容中出现 token 的地方都会被替换：
 
 ```sh
-cat ~/.claude/settings.json
+node - <<'EOF'
+const file = require("node:path").join(require("node:os").homedir(), ".claude", "settings.json")
+let env
+try {
+  env = JSON.parse(require("node:fs").readFileSync(file, "utf8")).env || {}
+} catch {
+  console.log(`${file}: missing or not valid JSON`)
+}
+if (env) {
+  const token = typeof env.ANTHROPIC_AUTH_TOKEN === "string" ? env.ANTHROPIC_AUTH_TOKEN : ""
+  // Every printed line passes through hide, which replaces the token wherever it appears.
+  const secret = token && new RegExp(token.replace(/\W/g, "\\$&"), "gi")
+  const hide = (text) => secret ? text.replace(secret, "[redacted]") : text
+  let url
+  try {
+    url = new URL(env.ANTHROPIC_BASE_URL)
+  } catch {
+    url = undefined
+  }
+  if (url && !/^https?:$/.test(url.protocol)) {
+    url = undefined
+  }
+  // The origin only: a path, query or user name can hold anything.
+  let base = env.ANTHROPIC_BASE_URL === undefined ? "(unset)" : "(not an http or https URL)"
+  if (url) {
+    const extra = url.username || url.password || url.search || url.hash || url.pathname !== "/"
+    base = url.origin + (extra ? " (path, query or credentials hidden)" : "")
+  }
+  const mode = env.CLAUDE_CODE_AUTO_MODE_SERVER
+  let autoMode = "(set to another value)"
+  if (mode === undefined) {
+    autoMode = "(unset)"
+  } else if (mode === "0" || mode === "1") {
+    autoMode = mode
+  }
+  console.log(hide(`ANTHROPIC_BASE_URL: ${base}`))
+  console.log(hide(`CLAUDE_CODE_AUTO_MODE_SERVER: ${autoMode}`))
+  console.log(hide(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`))
+  if (url) {
+    fetch(`${env.ANTHROPIC_BASE_URL}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        await response.arrayBuffer()
+        console.log(hide(`The relay answers with HTTP ${response.status}.`))
+      })
+      .catch(() => console.log(hide(`No relay answered at ${base}.`)))
+  }
+}
+EOF
 ```
+
+在 PowerShell 中，用 here-string 传入同一段脚本：把第一行换成 `@'`，最后一行换成
+`'@ | node -`。
+
+`200` 表示中继接受这个 token：它与中继的 `apiKey` 一致，或者没有设置 `apiKey`。
+`401` 表示 token 缺失，或与中继正在使用的密钥不一致；见下文。
 
 期望的值：
 
 - `ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:4142`
-- `ANTHROPIC_AUTH_TOKEN` 存在；它是给本地中继用的占位值
+- `ANTHROPIC_AUTH_TOKEN` 已设置。设置了 `apiKey` 时，启动会把密钥写在这里。未设置时，
+  启动保留已有 token，即使它是之前的 `apiKey` 写入的密钥，只在 token 缺失或为空时设为
+  `dummy`；此时中继接受任何 token
 - `CLAUDE_CODE_AUTO_MODE_SERVER` 为 `0`，除非你设置了其他值
+- 设置了 `apiKey` 时，在 Linux 和 macOS 上只有你能读取该文件：
+  `ls -lL ~/.claude/settings.json` 显示 `-rw-------`
 
 改 `host` 或 `port` 需要重启中继，因为监听 socket 无法在热重载期间迁移。
+
+设置了 `apiKey` 时，token 与它不一致的客户端会收到 `401`，中继会记录
+`error="Missing or invalid API key: ..."`：
+
+```sh
+grep -n "Missing or invalid API key" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+设置写入只在启动时运行，正在运行的客户端会一直使用它已加载的 token。修改 `apiKey`
+之后，重启中继或自行设置 token，然后重启 Claude Code。见[配置](ZH-Configuration.md)。
 
 ## Claude Code 提示会话不符合 auto mode 的条件
 

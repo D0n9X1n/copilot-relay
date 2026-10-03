@@ -15,12 +15,22 @@ host: 127.0.0.1
 # Local port for the HTTP server.
 port: 4142
 
+# Optional key that every client request must carry, as x-api-key or
+# Authorization: Bearer. GET /healthz and GET|HEAD /api/hello stay open.
+# Empty disables it. A set key is at least 16 visible ASCII characters;
+# quote one that starts with #. Set a key before binding host beyond
+# loopback: otherwise any client that reaches the port can use your
+# Copilot account. Changes hot-reload, but a client keeps the token it
+# loaded, so update and restart clients after changing it.
+apiKey:
+
 # GitHub Copilot API base URL.
 # Keep this default unless you know your Copilot tenant uses a custom endpoint.
 copilotBaseUrl: https://api.githubcopilot.com
 
 # When true, start updates ~/.claude/settings.json with ANTHROPIC_BASE_URL
-# and a dummy ANTHROPIC_AUTH_TOKEN so Claude Code can use this proxy.
+# and ANTHROPIC_AUTH_TOKEN so Claude Code can use this proxy. The token is
+# apiKey when it is set; otherwise a dummy token is written if none is present.
 # Also seeds context/output budgets from model discovery, and
 # CLAUDE_CODE_AUTO_MODE_SERVER=0, when not already set.
 claudeSetup: true

@@ -32,6 +32,7 @@ has loaded them. With broken config, `status` exits `2` with a safe diagnostic;
 ```yaml
 host: 127.0.0.1
 port: 4142
+apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
 claudeSetup: true
 logLevel: info
@@ -48,8 +49,9 @@ opusModel: claude-opus-5.5
 
 | Key | Purpose |
 | --- | --- |
-| `host` | Local bind host for the Claude-compatible HTTP server. Keep `127.0.0.1` for local-only use. |
+| `host` | Local bind host for the Claude-compatible HTTP server. Keep `127.0.0.1` for local-only use; set `apiKey` before binding beyond loopback. |
 | `port` | Local port. Default: `4142`. |
+| `apiKey` | Optional key that clients must send as `x-api-key` or `Authorization: Bearer`. Empty, the default, disables the check. Hot-reloads. See [Require a client key](#require-a-client-key). |
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
 | `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
@@ -611,6 +613,72 @@ one thing users are asked to attach to a bug report. A base URL with no path,
 such as the default `https://api.githubcopilot.com`, is shown in full — there is
 nothing in it to hide.
 
+## Require a client key
+
+By default the relay authenticates no caller. With the default `host: 127.0.0.1`
+only local processes can connect. With `0.0.0.0` or a LAN address, any client that
+reaches the port can send requests, and each one uses your Copilot account. Set
+`apiKey` before you bind `host` beyond loopback:
+
+```yaml
+apiKey: <a long random value>
+```
+
+One way to generate a value:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+With `apiKey` set, every request except `GET /healthz` and `GET`/`HEAD /api/hello`
+must carry the key as `x-api-key: <key>` or `Authorization: Bearer <key>`. Without
+it, or with a different key, the relay answers HTTP `401` with an Anthropic-style
+`authentication_error`, before it reads the body or runs any route. An empty
+`apiKey`, the default, disables the check.
+
+- A key is at least 16 visible ASCII characters, with no spaces. Generated from
+  letters and digits, like the value above, it never needs quotes. Quote a key
+  that starts with `#`: unquoted, YAML reads it as a comment, which leaves the key
+  empty and the check off.
+- The key is never logged or displayed. `copilot-relay status` shows it as
+  `[redacted]`, in text and in `--json`, and sends it on its `GET /v1/models` probe
+  and on the `--deep` `POST /v1/messages` probe. `copilot-relay models` prints
+  `[redacted]` wherever a model ID, a display name, a configured model or a search
+  holds it, and `--deep` does not probe an ID that holds it.
+- Debug captures leave out the header that carries the key, but keep request and
+  response bodies unredacted, so a key that a client puts in a prompt is stored
+  there; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+- `config.yaml` then holds the key. A new `config.yaml` is created `0600`,
+  readable only by you; an existing one keeps its mode, and the relay never
+  changes it. On Linux and macOS, when `apiKey` is set and `config.yaml`, or the
+  file it links to, gives other local users any access, startup and each reload
+  that sets or changes the key log one error that names the file and its mode
+  and says to run `chmod 600` on it. Windows has no such mode bits.
+- With `claudeSetup: true`, `start` writes the key as Claude Code's
+  `ANTHROPIC_AUTH_TOKEN`; see [Claude Code settings](#claude-code-settings).
+- When `host` is not a loopback address and `apiKey` is empty, startup logs one
+  warning that names `apiKey`. The relay still starts, so an existing `0.0.0.0`
+  setup keeps working.
+- Admission also checks the request's Host. A remote client must use the address
+  set in `host`; a wildcard bind such as `0.0.0.0` admits only loopback names. See
+  [Architecture](EN-Architecture.md).
+- The relay speaks plain HTTP. On a network you do not trust, the key and your
+  prompts can be read in transit.
+
+### Rotate the key
+
+`apiKey` hot-reloads: once the relay applies a valid edit, the next request must
+carry the new key. An edit that fails validation keeps the previous key and logs
+the reason, never the value. A client keeps the token it loaded, so after a
+change:
+
+1. Edit `apiKey` in `~/.copilot-relay/config.yaml`.
+2. Update each client. With `claudeSetup: true`, run `copilot-relay restart`, or
+   restart the service, so startup rewrites `ANTHROPIC_AUTH_TOKEN`; the settings
+   writer runs only at startup. Otherwise set the new key in each client yourself.
+3. Restart running Claude Code sessions. Until then they send the old key and get
+   `401`.
+
 ## Hot reload vs restart
 
 Hot-reloaded, applying to work that starts after the change:
@@ -624,6 +692,7 @@ Hot-reloaded, applying to work that starts after the change:
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
+- `apiKey`
 
 Requires restart:
 
@@ -662,7 +731,7 @@ With `claudeSetup: true`, `copilot-relay start` writes:
 
 ```text
 ANTHROPIC_BASE_URL=http://127.0.0.1:4142
-ANTHROPIC_AUTH_TOKEN=<dummy local token>
+ANTHROPIC_AUTH_TOKEN=<apiKey, or a dummy local token if the file has none>
 CLAUDE_CODE_MAX_CONTEXT_TOKENS=<discovered GPT context window>
 CLAUDE_CODE_MAX_OUTPUT_TOKENS=<largest discovered output budget of the model pair>
 CLAUDE_CODE_AUTO_MODE_SERVER=0
@@ -674,8 +743,15 @@ into:
 ~/.claude/settings.json
 ```
 
-The token is intentionally a dummy value because `copilot-relay` authenticates to
-GitHub Copilot with your cached GitHub/Copilot tokens, not with Claude's token.
+With `apiKey` set, the token is that key, replacing a dummy value or an older key,
+because the relay requires it on every request; see
+[Require a client key](#require-a-client-key). `start` then publishes the file
+readable only by you (mode `0600`; Windows has no such mode bits), and publishes it
+again when its mode lets other local users read it. Without `apiKey`, `start`
+keeps an existing `ANTHROPIC_AUTH_TOKEN`, even a key an earlier `apiKey` wrote, and
+leaves the file's mode as it is; it sets the token to `dummy` only when the token
+is missing or empty. Any value works then, because `copilot-relay` authenticates
+to GitHub Copilot with your cached GitHub/Copilot tokens, not with Claude's token.
 The two budget variables are written only when absent. Smaller explicit values
 are preserved. The relay bounds each request to the actual routed model's output
 ceiling, so the common client setting cannot exceed the Opus limit when switching
@@ -696,9 +772,10 @@ or change it when Claude Code connects without the relay, or through a gateway
 that supports the server checks. Claude Code documents the variable as temporary;
 see [auto mode classifier billing](https://code.claude.com/docs/en/auto-mode-classifier-billing).
 
-The local dummy token is **not network authentication**. Host/Origin checks and
-JSON content-type validation reduce browser-origin misuse, not access by an
-arbitrary network client. Keep the listener on loopback; see
+The dummy token is **not network authentication**. Host/Origin checks and JSON
+content-type validation reduce browser-origin misuse, not access by an arbitrary
+network client. Keep the listener on loopback, or set `apiKey` before binding
+beyond it; see [Require a client key](#require-a-client-key) and
 [Architecture](EN-Architecture.md).
 
 ### Keep the picker focused on Opus and GPT-6 Astra

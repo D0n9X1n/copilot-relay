@@ -37,7 +37,7 @@ process.kill = (...args) => {
 
 syncBuiltinESMExports()
 
-const { checkDeep, hasVersionMismatch, renderStatus, resolveExitCode, toStatusConfig } =
+const { checkDeep, hasVersionMismatch, readModels, renderStatus, resolveExitCode, toStatusConfig } =
   await import("../../src/status")
 const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
   await import("../../src/lib/lifecycle")
@@ -50,6 +50,7 @@ type RelayStatus = Awaited<
 // Routed through toStatusConfig so every render below exercises the real
 // AppConfig -> StatusConfig mapping rather than a hand-written parallel shape.
 const baseConfig = toStatusConfig({
+  apiKey: "",
   claudeSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
   gptModel: "gpt-5.6-sol",
@@ -208,7 +209,7 @@ for (const [name, body, detail] of [
       return Response.json(body)
     })
 
-    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(captured?.url, "http://127.0.0.1:4142/v1/messages")
     assert.equal(captured?.init?.method, "POST")
@@ -249,7 +250,7 @@ for (const [name, body] of [
 ] as const) {
   test(`deep probe rejects ${name}`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => Response.json(body))
-    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
     assert.equal(result.detail, "empty response")
@@ -263,7 +264,7 @@ for (const [status, body, detail] of [
 ] as const) {
   test(`deep probe rejects HTTP ${status} regardless of response content`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => Response.json(body, { status }))
-    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
     assert.equal(result.detail, detail)
@@ -282,7 +283,7 @@ for (const [name, response, detail] of [
 ] as const) {
   test(`deep probe rejects ${name}`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => response())
-    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]")
+    const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "")
 
     assert.equal(result.ok, false)
     assert.equal(result.detail, detail)
@@ -529,6 +530,7 @@ test("renders every resolved config key", () => {
   const expected: Array<[string, string]> = [
     ["host", "127.0.0.1"],
     ["port", "4142"],
+    ["apiKey", "(unset — clients need no key)"],
     ["copilotBaseUrl", "https://api.githubcopilot.com"],
     ["claudeSetup", "true"],
     ["logLevel", "info"],
@@ -560,7 +562,7 @@ test("prints webSearchBackend when it is set", () => {
   })
 
   assert.match(out, /^\s+webSearchBackend\s+gpt-5\.6-sol$/m)
-  assert.doesNotMatch(out, /unset/)
+  assert.doesNotMatch(out, /\(unset — uses gptModel\)/)
 })
 
 // Why: these are the values on disk, which is not the same question as what a
@@ -586,15 +588,15 @@ test("shows the config but not the restart note when not running", () => {
 })
 
 // Why: JSON.stringify drops undefined properties. Leaving webSearchBackend
-// optional would emit 10 config keys on a default install and 11 on a
+// optional would emit one config key fewer on a default install than on a
 // customized one, so anything parsing `status --json` would see the key set
-// change under it. null keeps it stable at 11.
+// change under it. null keeps every AppConfig key present.
 test("keeps the --json config key set stable when webSearchBackend is unset", () => {
   const parsed = JSON.parse(JSON.stringify(baseStatus)) as {
     config: Record<string, unknown>
   }
 
-  assert.equal(Object.keys(parsed.config).length, 12)
+  assert.equal(Object.keys(parsed.config).length, 13)
   assert.ok("webSearchBackend" in parsed.config)
   assert.equal(parsed.config.webSearchBackend, null)
 })
@@ -606,6 +608,7 @@ test("keeps the --json config key set stable when webSearchBackend is unset", ()
 // makes the two impossible to disagree.
 test("passes config values through unchanged except webSearchBackend", () => {
   const appConfig = {
+    apiKey: "",
     claudeSetup: false,
     copilotBaseUrl: "https://example.invalid",
     gptModel: "gpt-x",
@@ -631,6 +634,7 @@ test("passes config values through unchanged except webSearchBackend", () => {
 // Config carrying a credential in the URL path, used for the disclosure tests
 // below. This is a working custom-gateway shape: it is used as `${base}/models`.
 const secretUrlConfig = {
+  apiKey: "",
   claudeSetup: true,
   copilotBaseUrl:
     "https://gateway.example/tenant/PATH_SENTINEL?key=QUERY_SENTINEL#FRAG_SENTINEL",
@@ -695,7 +699,7 @@ test("hides copilot base url path, query and fragment in --json output", () => {
 
   const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
   // Key set and count must not shift just because one value is now redacted.
-  assert.equal(Object.keys(parsed.config).length, 12)
+  assert.equal(Object.keys(parsed.config).length, 13)
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
 })
 
@@ -728,6 +732,7 @@ test("keeps key order and exit codes unchanged under redaction", () => {
   const order = [
     "host",
     "port",
+    "apiKey",
     "copilotBaseUrl",
     "claudeSetup",
     "logLevel",
@@ -755,6 +760,100 @@ test("keeps key order and exit codes unchanged under redaction", () => {
   )
 })
 
+// Why (#159): status output is pasted into bug reports, so the apiKey row says
+// whether a key is set and never what it is, in text and in --json alike.
+test("shows whether an apiKey is set, never the key itself", () => {
+  const key = "STATUS_RENDER_KEY_SENTINEL"
+  const status = {
+    ...runningStatus,
+    config: toStatusConfig({ ...secretConfigWith("https://api.githubcopilot.com"), apiKey: key }),
+  }
+
+  assert.equal(status.config.apiKey, "[redacted]")
+  assert.match(render(status), /^\s+apiKey\s+\[redacted\]$/m)
+  assert.ok(!render(status).includes(key))
+  assert.ok(!JSON.stringify(status).includes(key))
+})
+
+// Why (#159): with an apiKey set, the /v1 routes answer 401 without it, so the
+// probes of those routes send it, and only when one is configured.
+test("the models probe sends the apiKey only when one is configured", async (t) => {
+  const calls: Array<{ url: unknown; headers: unknown }> = []
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    calls.push({ url, headers: init?.headers })
+    return Response.json({ data: [{ id: "gpt-6-astra" }] })
+  })
+
+  assert.deepEqual(await readModels("http://127.0.0.1:4142", "probe-fixture-key-0001"), ["gpt-6-astra"])
+  assert.deepEqual(await readModels("http://127.0.0.1:4142", ""), ["gpt-6-astra"])
+  assert.deepEqual(calls, [
+    { url: "http://127.0.0.1:4142/v1/models", headers: { "x-api-key": "probe-fixture-key-0001" } },
+    { url: "http://127.0.0.1:4142/v1/models", headers: {} },
+  ])
+})
+
+test("the deep probe sends the apiKey with its message request", async (t) => {
+  let captured: RequestInit | undefined
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
+    captured = init
+    return Response.json({
+      ...exhaustedProbeResponse,
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn",
+    })
+  })
+
+  const result = await checkDeep("http://127.0.0.1:4142", "gpt-6-astra[1m]", "probe-fixture-key-0001")
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(captured?.headers, {
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+    "x-api-key": "probe-fixture-key-0001",
+  })
+})
+
+// Why (#159): the key must never reach printed status, in text or --json. The
+// config row is redacted, and the whole output is scrubbed as a backstop.
+test("status command output never contains the configured apiKey", async (t) => {
+  const { status: command } = await import("../../src/status")
+  const key = "STATUS_COMMAND_KEY_SENTINEL"
+  await fs.mkdir(paths.appDir, { recursive: true })
+  // Why (#159 re-review): the key split by a character a terminal does not show, here U+200B and
+  // the C1 control U+0085 in the model settings, passed the final scrub unchanged.
+  await fs.writeFile(paths.configPath, [
+    "port: 4199",
+    `apiKey: ${key}`,
+    "gptModel: STATUS_COMMAND_\u200bKEY_SENTINEL",
+    "opusModel: STATUS_COMMAND_\u0085KEY_SENTINEL",
+    "",
+  ].join("\n"))
+  const output: string[] = []
+  t.mock.method(console, "log", (value: unknown) => {
+    output.push(String(value))
+  })
+  t.mock.method(console, "error", (value: unknown) => {
+    output.push(String(value))
+  })
+  const originalExit = process.exitCode
+
+  try {
+    const run = command.run as (context: { args: Record<string, unknown> }) => Promise<void>
+    await run({ args: { json: true } })
+    await run({ args: {} })
+
+    assert.equal(output.length, 2)
+    assert.equal(JSON.parse(output[0]).config.apiKey, "[redacted]")
+    assert.match(output[1], /^\s+apiKey\s+\[redacted\]$/m)
+    // A terminal shows neither split character, so the key must not appear once they are removed.
+    const visible = (text: string): string => text.replace(/[\x80-\x9f]|\p{Cf}|\p{Zl}|\p{Zp}/gu, "")
+    assert.ok(output.every((text) => !visible(text).includes(key)), "status printed the key")
+  } finally {
+    process.exitCode = originalExit
+    await fs.rm(paths.configPath, { force: true })
+  }
+})
+
 test.after(async () => {
   childProcess.execFile = originalExecFile
   process.kill = originalKill
@@ -763,7 +862,7 @@ test.after(async () => {
   assert.deepEqual(signalCalls, [])
 
   // Each port lookup asked about 4199 only and never scanned every process (#33).
-  assert.equal(discoveryCalls.length, 3)
+  assert.equal(discoveryCalls.length, 5)
   for (const { file, args } of discoveryCalls) {
     if (process.platform === "win32") {
       assert.equal(file, "powershell.exe")

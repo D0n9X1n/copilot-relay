@@ -541,3 +541,89 @@ test("is byte-idempotent after the first settings update", async () => {
     assert.deepEqual(secondBytes, firstBytes)
   })
 })
+
+// Why (#159): with an apiKey set, the relay refuses Claude Code's dummy token,
+// so managed setup writes the key as ANTHROPIC_AUTH_TOKEN, replacing the dummy
+// value or an older key.
+test("writes the relay apiKey as Claude Code's auth token", async () => {
+  await withTemporarySettings(async (configPath) => {
+    const input = {
+      baseUrl: "http://127.0.0.1:4142",
+      configPath,
+      gptModel: "gpt-5.6-sol",
+    }
+
+    await applyClaudeConfig(input)
+    let env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "dummy")
+
+    await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0001" })
+    env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "relay-fixture-key-0001")
+
+    const rotated = await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0002" })
+    env = (await readSettings(configPath)).env as Record<string, unknown>
+    assert.equal(rotated.changed, true)
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, "relay-fixture-key-0002")
+
+    const repeated = await applyClaudeConfig({ ...input, apiKey: "relay-fixture-key-0002" })
+    assert.equal(repeated.changed, false)
+  })
+})
+
+test("leaves an existing auth token unchanged when no apiKey is set", async () => {
+  await withTemporarySettings(async (configPath) => {
+    await fs.mkdir(path.dirname(configPath), { recursive: true })
+    await fs.writeFile(configPath, `${JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "user-chosen-token" } }, null, 2)}\n`)
+
+    for (const apiKey of [undefined, ""]) {
+      await applyClaudeConfig({
+        apiKey,
+        baseUrl: "http://127.0.0.1:4142",
+        configPath,
+        gptModel: "gpt-5.6-sol",
+      })
+
+      const env = (await readSettings(configPath)).env as Record<string, unknown>
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, "user-chosen-token")
+    }
+  })
+})
+
+// Why (#159 review): the writer kept an existing file's mode, so a 0644 or 0640 settings file that
+// gained the relay's apiKey stayed readable by other local users.
+for (const mode of [0o644, 0o640]) {
+  test(`publishes settings holding the apiKey owner-only over an existing ${mode.toString(8).padStart(4, "0")} file`, {
+    skip: process.platform === "win32",
+  }, async () => {
+    await withTemporarySettings(async (configPath) => {
+      await fs.mkdir(path.dirname(configPath), { recursive: true })
+      await fs.writeFile(configPath, `${JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "dummy" } }, null, 2)}\n`)
+      await fs.chmod(configPath, mode)
+      const input = { baseUrl: "http://127.0.0.1:4142", configPath, gptModel: "gpt-5.6-sol" }
+      const keyed = { ...input, apiKey: "relay-fixture-key-0001" }
+      const token = async () => ((await readSettings(configPath)).env as Record<string, unknown>).ANTHROPIC_AUTH_TOKEN
+      const fileMode = async () => (await fs.stat(configPath)).mode & 0o777
+
+      // Without a key, the token and the mode are kept.
+      assert.equal((await applyClaudeConfig(input)).changed, true)
+      assert.equal(await token(), "dummy")
+      assert.equal(await fileMode(), mode)
+
+      assert.equal((await applyClaudeConfig(keyed)).changed, true)
+      assert.equal(await token(), "relay-fixture-key-0001")
+      assert.equal(await fileMode(), 0o600)
+
+      // A file that already holds the key is published again once its mode is opened back up.
+      const current = await fs.readFile(configPath, "utf8")
+      await fs.chmod(configPath, mode)
+
+      assert.equal((await applyClaudeConfig(keyed)).changed, true)
+      assert.equal(await fs.readFile(configPath, "utf8"), current)
+      assert.equal(await fileMode(), 0o600)
+
+      // Private and current: nothing to write.
+      assert.equal((await applyClaudeConfig(keyed)).changed, false)
+    })
+  })
+}

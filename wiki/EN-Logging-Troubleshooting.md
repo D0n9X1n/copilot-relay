@@ -16,6 +16,9 @@ the log format is the way it is see [Internals](EN-Internals.md).
    curl -sS http://127.0.0.1:4142/v1/models
    ```
 
+   With `apiKey` set, `/v1/models` answers `401` unless the request carries the
+   key, for example `-H "x-api-key: <key>"`. `/healthz` needs no key.
+
 2. Follow today's log:
 
    ```sh
@@ -578,7 +581,10 @@ strip signed history to hide these errors; see [Internals](EN-Internals.md).
 
 Host/Origin rejection is `403`; a nonempty inference/token-count POST without
 `application/json` is `415`. These are local admission errors, not Copilot auth
-failures, and do not make a non-loopback listener authenticated.
+failures, and do not make a non-loopback listener authenticated. With `apiKey`
+set, a request without that key, or with a different one, is `401`
+`authentication_error`, also from the relay before any Copilot call; see
+[Claude Code settings are wrong](#claude-code-settings-are-wrong).
 
 An upstream HTTP 400 can also be a client/provider capability mismatch. In the
 isolated 2026-09-30 Claude Code 2.1.285 native check, the first two requests were
@@ -1022,20 +1028,95 @@ model-list endpoints alone do not prove upstream access.
 ## Claude Code settings are wrong
 
 `copilot-relay start` can update `~/.claude/settings.json` when
-`claudeSetup: true`.
+`claudeSetup: true`. With `apiKey` set, that file holds the key as
+`ANTHROPIC_AUTH_TOKEN`, so do not print the file or share it whole. This check
+prints the origin of `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_AUTO_MODE_SERVER` only as
+`0`, `1`, unset or another value, whether a token is set, and how the relay at
+that address answers the token. It replaces the token wherever it would appear in
+what it prints:
 
 ```sh
-cat ~/.claude/settings.json
+node - <<'EOF'
+const file = require("node:path").join(require("node:os").homedir(), ".claude", "settings.json")
+let env
+try {
+  env = JSON.parse(require("node:fs").readFileSync(file, "utf8")).env || {}
+} catch {
+  console.log(`${file}: missing or not valid JSON`)
+}
+if (env) {
+  const token = typeof env.ANTHROPIC_AUTH_TOKEN === "string" ? env.ANTHROPIC_AUTH_TOKEN : ""
+  // Every printed line passes through hide, which replaces the token wherever it appears.
+  const secret = token && new RegExp(token.replace(/\W/g, "\\$&"), "gi")
+  const hide = (text) => secret ? text.replace(secret, "[redacted]") : text
+  let url
+  try {
+    url = new URL(env.ANTHROPIC_BASE_URL)
+  } catch {
+    url = undefined
+  }
+  if (url && !/^https?:$/.test(url.protocol)) {
+    url = undefined
+  }
+  // The origin only: a path, query or user name can hold anything.
+  let base = env.ANTHROPIC_BASE_URL === undefined ? "(unset)" : "(not an http or https URL)"
+  if (url) {
+    const extra = url.username || url.password || url.search || url.hash || url.pathname !== "/"
+    base = url.origin + (extra ? " (path, query or credentials hidden)" : "")
+  }
+  const mode = env.CLAUDE_CODE_AUTO_MODE_SERVER
+  let autoMode = "(set to another value)"
+  if (mode === undefined) {
+    autoMode = "(unset)"
+  } else if (mode === "0" || mode === "1") {
+    autoMode = mode
+  }
+  console.log(hide(`ANTHROPIC_BASE_URL: ${base}`))
+  console.log(hide(`CLAUDE_CODE_AUTO_MODE_SERVER: ${autoMode}`))
+  console.log(hide(`ANTHROPIC_AUTH_TOKEN: ${token ? "set" : "missing"}`))
+  if (url) {
+    fetch(`${env.ANTHROPIC_BASE_URL}/v1/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        await response.arrayBuffer()
+        console.log(hide(`The relay answers with HTTP ${response.status}.`))
+      })
+      .catch(() => console.log(hide(`No relay answered at ${base}.`)))
+  }
+}
+EOF
 ```
+
+In PowerShell, pipe the same script as a here-string: replace the first line with
+`@'` and the last line with `'@ | node -`.
+
+`200` means the relay accepts the token: it matches the relay's `apiKey`, or no
+`apiKey` is set. `401` means the token is missing or differs from the key the
+relay is running with; see below.
 
 Expected values:
 
 - `ANTHROPIC_BASE_URL` points at `http://127.0.0.1:4142`
-- `ANTHROPIC_AUTH_TOKEN` exists; it is a dummy value for local relay use
+- `ANTHROPIC_AUTH_TOKEN` is set. With `apiKey` set, startup writes the key there.
+  Without one, startup keeps an existing token, even a key an earlier `apiKey`
+  wrote, and sets `dummy` only when the token is missing or empty; the relay then
+  accepts any token
 - `CLAUDE_CODE_AUTO_MODE_SERVER` is `0`, unless you set another value
+- With `apiKey` set, only you can read the file on Linux and macOS:
+  `ls -lL ~/.claude/settings.json` shows `-rw-------`
 
 Changing `host` or `port` requires restarting the relay, because the listening
 socket cannot move during hot reload.
+
+With `apiKey` set, a client whose token differs from it gets `401`, and the relay
+logs `error="Missing or invalid API key: ..."`:
+
+```sh
+grep -n "Missing or invalid API key" ~/.copilot-relay/logs/copilot-relay.*.log
+```
+
+The settings writer runs only at startup, and a running client keeps the token it
+loaded. After changing `apiKey`, restart the relay, or set the token yourself, and
+then restart Claude Code. See [Configuration](EN-Configuration.md).
 
 ## Claude Code says the session isn't eligible for auto mode
 

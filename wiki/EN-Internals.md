@@ -143,9 +143,32 @@ Adding a key means updating `config.default.yaml`, the README, and
 
 ### Admission and request policy
 
-`src/server.ts` checks Host/authority, supplied Origin, and JSON content type before
-inference. These are browser-origin/local request checks, **not authentication**;
-a reachable non-loopback listener is not protected by the dummy Claude token.
+`src/server.ts` checks Host/authority, supplied Origin, the optional `apiKey`, and
+JSON content type before inference, in that order. Host/authority, Origin and
+content type are browser-origin/local request checks, **not authentication**;
+without `apiKey`, a reachable non-loopback listener is not protected by the dummy
+Claude token.
+
+`apiKey` is read from the live `ProxyConfig` on every request, so a hot reload
+applies to the next one. `isOpenProbe` exempts `GET /healthz` and
+`GET`/`HEAD /api/hello`; every other route, unknown ones included, needs the key.
+`presentsApiKey` hashes the configured key and each presented value, `x-api-key`
+and the `Authorization: Bearer` token, with SHA-256 and compares the fixed-length
+digests with `timingSafeEqual`, which never stops at the first byte that differs. A
+refusal is HTTP `401` `authentication_error` with `WWW-Authenticate: Bearer`,
+returned before the body is read and before the unknown-route handler can log a
+payload; it never echoes the presented value. `applyRuntimeConfig` in
+`src/start.ts` registers the key with `registerLogSecret` at startup and on every
+reload, and `status` and `models` register it before they use it. `RequestTrace`
+keeps it out of the headers a capture records, whichever header carried it, but
+captured body files are unredacted by design, so a key that a client puts in a
+prompt is stored there. `toStatusConfig` shows the key as `[redacted]`. In
+`copilot-relay models`, `printable` in `src/models.ts` replaces the key in every
+model, config and search string before a row is shortened or padded, `safeId` in
+`src/lib/model-probe.ts` keeps an ID that holds it from being probed or printed,
+and both paths scrub each printed line again. While Claude Code's settings hold
+the key, `applyClaudeConfig` publishes them owner-only through the `ownerOnly`
+option of `writeFileSnapshot`.
 
 Before consuming a POST body, `snapshotProxyConfig` in `src/lib/config.ts` and
 `snapshotRuntimeState` / `withRuntimeState` in `src/lib/state.ts` freeze routing,

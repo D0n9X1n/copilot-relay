@@ -3,6 +3,9 @@ import { readFileSnapshot, writeFileSnapshot } from "~/lib/atomic-file"
 import { normalizeClaudeModelId, type ModelTokenLimits } from "~/lib/models"
 
 interface ApplyClaudeConfigInput {
+  // The relay's inbound apiKey. Empty or absent keeps an existing token and writes the dummy
+  // only when there is none.
+  apiKey?: string
   baseUrl: string
   configPath: string
   gptModel: string
@@ -57,7 +60,9 @@ const hasPrimaryModelOverride = (
 /**
  * Update `~/.claude/settings.json` so its env block points Claude Code at the
  * running proxy. Preserves unrelated keys and model choices while normalizing
- * managed one-million-context GPT overrides. Sets a dummy auth token only if absent.
+ * managed one-million-context GPT overrides. Sets the auth token to the relay's
+ * apiKey when one is configured and then publishes the file owner-only;
+ * otherwise keeps an existing token and writes a dummy value only if none is set.
  */
 export async function applyClaudeConfig(
   input: ApplyClaudeConfigInput,
@@ -120,9 +125,15 @@ export async function applyClaudeConfig(
 
   env.ANTHROPIC_BASE_URL = baseUrl
 
-  // Claude Code only requires a syntactically present auth token here; real
-  // upstream authentication is handled by copilot-relay's Copilot token.
-  if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
+  // With an apiKey set, the relay requires that key on every request, so the token
+  // is replaced, whether it was the dummy value or an older key. Without one, an
+  // existing token is kept, even a key an earlier apiKey wrote, and only a missing,
+  // empty or non-string token becomes the dummy: Claude Code only requires a
+  // syntactically present auth token here; real upstream authentication is handled
+  // by copilot-relay's Copilot token.
+  if (input.apiKey) {
+    env.ANTHROPIC_AUTH_TOKEN = input.apiKey
+  } else if (typeof env.ANTHROPIC_AUTH_TOKEN !== "string" || !env.ANTHROPIC_AUTH_TOKEN) {
     env.ANTHROPIC_AUTH_TOKEN = "dummy"
   }
 
@@ -149,11 +160,16 @@ export async function applyClaudeConfig(
     env,
   }
   const serialized = `${JSON.stringify(next, null, 2)}\n`
+  const writesKey = Boolean(input.apiKey)
+  // The apiKey is a credential, so a file holding it is published owner-only, and published again
+  // when its mode lets other local users read it, even if its content is current. Windows has no
+  // POSIX mode bits.
+  const keyExposed = writesKey && process.platform !== "win32" && (snapshot.mode & 0o077) !== 0
 
-  if (serialized === raw) {
+  if (serialized === raw && !keyExposed) {
     return { configPath, changed: false, created: false, previousBaseUrl }
   }
 
-  await writeFileSnapshot(snapshot, serialized)
+  await writeFileSnapshot(snapshot, serialized, { ownerOnly: writesKey })
   return { configPath, changed: true, created, previousBaseUrl }
 }

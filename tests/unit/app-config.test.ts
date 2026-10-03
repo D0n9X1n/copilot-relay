@@ -3,6 +3,7 @@ import test from "node:test"
 
 import {
   logLevels,
+  normalizeApiKey,
   normalizeCopilotBaseUrl,
   normalizeLogLevel,
   normalizeThinkEffort,
@@ -407,5 +408,38 @@ test("accepts ordinary url punctuation unchanged", () => {
     "https://gateway.example/?a=v1;b=v2",
   ]) {
     assert.equal(normalizeCopilotBaseUrl(value), value)
+  }
+})
+
+// Why (#159): empty is the documented way to turn the key check off, so a blank
+// spelling disables it rather than failing startup. Any visible ASCII is allowed.
+test("an absent or blank apiKey disables the key check", () => {
+  assert.equal(normalizeApiKey(undefined), undefined)
+  assert.equal(normalizeApiKey(""), "")
+  assert.equal(normalizeApiKey("   "), "")
+  assert.equal(normalizeApiKey("  relay-fixture-key-0001  "), "relay-fixture-key-0001")
+  assert.equal(normalizeApiKey("sixteen-chars-ok"), "sixteen-chars-ok")
+  assert.equal(normalizeApiKey("!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"), "!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+})
+
+// Why (#159): the key travels in an HTTP header, and every logged copy of it is
+// redacted as text. The message is fixed: a value typed under the wrong key can
+// be a credential, so the error never repeats it.
+test("rejects a short, spaced, non-ASCII or non-string apiKey without repeating it", () => {
+  for (const value of [
+    "short-key-15chr",
+    "relay fixture key 0001",
+    "relay-fixture-key-é0001",
+    "relay-fixture-key\t0001",
+    "relay-fixture-key\n0001",
+    42,
+    true,
+    null,
+  ]) {
+    assert.throws(
+      () => normalizeApiKey(value),
+      { message: "Invalid apiKey: expected empty, or at least 16 visible ASCII characters" },
+      String(value),
+    )
   }
 })

@@ -17,6 +17,9 @@ export interface ProxyConfig {
   vsCodeVersion: string
   webSearchBackend?: string
   claudeUpstreamApi?: "auto" | "messages" | "chat-completions"
+  // The inbound key clients must present; empty or absent disables the check. Admission reads it
+  // from the live config on every request, so a hot reload applies to the next one.
+  apiKey?: string
 }
 
 export interface ProxyEnv {
@@ -68,4 +71,5 @@ export const readProxyConfig = (config: AppConfig): ProxyConfig => ({
   vsCodeVersion: vscodeVersion,
   webSearchBackend: config.webSearchBackend,
   claudeUpstreamApi: config.claudeUpstreamApi,
+  apiKey: config.apiKey,
 })

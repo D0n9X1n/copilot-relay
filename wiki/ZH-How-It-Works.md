@@ -10,7 +10,8 @@ http://127.0.0.1:4142/v1/messages
 ```
 
 `copilot-relay` 将请求路由到 GitHub Copilot，选择翻译或保留原生 Claude Messages。
-请保持 loopback 监听：Host/Origin/JSON 检查只是本地接入控制，不是网络认证。
+请保持 loopback 监听：Host/Origin/JSON 检查只是本地接入控制，不是网络认证。要为其他
+机器提供服务，先设置 `apiKey`，再把 `host` 绑定到 loopback 以外；见[配置](ZH-Configuration.md)。
 
 本页是简版。设计地图见[架构](ZH-Architecture.md)；其背后的机制与不变量见
 [内部实现](ZH-Internals.md)。

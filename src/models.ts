@@ -6,7 +6,7 @@ import { readAppConfig, type AppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { flushLogs, log, setLogLevel, withoutConsoleLogging } from "~/lib/log"
+import { flushLogs, log, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
 import { terminalText } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
@@ -21,15 +21,22 @@ import {
 } from "~/lib/model-listing"
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
 import { paths } from "~/lib/paths"
-import { registerSensitiveOrigin, sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
+import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
 
 // A mistake in how the command was called. Its message replaces the generic connectivity advice.
 class ModelsUsageError extends Error {}
 
-// Catalog names are untrusted: control characters are stripped and a long one is shortened so it
-// cannot take over a row.
+// A catalog, config or search string as it may be printed. terminalText first removes ANSI
+// escapes, C0 and C1 controls, invisible format characters and line separators, any of which can
+// sit inside a secret and keep it from matching; then every registered secret, such as the
+// relay's apiKey, is replaced. Callers apply it before shortening or padding, because a key cut in
+// two would escape the scrub that runs on each printed line.
+const printable = (text: string): string => scrubLogSecrets(terminalText(text))
+
+// Catalog names are untrusted: control characters and secrets are removed and a long name is
+// shortened so it cannot take over a row.
 const displayName = (name: string | undefined): string | undefined => {
-  const text = sanitizeTerminalString(name ?? "").trim()
+  const text = printable(name ?? "").trim()
 
   if (text === "") {
     return undefined
@@ -45,7 +52,7 @@ const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog): Listed
     const name = displayName(catalog.models.get(id)?.name)
 
     return {
-      id: sanitizeTerminalString(id),
+      id: printable(id),
       ...(name !== undefined && { name }),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
     }
@@ -63,7 +70,7 @@ const configuredModels = (
 
     return {
       key,
-      value: sanitizeTerminalString(appConfig[key]),
+      value: printable(appConfig[key]),
       advertised: catalog.models.has(id),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
     }
@@ -78,7 +85,7 @@ const listingHeading = (search: string, result: ModelSearch): string => {
     return `Upstream-advertised models (${result.models.length}):`
   }
 
-  const label = sanitizeTerminalString(search)
+  const label = printable(search)
 
   if (result.found) {
     return `Upstream models matching "${label}" (${result.models.length}):`
@@ -196,6 +203,8 @@ export const models = defineCommand({
         const appConfig = await readAppConfig()
         setLogLevel(appConfig.logLevel)
         registerSensitiveOrigin(appConfig.copilotBaseUrl)
+        // --deep probes send the relay's apiKey to the in-process app.
+        registerLogSecret(appConfig.apiKey)
         const config = readProxyConfig(appConfig)
 
         failure = "Could not authenticate with GitHub Copilot"
@@ -248,7 +257,9 @@ export const models = defineCommand({
       }
 
       lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen))
-      console.log(scrubSensitiveUrls(lines.join("\n")))
+      // Each printed line is normalized and scrubbed again, as a backstop for any string that
+      // skipped printable.
+      console.log(lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(terminalText(line)))).join("\n"))
 
       if (!result.found) {
         process.exitCode = 1

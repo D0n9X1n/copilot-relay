@@ -7,7 +7,7 @@ import { readAppConfig } from "~/lib/app-config"
 import { getRelayBaseUrl } from "~/lib/address"
 import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
-import { setLogLevel } from "~/lib/log"
+import { registerLogSecret, scrubLogSecrets, setLogLevel } from "~/lib/log"
 import { getLogPath, paths } from "~/lib/paths"
 import {
   formatUrlForDisplay,
@@ -16,7 +16,7 @@ import {
   scrubSensitiveUrls,
 } from "~/lib/redact"
 import { appVersion } from "~/lib/version"
-import { colorEnabled, colorText } from "~/lib/terminal"
+import { colorEnabled, colorText, withoutHiddenCharacters } from "~/lib/terminal"
 
 /**
  * Exit codes, so `status` is usable in a health check or a script.
@@ -47,7 +47,7 @@ interface ProbeResult {
  * The resolved config as `status` reports it.
  *
  * Derived from AppConfig rather than restated, so a new config key cannot be
- * added without this type following it automatically. Two deliberate
+ * added without this type following it automatically. Three deliberate
  * differences:
  *
  * `webSearchBackend` is null rather than undefined when unset. JSON.stringify
@@ -59,6 +59,9 @@ interface ProbeResult {
  * and may legitimately carry a credential in its path, and `status` output is
  * what a user pastes into a bug report. Mapped here rather than at each render
  * site so the text block and `--json` cannot disagree about it. See #47.
+ *
+ * `apiKey` is never the key itself: `[redacted]` when one is set, empty when
+ * none is. For the same reason, and mapped here for the same reason.
  */
 export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
   webSearchBackend: string | null
@@ -66,6 +69,7 @@ export type StatusConfig = Omit<AppConfig, "webSearchBackend"> & {
 
 export const toStatusConfig = (config: AppConfig): StatusConfig => ({
   ...config,
+  apiKey: config.apiKey ? "[redacted]" : "",
   copilotBaseUrl: formatUrlForDisplay(config.copilotBaseUrl),
   webSearchBackend: config.webSearchBackend ?? null,
   claudeUpstreamApi: config.claudeUpstreamApi ?? "chat-completions",
@@ -181,21 +185,29 @@ const formatUptime = (startedAt: string | undefined): string => {
 const configRowOrder: Record<keyof StatusConfig, number> = {
   host: 0,
   port: 1,
-  copilotBaseUrl: 2,
-  claudeSetup: 3,
-  logLevel: 4,
-  logRetentionDays: 5,
-  thinkEffort: 6,
-  upstreamTimeoutSeconds: 7,
-  webSearchBackend: 8,
-  gptModel: 9,
-  opusModel: 10,
-  claudeUpstreamApi: 11,
+  apiKey: 2,
+  copilotBaseUrl: 3,
+  claudeSetup: 4,
+  logLevel: 5,
+  logRetentionDays: 6,
+  thinkEffort: 7,
+  upstreamTimeoutSeconds: 8,
+  webSearchBackend: 9,
+  gptModel: 10,
+  opusModel: 11,
+  claudeUpstreamApi: 12,
 }
 
 const configRowKeys = (
   Object.keys(configRowOrder) as Array<keyof StatusConfig>
 ).sort((a, b) => configRowOrder[a] - configRowOrder[b])
+
+// What an unset optional key means. A blank value would be indistinguishable
+// from a bug that dropped it.
+const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
+  apiKey: "(unset — clients need no key)",
+  webSearchBackend: "(unset — uses gptModel)",
+}
 
 /**
  * The resolved config, one key per line.
@@ -216,10 +228,8 @@ const renderConfig = (
 ): Array<string> => {
   const lines = configRowKeys.map((key) => {
     const value = config[key]
-    const rendered =
-      key === "webSearchBackend" && value === null ?
-        "(unset — uses gptModel)"
-      : String(value)
+    const unset = value === null || value === "" ? unsetConfigText[key] : undefined
+    const rendered = unset ?? String(value)
 
     // Every value is user-supplied and lands on a terminal unescaped. Raw
     // control bytes could clear the line and paint status rows the relay never
@@ -388,9 +398,14 @@ const checkHealth = async (
   }
 }
 
-const readModels = async (baseUrl: string): Promise<Array<string>> => {
+// The relay's apiKey, for a probe of a route it protects. /healthz is open, so
+// only the /v1 probes send it.
+const relayKeyHeaders = (apiKey: string): Record<string, string> =>
+  apiKey ? { "x-api-key": apiKey } : {}
+
+export const readModels = async (baseUrl: string, apiKey: string): Promise<Array<string>> => {
   try {
-    const result = await probe(`${baseUrl}/v1/models`, {}, localProbeTimeoutMs)
+    const result = await probe(`${baseUrl}/v1/models`, { headers: relayKeyHeaders(apiKey) }, localProbeTimeoutMs)
     const data = (result.body as { data?: Array<{ id?: string }> } | undefined)?.data
 
     return Array.isArray(data) ?
@@ -410,6 +425,7 @@ const readModels = async (baseUrl: string): Promise<Array<string>> => {
 export const checkDeep = async (
   baseUrl: string,
   model: string,
+  apiKey: string,
 ): Promise<ProbeResult> => {
   try {
     const result = await probe(
@@ -423,6 +439,7 @@ export const checkDeep = async (
         headers: {
           "anthropic-version": "2023-06-01",
           "content-type": "application/json",
+          ...relayKeyHeaders(apiKey),
         },
         method: "POST",
       },
@@ -493,6 +510,8 @@ export const collectStatus = async (options: {
   // from checkHealth or checkDeep, which quotes the URL it tried - is already
   // covered by the time it reaches a detail string. See #47.
   registerSensitiveOrigin(appConfig.copilotBaseUrl)
+  // The /v1 probes below send the relay's apiKey, and the output is scrubbed of it.
+  registerLogSecret(appConfig.apiKey)
 
   const base = {
     // logLevel and thinkEffort are derived from the same appConfig as `config`,
@@ -521,10 +540,10 @@ export const collectStatus = async (options: {
   const baseUrl = getRelayBaseUrl(relay.host, relay.port)
 
   const health = await checkHealth(baseUrl)
-  const models = health.result.ok ? await readModels(baseUrl) : []
+  const models = health.result.ok ? await readModels(baseUrl, appConfig.apiKey) : []
   const deep =
     options.deep && health.result.ok ?
-      await checkDeep(baseUrl, models[0] ?? appConfig.gptModel)
+      await checkDeep(baseUrl, models[0] ?? appConfig.gptModel, appConfig.apiKey)
     : undefined
 
   // /healthz first: it is answered by the process itself, so it cannot be
@@ -595,10 +614,14 @@ export const status = defineCommand({
     // it tried, and those strings come from fetch rather than from config. This
     // is the backstop for every such path, including --deep. Applied to the
     // complete output so legitimate newlines between rows survive. See #47.
+    // scrubLogSecrets is the same backstop for the apiKey, which toStatusConfig
+    // already replaces in the config block. Hidden characters are removed first,
+    // keeping colors and newlines, because one inside a value can split the key
+    // and keep it from matching.
     if (args.json) {
-      console.log(scrubSensitiveUrls(JSON.stringify(result, null, 2)))
+      console.log(scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(JSON.stringify(result, null, 2)))))
     } else {
-      console.log(scrubSensitiveUrls(renderStatus(result, colorEnabled()).join("\n")))
+      console.log(scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(renderStatus(result, colorEnabled()).join("\n")))))
     }
 
     // 0 requires both a live process and a passing health probe. A relay that
