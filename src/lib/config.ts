@@ -23,6 +23,10 @@ export interface ProxyConfig {
 }
 
 export interface ProxyEnv {
+  // Set only by the relay's own in-process calls, such as the model probe; no client can set it.
+  Bindings: {
+    relayProbe?: boolean
+  }
   Variables: {
     config: ProxyConfig
     requestErrorMessage?: string

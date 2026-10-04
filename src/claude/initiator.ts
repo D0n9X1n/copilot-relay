@@ -5,66 +5,92 @@ import { readBillingLineField, removeBillingLine } from "~/claude/billing-line"
 import type { ClaudeMessagesPayload } from "~/claude/types"
 
 // Texts Claude Code 2.1.288 writes itself, read from its bundle. If a later version rewords one,
-// that case falls back to the general rule at the end of getClaudeRequestInitiator.
+// that case reads as any other text.
 
-// The system prompt of a dedicated compaction request.
-const compactionSystemPrompt = "You are a helpful AI assistant tasked with summarizing conversations."
-
-// The instruction that ends every compaction request, including one that keeps the main system
-// prompt to reuse its cache.
-const compactionInstructions = [
-  "CRITICAL: Respond with TEXT ONLY.",
-  "Your task is to create a detailed summary of the conversation so far",
+// System prompts of requests Claude Code makes on its own: a dedicated compaction, and the
+// session title.
+const ownRequestSystemPrompts = [
+  "You are a helpful AI assistant tasked with summarizing conversations.",
+  "You are naming a coding session",
 ]
 
-// How Claude Code delivers a message the person sent while the model was working.
-const midTurnMessagePrefix = "The user sent a new message while you were working:"
+// The two parts of the instruction that ends every compaction request, including one that keeps
+// the main system prompt to reuse its cache. Either part alone can be a person's own words.
+const compactionGuard = "CRITICAL: Respond with TEXT ONLY."
+const compactionInstruction = "Your task is to create a detailed summary of the conversation so far"
 
-// Claude Code's interrupt-only notices. After one, Claude Code waits for the person, so a message
-// beside it in the same turn is theirs.
-const stopNotices = [
-  "[Request interrupted by user",
-  "[Tool call ",
-  "The user doesn't want to take this action right now.",
+// How Claude Code delivers a message a person sent while the model was working, directly or
+// through a bound thread.
+const personDeliveries = [
+  "The user sent a new message while you were working:",
+  "A message arrived in the bound thread while you were working:",
+  "Messages arrived in the bound thread while you were working:",
 ]
 
-// Other texts Claude Code puts in a user turn: the summary that resumes a session after
-// compaction, messages from sources other than the person, and retry nudges.
-const claudeCodeTexts = [
-  ...stopNotices,
+// Texts that start a request without the person: the summary that resumes a session after
+// compaction, recovery and retry nudges, and messages from sources other than the person.
+const claudeCodeTriggers = [
   "This session is being continued from a previous conversation",
   "The summarized conversation included Artifact content",
-  "Messages arrived in the bound thread while you were working:",
-  "[MESSAGE FROM NON-USER SOURCE",
-  "[SCHEDULED TASK",
   "The previous response failed to produce a valid tool call.",
   "Your tool call was malformed and could not be parsed.",
   "[Your previous response had no visible output.",
   "[structured-output-enforce]",
   "[projects-reply-gate]",
+  "Output token limit hit",
+  "Your response above was cut off mid-stream",
+  "Your response above was stopped by a safety classifier",
+  "Activity in the bound conversation",
+  "Another Claude session sent a message",
+  "Your background observer",
+  "[MESSAGE FROM NON-USER SOURCE",
+  "[SCHEDULED TASK",
+  "<channel source=",
+  "<teammate-message",
 ]
 
 // Hook output, such as "Stop hook feedback:", and a plugin's message, such as
 // "The lint plugin sent a message".
-const claudeCodePatterns = [
-  /^\S+ hook (?:feedback|blocking error from command|additional context):/,
+const claudeCodeTriggerPatterns = [
+  /^\S+ hook (?:feedback|blocking error from command):/,
   /^The \S+ plugin sent a message/,
 ]
+
+// Texts Claude Code adds beside what started the turn: interrupt notices, a hook's additional
+// context, and a skill's body after the Skill tool.
+const claudeCodeContext = [
+  "[Request interrupted by user",
+  "[Tool call ",
+  "The user doesn't want to take this action right now.",
+  "Base directory for this skill:",
+]
+const claudeCodeContextPatterns = [/^\S+ hook additional context:/]
 
 type JsonRecord = Record<string, unknown>
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
-// Harness context, such as a background task's notification, travels in reminders.
-const withoutReminders = (text: string): string =>
-  text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim()
+// Harness context, such as a background task's notification, travels in reminders, and a
+// reminder can hold another. Each pass removes the innermost ones.
+const innermostReminder = /<system-reminder>(?:(?!<system-reminder>)[\s\S])*?<\/system-reminder>/g
+
+const withoutReminders = (text: string): string => {
+  let previous = text
+  let remaining = text.replace(innermostReminder, "")
+  while (remaining !== previous) {
+    previous = remaining
+    remaining = remaining.replace(innermostReminder, "")
+  }
+
+  return remaining.trim()
+}
 
 const startsWithAny = (text: string, prefixes: Array<string>): boolean =>
   prefixes.some((prefix) => text.startsWith(prefix))
 
-const isClaudeCodeText = (text: string): boolean =>
-  startsWithAny(text, claudeCodeTexts) || claudeCodePatterns.some((pattern) => pattern.test(text))
+const matchesAny = (text: string, prefixes: Array<string>, patterns: Array<RegExp>): boolean =>
+  startsWithAny(text, prefixes) || patterns.some((pattern) => pattern.test(text))
 
 // String content counts as one text block.
 const contentBlocks = (content: unknown): Array<JsonRecord> => {
@@ -98,28 +124,39 @@ const originatingTurn = (messages: Array<unknown>): Array<JsonRecord> | undefine
   return sawUser ? blocks : undefined
 }
 
-// The turn's texts without reminders, leaving out texts that held nothing else.
-const turnTexts = (blocks: Array<JsonRecord>): Array<string> =>
-  blocks.flatMap((block) => {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      return []
-    }
+// What one block says about who started the turn, or undefined for a block that does not decide:
+// a reminder, or context Claude Code adds beside what started the turn.
+const blockOrigin = (block: JsonRecord): "agent" | "user" | undefined => {
+  if (block.type === "tool_result") {
+    return "agent"
+  }
 
-    const text = withoutReminders(block.text)
-    return text === "" ? [] : [text]
-  })
+  // A pasted image or an attached document. A tool's image travels inside its tool result.
+  if (block.type === "image" || block.type === "document") {
+    return "user"
+  }
 
-const isToolResult = (block: JsonRecord): boolean => block.type === "tool_result"
+  if (block.type !== "text" || typeof block.text !== "string") {
+    return undefined
+  }
 
-// A pasted image or an attached document.
-const isAttachment = (block: JsonRecord): boolean => block.type === "image" || block.type === "document"
+  const text = withoutReminders(block.text)
+  if (text === "" || matchesAny(text, claudeCodeContext, claudeCodeContextPatterns)) {
+    return undefined
+  }
 
-// A call Claude Code stopped carries a stop notice as its error result.
-const isStoppedToolResult = (block: JsonRecord): boolean =>
-  isToolResult(block)
-  && block.is_error === true
-  && typeof block.content === "string"
-  && startsWithAny(block.content, stopNotices)
+  if (startsWithAny(text, personDeliveries)) {
+    return "user"
+  }
+
+  const isCompaction = text.includes(compactionGuard) && text.includes(compactionInstruction)
+  if (isCompaction || matchesAny(text, claudeCodeTriggers, claudeCodeTriggerPatterns)) {
+    return "agent"
+  }
+
+  // Any other text is the person's, such as an instruction typed while approving a tool call.
+  return "user"
+}
 
 const systemTexts = (system: unknown): Array<string> =>
   contentBlocks(system).flatMap((block) => block.type === "text" && typeof block.text === "string" ? [block.text] : [])
@@ -132,13 +169,15 @@ export const getClaudeRequestInitiator = (body: unknown): "agent" | "user" => {
     return "agent"
   }
 
+  // Claude Code marks every request from a subagent, and the scheduler's cron jobs, on the
+  // billing line.
   const payload = body as unknown as ClaudeMessagesPayload
-  if (readBillingLineField(payload, "cc_is_subagent") === "true") {
+  if (readBillingLineField(payload, "cc_is_subagent") === "true" || readBillingLineField(payload, "cc_workload") === "cron") {
     return "agent"
   }
 
   const system = systemTexts(removeBillingLine(payload).system)
-  if (system.some((text) => text.trimStart().startsWith(compactionSystemPrompt))) {
+  if (system.some((text) => startsWithAny(text.trimStart(), ownRequestSystemPrompts))) {
     return "agent"
   }
 
@@ -147,22 +186,13 @@ export const getClaudeRequestInitiator = (body: unknown): "agent" | "user" => {
     return "agent"
   }
 
-  const texts = turnTexts(turn)
-  if (texts.some((text) => startsWithAny(text, compactionInstructions))) {
-    return "agent"
+  // Read backward from the end of the turn: the last block that decides is what started it.
+  for (let index = turn.length - 1; index >= 0; index--) {
+    const origin = blockOrigin(turn[index])
+    if (origin !== undefined) {
+      return origin
+    }
   }
 
-  if (texts.some((text) => text.startsWith(midTurnMessagePrefix))) {
-    return "user"
-  }
-
-  const holdsPersonContent = texts.some((text) => !isClaudeCodeText(text)) || turn.some(isAttachment)
-  if (!turn.some(isToolResult)) {
-    return holdsPersonContent ? "user" : "agent"
-  }
-
-  // Claude Code writes text of its own beside tool results, such as a skill's body after the
-  // Skill tool. The person's message travels there only after Claude Code stopped a call for them.
-  const stoppedForPerson = turn.some(isStoppedToolResult) || texts.some((text) => startsWithAny(text, stopNotices))
-  return stoppedForPerson && holdsPersonContent ? "user" : "agent"
+  return "agent"
 }

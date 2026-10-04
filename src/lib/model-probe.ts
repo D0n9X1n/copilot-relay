@@ -295,6 +295,7 @@ export async function probeModels(
                 messages: [{ role: "user", content: "Reply with OK only." }],
               }),
             }),
+            { relayProbe: true },
           )
           const body: unknown = await response.json().catch(() => undefined)
           return { response, body }

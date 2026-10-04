@@ -220,46 +220,50 @@ appends.
 
 The request is `agent` when:
 
-- the billing line carries `cc_is_subagent=true;`, which marks every request from a
-  subagent;
-- it is a compaction request: a system block starts with Claude Code's summarizer
-  prompt, or the turn holds its compaction instruction;
+- the billing line carries `cc_is_subagent=true;` (every request from a subagent) or
+  `cc_workload=cron;` (the scheduler's cron jobs);
+- a system block starts with the prompt of a request Claude Code makes on its own: the
+  dedicated compaction summarizer or the session title;
 - it ends on an assistant message (a prefill), or holds no user message.
 
-Otherwise the rule reads the originating turn, meaning the user messages after the last
-assistant message. It skips `role: "system"` turns and removes `<system-reminder>` spans.
+Otherwise the rule reads the turn backward and stops at the first block that says who
+started it. The turn is the user messages after the last assistant message. The rule
+skips `role: "system"` turns and removes `<system-reminder>` spans, nested ones too.
 
-Texts Claude Code writes itself are not the person's:
-
-- interrupt notices;
-- the summary that resumes a session after compaction;
-- hook feedback;
-- plugin, scheduled and non-user messages;
-- retry nudges.
-
-How the turn is labeled:
-
-- **No tool result in the turn.** `user` when the person's text, an image or a document
-  remains.
-- **A tool result in the turn.** `agent`, with two exceptions:
-  - Claude Code stopped a call for the person (an interrupt notice), and the person's
-    content remains;
-  - the turn delivers a message the person sent while the model was working.
+- A tool result is `agent`: a tool continuation.
+- A pasted image or an attached document is `user`.
+- A message the person sent while the model was working, directly or through a bound
+  thread, is `user`.
+- Texts that start a request without the person are `agent`:
+  - the compaction instruction, with both of its parts;
+  - the summary that resumes a session after compaction;
+  - recovery and retry nudges;
+  - hook feedback;
+  - messages from plugins, other sessions, observers, channels, teammates and the
+    scheduler.
+- Texts Claude Code adds beside what started the turn do not decide: interrupt notices,
+  a hook's additional context, and a skill's body after the Skill tool. A prompt typed
+  after an interrupt is therefore `user`.
+- Any other text is the person's, so `user`, including an instruction typed while
+  approving a tool call.
 
 The relay's own requests are `agent`:
 
 - the WebSearch execution;
 - the WebSearch final pass;
 - the native WebSearch follow-up;
-- the startup preflight.
+- the startup preflight;
+- the `models --deep` probes, which mark themselves in-process, where no client can.
 
 Retries reuse the value of the attempt they replace. Only the header changes: the
 upstream body is the same either way, so prompt-cache prefixes are untouched. The
 `Model request` log line records the value as `initiator=`.
 
 The recognized texts are Claude Code 2.1.288's. If a later version rewords one, that
-case falls back to the general rule. With `CLAUDE_CODE_ATTRIBUTION_HEADER=0` there is no
-billing line, so a subagent's first request reads as `user`.
+case reads as any other text. A person's text that starts exactly like one of Claude
+Code's, such as pasted hook feedback, reads as Claude Code's. With
+`CLAUDE_CODE_ATTRIBUTION_HEADER=0` there is no billing line, so a subagent's first
+request reads as `user`.
 
 ### Translated history
 

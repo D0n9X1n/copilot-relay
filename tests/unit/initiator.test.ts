@@ -57,6 +57,11 @@ const cases: Array<{ name: string; messages: Array<unknown>; expected: "agent" |
     expected: "user",
   },
   {
+    name: "an attached document without text",
+    messages: [...history, { role: "user", content: [{ type: "document", source: { type: "text", media_type: "text/plain", data: "Notes" } }] }],
+    expected: "user",
+  },
+  {
     name: "a slash command",
     messages: [...history, { role: "user", content: [text("<command-message>review</command-message>\n<command-name>/review</command-name>")] }],
     expected: "user",
@@ -164,6 +169,73 @@ const cases: Array<{ name: string; messages: Array<unknown>; expected: "agent" |
   {
     name: "Stop hook feedback in a reminder",
     messages: [...history, { role: "user", content: [reminder("Stop hook feedback:\nThe goal is not met yet.")] }],
+    expected: "agent",
+  },
+  {
+    name: "a reminder nested in another",
+    messages: [
+      ...history,
+      { role: "user", content: [text("<system-reminder>\nStop hook feedback:\n<system-reminder>Hook context.</system-reminder>\nRetry the check.\n</system-reminder>")] },
+    ],
+    expected: "agent",
+  },
+  {
+    name: "a person's message through a bound thread",
+    messages: [
+      ...history,
+      { role: "user", content: [text("Messages arrived in the bound thread while you were working:\nFix the failing test.\n\nAlso check Windows.")] },
+    ],
+    expected: "user",
+  },
+  {
+    name: "a person's message through a bound thread beside a tool result",
+    messages: [
+      ...working,
+      { role: "user", content: [toolResult("toolu_bash", "1 passing"), text("A message arrived in the bound thread while you were working:\nCheck Windows too.")] },
+    ],
+    expected: "user",
+  },
+  {
+    name: "an instruction typed while approving a tool call",
+    messages: [...working, { role: "user", content: [toolResult("toolu_bash", "1 passing"), text("Now run the integration tests too.")] }],
+    expected: "user",
+  },
+  {
+    name: "a person's message that starts like the compaction guard",
+    messages: [...history, { role: "user", content: "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Explain this traceback." }],
+    expected: "user",
+  },
+  {
+    name: "a retry nudge after Claude Code removed the failed response",
+    messages: [
+      { role: "user", content: "Fix the failing test." },
+      { role: "user", content: "The previous response failed to produce a valid tool call. Please retry the tool call now." },
+    ],
+    expected: "agent",
+  },
+  {
+    name: "a recovery after the output token limit",
+    messages: [...history, { role: "user", content: "Output token limit hit. Resume directly from where you stopped." }],
+    expected: "agent",
+  },
+  {
+    name: "a recovery after a response was cut off",
+    messages: [...history, { role: "user", content: "Your response above was cut off mid-stream. Resume directly from where it stopped." }],
+    expected: "agent",
+  },
+  {
+    name: "a message from another Claude session",
+    messages: [...history, { role: "user", content: "Another Claude session sent a message:\n<cross-session-message>Check the build.</cross-session-message>" }],
+    expected: "agent",
+  },
+  {
+    name: "a teammate's message",
+    messages: [{ role: "user", content: "<teammate-message teammate_id=\"team-lead\">Implement the parser.</teammate-message>" }],
+    expected: "agent",
+  },
+  {
+    name: "a channel notification",
+    messages: [...history, { role: "user", content: "<channel source=\"ci\">The build failed.</channel>" }],
     expected: "agent",
   },
   {
@@ -308,4 +380,12 @@ test("a malformed body reads as agent without throwing", () => {
   ]) {
     assert.equal(getClaudeRequestInitiator(body), "agent")
   }
+})
+
+test("the scheduler's cron jobs and session titles read as agent", () => {
+  const cron = [text(`${billingLine} cc_workload=cron;`), text("You are Claude Code.")]
+  const title = [text(billingLine), text("You are naming a coding session from its first messages.")]
+
+  assert.equal(getClaudeRequestInitiator(request([{ role: "user", content: "Check the deploy." }], cron)), "agent")
+  assert.equal(getClaudeRequestInitiator(request([{ role: "user", content: "<session>Fix the failing test.</session>" }], title)), "agent")
 })
