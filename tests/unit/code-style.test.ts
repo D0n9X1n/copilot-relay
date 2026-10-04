@@ -42,7 +42,9 @@ const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
 // Issue and PR citations are searched for in prose only: comments and the text of string and
 // template literals. Code around them is not read, so an object key named issues that holds a count
-// is not a citation. In prose, a citation is:
+// is not a citation. A template literal is read whole, with the code in each ${} field replaced by
+// x's, so a link continues across a field and a field's code never reads as prose. In prose, a
+// citation is:
 // - a hash and a number, alone or after a project name or owner/repo;
 // - "issue", "PR", "pull request" or "GH", then a space, "#", ":", "-", "no." or "number", then a
 //   number;
@@ -84,9 +86,27 @@ const citationOffsets = (prose: string) => {
     .map((match) => match.index)
 }
 
-// Comments and the text of string and template literals, each with the offset it starts at. Comments
-// sit in the trivia before a token, so the full start of every token is read for leading and trailing
-// comments. JSDoc nodes are skipped: their text is read as a leading comment of the node they document.
+// The text of a template literal, with the code in each ${} field replaced by x's. Line breaks stay,
+// so an offset in the result is an offset in the source.
+const maskedTemplate = (sourceFile: ts.SourceFile, template: ts.TemplateExpression) => {
+  const text = sourceFile.text
+  const pieces = [text.slice(template.getStart(sourceFile), template.head.getEnd())]
+  let fieldStart = template.head.getEnd()
+
+  for (const span of template.templateSpans) {
+    const fieldEnd = span.literal.getStart(sourceFile)
+    pieces.push(text.slice(fieldStart, fieldEnd).replace(/[^\r\n]/g, "x"))
+    pieces.push(text.slice(fieldEnd, span.literal.getEnd()))
+    fieldStart = span.literal.getEnd()
+  }
+
+  return pieces.join("")
+}
+
+// Comments and the text of string and template literals, each with the offset it starts at. A
+// template literal with fields is one segment, masked by maskedTemplate. Comments sit in the trivia
+// before a token, so the full start of every token is read for leading and trailing comments. JSDoc
+// nodes are skipped: their text is read as a leading comment of the node they document.
 const proseSegments = (sourceFile: ts.SourceFile) => {
   const segments = new Map<number, string>()
 
@@ -100,8 +120,12 @@ const proseSegments = (sourceFile: ts.SourceFile) => {
       segments.set(range.pos, sourceFile.text.slice(range.pos, range.end))
     }
 
-    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) {
+    if (ts.isStringLiteralLike(node)) {
       segments.set(node.getStart(sourceFile), node.getText(sourceFile))
+    }
+
+    if (ts.isTemplateExpression(node)) {
+      segments.set(node.getStart(sourceFile), maskedTemplate(sourceFile, node))
     }
 
     for (const child of node.getChildren(sourceFile)) {
@@ -472,21 +496,88 @@ const runPythonChecker = (files: string[]): string[] => {
   return output.split(/\r?\n/).filter((line) => line.trim() !== "")
 }
 
-// Python comments and strings, one JSON line per token: the file, the line the token starts on and
-// its text. From Python 3.12, the text of an f-string arrives in FSTRING_MIDDLE tokens.
-const pythonProse = `
+// Python comments and strings, one JSON line each: the file, the line it starts on and its text. An
+// f-string or t-string is read whole, from its prefix to its closing quote, with the code in each {}
+// field replaced by x's, as a template literal is. Python 3.11 returns it as one STRING token; from
+// Python 3.12 it is the span from FSTRING_START to the matching FSTRING_END (TSTRING_* from 3.14).
+// Token columns count characters, so that span is sliced from the decoded source.
+const pythonProse = String.raw`
+import io
 import json
 import sys
 import tokenize
 
-prose = {tokenize.COMMENT, tokenize.STRING}
-prose.update(getattr(tokenize, name) for name in ("FSTRING_MIDDLE", "TSTRING_MIDDLE") if hasattr(tokenize, name))
+starts = {getattr(tokenize, name) for name in ("FSTRING_START", "TSTRING_START") if hasattr(tokenize, name)}
+ends = {getattr(tokenize, name) for name in ("FSTRING_END", "TSTRING_END") if hasattr(tokenize, name)}
+prefix_letters = "rRbBfFtTuU"
+
+
+def emit(path, line, text):
+    print(json.dumps({"file": path, "line": line, "text": text}))
+
+
+def is_formatted(text):
+    prefix = text[:len(text) - len(text.lstrip(prefix_letters))]
+    return any(letter in prefix for letter in "fFtT")
+
+
+def mask_fields(text):
+    masked = list(text)
+    index = len(text) - len(text.lstrip(prefix_letters))
+    depth = 0
+    quote = ""
+    field_start = 0
+    while index < len(text):
+        character = text[index]
+        if depth == 0:
+            if character in "{}" and text[index + 1:index + 2] == character:
+                index += 2
+                continue
+            if character == "{":
+                depth = 1
+                field_start = index + 1
+        elif quote:
+            if character == quote:
+                quote = ""
+        elif character in "'\"":
+            quote = character
+        elif character in "{[(":
+            depth += 1
+        elif character in "}])":
+            depth -= 1
+            if depth == 0:
+                for position in range(field_start, index):
+                    if masked[position] not in "\r\n":
+                        masked[position] = "x"
+        index += 1
+    return "".join(masked)
+
 
 for path in sys.argv[1:]:
     with open(path, "rb") as source:
-        for token in tokenize.tokenize(source.readline):
-            if token.type in prose:
-                print(json.dumps({"file": path, "line": token.start[0], "text": token.string}))
+        data = source.read()
+    encoding = tokenize.detect_encoding(io.BytesIO(data).readline)[0]
+    text = data.decode(encoding)
+    line_starts = [0]
+    for line in text.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    depth = 0
+    opened = (0, 0)
+    for token in tokenize.tokenize(io.BytesIO(data).readline):
+        if token.type in starts:
+            if depth == 0:
+                opened = token.start
+            depth += 1
+        elif token.type in ends:
+            depth -= 1
+            if depth == 0:
+                begin = line_starts[opened[0] - 1] + opened[1]
+                finish = line_starts[token.end[0] - 1] + token.end[1]
+                emit(path, opened[0], mask_fields(text[begin:finish]))
+        elif depth == 0 and token.type == tokenize.COMMENT:
+            emit(path, token.start[0], token.string)
+        elif depth == 0 and token.type == tokenize.STRING:
+            emit(path, token.start[0], mask_fields(token.string) if is_formatted(token.string) else token.string)
 `
 
 interface PythonProse {
@@ -743,6 +834,7 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     "const site = \"www.example.com/page#" + "12\"",
     "const host = \"example.com/page#" + "12\"",
     "const repo = \"https://github.com/owner/repo#" + "12\"",
+    "const page = `https://example.com/page?q=${query}#" + "123`",
     "const color = \"#" + "123456\"",
     "const translucent = '#" + "12345678'",
     "const templated = `#" + "123456`",
@@ -765,7 +857,7 @@ test("the issue-number check reports citations and leaves other uses of # alone"
   assert.deepEqual(found, [...citations.map((_, index) => index + 1), lastLineNumber])
 })
 
-test("the Python issue-number check reads comments and strings, and leaves colors and links alone", (t) => {
+test("the Python issue-number check reads comments and strings, and leaves colors, links and f-string fields alone", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
@@ -778,10 +870,13 @@ test("the Python issue-number check reads comments and strings, and leaves color
     "LINK = \"https://example.com/page#" + "12\"",
     "NOTE = \"\"\"First line.",
     "See issue " + "56.\"\"\"",
+    "SUMMARY = f\"Resolved {issues" + ":3} issues.\"",
+    "URL = f\"https://example.com/page?q={query}#" + "123\"",
+    "CITED = f\"{name} cites #" + "78.\"",
   ]
   fs.writeFileSync(file, sample.join("\n") + "\n")
 
-  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`])
+  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`, `${file}:9`])
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

@@ -310,7 +310,7 @@ linter 依赖。
 | 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
 | 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
 | Python：不写单行复合语句（包括 `case` 子句），不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
-| 注释和字符串（包括测试名）不引用 issue 或 PR：不写 `#N`、`name#N` 或 `owner/repo#N`；`issue`、`PR`、`pull request` 或 `GH` 后不接编号（中间是空格、`#`、`:`、`-`、`no.` 或 `number` 都算）；不写指向 issue、pull request 或 merge request 页面的路径。注释和字符串之外的代码不检查。其他链接、HTML 实体，以及占满整个字符串或跟在 CSS 颜色属性后的 3、4、6、8 位颜色值，都不算引用。序号不加 `#`。发布脚本的测试 fixture 把真实引用当作数据，不受此限 | 无（项目规则） |
+| 注释和字符串（包括测试名）不引用 issue 或 PR：不写 `#N`、`name#N` 或 `owner/repo#N`；`issue`、`PR`、`pull request` 或 `GH` 后不接编号（中间是空格、`#`、`:`、`-`、`no.` 或 `number` 都算）；不写指向 issue、pull request 或 merge request 页面的路径。注释和字符串之外的代码不检查。模板字面量和 f-string 整体检查，不读字段中的代码，所以链接可以跨过字段延续。其他链接、HTML 实体，以及占满整个字符串或跟在 CSS 颜色属性后的 3、4、6、8 位颜色值，都不算引用。序号不加 `#`。发布脚本的测试 fixture 把真实引用当作数据，不受此限 | 无（项目规则） |
 
 这条花括号规则有意比 Google、Airbnb 和 Microsoft 的指南更严格 —— 它们都允许某些不加
 花括号的单行主体。它与 ESLint `curly` 的默认值以及
