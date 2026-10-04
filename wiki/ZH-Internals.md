@@ -219,7 +219,9 @@ relay 自己的请求是 `agent`：
 - 原生 WebSearch 后续轮；
 - 启动 preflight；
 - `models --deep` 的探测请求，它们在进程内标记自己，客户端无法这样做；
-- `status --deep` 的探测请求，它经由 HTTP 到达 relay，靠固定的 prompt 识别。
+- `status --deep` 的探测请求，它经由 HTTP 到达 relay，靠完整的正文识别：固定的 prompt、
+  固定的 `max_tokens`，没有其他字段。Claude Code 总会附加 system prompt，所以本人输入同样的
+  文字仍读作 `user`。
 
 重试沿用被替换那次尝试的值。只有这个 header 会变：上游正文完全相同，因此 prompt 缓存
 前缀不受影响。`Model request` 日志行以 `initiator=` 记录该值。

@@ -66,9 +66,11 @@ const claudeCodeContext = [
 ]
 const claudeCodeContextPatterns = [/^\S+ hook additional context:/]
 
-// The prompt `status --deep` sends. It reaches the relay over HTTP from another process, so its
-// text is the only mark it carries.
+// The request `status --deep` sends. It reaches the relay over HTTP from another process, so its
+// body is the only mark it carries: these three fields and nothing else. Claude Code always adds
+// a system prompt and more, so a person typing the same words never matches.
 export const statusProbePrompt = "Reply with the single word: ok"
+export const statusProbeMaxTokens = 16
 
 type JsonRecord = Record<string, unknown>
 
@@ -149,10 +151,6 @@ const blockOrigin = (block: JsonRecord): "agent" | "user" | undefined => {
     return undefined
   }
 
-  if (text === statusProbePrompt) {
-    return "agent"
-  }
-
   if (startsWithAny(text, personDeliveries)) {
     return "user"
   }
@@ -166,6 +164,20 @@ const blockOrigin = (block: JsonRecord): "agent" | "user" | undefined => {
   return "user"
 }
 
+const isStatusProbe = (body: JsonRecord): boolean => {
+  const keys = Object.keys(body).sort()
+  if (keys.join(",") !== "max_tokens,messages,model" || body.max_tokens !== statusProbeMaxTokens) {
+    return false
+  }
+
+  const messages = body.messages
+  return Array.isArray(messages)
+    && messages.length === 1
+    && isRecord(messages[0])
+    && messages[0].role === "user"
+    && messages[0].content === statusProbePrompt
+}
+
 const systemTexts = (system: unknown): Array<string> =>
   contentBlocks(system).flatMap((block) => block.type === "text" && typeof block.text === "string" ? [block.text] : [])
 
@@ -173,7 +185,7 @@ const systemTexts = (system: unknown): Array<string> =>
 // requests and before it adds turns of its own. Never throws: a malformed body is "agent", and
 // validation rejects it later.
 export const getClaudeRequestInitiator = (body: unknown): "agent" | "user" => {
-  if (!isRecord(body) || !Array.isArray(body.messages)) {
+  if (!isRecord(body) || !Array.isArray(body.messages) || isStatusProbe(body)) {
     return "agent"
   }
 

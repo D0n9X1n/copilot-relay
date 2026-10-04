@@ -239,11 +239,6 @@ const cases: Array<{ name: string; messages: Array<unknown>; expected: "agent" |
     expected: "agent",
   },
   {
-    name: "the status --deep probe",
-    messages: [{ role: "user", content: "Reply with the single word: ok" }],
-    expected: "agent",
-  },
-  {
     name: "a message from another Claude session",
     messages: [...history, { role: "user", content: "Another Claude session sent a message:\n<cross-session-message>Check the build.</cross-session-message>" }],
     expected: "agent",
@@ -408,4 +403,17 @@ test("the scheduler's cron jobs and session titles read as agent", () => {
 
   assert.equal(getClaudeRequestInitiator(request([{ role: "user", content: "Check the deploy." }], cron)), "agent")
   assert.equal(getClaudeRequestInitiator(request([{ role: "user", content: "<session>Fix the failing test.</session>" }], title)), "agent")
+})
+
+test("the status --deep probe reads as agent only in its exact shape", () => {
+  const probe = { max_tokens: 16, messages: [{ content: "Reply with the single word: ok", role: "user" }], model: "opus" }
+  const typed = {
+    ...request([...history, { role: "user", content: "Reply with the single word: ok" }]),
+    tools: [{ name: "Read", input_schema: { type: "object" } }],
+  }
+
+  assert.equal(getClaudeRequestInitiator(probe), "agent")
+  assert.equal(getClaudeRequestInitiator(typed), "user")
+  assert.equal(getClaudeRequestInitiator({ ...probe, max_tokens: 1024 }), "user")
+  assert.equal(getClaudeRequestInitiator({ ...probe, system: "You are Claude Code." }), "user")
 })
