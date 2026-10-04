@@ -40,18 +40,80 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
-// An issue or PR citation, in one of four forms:
-// - a link to a tracker's issue, pull request or merge request page;
-// - "issue", "PR" or "pull request", then a space, colon or hash, then a number;
-// - a hash and a number after a project name or owner/repo, outside a URL;
-// - a hash and a number alone, unless the hash follows a slash, dot, hyphen, equals sign, question
-//   mark, ampersand or hash, which puts it in a URL or an HTML entity (a comment's "//" does not),
-//   or the number is a six- or eight-digit color that ends a CSS value or a string.
-const trackerLink = String.raw`\/(?:issues|pulls?|merge_requests)\/\d+\b`
-const labelledReference = String.raw`(?<!\w)(?:issues?|PRs?|pull[ -]requests?)[ \t:#]+\d+\b`
-const namedReference = String.raw`(?<![\w/.&=?#-])[\w.-]+(?:\/[\w.-]+)?#\d+\b`
-const bareReference = String.raw`(?:(?<=\/\/)|(?<![\w/.&=?#-]))#(?!(?:\d{6}|\d{8})(?:[;"']|[ \t]*\}))\d+\b`
-const issueReference = new RegExp([trackerLink, labelledReference, namedReference, bareReference].join("|"), "gi")
+// Issue and PR citations are searched for in prose only: comments and the text of string and
+// template literals. Code around them is not read, so an object key named issues that holds a count
+// is not a citation. In prose, a citation is:
+// - a hash and a number, alone or after a project name or owner/repo;
+// - "issue", "PR", "pull request" or "GH", then a space, "#", ":", "-", "no." or "number", then a
+//   number;
+// - a path to an issue, pull request or merge request page.
+// Ordinals take no hash ("attempt 2"). Every other link is blanked first, so its path, query and
+// fragment cannot read as a citation. An owner name has no dot, so a domain and a path do not read
+// as owner/repo. A hash right after a letter, a digit or URL punctuation, other than a comment's //,
+// belongs to a word, a relative link or an HTML entity. A hash and 3, 4, 6 or 8 digits is a color,
+// not a citation, when it fills a string literal or follows a CSS color property.
+const linkPattern = /\b(?:[a-z][\w+.-]*:\/\/|www\.)[^\s"'`<>()]+/gi
+const trackerPath = /\/(?:issues|pulls?|merge_requests)\/\d+\b/
+const labelledReference = /(?<!\w)(?:issues?|PRs?|pull[ -]requests?|GH)(?:(?:[ \t]*(?:[:#-]|no\.|number))+[ \t]*|[ \t]+)\d+\b/
+const namedReference = /(?<![\w/.&=?#+%-])(?:[\w-]+\/[\w.-]+|[\w.-]+)#\d+\b/
+const bareReference = /(?:(?<=\/\/)|(?<![\w/.&=?#+%-]))#\d+\b/
+const citationPatterns = [trackerPath, labelledReference, namedReference, bareReference]
+const issueReference = new RegExp(citationPatterns.map((pattern) => pattern.source).join("|"), "gi")
+const colorValue = /^#(?:\d{3}|\d{4}|\d{6}|\d{8})$/
+const colorProperty = /(?:color|background|fill|stroke):[ \t]*$/
+const literalOpening = /^[a-z]*["'`]+$/i
+const literalClosing = /^["'`]+$/
+
+// A hash and 3, 4, 6 or 8 digits that fills a string literal or follows a CSS color property.
+const isColor = (prose: string, index: number, reference: string) => {
+  if (!colorValue.test(reference)) {
+    return false
+  }
+
+  const before = prose.slice(0, index)
+  const after = prose.slice(index + reference.length)
+  return (literalOpening.test(before) && literalClosing.test(after)) || colorProperty.test(before)
+}
+
+// Offsets of the citations in one comment or literal.
+const citationOffsets = (prose: string) => {
+  const searched = prose.replace(linkPattern, (link) => trackerPath.test(link) ? link : " ".repeat(link.length))
+
+  return [...searched.matchAll(issueReference)]
+    .filter((match) => !isColor(prose, match.index, match[0]))
+    .map((match) => match.index)
+}
+
+// Comments and the text of string and template literals, each with the offset it starts at. Comments
+// sit in the trivia before a token, so the full start of every token is read for leading and trailing
+// comments. JSDoc nodes are skipped: their text is read as a leading comment of the node they document.
+const proseSegments = (sourceFile: ts.SourceFile) => {
+  const segments = new Map<number, string>()
+
+  const visit = (node: ts.Node) => {
+    const commentRanges = [
+      ...(ts.getLeadingCommentRanges(sourceFile.text, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(sourceFile.text, node.getFullStart()) ?? []),
+    ]
+
+    for (const range of commentRanges) {
+      segments.set(range.pos, sourceFile.text.slice(range.pos, range.end))
+    }
+
+    if (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) {
+      segments.set(node.getStart(sourceFile), node.getText(sourceFile))
+    }
+
+    for (const child of node.getChildren(sourceFile)) {
+      if (!ts.isJSDoc(child)) {
+        visit(child)
+      }
+    }
+  }
+
+  visit(sourceFile)
+  return [...segments].sort(([first], [second]) => first - second)
+}
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -309,8 +371,10 @@ const collectViolations = (file: string, text: string): Violation[] => {
   }
 
   // Comments, test names and strings alike: code states how it works and cites no issue or PR.
-  for (const match of text.matchAll(issueReference)) {
-    record("issueNumbers", match.index)
+  for (const [start, prose] of proseSegments(sourceFile)) {
+    for (const offset of citationOffsets(prose)) {
+      record("issueNumbers", start + offset)
+    }
   }
 
   return violations
@@ -406,6 +470,41 @@ for path in sys.argv[1:]:
 const runPythonChecker = (files: string[]): string[] => {
   const output = execFileSync(python, ["-", ...files], { cwd: repoRoot, input: pythonChecker, encoding: "utf8" })
   return output.split(/\r?\n/).filter((line) => line.trim() !== "")
+}
+
+// Python comments and strings, one JSON line per token: the file, the line the token starts on and
+// its text. From Python 3.12, the text of an f-string arrives in FSTRING_MIDDLE tokens.
+const pythonProse = `
+import json
+import sys
+import tokenize
+
+prose = {tokenize.COMMENT, tokenize.STRING}
+prose.update(getattr(tokenize, name) for name in ("FSTRING_MIDDLE", "TSTRING_MIDDLE") if hasattr(tokenize, name))
+
+for path in sys.argv[1:]:
+    with open(path, "rb") as source:
+        for token in tokenize.tokenize(source.readline):
+            if token.type in prose:
+                print(json.dumps({"file": path, "line": token.start[0], "text": token.string}))
+`
+
+interface PythonProse {
+  file: string
+  line: number
+  text: string
+}
+
+// Every citation in the given Python files, as file:line.
+const pythonCitations = (files: string[]) => {
+  const output = execFileSync(python, ["-", ...files], { cwd: repoRoot, input: pythonProse, encoding: "utf8" })
+  const tokens = output.split(/\r?\n/).filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as PythonProse)
+
+  return tokens.flatMap((token) => {
+    return citationOffsets(token.text).map((offset) => {
+      return `${token.file}:${token.line + token.text.slice(0, offset).split("\n").length - 1}`
+    })
+  })
 }
 
 // Show where to look, capped so a large regression still prints a readable failure.
@@ -593,12 +692,8 @@ const issueReferenceFixtures = new Set(["scripts/release-issues_tests.py", "scri
 test("no source, test or script cites an issue or PR number", () => {
   assertNoViolations("issueNumbers")
 
-  const cited = pythonFiles.map(displayPath).filter((file) => !issueReferenceFixtures.has(file)).flatMap((file) => {
-    const text = fs.readFileSync(path.join(repoRoot, file), "utf8")
-    return [...text.matchAll(issueReference)].map((match) => `${file}:${text.slice(0, match.index).split("\n").length}`)
-  })
-
-  assert.deepEqual(cited, [])
+  const pythonSources = pythonFiles.map(displayPath).filter((file) => !issueReferenceFixtures.has(file))
+  assert.deepEqual(pythonCitations(pythonSources), [])
 })
 
 test("the issue-number check reports citations and leaves other uses of # alone", () => {
@@ -616,13 +711,24 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     "// See owner/repo#" + "200000.",
     "// See issue #" + "200000.",
     "test(\"#" + "200000 keeps the header\", () => {})",
-    "// See #" + "200000.",
+    "test(\"regression for #" + "200000\", () => {})",
+    "// See #" + "200000; keep this fallback.",
     "// See https://github.com/owner/repo/issues/" + "12.",
     "// See https://github.com/owner/repo/pull/" + "12.",
     "// See https://gitlab.com/owner/repo/-/merge_requests/" + "12.",
+    "// See ../issues/" + "12.",
     "// See PR: " + "3.",
     "// See issue  " + "12.",
+    "// See issue: #" + "12.",
+    "// See issue no. " + "12.",
+    "// See issue number " + "12.",
+    "// See PR no. " + "3.",
+    "// See PR-" + "3.",
+    "// See GH-" + "123.",
     "// Pull request #" + "7 changed this.",
+    "function empty() { /* See #" + "12. */ }",
+    "/** See #" + "12. */ function documented() {}",
+    "const message = `See ${first} #" + "12 ${second}.`",
   ]
 
   const otherUses = [
@@ -631,20 +737,51 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     "const anchor = \"https://example.com/page-#" + "123\"",
     "const query = \"https://example.com/?q=#" + "123\"",
     "const search = \"https://example.com/page?q=repo#" + "123\"",
+    "const spaced = \"https://example.com/page?q=foo+bar#" + "123\"",
+    "const encoded = \"https://example.com/file%20name#" + "123\"",
+    "const relative = \"/page?q=foo+bar#" + "123\"",
+    "const site = \"www.example.com/page#" + "12\"",
+    "const host = \"example.com/page#" + "12\"",
+    "const repo = \"https://github.com/owner/repo#" + "12\"",
     "const color = \"#" + "123456\"",
     "const translucent = '#" + "12345678'",
+    "const templated = `#" + "123456`",
     "const css = \"body { color: #" + "123456; }\"",
-    "const overlay = \"a { color: #" + "00000000 }\"",
-    "const repo = \"https://github.com/owner/repo#" + "12\"",
+    "const grey = \"body { color: #" + "333; }\"",
+    "const overlay = \"a { background-color: #" + "00000000 }\"",
+    "const counts = { issues" + ": 0, PRs" + ": 0 }",
     "const issues = items.filter((item) => item.kind === \"issue\")",
     "const api = `${base}/repos/${repo}/issues/${number}`",
   ]
 
-  const found = collectViolations("sample.ts", [...citations, ...otherUses].join("\n"))
+  // A comment on the last line sits in the trivia of the end-of-file token.
+  const lastLine = "// See #" + "12 at the end of the file."
+
+  const found = collectViolations("sample.ts", [...citations, ...otherUses, lastLine].join("\n"))
     .filter((violation) => violation.rule === "issueNumbers")
     .map((violation) => violation.line)
 
-  assert.deepEqual(found, citations.map((_, index) => index + 1))
+  const lastLineNumber = citations.length + otherUses.length + 1
+  assert.deepEqual(found, [...citations.map((_, index) => index + 1), lastLineNumber])
+})
+
+test("the Python issue-number check reads comments and strings, and leaves colors and links alone", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+
+  // Built by concatenation, so this file cites nothing itself.
+  const file = path.join(directory, "sample.py")
+  const sample = [
+    "COLOR = \"#" + "123456\"",
+    "# See #" + "12.",
+    "LABEL = \"PR " + "34\"",
+    "LINK = \"https://example.com/page#" + "12\"",
+    "NOTE = \"\"\"First line.",
+    "See issue " + "56.\"\"\"",
+  ]
+  fs.writeFileSync(file, sample.join("\n") + "\n")
+
+  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`])
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

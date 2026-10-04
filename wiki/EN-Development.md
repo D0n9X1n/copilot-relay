@@ -361,7 +361,7 @@ project already uses, so it adds no linter dependency.
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
 | Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
-| Comments, test names and strings cite no issue or PR: no `#N`, `name#N`, `owner/repo#N`, `issue N` or `PR N` (also with a colon or a hash before the number), and no link to an issue or pull request page. A hash inside a URL or an HTML entity is not a citation, nor is a six- or eight-digit color that ends a CSS value or a string; the release scripts' test fixtures, which hold real references as data, are exempt | none (project rule) |
+| Comments and strings, test names included, cite no issue or PR: no `#N`, `name#N` or `owner/repo#N`; no `issue`, `PR`, `pull request` or `GH` followed by a number (after a space, `#`, `:`, `-`, `no.` or `number`); no path to an issue, pull request or merge request page. Code outside comments and strings is not read. Other links, HTML entities, and a 3-, 4-, 6- or 8-digit color that fills a string or follows a CSS color property are not citations. Ordinals take no hash. The release scripts' test fixtures, which hold real references as data, are exempt | none (project rule) |
 
 This brace rule is deliberately stricter than the Google, Airbnb and Microsoft
 guides, which each allow some brace-less one-line bodies. It matches ESLint's
