@@ -120,19 +120,19 @@ test("cache --json prints one row per model and upstream route", async () => {
   )
 })
 
-test("cache --hourly flags the rows below the goal in words", async () => {
+test("cache --hourly prints one row per hour, model and route, ending in its hit rate", async () => {
   const result = await run(["cache", "--hourly", "--goal", "98.37"])
 
   assert.equal(result.code, 0, result.stderr)
   assert.match(result.stdout, /^Prompt-cache hit rate by local hour since .+ local time, goal 98\.37%$/m)
+  assert.match(result.stdout, /^ {2}HOUR +MODEL +ROUTE +REQUESTS {2}HIT RATE$/m)
 
-  // 98.36% is just under the goal and 98.38% just over it.
-  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}claude-opus-5-5 .* 98\.36% {2}below goal$/m)
+  // 98.36% is just under the goal and 98.38% just over it. NO_COLOR is set, so no rate is colored,
+  // and nothing else marks the rows below the goal.
+  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}claude-opus-5-5 .* 98\.36%$/m)
   assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}claude-opus-5\.5 .* 98\.38%$/m)
-  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}gpt-5\.5-2026-04-23 .* 92\.86% {2}below goal$/m)
-
-  // NO_COLOR is set, so nothing is colored.
-  assert.doesNotMatch(result.stdout, /\u001b\[/)
+  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}gpt-5\.5-2026-04-23 .* 92\.86%$/m)
+  assert.doesNotMatch(result.stdout, /\u001b\[|below goal/)
 })
 
 test("cache explains an unusable flag and exits 1", async () => {

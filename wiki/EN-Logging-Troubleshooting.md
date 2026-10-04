@@ -834,38 +834,39 @@ copilot-relay cache --hourly             # hourly trend over the last 24 hours
 copilot-relay cache --daily              # daily trend across the retained logs
 copilot-relay cache --since 6h           # a duration, or an ISO date or time
 copilot-relay cache --model opus         # names containing "opus", ignoring case
-copilot-relay cache --goal 97.5          # flag rows below 97.5% (default 95)
+copilot-relay cache --goal 97.5          # rates below 97.5% in red (default 95)
 copilot-relay cache --json               # an array of rows, for scripts
 ```
 
 ```text
 Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
 
-  MODEL               ROUTE              REQUESTS  UNKNOWN  0-READ   INPUT  CACHE READ  UNCACHED  CACHE WRITE  HIT RATE
-  claude-opus-5-5     /v1/messages              1        0       0  31,654      31,136       518          516    98.36%
-  claude-opus-5.5     /chat/completions         2        1       0  31,431      30,924       507            -    98.38%
-  gpt-5.5-2026-04-23  /responses                1        0       0  19,297      17,920     1,377            -    92.86%  below goal
+  MODEL               ROUTE              REQUESTS  HIT RATE
+  claude-opus-5-5     /v1/messages              1    98.36%
+  claude-opus-5.5     /chat/completions         2    98.38%
+  gpt-5.5-2026-04-23  /responses                1    92.86%
 
-UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 ```
 
 | Column | Meaning |
 | --- | --- |
 | `MODEL`, `ROUTE` | The model the upstream reported, or `unknown` when the entry has none, and the upstream path. One model can be reported under different names on different routes, such as `claude-opus-5.5` and `claude-opus-5-5`. |
 | `REQUESTS` | Upstream calls that answered HTTP 200 and logged `input_tokens`, including calls cut off after their usage arrived and calls whose caching is unknown. |
-| `UNKNOWN` | Calls whose entry carried no `cache_read_input_tokens`. Their caching is unknown, not zero, so they stay out of every token column and `HIT RATE`. |
-| `0-READ` | Calls that reported a cache read of exactly 0. |
-| `INPUT` | Input tokens including cached input, normalized per route as described below. |
-| `CACHE READ` | Input tokens served from the prompt cache. |
-| `UNCACHED` | `INPUT` minus `CACHE READ`. |
-| `CACHE WRITE` | `cache_creation_input_tokens`, or `-` when no call in the row reported it. |
-| `HIT RATE` | `CACHE READ` divided by `INPUT`, truncated to two decimals; `-` when no call in the row has known caching. |
+| `HIT RATE` | Input tokens read from the prompt cache, divided by total input, truncated to two decimals. On a color terminal it is green at or above `--goal` and red below it. It is `-`, in gray, when no call in the row reported its caching. |
 
-A row below `--goal` ends in `below goal`, in red on a color terminal. The words
-are printed either way, so the flag survives `NO_COLOR` and a pipe, and `HIT RATE`
-is truncated rather than rounded, so a row below the goal never prints as the goal.
-`--goal` takes at most two decimals, and a row is flagged exactly when its printed
-`HIT RATE` is below the goal.
+A call whose entry carried no `cache_read_input_tokens` has unknown caching, not
+zero. It counts in `REQUESTS` but not in `HIT RATE`, and the line under the table
+says how many such calls there are; with none, the line is left out. The token
+counts behind the rate (total input, cache read, uncached and cache write), and
+the counts of calls with unknown caching and with a cache read of 0, are in
+`--json`.
+
+The color of `HIT RATE` is the table's only mark of a missed goal. Without color
+(`NO_COLOR`, or output to a pipe), compare the rate with the goal in the title, or
+read `belowGoal` in `--json`. `HIT RATE` is truncated rather than rounded, so a rate
+below the goal never prints as the goal. `--goal` takes at most two decimals, and a
+rate is red exactly when the printed `HIT RATE` is below the goal.
 
 `--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
 the dates in the log file names. When clocks go back, a local hour that happens
@@ -897,9 +898,10 @@ client request (both entries are described under HTTP requests above), so it is
 never read: counting it would count calls twice. Malformed lines, and a last line
 the relay is still writing, are skipped.
 
-`input_tokens` means different things per route, so `INPUT` is normalized:
+`input_tokens` means different things per route, so the total input that `HIT RATE`
+divides by (`totalInputTokens` in `--json`) is normalized:
 
-| Route | `INPUT` |
+| Route | Total input |
 | --- | --- |
 | `/chat/completions`, `/responses` | `input_tokens`, which already includes cached input |
 | `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |

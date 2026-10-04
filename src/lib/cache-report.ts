@@ -41,7 +41,7 @@ export interface CompletionRecord {
 /**
  * One model on one upstream route, for the whole window or for one hour or day of a trend.
  *
- * The token columns and hitRate cover only the calls whose caching is known, so hitRate is always
+ * The token counts and hitRate cover only the calls whose caching is known, so hitRate is always
  * cacheReadTokens / totalInputTokens of the same row.
  */
 export interface CacheRow {
@@ -348,7 +348,7 @@ const addRecord = (totals: CacheTotals, record: CompletionRecord): void => {
   totals.firstCall = Math.min(totals.firstCall, record.timestamp.getTime())
 
   // Without a cache read the call's caching is unknown, not zero. It stays out of every token
-  // column, so that hitRate is always the row's cache read over the row's input.
+  // count, so that hitRate is always the row's cache read over the row's input.
   if (record.cacheReadTokens === undefined) {
     totals.unknownCacheRequests += 1
     return
@@ -675,7 +675,7 @@ interface Column {
 const formatCount = (value: number): string => value.toLocaleString("en-US")
 
 // Truncated rather than rounded, so a row below the goal never prints as the goal itself. The same
-// integer decides belowGoal, so the flag always agrees with the printed rate.
+// integer decides belowGoal, so the rate's color always agrees with the printed rate.
 const formatHitRate = (row: CacheRow): string => {
   if (row.hitRate === null) {
     return "-"
@@ -686,6 +686,8 @@ const formatHitRate = (row: CacheRow): string => {
   return `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
 }
 
+// The rate's color is the table's only mark of a missed goal. Without color, the title states the
+// goal and --json has belowGoal.
 const hitRateTone = (row: CacheRow): TerminalTone => {
   if (row.hitRate === null) {
     return "muted"
@@ -700,20 +702,12 @@ const bucketColumns: Record<CacheView, Array<Column>> = {
   daily: [{ header: "DAY", alignRight: false, cell: (row) => row.bucket ?? "" }],
 }
 
+// The table answers whether the cache works for each model and route: what the row is, how many
+// calls its rate rests on, and the rate. The token counts behind the rate are in --json.
 const dataColumns: Array<Column> = [
   { header: "MODEL", alignRight: false, cell: (row) => row.model },
   { header: "ROUTE", alignRight: false, cell: (row) => row.route },
   { header: "REQUESTS", alignRight: true, cell: (row) => formatCount(row.requests) },
-  { header: "UNKNOWN", alignRight: true, cell: (row) => formatCount(row.unknownCacheRequests) },
-  { header: "0-READ", alignRight: true, cell: (row) => formatCount(row.zeroCacheReadRequests) },
-  { header: "INPUT", alignRight: true, cell: (row) => formatCount(row.totalInputTokens) },
-  { header: "CACHE READ", alignRight: true, cell: (row) => formatCount(row.cacheReadTokens) },
-  { header: "UNCACHED", alignRight: true, cell: (row) => formatCount(row.uncachedInputTokens) },
-  {
-    header: "CACHE WRITE",
-    alignRight: true,
-    cell: (row) => (row.cacheWriteTokens === null ? "-" : formatCount(row.cacheWriteTokens)),
-  },
   { header: "HIT RATE", alignRight: true, cell: formatHitRate, tone: hitRateTone },
 ]
 
@@ -733,10 +727,7 @@ const renderTable = (rows: Array<CacheRow>, view: CacheView, color: boolean): Ar
       return column.tone === undefined ? text : colorText(text, column.tone(row), color)
     })
 
-    // Spelled out as well as colored, so the flag survives NO_COLOR and a pipe.
-    const marker = row.belowGoal ? `  ${colorText("below goal", "bad", color)}` : ""
-
-    return `  ${rendered.join("  ")}${marker}`
+    return `  ${rendered.join("  ")}`
   })
 
   return [`  ${header}`, ...body]
@@ -763,8 +754,10 @@ const describeScope = (options: CacheReportOptions): string => {
   return `${span}${model}`
 }
 
-const unknownNote =
-  "UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE."
+// REQUESTS counts the calls that logged no cache read and HIT RATE leaves them out, so a line under
+// the table says how many there are.
+const unknownNote = (calls: number): string =>
+  `HIT RATE leaves out ${formatCount(calls)} ${calls === 1 ? "call" : "calls"} that logged no cache_read_input_tokens.`
 
 /** The report as text lines. Kept free of IO, so it is tested without a terminal. */
 export const renderCacheReport = (
@@ -786,8 +779,10 @@ export const renderCacheReport = (
     ...renderTable(rows, options.view, color),
   ]
 
-  if (rows.some((row) => row.unknownCacheRequests > 0)) {
-    lines.push("", unknownNote)
+  const unknownCalls = rows.reduce((total, row) => total + row.unknownCacheRequests, 0)
+
+  if (unknownCalls > 0) {
+    lines.push("", unknownNote(unknownCalls))
   }
 
   return lines

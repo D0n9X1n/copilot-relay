@@ -319,9 +319,9 @@ test("a call that logged no cache read is unknown, not a zero read", async () =>
     },
   ])
 
-  assert.ok(renderCacheReport(rows, options).includes(
-    "UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE.",
-  ))
+  // The line under the table counts the calls of unknown caching in every row: one in each here.
+  assert.ok(renderCacheReport(rows, options).includes("HIT RATE leaves out 2 calls that logged no cache_read_input_tokens."))
+  assert.ok(renderCacheReport(rows.slice(0, 1), options).includes("HIT RATE leaves out 1 call that logged no cache_read_input_tokens."))
 })
 
 test("hourly and daily trends bucket by local time", async () => {
@@ -613,7 +613,7 @@ test("--json rows keep one stable key set", async () => {
   ])
 })
 
-test("rows below the goal are flagged in words and, on a color terminal, in red", async () => {
+test("the table shows requests and hit rate per model and route, the rate in red below the goal", async () => {
   await writeLogs({ [dated("2026-10-03")]: entries(chatLine, messagesLine, responsesLine) })
 
   const options: CacheReportOptions = { view: "summary", since: lastDay, goal: 95 }
@@ -622,19 +622,21 @@ test("rows below the goal are flagged in words and, on a color terminal, in red"
   assert.deepEqual(renderCacheReport(rows, options), [
     "Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%",
     "",
-    "  MODEL               ROUTE              REQUESTS  UNKNOWN  0-READ   INPUT  CACHE READ  UNCACHED  CACHE WRITE  HIT RATE",
-    "  claude-opus-5-5     /v1/messages              1        0       0  31,654      31,136       518          516    98.36%",
-    "  claude-opus-5.5     /chat/completions         1        0       0  31,431      30,924       507            -    98.38%",
-    "  gpt-5.5-2026-04-23  /responses                1        0       0  19,297      17,920     1,377            -    92.86%  below goal",
+    "  MODEL               ROUTE              REQUESTS  HIT RATE",
+    "  claude-opus-5-5     /v1/messages              1    98.36%",
+    "  claude-opus-5.5     /chat/completions         1    98.38%",
+    "  gpt-5.5-2026-04-23  /responses                1    92.86%",
   ])
 
+  // On a color terminal the rate below the goal is red, and nothing else marks the row.
   const colored = renderCacheReport(rows, options, true).join("\n")
-  assert.ok(colored.includes("\u001b[31m  92.86%\u001b[0m  \u001b[31mbelow goal\u001b[0m"))
+  assert.ok(colored.includes("\u001b[31m  92.86%\u001b[0m"))
   assert.ok(colored.includes("\u001b[32m  98.38%\u001b[0m"))
+  assert.ok(!colored.includes("below goal"))
 
-  // Against a lower goal, nothing is flagged.
+  // Against a lower goal, no rate is red.
   const relaxed: CacheReportOptions = { ...options, goal: 90 }
-  assert.ok(!renderCacheReport(await buildCacheReport(relaxed), relaxed).join("\n").includes("below goal"))
+  assert.ok(!renderCacheReport(await buildCacheReport(relaxed), relaxed, true).join("\n").includes("\u001b[31m"))
 })
 
 test("a row on the goal is not flagged, and a row just below it never prints as the goal", async () => {
@@ -653,7 +655,7 @@ test("a row on the goal is not flagged, and a row just below it never prints as 
   assert.match(text, /^ {2}at-goal .* 95\.00%$/m)
 
   // 94.999% is truncated to 94.99%, not rounded up to the goal it misses.
-  assert.match(text, /^ {2}under-goal .* 94\.99% {2}below goal$/m)
+  assert.match(text, /^ {2}under-goal .* 94\.99%$/m)
 })
 
 // A goal with decimals is compared exactly. In binary floating point, 95.4 * 10,500 comes out a
@@ -672,7 +674,7 @@ test("a decimal goal flags exactly the rows whose printed rate is below it", asy
 
   assert.deepEqual(rows.map((row) => [row.model, row.belowGoal]), [["at-goal", false], ["under-goal", true]])
   assert.match(text, /^ {2}at-goal .* 95\.40%$/m)
-  assert.match(text, /^ {2}under-goal .* 95\.39% {2}below goal$/m)
+  assert.match(text, /^ {2}under-goal .* 95\.39%$/m)
 })
 
 // A caller that builds the options itself gets the --goal rule too. Rows are compared in whole

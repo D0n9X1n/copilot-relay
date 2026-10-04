@@ -40,7 +40,7 @@ export const cache = defineCommand({
     },
     goal: {
       default: String(defaultGoal),
-      description: "Hit-rate goal in percent, with at most two decimals. Rows below it are flagged.",
+      description: "Hit-rate goal in percent, with at most two decimals. A hit rate below it is shown in red.",
       type: "string",
     },
   },
