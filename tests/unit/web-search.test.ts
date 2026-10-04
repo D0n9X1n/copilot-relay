@@ -638,8 +638,8 @@ const createFinalPayloadFixture = (
 }
 
 test("keeps client tools on the WebSearch final-answer request", () => {
-  // Why: with no tools upstream the model cannot emit tool_use at all, so the
-  // turn ends as an unactioned plan.
+  // Why: with no tools upstream the model cannot emit tool_use at all, so a
+  // turn that needs one of the client's tools ends as an unactioned plan.
   const { mapper, result } = createFinalPayloadFixture()
   const names = result.tools?.map((tool) => mapper.toClaude(tool.function.name))
 

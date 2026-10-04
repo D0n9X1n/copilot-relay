@@ -361,7 +361,7 @@ project already uses, so it adds no linter dependency.
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
 | Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
-| Comments, test names and strings cite no issue or PR: no `#N`, `owner/repo#N`, `issue N` or `PR N`. A URL fragment, color or HTML entity is not a citation; the release scripts' test fixtures, which hold real references as data, are exempt | none (project rule) |
+| Comments, test names and strings cite no issue or PR: no `#N`, `name#N`, `owner/repo#N`, `issue N` or `PR N`. A URL fragment, an HTML entity or a six-digit color is not a citation; the release scripts' test fixtures, which hold real references as data, are exempt | none (project rule) |
 
 This brace rule is deliberately stricter than the Google, Airbnb and Microsoft
 guides, which each allow some brace-less one-line bodies. It matches ESLint's

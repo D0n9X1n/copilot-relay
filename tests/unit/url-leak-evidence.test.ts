@@ -129,9 +129,9 @@ test.beforeEach(async () => {
   setLogLevel("debug")
 })
 
-// Why: the /models preflight is the first upstream call a relay makes, so
-// a credential-bearing base URL reaches the log before anything else. This
-// drives the real preflight -> client -> HTTPError path against a mock 500.
+// Why: the /models preflight calls the Copilot base URL at startup, so a
+// credential-bearing base URL can reach the log there. This drives the real
+// preflight -> client -> HTTPError path against a mock 500.
 test("does not leak the base url path when /models fails upstream", async () => {
   await withMockUpstream(
     (_request, response) => {

@@ -40,10 +40,11 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
-// An issue or PR reference starting a word: a hash and digits, the same after owner/repo, or
-// "issue", "PR" or "pull request" and a number. Inside a URL, color or HTML entity a hash does not
-// start a word, so those are not references.
-const issueReference = /(?<=^|[\s(\[]|\/\/)#\d+\b|(?<=^|[\s(\[])[\w.-]+\/[\w.-]+#\d+\b|(?<=^|[\s(\[]|\/\/)(?:issues?|PR|pull requests?) \d+\b/gim
+// An issue or PR reference: a hash and up to five digits, alone or after a project name or
+// owner/repo, or "issue", "PR" or "pull request" and a number. A hash right after a slash, dot,
+// hyphen, equals sign or ampersand belongs to a URL or an HTML entity, except after a comment's
+// "//", and a six-digit color is too long to be one.
+const issueReference = /(?<![\w/.&-])[\w.-]+(?:\/[\w.-]+)?#\d{1,5}\b|(?:(?<=\/\/)|(?<![\w/.&#=-]))#\d{1,5}\b|(?<!\w)(?:issues?|PR|pull requests?) \d+\b/gi
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -601,11 +602,15 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     "// Fixed in owner/repo#" + "123.",
     "// See PR " + "34.",
     "call() //#" + "34",
+    "test(\"#" + "123 keeps the header\", () => {})",
+    "// See `#" + "123`.",
+    "// Reported upstream (project#" + "75395).",
     "const entity = \"&#" + "39;\"",
     "const link = \"https://example.com/page#" + "12\"",
     "const anchor = \"https://example.com/page-#" + "123\"",
     "const query = \"https://example.com/?q=#" + "123\"",
     "const color = \"#" + "123456\"",
+    "const css = \"body { color: #" + "123456; }\"",
     "const repo = \"https://github.com/owner/repo#" + "12\"",
   ].join("\n")
 
@@ -613,7 +618,7 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     .filter((violation) => violation.rule === "issueNumbers")
     .map((violation) => violation.line)
 
-  assert.deepEqual(found, [1, 2, 3, 4, 5, 6])
+  assert.deepEqual(found, [1, 2, 3, 4, 5, 6, 7, 8, 9])
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

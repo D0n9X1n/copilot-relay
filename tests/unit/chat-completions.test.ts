@@ -357,11 +357,9 @@ test("treats destroyed HTTP/2 sessions as retryable fetch errors", () => {
 })
 
 // Why: Copilot's Claude-family models reject a conversation that does not end
-// with a user message. The bridge-managed WebSearch path used to append its
-// retrieval context as a trailing system message, which reached upstream and
-// 400'd. The same class of bug has been reported elsewhere as a fixup
-// applied on one code path and missed on another, so the guard lives at the
-// shared chat layer rather than in a single caller.
+// with a user message. A path that appends context as a trailing system message
+// would reach upstream and get HTTP 400, so the guard lives at the shared chat
+// layer rather than in a single caller.
 test("appends a user turn when the payload ends on a non-user role", async () => {
   const mock = await startMockCopilot()
   try {

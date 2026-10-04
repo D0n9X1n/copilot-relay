@@ -393,10 +393,9 @@ test("exits 0 only when running and healthy", () => {
   assert.equal(resolveExitCode({ ...runningStatus, deep: { ms: 8, ok: true } }), 0)
 })
 
-// Why: status reported the version of the CLI being invoked, never
-// asking the daemon. After `npm i -g copilot-relay@X` without a restart it
-// confidently printed the new version while the old process kept serving —
-// wrong in exactly the situation you would run it to check.
+// Why: after `npm i -g copilot-relay@X` without a restart, the CLI is the new
+// version while the old process keeps serving. status must report the daemon's
+// version, which is what you run it to check.
 test("reports the daemon's version, not the CLI's", () => {
   const out = render({ ...runningStatus, daemonVersion: "0.2.6", version: "0.3.0" })
 
@@ -493,9 +492,9 @@ test("reads a pre-v0.3.1 pid file without a version", async () => {
   await fs.rm(paths.pidPath, { force: true })
 })
 
-// Why: status paired a pid found by scanning every process on the machine
-// with an address taken from config, so it reported a relay "running" on a port
-// nothing was listening on. Detection must be scoped to the port asked about.
+// Why: a pid found by scanning every process on the machine, paired with an
+// address taken from config, can describe a relay "running" on a port nothing
+// listens on. Detection must be scoped to the port asked about.
 test("ignores a pid file describing a different port", async () => {
   await fs.mkdir(paths.appDir, { recursive: true })
   await fs.writeFile(
@@ -526,10 +525,9 @@ test("returns nothing when no pid file and nothing is listening", async () => {
   )
 })
 
-// Why: status collapsed the whole resolved config into
-// "(logLevel=info, thinkEffort=max)" — 2 of 11 keys. The other nine were
-// invisible in text and in --json, so the command you run when something looks
-// wrong could not answer "which model is this actually routing to?".
+// Why: status is the command you run when something looks wrong, so it shows
+// every resolved config key, in text and in --json, and answers "which model is
+// this actually routing to?".
 test("renders every resolved config key", () => {
   const out = render(runningStatus)
 
@@ -868,7 +866,7 @@ test("status command output never contains the configured apiKey", async (t) => 
   const key = "STATUS_COMMAND_KEY_SENTINEL"
   await fs.mkdir(paths.appDir, { recursive: true })
   // Why: the key split by a character a terminal does not show, here U+200B and
-  // the C1 control U+0085 in the model settings, passed the final scrub unchanged.
+  // the C1 control U+0085 in the model settings, must not pass the final scrub.
   await fs.writeFile(paths.configPath, [
     "port: 4199",
     `apiKey: ${key}`,

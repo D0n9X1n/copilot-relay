@@ -2018,12 +2018,11 @@ test("unsupported Claude API routes return structured 500", async () => {
   assert.equal(body.error?.message, "Unsupported Claude API route")
 })
 
-// Why: Claude Code advertises WebSearch alongside
-// its own tools, and the relay's recompose pass used to send `tools: undefined`,
-// so the model could not emit a tool_use block and every search turn ended as an
-// unactioned plan. The recompose request must keep the client's tools, drop only
-// the search tool, and end on a user message so Copilot's Claude-family models
-// accept it.
+// Why: Claude Code advertises WebSearch alongside its own tools. Without them on
+// the recompose pass the model cannot emit a tool_use block, so a search turn
+// that needs one ends as an unactioned plan. The recompose request must keep the
+// client's tools, drop only the search tool, and end on a user message so
+// Copilot's Claude-family models accept it.
 test("POST /v1/messages keeps client tools usable after a WebSearch turn", async () => {
   const mock = await startMockCopilot()
   try {
