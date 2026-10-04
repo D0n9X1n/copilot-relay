@@ -361,6 +361,7 @@ project already uses, so it adds no linter dependency.
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
 | Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
+| Comments, test names and strings cite no issue or PR number; the release scripts' test fixtures, which hold real ones as data, are exempt | none (project rule) |
 
 This brace rule is deliberately stricter than the Google, Airbnb and Microsoft
 guides, which each allow some brace-less one-line bodies. It matches ESLint's
@@ -381,9 +382,8 @@ Reviewed rather than enforced:
 - Comments state how the code works and why — an invariant, ordering constraint or
   non-obvious reason — not what the next line already says. Fix stale comments
   instead of adding more.
-- Code states how it works today, never its history. Comments, test names and
-  strings never cite an issue or PR number or tell how a bug was found; that
-  history belongs in commit messages, PR descriptions and the wiki.
+- Code states how it works today, never its history: no story of how a bug was
+  found. That history belongs in commit messages, PR descriptions and the wiki.
 - Prefer guard clauses to deep nesting.
 - Tests separate arrange, act and assert with blank lines; fixtures do not hide
   the behavior under test.

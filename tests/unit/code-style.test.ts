@@ -21,6 +21,7 @@ type Rule =
   | "nestedTernaries"
   | "strictEquality"
   | "declarations"
+  | "issueNumbers"
 
 interface Violation {
   rule: Rule
@@ -38,6 +39,10 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 // A run of blank lines may also open the file, with no line break before it.
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
+
+// An issue or PR number: "#" and digits. A "#" after a word character, "&", "/" or another "#"
+// is something else, such as an HTML entity or a URL fragment.
+const issueReference = /(?<![\w&/#])#\d+\b/g
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -292,6 +297,11 @@ const collectViolations = (file: string, text: string): Violation[] => {
     if (!insideLiteral) {
       record("multipleBlankLines", run.index + run[0].length)
     }
+  }
+
+  // Comments, test names and strings alike: code states how it works and cites no issue or PR.
+  for (const match of text.matchAll(issueReference)) {
+    record("issueNumbers", match.index)
   }
 
   return violations
@@ -566,6 +576,35 @@ test("equality is strict except for an intentional == null", () => {
 
 test("declarations use const or let with one variable each", () => {
   assertNoViolations("declarations")
+})
+
+// The release scripts read issue references as data, so their tests hold real ones as fixtures.
+const issueReferenceFixtures = new Set(["scripts/release-issues_tests.py", "scripts/release-notes_tests.py"])
+
+test("no source, test or script cites an issue or PR number", () => {
+  assertNoViolations("issueNumbers")
+
+  const cited = pythonFiles.map(displayPath).filter((file) => !issueReferenceFixtures.has(file)).flatMap((file) => {
+    const text = fs.readFileSync(path.join(repoRoot, file), "utf8")
+    return [...text.matchAll(issueReference)].map((match) => `${file}:${text.slice(0, match.index).split("\n").length}`)
+  })
+
+  assert.deepEqual(cited, [])
+})
+
+test("the issue-number check reports citations and leaves other uses of # alone", () => {
+  const sample = [
+    "call() // See #" + "12.",
+    "test(\"keeps the header (#" + "12)\", () => {})",
+    "const entity = \"&#" + "39;\"",
+    "const link = \"https://example.com/page#" + "12\"",
+  ].join("\n")
+
+  const found = collectViolations("sample.ts", sample)
+    .filter((violation) => violation.rule === "issueNumbers")
+    .map((violation) => violation.line)
+
+  assert.deepEqual(found, [1, 2])
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {
