@@ -1,6 +1,7 @@
 // Loaded before tsx and source modules in every test process. A private tmpdir
 // also contains existing per-suite mkdtemp homes, including ones not removed by
 // their suite. Never infer cleanup ownership from a mutable environment value.
+import { Console } from "node:console"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -42,5 +43,18 @@ if (isMainThread) {
     } else {
       process.env.CONSOLA_LEVEL = inheritedLevel
     }
+  }
+
+  // A test file's stdout carries the result frames its runner reads back. Plain text there can make
+  // Node's runner join two reads out of order and lose the file's results. So in a test file the
+  // runner started, the relay logger and the console write to stderr, which the runner reports as
+  // diagnostics. A process a test starts itself keeps its stdout: that test reads it as data.
+  const isRunnerTestFile =
+    process.env.NODE_TEST_CONTEXT === "child-v8" && /\.test\.[cm]?[jt]s$/.test(process.argv[1] ?? "")
+
+  if (isRunnerTestFile) {
+    const { default: consola } = await import("consola")
+    consola.options.stdout = process.stderr
+    globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr })
   }
 }

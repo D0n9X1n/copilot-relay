@@ -1312,6 +1312,27 @@ runs `windows-latest`, so setting only `HOME` leaves the redirect silently
 ineffective there. Without this the suite writes into the developer's live
 `~/.copilot-relay/logs` on every run.
 
+### Test stdout
+
+A test file's stdout carries the result frames its runner reads back, so nothing
+else may write there. Plain text before a frame can make Node's runner join two
+reads out of order and lose the file's results. In a test file the runner started,
+recognized by `NODE_TEST_CONTEXT=child-v8` and the file as `argv[1]`, the bootstrap
+sends the relay logger and the console to stderr, which the runner reports as
+diagnostics. A process a test starts itself keeps its stdout, because the test
+reads it as data.
+
+### Test log reads
+
+The logger files an entry under the local date when it is logged, so an entry
+logged just before midnight stays in that day's file while `getLogPath()` already
+names the next day's. A test that looks for an entry it logged reads with
+`readLogs()` from `tests/fixtures/logs.ts`, which reads every dated log file,
+oldest first. A test of the log writer itself acts on today's file by its path,
+so it pins the clock with `t.mock.timers`. It mocks only `Date`: the writer reads
+the clock only to stamp entries and schedule cleanup, and its idle-close timer
+stays real.
+
 ### Mocked upstream
 
 Integration tests run the Hono app against a local mocked Copilot HTTP server.

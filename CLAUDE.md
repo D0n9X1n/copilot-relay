@@ -124,6 +124,10 @@ npm run build
 
 The package test commands preload `scripts/test-bootstrap.mjs` before `tsx`, isolating each process's home and temporary directory. Any suite that selects its own log/config fixture **must redirect the home directory before importing** `src/` — `paths.ts` resolves from `os.homedir()` at import time, so use a dynamic `import()` after setting it.
 
+A test file's stdout carries its runner's result frames, and plain text there can make Node's runner lose the file's results. So in a test file the runner started, the bootstrap sends the relay logger and the console to stderr; a process a test starts keeps its stdout.
+
+A test that looks for an entry it logged reads with `readLogs()` from `tests/fixtures/logs.ts`, not `getLogPath()`: an entry logged just before local midnight stays in that day's file. A test of the log writer itself names today's file, so it pins the clock with `t.mock.timers`, mocking only `Date`.
+
 Set **both `HOME` and `USERPROFILE`**. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
 
 Integration tests mock upstream Copilot. They must never call the real service.

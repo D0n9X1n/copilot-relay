@@ -4,6 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import { readLogs } from "../fixtures/logs"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-capture-"))
@@ -410,7 +412,6 @@ for (const native of [false, true]) {
     const { createServer } = await import("../../src/server")
     const { withRecordedTransport } = await import("../../src/lib/request-trace")
     const { setLogLevel } = await import("../../src/lib/log")
-    const { getLogPath } = await import("../../src/lib/paths")
     const token = `ECHOED_PRIVATE_BEARER_${native ? "native" : "chat"}`
 
     // Write the log file at info level while keeping the console silent.
@@ -433,7 +434,7 @@ for (const native of [false, true]) {
     await response.text()
     await flushLogs()
 
-    const logs = await fs.readFile(getLogPath(), "utf8")
+    const logs = await readLogs()
     assert.equal(logs.includes(token), false, "An upstream echo disclosed the configured bearer in ordinary logs")
     assert.match(logs, /redacted/)
   })

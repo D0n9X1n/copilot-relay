@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import { readLogs } from "../fixtures/logs"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-upstream-error-log-"))
@@ -14,7 +16,6 @@ process.env.CONSOLA_LEVEL = "0"
 
 const { createChatCompletions } = await import("../../src/copilot/chat")
 const { flushLogs, withoutConsoleLogging } = await import("../../src/lib/log")
-const { getLogPath } = await import("../../src/lib/paths")
 
 test.after(async () => {
   await flushLogs()
@@ -27,7 +28,7 @@ const readErrorEntry = async (): Promise<string> => {
   // File writes are fire-and-forget so logging never blocks a request.
   for (let attempt = 0; attempt < 50; attempt += 1) {
     await flushLogs()
-    const content = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const content = await readLogs()
     const entry = content.split("\n").find((line) => line.includes("Failed to create chat completions"))
     if (entry) {
       return entry

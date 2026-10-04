@@ -113,7 +113,7 @@ for (const suite of ["chat-completions", "auth-recovery", "model-limits", "web-s
       const after = test.after;
       test.after = (hook, ...options) => after(async (...args) => {
         const { log, flushLogs } = await import(${JSON.stringify(new URL("../../src/lib/log.ts", import.meta.url).href)});
-        const { paths, getLogPath } = await import(${JSON.stringify(new URL("../../src/lib/paths.ts", import.meta.url).href)});
+        const { paths } = await import(${JSON.stringify(new URL("../../src/lib/paths.ts", import.meta.url).href)});
         await flushLogs();
         const home = os.homedir();
         const mkdir = fs.mkdir, open = fs.open, rm = fs.rm;
@@ -126,7 +126,8 @@ for (const suite of ["chat-completions", "auth-recovery", "model-limits", "web-s
         };
         fs.open = async (...args) => {
           const handle = await open(...args);
-          if (args[0] === getLogPath()) {
+          // The log file is named for the day its entry was logged, which may no longer be today.
+          if (path.dirname(String(args[0])) === paths.logsDir) {
             const close = handle.close.bind(handle);
             handle.close = async () => { await close(); closed = true };
           }

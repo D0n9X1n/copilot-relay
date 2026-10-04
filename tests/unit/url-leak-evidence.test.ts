@@ -6,6 +6,8 @@ import os from "node:os"
 import path from "node:path"
 import { inspect } from "node:util"
 
+import { readLogs } from "../fixtures/logs"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-leak-"))
@@ -15,7 +17,7 @@ process.env.USERPROFILE = tempHome
 const consola = (await import("consola")).default
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
-const { getLogPath, paths } = await import("../../src/lib/paths")
+const { paths } = await import("../../src/lib/paths")
 const { createChatCompletions } = await import("../../src/copilot/chat")
 const { validateUpstream } = await import("../../src/lib/preflight")
 
@@ -42,7 +44,7 @@ consola.setReporters([
 const readActiveLog = async (): Promise<string> => {
   // File writes are fire-and-forget so logging never blocks a request.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const content = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const content = await readLogs()
     if (content) {
       return content
     }
