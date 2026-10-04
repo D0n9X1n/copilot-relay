@@ -83,8 +83,9 @@ test("preserves explicit client context and output overrides", async () => {
   })
 })
 
-// Through the relay, auto mode's server checks do not reach Claude Code, and it shows a
-// notice. The writer seeds CLAUDE_CODE_AUTO_MODE_SERVER=0, but only when the key is absent.
+// Through the relay, auto mode's server checks do not reach Claude Code, which then shows a
+// notice unless CLAUDE_CODE_AUTO_MODE_SERVER=0. The writer seeds that value, but only when the key
+// is absent.
 test("seeds CLAUDE_CODE_AUTO_MODE_SERVER=0 only when it is absent", async () => {
   const input = (configPath: string) => ({
     baseUrl: "http://127.0.0.1:4142",

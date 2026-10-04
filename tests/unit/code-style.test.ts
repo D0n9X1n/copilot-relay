@@ -40,9 +40,10 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
-// An issue or PR number: "#" and digits. A "#" after a word character, "&", "/" or another "#"
-// is something else, such as an HTML entity or a URL fragment.
-const issueReference = /(?<![\w&/#])#\d+\b/g
+// An issue or PR reference starting a word: a hash and digits, the same after owner/repo, or
+// "issue", "PR" or "pull request" and a number. Inside a URL, color or HTML entity a hash does not
+// start a word, so those are not references.
+const issueReference = /(?<=^|[\s(\[]|\/\/)#\d+\b|(?<=^|[\s(\[])[\w.-]+\/[\w.-]+#\d+\b|(?<=^|[\s(\[]|\/\/)(?:issues?|PR|pull requests?) \d+\b/gim
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -596,15 +597,23 @@ test("the issue-number check reports citations and leaves other uses of # alone"
   const sample = [
     "call() // See #" + "12.",
     "test(\"keeps the header (#" + "12)\", () => {})",
+    "// See issue " + "123.",
+    "// Fixed in owner/repo#" + "123.",
+    "// See PR " + "34.",
+    "call() //#" + "34",
     "const entity = \"&#" + "39;\"",
     "const link = \"https://example.com/page#" + "12\"",
+    "const anchor = \"https://example.com/page-#" + "123\"",
+    "const query = \"https://example.com/?q=#" + "123\"",
+    "const color = \"#" + "123456\"",
+    "const repo = \"https://github.com/owner/repo#" + "12\"",
   ].join("\n")
 
   const found = collectViolations("sample.ts", sample)
     .filter((violation) => violation.rule === "issueNumbers")
     .map((violation) => violation.line)
 
-  assert.deepEqual(found, [1, 2])
+  assert.deepEqual(found, [1, 2, 3, 4, 5, 6])
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

@@ -41,9 +41,9 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
           ["--import", "tsx", "--input-type=module", "--eval", script],
           {
             cwd,
-            // Each child compiles the relay through tsx with its disk cache disabled. In full
-            // local runs on Windows the first case took longer than the others and sometimes
-            // reached a 10-second limit. A child that hangs still fails, after 60 seconds.
+            // Each child compiles the relay through tsx with its disk cache disabled, which can
+            // take more than 10 seconds on Windows. A child that hangs still fails, after 60
+            // seconds.
             timeout: 60_000,
             env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
           },

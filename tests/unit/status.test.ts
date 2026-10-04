@@ -356,8 +356,8 @@ test("shows the dated log path", () => {
   assert.doesNotMatch(out, /logs\/copilot-relay\.log/)
 })
 
-// Why: the exit code is the contract every scripted caller depends on.
-// It exited 0 while printing "health FAILED", so anything gating on it treated
+// Why: the exit code is the contract every scripted caller depends on. It must
+// not be 0 while status prints "health FAILED", or anything gating on it treats
 // an unreachable relay as fine.
 test("exits non-zero when the health probe fails", () => {
   assert.equal(

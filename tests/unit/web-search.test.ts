@@ -593,9 +593,9 @@ test("times out hung Claude WebSearch upstream calls", async () => {
   }
 })
 
-// The final-answer pass keeps the client's tools: with `tools: undefined`
-// the model cannot emit a tool_use block, and every web-search turn ends with
-// a stated plan and no action.
+// The final-answer pass keeps the client's other tools. Without them the model
+// cannot emit a tool_use block, so a turn that needs one ends with a stated
+// plan and no action.
 const searchExecution: WebSearchExecutionResult = {
   id: "msg_final",
   inputTokens: 10,

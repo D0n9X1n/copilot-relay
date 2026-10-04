@@ -125,8 +125,8 @@ test("a direct failure while a proxy variable is set logs the upstreamProxy hint
   assert.match(hints[0], /set upstreamProxy: env in .+config\.yaml/)
 })
 
-// Why: the global fetch ignores the relay's dispatcher, so sign-in through it fails for a user
-// behind a proxy. Device login, the token poll, the Copilot token exchange and
+// Why: the global fetch ignores the relay's dispatcher, and with it upstreamProxy, so sign-in
+// through it would not follow the relay's proxy setting. Device login, the token poll, the Copilot token exchange and
 // the user lookup must all go through the dispatcher every Copilot call uses.
 test("GitHub sign-in uses the shared upstream dispatcher", async (t) => {
   t.mock.method(globalThis, "fetch", () => {

@@ -831,8 +831,8 @@ function translateToolOutput(
   return stringifyToolOutput(content)
 }
 
-// caozhiyuan/copilot-api issues 361 and 362 report Copilot rejecting, in tool output, an image
-// detail other than "low" or "high", and an empty text part. A Claude image block has no detail,
+// Copilot is reported to reject, in tool output, an image detail other than "low" or "high", and
+// an empty text part. A Claude image block has no detail,
 // so the item carries none, as in the shape those models read; an empty text part is left out.
 function translateToolOutputPart(part: ContentPart): Array<ResponsesToolOutputPart> {
   if (part.type === "image_url") {

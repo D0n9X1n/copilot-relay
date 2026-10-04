@@ -7,8 +7,9 @@ import { isLoggingSuppressed, log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
 // Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
-// default and the next request would pay for a new TCP and TLS handshake. Copilot reuses a
-// connection idle for 60 s and closes one idle for 120 s; 50 s stays under the reused gap.
+// default and the next request would pay for a new TCP and TLS handshake. Copilot reused a
+// connection idle for 60 s, and one idle for 120 s was already closed; 50 s stays under the reused
+// gap.
 // Every dispatcher kind below takes these options, so a proxy changes none of it.
 const connectionOptions: Agent.Options = {
   allowH2: false,
