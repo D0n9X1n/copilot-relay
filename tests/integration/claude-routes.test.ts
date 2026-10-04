@@ -1876,17 +1876,19 @@ test("POST /v1/messages reports only a typed prompt to Copilot as the person's",
       ["/chat/completions", "agent"],
     ])
 
-    // The relay's model probe marks itself in-process; the same body from a client is the person's.
-    const probeRequest = () => new Request("http://localhost/v1/messages", {
-      body: JSON.stringify({ max_tokens: 16, model: "opus", messages: [{ role: "user", content: "Reply with OK only." }] }),
+    // The model probe marks itself in-process, and the status --deep probe is known by its prompt.
+    // The model probe's body sent by a client is the person's.
+    const probeRequest = (content: string) => new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({ max_tokens: 16, model: "opus", messages: [{ role: "user", content }] }),
       headers: { "content-type": "application/json" },
       method: "POST",
     })
     const beforeProbe = mock.requests.length
-    await (await app.fetch(probeRequest(), { relayProbe: true })).text()
-    await (await app.fetch(probeRequest())).text()
+    await (await app.fetch(probeRequest("Reply with OK only."), { relayProbe: true })).text()
+    await (await app.fetch(probeRequest("Reply with the single word: ok"))).text()
+    await (await app.fetch(probeRequest("Reply with OK only."))).text()
     const probed = mock.requests.slice(beforeProbe).filter((request) => request.path !== "/models")
-    assert.deepEqual(probed.map((request) => request.initiator), ["agent", "user"])
+    assert.deepEqual(probed.map((request) => request.initiator), ["agent", "agent", "user"])
   } finally {
     await mock.close()
   }

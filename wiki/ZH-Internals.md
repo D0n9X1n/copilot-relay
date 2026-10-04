@@ -218,7 +218,8 @@ relay 自己的请求是 `agent`：
 - WebSearch 最终轮；
 - 原生 WebSearch 后续轮；
 - 启动 preflight；
-- `models --deep` 的探测请求，它们在进程内标记自己，客户端无法这样做。
+- `models --deep` 的探测请求，它们在进程内标记自己，客户端无法这样做；
+- `status --deep` 的探测请求，它经由 HTTP 到达 relay，靠固定的 prompt 识别。
 
 重试沿用被替换那次尝试的值。只有这个 header 会变：上游正文完全相同，因此 prompt 缓存
 前缀不受影响。`Model request` 日志行以 `initiator=` 记录该值。

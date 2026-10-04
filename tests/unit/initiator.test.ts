@@ -224,6 +224,26 @@ const cases: Array<{ name: string; messages: Array<unknown>; expected: "agent" |
     expected: "agent",
   },
   {
+    name: "a recovery after a safety classifier stopped a response",
+    messages: [...history, { role: "user", content: "Your response above was stopped by a safety classifier. Continue the task." }],
+    expected: "agent",
+  },
+  {
+    name: "activity in the bound conversation",
+    messages: [...history, { role: "user", content: "Activity in the bound conversation: a reaction was added. This is not a new message." }],
+    expected: "agent",
+  },
+  {
+    name: "a background observer's report",
+    messages: [...history, { role: "user", content: "Your background observer (build) sent a report: the build passed." }],
+    expected: "agent",
+  },
+  {
+    name: "the status --deep probe",
+    messages: [{ role: "user", content: "Reply with the single word: ok" }],
+    expected: "agent",
+  },
+  {
     name: "a message from another Claude session",
     messages: [...history, { role: "user", content: "Another Claude session sent a message:\n<cross-session-message>Check the build.</cross-session-message>" }],
     expected: "agent",

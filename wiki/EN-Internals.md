@@ -253,7 +253,9 @@ The relay's own requests are `agent`:
 - the WebSearch final pass;
 - the native WebSearch follow-up;
 - the startup preflight;
-- the `models --deep` probes, which mark themselves in-process, where no client can.
+- the `models --deep` probes, which mark themselves in-process, where no client can;
+- the `status --deep` probe, which reaches the relay over HTTP and is known by its fixed
+  prompt.
 
 Retries reuse the value of the attempt they replace. Only the header changes: the
 upstream body is the same either way, so prompt-cache prefixes are untouched. The

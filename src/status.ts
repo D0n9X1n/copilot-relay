@@ -5,6 +5,7 @@ import { Agent, fetch as undiciFetch, type RequestInit } from "undici"
 import type { AppConfig } from "~/lib/app-config"
 
 import { readAppConfig } from "~/lib/app-config"
+import { statusProbePrompt } from "~/claude/initiator"
 import { getRelayBaseUrl } from "~/lib/address"
 import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
@@ -460,7 +461,7 @@ export const checkDeep = async (
       {
         body: JSON.stringify({
           max_tokens: 16,
-          messages: [{ content: "Reply with the single word: ok", role: "user" }],
+          messages: [{ content: statusProbePrompt, role: "user" }],
           model,
         }),
         headers: {

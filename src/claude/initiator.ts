@@ -66,6 +66,10 @@ const claudeCodeContext = [
 ]
 const claudeCodeContextPatterns = [/^\S+ hook additional context:/]
 
+// The prompt `status --deep` sends. It reaches the relay over HTTP from another process, so its
+// text is the only mark it carries.
+export const statusProbePrompt = "Reply with the single word: ok"
+
 type JsonRecord = Record<string, unknown>
 
 const isRecord = (value: unknown): value is JsonRecord =>
@@ -143,6 +147,10 @@ const blockOrigin = (block: JsonRecord): "agent" | "user" | undefined => {
   const text = withoutReminders(block.text)
   if (text === "" || matchesAny(text, claudeCodeContext, claudeCodeContextPatterns)) {
     return undefined
+  }
+
+  if (text === statusProbePrompt) {
+    return "agent"
   }
 
   if (startsWithAny(text, personDeliveries)) {
