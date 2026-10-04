@@ -40,11 +40,18 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 
-// An issue or PR reference: a hash and up to five digits, alone or after a project name or
-// owner/repo, or "issue", "PR" or "pull request" and a number. A hash right after a slash, dot,
-// hyphen, equals sign or ampersand belongs to a URL or an HTML entity, except after a comment's
-// "//", and a six-digit color is too long to be one.
-const issueReference = /(?<![\w/.&-])[\w.-]+(?:\/[\w.-]+)?#\d{1,5}\b|(?:(?<=\/\/)|(?<![\w/.&#=-]))#\d{1,5}\b|(?<!\w)(?:issues?|PR|pull requests?) \d+\b/gi
+// An issue or PR citation, in one of four forms:
+// - a link to a tracker's issue, pull request or merge request page;
+// - "issue", "PR" or "pull request", then a space, colon or hash, then a number;
+// - a hash and a number after a project name or owner/repo, outside a URL;
+// - a hash and a number alone, unless the hash follows a slash, dot, hyphen, equals sign, question
+//   mark, ampersand or hash, which puts it in a URL or an HTML entity (a comment's "//" does not),
+//   or the number is a six- or eight-digit color that ends a CSS value or a string.
+const trackerLink = String.raw`\/(?:issues|pulls?|merge_requests)\/\d+\b`
+const labelledReference = String.raw`(?<!\w)(?:issues?|PRs?|pull[ -]requests?)[ \t:#]+\d+\b`
+const namedReference = String.raw`(?<![\w/.&=?#-])[\w.-]+(?:\/[\w.-]+)?#\d+\b`
+const bareReference = String.raw`(?:(?<=\/\/)|(?<![\w/.&=?#-]))#(?!(?:\d{6}|\d{8})(?:[;"']|[ \t]*\}))\d+\b`
+const issueReference = new RegExp([trackerLink, labelledReference, namedReference, bareReference].join("|"), "gi")
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -595,7 +602,8 @@ test("no source, test or script cites an issue or PR number", () => {
 })
 
 test("the issue-number check reports citations and leaves other uses of # alone", () => {
-  const sample = [
+  // Built by concatenation, so this file cites nothing itself.
+  const citations = [
     "call() // See #" + "12.",
     "test(\"keeps the header (#" + "12)\", () => {})",
     "// See issue " + "123.",
@@ -605,20 +613,38 @@ test("the issue-number check reports citations and leaves other uses of # alone"
     "test(\"#" + "123 keeps the header\", () => {})",
     "// See `#" + "123`.",
     "// Reported upstream (project#" + "75395).",
+    "// See owner/repo#" + "200000.",
+    "// See issue #" + "200000.",
+    "test(\"#" + "200000 keeps the header\", () => {})",
+    "// See #" + "200000.",
+    "// See https://github.com/owner/repo/issues/" + "12.",
+    "// See https://github.com/owner/repo/pull/" + "12.",
+    "// See https://gitlab.com/owner/repo/-/merge_requests/" + "12.",
+    "// See PR: " + "3.",
+    "// See issue  " + "12.",
+    "// Pull request #" + "7 changed this.",
+  ]
+
+  const otherUses = [
     "const entity = \"&#" + "39;\"",
     "const link = \"https://example.com/page#" + "12\"",
     "const anchor = \"https://example.com/page-#" + "123\"",
     "const query = \"https://example.com/?q=#" + "123\"",
+    "const search = \"https://example.com/page?q=repo#" + "123\"",
     "const color = \"#" + "123456\"",
+    "const translucent = '#" + "12345678'",
     "const css = \"body { color: #" + "123456; }\"",
+    "const overlay = \"a { color: #" + "00000000 }\"",
     "const repo = \"https://github.com/owner/repo#" + "12\"",
-  ].join("\n")
+    "const issues = items.filter((item) => item.kind === \"issue\")",
+    "const api = `${base}/repos/${repo}/issues/${number}`",
+  ]
 
-  const found = collectViolations("sample.ts", sample)
+  const found = collectViolations("sample.ts", [...citations, ...otherUses].join("\n"))
     .filter((violation) => violation.rule === "issueNumbers")
     .map((violation) => violation.line)
 
-  assert.deepEqual(found, [1, 2, 3, 4, 5, 6, 7, 8, 9])
+  assert.deepEqual(found, citations.map((_, index) => index + 1))
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

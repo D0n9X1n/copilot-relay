@@ -310,7 +310,7 @@ linter 依赖。
 | 使用 `===` 和 `!==`；只有要同时匹配 `null` 和 `undefined` 时才写 `== null` | `eqeqeq`，`null: "ignore"` |
 | 使用 `const` 或 `let`，每个声明只声明一个变量；循环头除外 | `no-var`、`one-var: "never"` |
 | Python：不写单行复合语句（包括 `case` 子句），不用 `;` 分隔语句 | PEP 8（pycodestyle E701–E704） |
-| 注释、测试名和字符串不引用 issue 或 PR：不写 `#N`、`name#N`、`owner/repo#N`、`issue N` 或 `PR N`。URL 片段、HTML 实体和六位颜色值不算引用；发布脚本的测试 fixture 把真实引用当作数据，不受此限 | 无（项目规则） |
+| 注释、测试名和字符串不引用 issue 或 PR：不写 `#N`、`name#N`、`owner/repo#N`、`issue N` 或 `PR N`（数字前用冒号或 `#` 也算），也不链接 issue 或 pull request 页面。URL 或 HTML 实体里的 `#` 不算引用，结束 CSS 值或字符串的六位或八位颜色值也不算；发布脚本的测试 fixture 把真实引用当作数据，不受此限 | 无（项目规则） |
 
 这条花括号规则有意比 Google、Airbnb 和 Microsoft 的指南更严格 —— 它们都允许某些不加
 花括号的单行主体。它与 ESLint `curly` 的默认值以及
