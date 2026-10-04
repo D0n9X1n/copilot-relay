@@ -151,7 +151,7 @@ try {
       import { syncBuiltinESMExports } from "node:module";
       import { Agent } from "undici";
       // The relay sends Copilot and GitHub calls through its own undici dispatcher, not the
-      // global fetch (#153). Its GitHub user lookup goes to the mock upstream; any other
+      // global fetch. Its GitHub user lookup goes to the mock upstream; any other
       // request off this machine is left to the socket guard below, which blocks it.
       const dispatch = Agent.prototype.dispatch;
       Agent.prototype.dispatch = function (options, handler) {

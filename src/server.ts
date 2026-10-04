@@ -263,7 +263,7 @@ export const createServer = (config: ProxyConfig) => {
 
   // `version` is the build answering this request, which is what makes it
   // worth serving here: `status` already probes /healthz, so reporting the
-  // daemon's own version costs no extra round trip and no new route. See #43.
+  // daemon's own version costs no extra round trip and no new route.
   // Still static — process-local data, never an upstream call.
   app.get("/healthz", (c) => c.json({ ok: true, version: appVersion }))
 

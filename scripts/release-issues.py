@@ -105,7 +105,7 @@ def terminate(process):
             pass
         except PermissionError as refused:
             # macOS reports EPERM, not ESRCH, for a group whose leader has exited but is not yet
-            # reaped, and can report it before poll() sees the leader exit (#169). Only a leader
+            # reaped, and can report it before poll() sees the leader exit. Only a leader
             # still running after a short wait, which cannot be signalled, is a failure; it raises
             # the original EPERM, not the wait's timeout.
             if not exits_within(process, EPERM_EXIT_GRACE_SECONDS):
@@ -357,7 +357,7 @@ def closing_references(message, repo):
     """Keywords nominate candidates; Refs, mentions, and PR numbers prove nothing."""
     result = set()
     for match in CLOSING.finditer(message):
-        # One keyword can introduce a list: "fixes #1, #2 and #3" nominates all three.
+        # One keyword can introduce a list of references, and every reference in the list is nominated.
         while match:
             result.add((repository(match["repo"] or match["url_repo"] or repo),
                         number(int(match["number"] or match["url_number"]))))

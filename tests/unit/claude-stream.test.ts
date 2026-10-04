@@ -37,7 +37,7 @@ test("exposes the 1M GPT identity in Claude stream metadata", () => {
   )
 })
 
-// #114: a zero-parameter tool streams its id and name with empty arguments.
+// A zero-parameter tool streams its id and name with empty arguments.
 const toolStream = (calls: Array<{ name: string; argumentDeltas: string[] }>) => {
   const state: ClaudeStreamState = {
     messageStartSent: false,

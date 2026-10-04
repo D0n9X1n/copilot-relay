@@ -389,7 +389,7 @@ test("flushLogs waits for queued writes without making logging synchronous", asy
 })
 
 // Why: two overlapping flushLogs calls each waited for the close the other had just queued, so
-// neither resolved and the loop starved the process (#141 review). A child process keeps a
+// neither resolved and the loop starved the process. A child process keeps a
 // regression from hanging this suite.
 test("concurrent flushLogs calls both resolve", async () => {
   const home = await fs.mkdtemp(path.join(tempHome, "concurrent-flush-"))
@@ -417,7 +417,7 @@ test("concurrent flushLogs calls both resolve", async () => {
 })
 
 // Why: each entry used to run its own directory checks, open, stat, chmod, append and close, and a
-// burst of them could finish out of order (#141). A burst now shares one open and keeps call order.
+// burst of them could finish out of order. A burst now shares one open and keeps call order.
 test("a burst of entries is appended in call order through one open", async (t) => {
   const open = t.mock.method(fs, "open")
 
@@ -526,7 +526,7 @@ test("a loosened active log mode is restored before the next append", {
 
 // Why: lstat of the log path follows links in its parent path. A logs folder replaced by a link to
 // the folder the open file was moved to leads back to the same file, so the directories are
-// checked before the handle is reused (#141 review).
+// checked before the handle is reused.
 test("an entry is not appended through a logs folder replaced by a link", async () => {
   log.info("before move")
   await readActiveLog()
@@ -561,7 +561,7 @@ test("a loosened logs folder mode is restored before the next append", {
 })
 
 // Why: Windows cannot rename or move a folder while a file in it is open, and the kept-open handle
-// locked the logs folder for as long as the relay ran (#141 review).
+// locked the logs folder for as long as the relay ran.
 test("the log file is closed after a second without entries", async (t) => {
   const open = t.mock.method(fs, "open")
   log.info("before idle")

@@ -7,8 +7,9 @@ import { isLoggingSuppressed, log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
 
 // Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
-// default and the next request would pay for a new TCP and TLS handshake. In #141 Copilot reused a
-// connection idle for 60 s and had closed one idle for 120 s; 50 s stays under the reused gap.
+// default and the next request would pay for a new TCP and TLS handshake. Copilot reused a
+// connection idle for 60 s, and one idle for 120 s was already closed; 50 s stays under the reused
+// gap.
 // Every dispatcher kind below takes these options, so a proxy changes none of it.
 const connectionOptions: Agent.Options = {
   allowH2: false,
@@ -31,7 +32,7 @@ export class InvalidProxyEnvironmentError extends Error {
 /**
  * Builds the dispatcher for one resolved upstreamProxy value.
  *
- * Empty connects directly, as every release before #153 did. "env" hands HTTPS_PROXY, HTTP_PROXY
+ * Empty connects directly. "env" hands HTTPS_PROXY, HTTP_PROXY
  * and NO_PROXY, in upper or lower case, to EnvHttpProxyAgent. Anything else is a proxy URL that
  * normalizeUpstreamProxy has already validated.
  */

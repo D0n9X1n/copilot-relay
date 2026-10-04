@@ -186,7 +186,7 @@ test("preserves but ignores a leftover configVersion line from v0.2.3", async ()
   assert.match(await readConfigFile(), /^configVersion: 2$/m)
 })
 
-// Why (#159): an install from before apiKey existed gains the key empty, so an
+// Why: an install from before apiKey existed gains the key empty, so an
 // upgrade leaves the relay exactly as open to local clients as it was.
 test("materializes an empty apiKey for an install that predates it", async () => {
   await writeConfigFile("port: 5000\n")

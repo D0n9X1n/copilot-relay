@@ -297,7 +297,7 @@ const writeConfig = async (t: TestContext, lines: Array<string>): Promise<void> 
   t.after(() => fs.rm(paths.configPath, { force: true }))
 }
 
-// Why (#153): behind a proxy the usage request must go through upstreamProxy, like every other
+// Why: behind a proxy the usage request must go through upstreamProxy, like every other
 // GitHub call. run() checks that nothing under the home directory changed: reading the config
 // neither completes nor rewrites it, and no log file appears.
 test("usage sends its request through upstreamProxy and still writes no file", async (t) => {
@@ -320,7 +320,7 @@ test("usage sends its request through upstreamProxy and still writes no file", a
   }])
 })
 
-// Why (#153): usage reads config.yaml without writing it, so an invalid file stops it with a line
+// Why: usage reads config.yaml without writing it, so an invalid file stops it with a line
 // that names the file and repeats nothing from it: the file can hold a proxy password.
 test("usage with an invalid config.yaml exits 1 before any request and prints nothing from the file", async (t) => {
   await storeToken()

@@ -49,7 +49,7 @@ export function mapOpenAIStopReasonToClaude(
 
 /**
  * Upstream sends an empty `arguments` string for tools that take no
- * parameters (#114). Blank text is the empty object; anything else must be a
+ * parameters. Blank text is the empty object; anything else must be a
  * JSON object, and a failure names the tool rather than surfacing a bare
  * SyntaxError. Argument text is never echoed: it can carry user data.
  */

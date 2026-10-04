@@ -30,7 +30,7 @@ const { runtimeState } = await import("../../src/lib/state")
 const { createClaudeWebSearchExecution } = await import("../../src/claude/web-search")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
-// Stands in for GitHub. The relay sends GitHub calls through its upstream dispatcher (#153), so
+// Stands in for GitHub. The relay sends GitHub calls through its upstream dispatcher, so
 // this is a local server behind redirectGitHubTo rather than a replaced global fetch. It answers
 // the user lookup itself and hands each token exchange to the running test's handler. Any other
 // GitHub call, device authorization included, is recorded and fails that test.

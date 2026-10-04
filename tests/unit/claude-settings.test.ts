@@ -83,8 +83,9 @@ test("preserves explicit client context and output overrides", async () => {
   })
 })
 
-// #162: through the relay, auto mode's server checks did not reach Claude Code, and it showed a
-// notice. The writer seeds CLAUDE_CODE_AUTO_MODE_SERVER=0, but only when the key is absent.
+// Through the relay, auto mode's server checks do not reach Claude Code, which then shows a
+// notice unless CLAUDE_CODE_AUTO_MODE_SERVER=0. The writer seeds that value, but only when the key
+// is absent.
 test("seeds CLAUDE_CODE_AUTO_MODE_SERVER=0 only when it is absent", async () => {
   const input = (configPath: string) => ({
     baseUrl: "http://127.0.0.1:4142",
@@ -542,7 +543,7 @@ test("is byte-idempotent after the first settings update", async () => {
   })
 })
 
-// Why (#159): with an apiKey set, the relay refuses Claude Code's dummy token,
+// Why: with an apiKey set, the relay refuses Claude Code's dummy token,
 // so managed setup writes the key as ANTHROPIC_AUTH_TOKEN, replacing the dummy
 // value or an older key.
 test("writes the relay apiKey as Claude Code's auth token", async () => {
@@ -590,7 +591,7 @@ test("leaves an existing auth token unchanged when no apiKey is set", async () =
   })
 })
 
-// Why (#159 review): the writer kept an existing file's mode, so a 0644 or 0640 settings file that
+// Why: the writer kept an existing file's mode, so a 0644 or 0640 settings file that
 // gained the relay's apiKey stayed readable by other local users.
 for (const mode of [0o644, 0o640]) {
   test(`publishes settings holding the apiKey owner-only over an existing ${mode.toString(8).padStart(4, "0")} file`, {

@@ -247,7 +247,7 @@ const ensureLogDirectory = async (): Promise<Array<Stats>> => {
 interface LogEntry {
   filePath: string
   // Already rendered: wrapFileLog renders each entry once, so the console and the file carry the
-  // same redacted text. Inspecting again here would reopen the gap #47 closed.
+  // same redacted text. Rendering it again here could let the two diverge.
   line: string
 }
 
@@ -471,7 +471,7 @@ const cleanupLogsIfDue = async (): Promise<void> => {
  * Each argument is rendered exactly once and scrubbed once, and the identical
  * array of strings goes to both the file and the console. Scrubbing only on the
  * way to disk would leave the original object on the console - the screen a
- * user screenshots into an issue - so the two sinks must not diverge. See #47.
+ * user screenshots into an issue - so the two sinks must not diverge.
  *
  * Rendering is skipped only when neither sink would emit, so the cost matches
  * the old behavior at info level. The console gate is read from consola rather

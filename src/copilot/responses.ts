@@ -817,7 +817,7 @@ function translateContentPart(part: ContentPart): ResponsesInputContentPart {
   }
 }
 
-// In #150, gpt-6-astra, gpt-5.4 and gpt-5.5 read a tool's image as an input_image item inside
+// gpt-6-astra, gpt-5.4 and gpt-5.5 read a tool's image as an input_image item inside
 // function_call_output.output. stringifyToolOutput drops the image, or sends the whole result as
 // JSON text when it has no text part. A result without images keeps that plain string, so an
 // existing history sends the same bytes and keeps its prompt-cache prefix.
@@ -831,9 +831,9 @@ function translateToolOutput(
   return stringifyToolOutput(content)
 }
 
-// caozhiyuan/copilot-api issues 361 and 362 report Copilot rejecting, in tool output, an image
-// detail other than "low" or "high", and an empty text part. A Claude image block has no detail,
-// so the item carries none, as in the shape #150 verified; an empty text part is left out.
+// Copilot is reported to reject, in tool output, an image detail other than "low" or "high", and
+// an empty text part. A Claude image block has no detail,
+// so the item carries none, as in the shape those models read; an empty text part is left out.
 function translateToolOutputPart(part: ContentPart): Array<ResponsesToolOutputPart> {
   if (part.type === "image_url") {
     return [{ type: "input_image", image_url: part.image_url.url }]

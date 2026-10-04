@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 
 import * as ts from "typescript"
 
-// Why (#48): the integration suite runs the real server, which logs, and
+// Why: the integration suite runs the real server, which logs, and
 // node --test frames its child-to-runner messages over that same stdout, so an
 // application write can abort the run mid-file. consola latches its level when
 // src/ first loads, so CONSOLA_LEVEL must be set first. A static import hoists

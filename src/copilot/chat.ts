@@ -117,11 +117,9 @@ const buildRequestPayload = (
 //
 // A trailing assistant message is the prefill case and keeps its dedicated
 // handling below. Any other non-user trailing role (system, developer, tool)
-// gets a short user turn appended. This guard is deliberately at the shared
-// /chat/completions layer rather than in one caller: the same bug has been
-// reported elsewhere as a fixup applied on one code path and missed on another
-// (openclaw#75395), and a payload that reaches here ending on a non-user role is
-// rejected no matter which caller built it.
+// gets a short user turn appended. The guard sits at the shared /chat/completions
+// layer rather than in one caller, because Copilot rejects a payload ending on a
+// non-user role no matter which caller built it.
 const normalizeFinalAssistantPrefill = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload => {
@@ -190,12 +188,13 @@ const toContentParts = (content: Message["content"]): Array<ContentPart> => {
 // Replaces the content of a tool result that held only images.
 const toolImageNote = "Image output follows in the next user message."
 
-// Copilot accepts image_url parts in a tool message, but in #150 only claude-opus-5.5 read them
-// there: gpt-5-mini answered that no image arrived, and gemini-3.8-flash named colors it never saw.
+// Copilot accepts image_url parts in a tool message, but of the models checked only claude-opus-5.5
+// read them there: gpt-5-mini answered that no image arrived, and gemini-3.8-flash named colors it
+// never saw.
 // Both read the same image when it follows in a user message. So a tool message keeps its text, and
 // its images move to the user message that follows its run of tool messages, each call's images led
-// by a label naming the tool call. Claude models keep the original shape: they read it, and the #147
-// cache marks rely on it.
+// by a label naming the tool call. Claude models keep the original shape: they read it, and the chat
+// route's cache marks rely on it.
 export const moveToolImagesToUserMessages = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload => {

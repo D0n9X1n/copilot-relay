@@ -49,7 +49,7 @@ async function fixture(
     handle(request, response, requests.length)
   })
 
-  // GitHub, answered locally. The relay sends GitHub calls through its upstream dispatcher (#153),
+  // GitHub, answered locally. The relay sends GitHub calls through its upstream dispatcher,
   // so the child redirects them here rather than replacing the global fetch. A GitHub call other
   // than the user lookup, the token exchange and, with deviceAuth, sign-in is recorded and fails
   // the run.
@@ -288,7 +288,7 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
 })
 
-// Why (#159 review): models registered the apiKey but printed through the URL scrub alone, so a key
+// Why: models registered the apiKey but printed through the URL scrub alone, so a key
 // in gptModel, a catalog ID, a display name or a search reached the console. A display name was
 // also shortened to 80 characters before any scrub, which could cut a key in two.
 test("models never prints the relay apiKey from gptModel, a catalog ID, a display name or a search", async (t) => {
@@ -327,7 +327,7 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
   assert.doesNotMatch(searched.output, /relay-fixture/)
 })
 
-// Why (#159 re-review): printable removed ANSI, C0 and DEL only, so a key split by U+200B or by a
+// Why: printable removed ANSI, C0 and DEL only, so a key split by U+200B or by a
 // C1 control such as U+0085 passed it and the final scrub unchanged, readable on screen and
 // recoverable from copied output.
 for (const [name, mark] of [["U+200B", "\u200b"], ["U+0085", "\u0085"]] as const) {
@@ -639,7 +639,7 @@ for (const endpoint of ["/chat/completions", "/responses"]) {
   })
 }
 
-// Copilot also signals no effort support by leaving reasoning_effort out of supports (#137).
+// Copilot also signals no effort support by leaving reasoning_effort out of supports.
 for (const supports of [{ reasoning_effort: false }, { reasoning_effort: [] }, { streaming: true, tool_calls: true }]) {
   test(`deep CLI omits effort for non-reasoning supports ${JSON.stringify(supports)}`, async (t) => {
     const catalog = {
@@ -679,7 +679,7 @@ for (const supports of [{ reasoning_effort: false }, { reasoning_effort: [] }, {
   })
 }
 
-// gpt-6.1-sol advertises none but rejects it with HTTP 400 invalid_request_body (#126), and the
+// gpt-6.1-sol advertises none but rejects it with HTTP 400 invalid_request_body, and the
 // relay never sends none on its own, so the implicit probe uses the lowest real tier instead.
 test("deep CLI probes the lowest advertised tier above none, and none only when it is the sole tier", async (t) => {
   const catalog = {
@@ -732,7 +732,7 @@ test("deep CLI probes the lowest advertised tier above none, and none only when 
 })
 
 // The catalog's gpt-5.6-sol-fast is the priority service tier of gpt-5.6-sol: its /responses
-// reply reports model gpt-5.6-sol with service_tier priority (#126). Only that exact pair is
+// reply reports model gpt-5.6-sol with service_tier priority. Only that exact pair is
 // accepted; a -fast suffix is not stripped in general.
 test("deep CLI accepts gpt-5.6-sol reported for gpt-5.6-sol-fast and no other -fast pair", async (t) => {
   const catalog = {
@@ -855,7 +855,7 @@ for (const logLevel of ["info", "debug"] as const) {
     // Only debug logging records a capture, so only it can offer an offline replay.
     if (logLevel === "debug") {
       // The details wait at most 1 s for the capture to settle, so on slow storage they print
-      // capture=pending (#132). The command still exits only after the capture is written, so
+      // capture=pending. The command still exits only after the capture is written, so
       // the capture replays once the command returns, whichever state the details showed.
       const capture = result.stdout.match(/capture=([a-z]+)/)?.[1]
       assert.ok(capture === "complete" || capture === "pending", `unexpected capture=${capture}`)
@@ -922,7 +922,7 @@ test("a model ID matching a refreshed token is never printed", async (t) => {
   assert.doesNotMatch(result.output, /new-private-token-sentinel/)
 })
 
-// Why (#159 review): deep probes checked a model ID only against the Copilot token, so a catalog ID
+// Why: deep probes checked a model ID only against the Copilot token, so a catalog ID
 // holding the relay's apiKey was probed, sent upstream as a model name, and printed in the model
 // column and in --details.
 test("models deep never probes or prints a model ID or reply model holding the relay apiKey", async (t) => {

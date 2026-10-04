@@ -54,7 +54,7 @@ const get = async (baseUrl: string): Promise<void> => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // undici 7.28 held each request on a reused idle connection for an unref'd setTimeout(0). On
-// Windows that lasts until the next system timer tick unless other I/O wakes the event loop (#141).
+// Windows that lasts until the next system timer tick unless other I/O wakes the event loop.
 test("a request on a reused idle upstream connection does not wait for a zero-delay timer", async (t) => {
   const upstream = await countingUpstream()
   t.after(() => upstream.close())
@@ -78,7 +78,7 @@ test("a request on a reused idle upstream connection does not wait for a zero-de
 })
 
 // Copilot sends no Keep-Alive hint, so undici's 4 s default closed every upstream connection idle
-// for longer, and the next request paid for a new TCP and TLS handshake (#141).
+// for longer, and the next request paid for a new TCP and TLS handshake.
 test("an upstream connection idle for longer than undici's 4 s default is reused", async (t) => {
   const upstream = await countingUpstream()
   t.after(() => upstream.close())

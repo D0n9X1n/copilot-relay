@@ -313,7 +313,7 @@ for (const endpoint of ["/chat/completions", "/responses", "/v1/messages"] as co
 }
 
 // Both protocols must omit the configured default for a no-effort model and say so. Copilot also
-// signals no effort support by leaving reasoning_effort out of supports (#137).
+// signals no effort support by leaving reasoning_effort out of supports.
 const noEffortPreflightCases = [
   { id: "plain-chat", endpoint: "/chat/completions", claudeUpstreamApi: undefined, supports: { reasoning_effort: false } },
   { id: "claude-plain", endpoint: "/v1/messages", claudeUpstreamApi: "auto", supports: { reasoning_effort: false } },

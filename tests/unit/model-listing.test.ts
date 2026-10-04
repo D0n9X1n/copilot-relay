@@ -9,7 +9,7 @@ import {
   type ListedModel,
 } from "../../src/lib/model-listing"
 
-// The relevant part of a live catalog: the display names come from Copilot (#139).
+// The relevant part of a live catalog: the display names come from Copilot.
 const catalog: ListedModel[] = [
   { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
   { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },

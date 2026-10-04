@@ -1,4 +1,4 @@
-// Mechanical rules of the repository code style (#127), enforced here so they cannot drift.
+// Mechanical rules of the repository code style, enforced here so they cannot drift.
 // Readability that needs judgment (grouping steps with blank lines, naming, why-comments)
 // is reviewed instead. "Code style" in wiki/EN-Development.md lists every rule and its precedent.
 import assert from "node:assert/strict"
@@ -21,6 +21,7 @@ type Rule =
   | "nestedTernaries"
   | "strictEquality"
   | "declarations"
+  | "issueNumbers"
 
 interface Violation {
   rule: Rule
@@ -38,6 +39,105 @@ const python = process.env.PYTHON || (process.platform === "win32" ? "python" : 
 // A run of blank lines may also open the file, with no line break before it.
 const blankLine = /\n[ \t]*\r?\n/
 const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
+
+// Issue and PR citations are searched for in prose only: comments and the text of string and
+// template literals. Code around them is not read, so an object key named issues that holds a count
+// is not a citation. A template literal is read whole, with the code in each ${} field replaced by
+// x's, so a link continues across a field and a field's code never reads as prose; a string inside a
+// field is read on its own. In prose, a citation is:
+// - a hash and a number, alone or after a project name or owner/repo;
+// - "issue", "PR", "pull request" or "GH", then a space, "#", ":", "-", "no." or "number", then a
+//   number;
+// - a path to an issue, pull request or merge request page.
+// Ordinals take no hash ("attempt 2"). Every other link is blanked first, so its path, query and
+// fragment cannot read as a citation. An owner name has no dot, so a domain and a path do not read
+// as owner/repo. A hash right after a letter, a digit or URL punctuation, other than a comment's //,
+// belongs to a word, a relative link or an HTML entity. A hash and 3, 4, 6 or 8 digits is a color,
+// not a citation, when it fills a string literal or follows a CSS color property.
+const linkPattern = /\b(?:[a-z][\w+.-]*:\/\/|www\.)[^\s"'`<>()]+/gi
+const trackerPath = /\/(?:issues|pulls?|merge_requests)\/\d+\b/
+const labelledReference = /(?<!\w)(?:issues?|PRs?|pull[ -]requests?|GH)(?:(?:[ \t]*(?:[:#-]|no\.|number))+[ \t]*|[ \t]+)\d+\b/
+const namedReference = /(?<![\w/.&=?#+%-])(?:[\w-]+\/[\w.-]+|[\w.-]+)#\d+\b/
+const bareReference = /(?:(?<=\/\/)|(?<![\w/.&=?#+%-]))#\d+\b/
+const citationPatterns = [trackerPath, labelledReference, namedReference, bareReference]
+const issueReference = new RegExp(citationPatterns.map((pattern) => pattern.source).join("|"), "gi")
+const colorValue = /^#(?:\d{3}|\d{4}|\d{6}|\d{8})$/
+const colorProperty = /(?:color|background|fill|stroke):[ \t]*$/
+const literalOpening = /^[a-z]*["'`]+$/i
+const literalClosing = /^["'`]+$/
+
+// A hash and 3, 4, 6 or 8 digits that fills a string literal or follows a CSS color property.
+const isColor = (prose: string, index: number, reference: string) => {
+  if (!colorValue.test(reference)) {
+    return false
+  }
+
+  const before = prose.slice(0, index)
+  const after = prose.slice(index + reference.length)
+  return (literalOpening.test(before) && literalClosing.test(after)) || colorProperty.test(before)
+}
+
+// Offsets of the citations in one comment or literal.
+const citationOffsets = (prose: string) => {
+  const searched = prose.replace(linkPattern, (link) => trackerPath.test(link) ? link : " ".repeat(link.length))
+
+  return [...searched.matchAll(issueReference)]
+    .filter((match) => !isColor(prose, match.index, match[0]))
+    .map((match) => match.index)
+}
+
+// The text of a template literal, with the code in each ${} field replaced by x's. Line breaks stay,
+// so an offset in the result is an offset in the source.
+const maskedTemplate = (sourceFile: ts.SourceFile, template: ts.TemplateExpression) => {
+  const text = sourceFile.text
+  const pieces = [text.slice(template.getStart(sourceFile), template.head.getEnd())]
+  let fieldStart = template.head.getEnd()
+
+  for (const span of template.templateSpans) {
+    const fieldEnd = span.literal.getStart(sourceFile)
+    pieces.push(text.slice(fieldStart, fieldEnd).replace(/[^\r\n]/g, "x"))
+    pieces.push(text.slice(fieldEnd, span.literal.getEnd()))
+    fieldStart = span.literal.getEnd()
+  }
+
+  return pieces.join("")
+}
+
+// Comments and the text of string and template literals, each with the offset it starts at. A
+// template literal with fields is one segment, masked by maskedTemplate. Comments sit in the trivia
+// before a token, so the full start of every token is read for leading and trailing comments. JSDoc
+// nodes are skipped: their text is read as a leading comment of the node they document.
+const proseSegments = (sourceFile: ts.SourceFile) => {
+  const segments = new Map<number, string>()
+
+  const visit = (node: ts.Node) => {
+    const commentRanges = [
+      ...(ts.getLeadingCommentRanges(sourceFile.text, node.getFullStart()) ?? []),
+      ...(ts.getTrailingCommentRanges(sourceFile.text, node.getFullStart()) ?? []),
+    ]
+
+    for (const range of commentRanges) {
+      segments.set(range.pos, sourceFile.text.slice(range.pos, range.end))
+    }
+
+    if (ts.isStringLiteralLike(node)) {
+      segments.set(node.getStart(sourceFile), node.getText(sourceFile))
+    }
+
+    if (ts.isTemplateExpression(node)) {
+      segments.set(node.getStart(sourceFile), maskedTemplate(sourceFile, node))
+    }
+
+    for (const child of node.getChildren(sourceFile)) {
+      if (!ts.isJSDoc(child)) {
+        visit(child)
+      }
+    }
+  }
+
+  visit(sourceFile)
+  return [...segments].sort(([first], [second]) => first - second)
+}
 
 const displayPath = (file: string) => path.relative(repoRoot, file).split(path.sep).join("/")
 
@@ -294,6 +394,13 @@ const collectViolations = (file: string, text: string): Violation[] => {
     }
   }
 
+  // Comments, test names and strings alike: code states how it works and cites no issue or PR.
+  for (const [start, prose] of proseSegments(sourceFile)) {
+    for (const offset of citationOffsets(prose)) {
+      record("issueNumbers", start + offset)
+    }
+  }
+
   return violations
 }
 
@@ -387,6 +494,110 @@ for path in sys.argv[1:]:
 const runPythonChecker = (files: string[]): string[] => {
   const output = execFileSync(python, ["-", ...files], { cwd: repoRoot, input: pythonChecker, encoding: "utf8" })
   return output.split(/\r?\n/).filter((line) => line.trim() !== "")
+}
+
+// Python comments and strings, one JSON line each: the file, the line it starts on and its text.
+// From Python 3.12 the tokenizer splits an f-string into its text and the tokens of each {} field,
+// and from 3.14 a t-string too. Such a string is read whole, from its prefix to its closing quote,
+// with each field's code replaced by x's, as a template literal is; strings and comments inside a
+// field are read on their own. Field boundaries come from the tokenizer, so quotes, brackets and
+// format specs inside a field cannot move them. Up to Python 3.11 an f-string is one STRING token
+// whose fields are not split out, so its text is not read. Token columns count characters, so spans
+// are sliced from the decoded source.
+const pythonProse = String.raw`
+import io
+import json
+import sys
+import tokenize
+
+starts = {getattr(tokenize, name) for name in ("FSTRING_START", "TSTRING_START") if hasattr(tokenize, name)}
+ends = {getattr(tokenize, name) for name in ("FSTRING_END", "TSTRING_END") if hasattr(tokenize, name)}
+prefix_letters = "rRbBfFtTuU"
+
+
+def emit(path, line, text):
+    print(json.dumps({"file": path, "line": line, "text": text}))
+
+
+def is_formatted(text):
+    prefix = text[:len(text) - len(text.lstrip(prefix_letters))]
+    return any(letter in prefix for letter in "fFtT")
+
+
+def offset(line_starts, position):
+    return line_starts[position[0] - 1] + position[1]
+
+
+def new_field(begin):
+    return {"kind": "field", "spec": False, "depth": 0, "begin": begin}
+
+
+def close_field(frames, end):
+    field = frames.pop()
+    if frames[-1]["kind"] == "string":
+        frames[-1]["fields"].append((field["begin"], end))
+
+
+def masked(code, begin, end, fields):
+    characters = list(code[begin:end])
+    for field_begin, field_end in fields:
+        for position in range(field_begin - begin, field_end - begin):
+            if characters[position] not in "\r\n":
+                characters[position] = "x"
+    return "".join(characters)
+
+
+for path in sys.argv[1:]:
+    with open(path, "rb") as handle:
+        data = handle.read()
+    encoding = tokenize.detect_encoding(io.BytesIO(data).readline)[0]
+    code = data.decode(encoding)
+    line_starts = [0]
+    for line in code.split("\n"):
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    frames = []
+    for token in tokenize.tokenize(io.BytesIO(data).readline):
+        top = frames[-1] if frames else {"kind": ""}
+        if token.type in starts:
+            frames.append({"kind": "string", "line": token.start[0], "begin": offset(line_starts, token.start), "fields": []})
+        elif token.type in ends:
+            frame = frames.pop()
+            emit(path, frame["line"], masked(code, frame["begin"], offset(line_starts, token.end), frame["fields"]))
+        elif token.type == tokenize.OP and top["kind"] == "string" and token.string == "{":
+            frames.append(new_field(offset(line_starts, token.end)))
+        elif token.type == tokenize.OP and top["kind"] == "field":
+            if token.string == "{" and top["spec"]:
+                frames.append(new_field(offset(line_starts, token.end)))
+            elif token.string in ("(", "[", "{"):
+                top["depth"] += 1
+            elif token.string in (")", "]", "}") and top["depth"] > 0:
+                top["depth"] -= 1
+            elif token.string == "}":
+                close_field(frames, offset(line_starts, token.start))
+            elif token.string == ":" and top["depth"] == 0:
+                top["spec"] = True
+        elif token.type == tokenize.COMMENT:
+            emit(path, token.start[0], token.string)
+        elif token.type == tokenize.STRING and not is_formatted(token.string):
+            emit(path, token.start[0], token.string)
+`
+
+interface PythonProse {
+  file: string
+  line: number
+  text: string
+}
+
+// Every citation in the given Python files, as file:line.
+const pythonCitations = (files: string[]) => {
+  const output = execFileSync(python, ["-", ...files], { cwd: repoRoot, input: pythonProse, encoding: "utf8" })
+  const tokens = output.split(/\r?\n/).filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as PythonProse)
+
+  return tokens.flatMap((token) => {
+    return citationOffsets(token.text).map((offset) => {
+      return `${token.file}:${token.line + token.text.slice(0, offset).split("\n").length - 1}`
+    })
+  })
 }
 
 // Show where to look, capped so a large regression still prints a readable failure.
@@ -566,6 +777,134 @@ test("equality is strict except for an intentional == null", () => {
 
 test("declarations use const or let with one variable each", () => {
   assertNoViolations("declarations")
+})
+
+// The release scripts read issue references as data, so their tests hold real ones as fixtures.
+const issueReferenceFixtures = new Set(["scripts/release-issues_tests.py", "scripts/release-notes_tests.py"])
+
+test("no source, test or script cites an issue or PR number", () => {
+  assertNoViolations("issueNumbers")
+
+  const pythonSources = pythonFiles.map(displayPath).filter((file) => !issueReferenceFixtures.has(file))
+  assert.deepEqual(pythonCitations(pythonSources), [])
+})
+
+test("the issue-number check reports citations and leaves other uses of # alone", () => {
+  // Built by concatenation, so this file cites nothing itself.
+  const citations = [
+    "call() // See #" + "12.",
+    "test(\"keeps the header (#" + "12)\", () => {})",
+    "// See issue " + "123.",
+    "// Fixed in owner/repo#" + "123.",
+    "// See PR " + "34.",
+    "call() //#" + "34",
+    "test(\"#" + "123 keeps the header\", () => {})",
+    "// See `#" + "123`.",
+    "// Reported upstream (project#" + "75395).",
+    "// See owner/repo#" + "200000.",
+    "// See issue #" + "200000.",
+    "test(\"#" + "200000 keeps the header\", () => {})",
+    "test(\"regression for #" + "200000\", () => {})",
+    "// See #" + "200000; keep this fallback.",
+    "// See https://github.com/owner/repo/issues/" + "12.",
+    "// See https://github.com/owner/repo/pull/" + "12.",
+    "// See https://gitlab.com/owner/repo/-/merge_requests/" + "12.",
+    "// See ../issues/" + "12.",
+    "// See PR: " + "3.",
+    "// See issue  " + "12.",
+    "// See issue: #" + "12.",
+    "// See issue no. " + "12.",
+    "// See issue number " + "12.",
+    "// See PR no. " + "3.",
+    "// See PR-" + "3.",
+    "// See GH-" + "123.",
+    "// Pull request #" + "7 changed this.",
+    "function empty() { /* See #" + "12. */ }",
+    "/** See #" + "12. */ function documented() {}",
+    "const message = `See ${first} #" + "12 ${second}.`",
+  ]
+
+  const otherUses = [
+    "const entity = \"&#" + "39;\"",
+    "const link = \"https://example.com/page#" + "12\"",
+    "const anchor = \"https://example.com/page-#" + "123\"",
+    "const query = \"https://example.com/?q=#" + "123\"",
+    "const search = \"https://example.com/page?q=repo#" + "123\"",
+    "const spaced = \"https://example.com/page?q=foo+bar#" + "123\"",
+    "const encoded = \"https://example.com/file%20name#" + "123\"",
+    "const relative = \"/page?q=foo+bar#" + "123\"",
+    "const site = \"www.example.com/page#" + "12\"",
+    "const host = \"example.com/page#" + "12\"",
+    "const repo = \"https://github.com/owner/repo#" + "12\"",
+    "const page = `https://example.com/page?q=${query}#" + "123`",
+    "const color = \"#" + "123456\"",
+    "const translucent = '#" + "12345678'",
+    "const templated = `#" + "123456`",
+    "const css = \"body { color: #" + "123456; }\"",
+    "const grey = \"body { color: #" + "333; }\"",
+    "const overlay = \"a { background-color: #" + "00000000 }\"",
+    "const counts = { issues" + ": 0, PRs" + ": 0 }",
+    "const issues = items.filter((item) => item.kind === \"issue\")",
+    "const api = `${base}/repos/${repo}/issues/${number}`",
+  ]
+
+  // A comment on the last line sits in the trivia of the end-of-file token.
+  const lastLine = "// See #" + "12 at the end of the file."
+
+  const found = collectViolations("sample.ts", [...citations, ...otherUses, lastLine].join("\n"))
+    .filter((violation) => violation.rule === "issueNumbers")
+    .map((violation) => violation.line)
+
+  const lastLineNumber = citations.length + otherUses.length + 1
+  assert.deepEqual(found, [...citations.map((_, index) => index + 1), lastLineNumber])
+})
+
+test("the Python issue-number check reads comments and strings, and leaves colors and links alone", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+
+  // Built by concatenation, so this file cites nothing itself.
+  const file = path.join(directory, "sample.py")
+  const sample = [
+    "COLOR = \"#" + "123456\"",
+    "# See #" + "12.",
+    "LABEL = \"PR " + "34\"",
+    "LINK = \"https://example.com/page#" + "12\"",
+    "NOTE = \"\"\"First line.",
+    "See issue " + "56.\"\"\"",
+  ]
+  fs.writeFileSync(file, sample.join("\n") + "\n")
+
+  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`])
+})
+
+test("the Python issue-number check reads f-strings without their fields' code, from Python 3.12", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+
+  // Built by concatenation, so this file cites nothing itself.
+  const file = path.join(directory, "sample.py")
+  const sample = [
+    "SUMMARY = f\"Resolved {issues" + ":3} issues.\"",
+    "URL = f\"https://example.com/page?q={query}#" + "123\"",
+    "CITED = f\"{name} cites #" + "78.\"",
+    "QUOTED = f\"\"\"{'''can't'''} See #" + "12 {'''won't'''}\"\"\"",
+    "FILL = f\"{name:[>{width}} {issues" + ":3}\"",
+    "FILLED = f\"[{name:[>8} See #" + "12]\"",
+    "NESTED = f\"Result: {'See #" + "12' if fallback else name}\"",
+    "INNER = f\"{f'see #" + "12'}\"",
+    "MULTI = f\"\"\"{",
+    "    value  # see #" + "12",
+    "}\"\"\"",
+  ]
+  fs.writeFileSync(file, sample.join("\n") + "\n")
+
+  // Up to Python 3.11 an f-string is one token, so none of its text is read.
+  const probe = "import tokenize\nprint(hasattr(tokenize, \"FSTRING_START\"))\n"
+  const splitsFstrings = execFileSync(python, ["-"], { cwd: repoRoot, input: probe, encoding: "utf8" }).trim() === "True"
+  const expected = splitsFstrings ? [3, 4, 6, 7, 8, 10] : []
+
+  assert.deepEqual(pythonCitations([file]), expected.map((line) => `${file}:${line}`))
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {

@@ -361,6 +361,7 @@ project already uses, so it adds no linter dependency.
 | `===` and `!==`; `== null` only to match both `null` and `undefined` | `eqeqeq` with `null: "ignore"` |
 | `const` or `let` with one variable per declaration; loop headers excepted | `no-var`, `one-var: "never"` |
 | Python: no compound one-line statements, `case` clauses included, and no `;` separators | PEP 8 (pycodestyle E701–E704) |
+| Comments and strings, test names included, cite no issue or PR: no `#N`, `name#N` or `owner/repo#N`; no `issue`, `PR`, `pull request` or `GH` followed by a number (after a space, `#`, `:`, `-`, `no.` or `number`); no path to an issue, pull request or merge request page. Code outside comments and strings is not read. A template literal or f-string is read whole, without the code in its fields, so a link continues across a field; a string inside a field is read on its own. Python reads f-strings from 3.12; up to 3.11 an f-string is one token, so its text is not checked. Other links, HTML entities, and a 3-, 4-, 6- or 8-digit color that fills a string or follows a CSS color property are not citations. Ordinals take no hash. The release scripts' test fixtures, which hold real references as data, are exempt | none (project rule) |
 
 This brace rule is deliberately stricter than the Google, Airbnb and Microsoft
 guides, which each allow some brace-less one-line bodies. It matches ESLint's
@@ -381,9 +382,8 @@ Reviewed rather than enforced:
 - Comments state how the code works and why — an invariant, ordering constraint or
   non-obvious reason — not what the next line already says. Fix stale comments
   instead of adding more.
-- Code states how it works today, never its history. Comments, test names and
-  strings never cite an issue or PR number or tell how a bug was found; that
-  history belongs in commit messages, PR descriptions and the wiki.
+- Code states how it works today, never its history: no story of how a bug was
+  found. That history belongs in commit messages, PR descriptions and the wiki.
 - Prefer guard clauses to deep nesting.
 - Tests separate arrange, act and assert with blank lines; fixtures do not hide
   the behavior under test.

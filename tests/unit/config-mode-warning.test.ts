@@ -27,7 +27,7 @@ const writeConfig = async (mode: number): Promise<void> => {
   await fs.chmod(paths.configPath, mode)
 }
 
-// Why (#159): config.yaml holds the apiKey and an existing one keeps the mode it had, so on a
+// Why: config.yaml holds the apiKey and an existing one keeps the mode it had, so on a
 // shared Linux or macOS machine a 0644 file let other local users read the key.
 for (const mode of [0o644, 0o640]) {
   const octal = mode.toString(8).padStart(4, "0")

@@ -153,7 +153,7 @@ test("rejects malformed, relative and non-http copilot base urls", () => {
 })
 
 // Why: URL userinfo is a credential. Undici rejects it at request time anyway,
-// so accepting it only buys a confusing failure plus a disclosure. See #47.
+// so accepting it only buys a confusing failure plus a disclosure.
 test("rejects copilot base urls carrying userinfo credentials", () => {
   for (const value of [
     "https://user:pass@gateway.example",
@@ -166,7 +166,7 @@ test("rejects copilot base urls carrying userinfo credentials", () => {
 
 // Why: the error message is itself a disclosure surface — it reaches the
 // terminal and, through the startup failure path, the log file. It must name
-// the key and the rule without ever echoing the offending value. See #47.
+// the key and the rule without ever echoing the offending value.
 test("never echoes the rejected copilot base url in the error", () => {
   const cases = [
     ["https://s3cr3t-user:s3cr3t-pass@gateway.example/tenant", "s3cr3t"],
@@ -214,7 +214,7 @@ test("accepts a backslash-normalized copilot base url unchanged", () => {
   assert.equal(new URL(backslashUrl).origin, "https://gateway.example")
 })
 
-// Why (#47): WHATWG accepts scheme-shorthand forms - `https:host/path`,
+// Why: WHATWG accepts scheme-shorthand forms - `https:host/path`,
 // `https:/host/path`, `https:\\host\path` - and normalizes every one of them to
 // a real origin with the tail in the path, so each passes a protocol check and
 // works upstream. None of them can be found again in arbitrary log text:
@@ -284,7 +284,7 @@ test("refuses shorthand at validation because redaction cannot catch it", () => 
   )
 })
 
-// Why (#47): a raw apostrophe is the sharpest case. WHATWG accepts it and
+// Why: a raw apostrophe is the sharpest case. WHATWG accepts it and
 // leaves it raw in the path, so the configured value keeps it - and every
 // practical URL scanner treats a quote as a delimiter, because in rendered
 // log text it usually is one. inspect() renders the value inside quotes, the
@@ -412,7 +412,7 @@ test("accepts ordinary url punctuation unchanged", () => {
   }
 })
 
-// Why (#159): empty is the documented way to turn the key check off, so a blank
+// Why: empty is the documented way to turn the key check off, so a blank
 // spelling disables it rather than failing startup. Any visible ASCII is allowed.
 test("an absent or blank apiKey disables the key check", () => {
   assert.equal(normalizeApiKey(undefined), undefined)
@@ -423,7 +423,7 @@ test("an absent or blank apiKey disables the key check", () => {
   assert.equal(normalizeApiKey("!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"), "!#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 })
 
-// Why (#159): the key travels in an HTTP header, and every logged copy of it is
+// Why: the key travels in an HTTP header, and every logged copy of it is
 // redacted as text. The message is fixed: a value typed under the wrong key can
 // be a credential, so the error never repeats it.
 test("rejects a short, spaced, non-ASCII or non-string apiKey without repeating it", () => {
@@ -445,7 +445,7 @@ test("rejects a short, spaced, non-ASCII or non-string apiKey without repeating 
   }
 })
 
-// Why (#153): upstreamProxy takes three forms. Empty connects directly, env reads the proxy
+// Why: upstreamProxy takes three forms. Empty connects directly, env reads the proxy
 // variables, and a URL names one proxy. The accepted value is the trimmed original, because the
 // dispatcher is built from it.
 test("accepts an empty, env or URL upstream proxy", () => {
@@ -470,7 +470,7 @@ test("accepts an empty, env or URL upstream proxy", () => {
   }
 })
 
-// Why (#153): each rejected form would otherwise fail later and less clearly. A bare host or a
+// Why: each rejected form would otherwise fail later and less clearly. A bare host or a
 // scheme other than http(s) is not a proxy undici's ProxyAgent can use. A path, query or fragment
 // makes it throw "invalid url" when the relay starts. A user name without a password sends no
 // credentials at all. A malformed percent-escape makes it throw "URI malformed".
@@ -495,8 +495,8 @@ test("rejects proxy URLs undici cannot use as written", () => {
   }
 })
 
-// Why (#153): a proxy URL can carry a password. The error reaches the terminal, and a failed hot
-// reload writes it to the log (#152), so it names the key and the rule, never the value.
+// Why: a proxy URL can carry a password. The error reaches the terminal, and a failed hot
+// reload writes it to the log, so it names the key and the rule, never the value.
 test("never echoes a rejected upstream proxy in the error", () => {
   for (const value of [
     "socks5://SECRET_USER:SECRET_PASS@SECRET_HOST:1080",

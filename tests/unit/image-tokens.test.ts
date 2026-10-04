@@ -22,7 +22,7 @@ const fetch = test.mock.method(globalThis, "fetch", () => {
   assert.fail("Token estimation must not fetch image data or URLs")
 })
 
-// The relay's own network calls go through undici's dispatcher rather than fetch (#153), so a
+// The relay's own network calls go through undici's dispatcher rather than fetch, so a
 // socket to any other host throws as well.
 const restoreConnections = refuseExternalConnections()
 

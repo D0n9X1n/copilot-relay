@@ -213,7 +213,7 @@ test("effort resolution distinguishes implicit default, explicit none, and unsup
 })
 
 // Copilot lists some models without effort support only by leaving reasoning_effort out of
-// supports; each such chat model rejected effort with invalid_reasoning_effort (#137).
+// supports; each such chat model rejected effort with invalid_reasoning_effort.
 test("catalog parsing keeps missing and malformed metadata unknown; empty, false or an omitted key is unsupported", async () => {
   const rows = [
     { id: "absent" },

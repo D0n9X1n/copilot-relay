@@ -1,11 +1,11 @@
-// Claude Code's billing attribution line in the top-level system prompt (#157).
+// Claude Code's billing attribution line in the top-level system prompt.
 import type { ClaudeMessagesPayload, ClaudeTextBlock } from "~/claude/types"
 
 // Claude Code sends this line first in the top-level system prompt:
 //   x-anthropic-billing-header: cc_version=2.1.288.976; cc_entrypoint=sdk-cli;
-// It is metadata for Anthropic's API, not an instruction to the model. In #157 a Claude model
-// on Copilot's /chat/completions behaved as if a system message starting with it were absent,
-// and the chat route joins every system block into one message, so the whole prompt was lost.
+// It is metadata for Anthropic's API, not an instruction to the model. A Claude model on
+// Copilot's /chat/completions behaves as if a system message starting with it were absent, and
+// the chat route joins every system block into one message, so the whole prompt would be lost.
 const billingLinePrefix = "x-anthropic-billing-header:"
 
 // The billing line a text starts with, without its line break, or undefined when the text does

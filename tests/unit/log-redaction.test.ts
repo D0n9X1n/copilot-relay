@@ -103,7 +103,7 @@ const uniqueHost = (label: string): string => {
   return `${label}-${originCounter}.log-test.invalid`
 }
 
-// Why: #47's core claim is that both sinks are protected. A fix that redacts
+// Why: both sinks must be protected. A fix that redacts
 // the file but not the console still puts the secret on a screen the user
 // screenshots, and vice versa.
 test("redacts a nested response.url in both console and file output", async () => {
@@ -455,7 +455,7 @@ const startWithProxy = async (upstreamProxy: string): Promise<void> => {
   configureUpstreamDispatcher((await readAppConfig()).upstreamProxy)
 }
 
-// Why (#153, #168): a proxy URL's user name and password become a Proxy-Authorization header, so
+// Why: a proxy URL's user name and password become a Proxy-Authorization header, so
 // they are credentials like a token. Building the dispatcher registers user:password, as written
 // in the URL and decoded, and the Basic value undici sends, so an echo of any of them is redacted.
 // A user name or password alone is not registered: redaction replaces a value in every log line.
@@ -475,7 +475,7 @@ test("building the dispatcher registers the proxy's user:password and Basic valu
   assert.ok(!(content + consoleOutput.join("\n")).includes(basic))
 })
 
-// Why (#168): a proxy user name such as "a" or "copilot" occurs in ordinary text. Registered alone,
+// Why: a proxy user name such as "a" or "copilot" occurs in ordinary text. Registered alone,
 // "a" cut into "completion path=", so `copilot-relay cache` skipped the record, and "copilot"
 // turned "copilot-relay" into "[redacted]-relay".
 test("a short or common proxy user name leaves ordinary log lines and completion records intact", async (t) => {
@@ -495,7 +495,7 @@ test("a short or common proxy user name leaves ordinary log lines and completion
   assert.ok(lines.some((line) => line.endsWith(" info copilot-relay applied a config change")), lines.join("\n"))
 })
 
-// Why (#168): with upstreamProxy: env the proxy URLs come from the environment. Each one undici
+// Why: with upstreamProxy: env the proxy URLs come from the environment. Each one undici
 // reads, HTTPS_PROXY or HTTP_PROXY in either case, has its credentials registered the same way.
 test("upstreamProxy: env registers the credentials of each proxy variable undici reads", async (t) => {
   t.after(() => configureUpstreamDispatcher(undefined))

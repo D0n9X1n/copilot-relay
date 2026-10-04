@@ -266,7 +266,7 @@ function validateWire(request: RecordedRequest, model: string, effort: string, b
   return body
 }
 
-// Matching content in two genuine upstream wire formats; empty arguments model #114.
+// Matching content in two genuine upstream wire formats; empty arguments model a zero-parameter tool.
 function upstreamReply(body: WireBody, turn: number, call?: { name: string; arguments: string }): Response {
   const text = `answer-${turn}`
   const thinking = `reason-${turn}`

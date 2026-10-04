@@ -593,9 +593,9 @@ test("times out hung Claude WebSearch upstream calls", async () => {
   }
 })
 
-// Regression coverage for #37. The final-answer pass used to send
-// `tools: undefined`, so the model could not emit a tool_use block and every
-// web-search turn ended with a stated plan and no action.
+// The final-answer pass keeps the client's other tools. Without them the model
+// cannot emit a tool_use block, so a turn that needs one ends with a stated
+// plan and no action.
 const searchExecution: WebSearchExecutionResult = {
   id: "msg_final",
   inputTokens: 10,
@@ -638,8 +638,8 @@ const createFinalPayloadFixture = (
 }
 
 test("keeps client tools on the WebSearch final-answer request", () => {
-  // Why: with no tools upstream the model cannot emit tool_use at all, so the
-  // turn ends as an unactioned plan (#37).
+  // Why: with no tools upstream the model cannot emit tool_use at all, so a
+  // turn that needs one of the client's tools ends as an unactioned plan.
   const { mapper, result } = createFinalPayloadFixture()
   const names = result.tools?.map((tool) => mapper.toClaude(tool.function.name))
 
@@ -732,7 +732,7 @@ test("passes prior conversation history through unchanged", () => {
   assert.deepEqual(result.messages.slice(0, -1), history)
 })
 
-// #161: a tool result can hold an array of blocks, such as text and an image. Its text reaches the
+// A tool result can hold an array of blocks, such as text and an image. Its text reaches the
 // search request as text, not as "[object Object]".
 test("a tool result with array content reaches the search request as text", async () => {
   const { withRecordedTransport } = await import("../../src/lib/request-trace")

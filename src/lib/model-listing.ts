@@ -1,5 +1,5 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
-// so a reader can tell what to put in gptModel or opusModel (#139).
+// so a reader can tell what to put in gptModel or opusModel.
 
 export interface ListedModel {
   // The exact upstream ID, which is the value gptModel or opusModel takes.

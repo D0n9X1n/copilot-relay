@@ -44,7 +44,7 @@ const toRequest = (url: URL, incoming: IncomingMessage): Request => {
   return new Request(url, { headers, method: incoming.method })
 }
 
-// Stands in for GitHub. GitHub calls go through undici's fetch with the upstream dispatcher (#153),
+// Stands in for GitHub. GitHub calls go through undici's fetch with the upstream dispatcher,
 // so they are redirected to this local server rather than stubbed on the global fetch. The current
 // test answers through `answer`, or makes a call fail before it is sent through `dispatchFailure`.
 // A connection off this machine throws, so nothing reaches the network.
@@ -318,7 +318,7 @@ test("the usage request is a GET of copilot_internal/user that carries the store
   assert.equal(requests[0].headers.get("authorization"), `token ${token}`)
 })
 
-// Why (#153): GitHub calls go through the upstream dispatcher, so upstreamProxy applies to them.
+// Why: GitHub calls go through the upstream dispatcher, so upstreamProxy applies to them.
 // Without a config.yaml, usage builds the direct one.
 test("the usage request goes through the upstream dispatcher", async (t) => {
   await storeToken(token)
@@ -585,7 +585,7 @@ test("a token file that cannot be read is reported by its error code", async (t)
   assert.match(await failure(), /^Could not read the GitHub token at .+github_token: E[A-Z]+\.$/)
 })
 
-// Why (#153): with upstreamProxy: env the proxy URL comes from the environment and can carry a
+// Why: with upstreamProxy: env the proxy URL comes from the environment and can carry a
 // password, so a malformed one stops the command with the fixed line that names the variables.
 test("upstreamProxy: env with a malformed proxy variable fails before any request, without its value", async (t) => {
   await storeToken(token)

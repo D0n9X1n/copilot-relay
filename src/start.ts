@@ -122,7 +122,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // base URL introduced by a later edit is covered too. Registration is
     // additive and never removes a previous origin: a request against the old
     // base URL can still be in flight when the config changes, and its error
-    // must stay redacted on its way to the log. See #47.
+    // must stay redacted on its way to the log.
     registerSensitiveOrigin(nextConfig.copilotBaseUrl)
     // The inbound apiKey, for the same reasons: registered before anything can log it, and a key
     // replaced by a reload stays redacted.

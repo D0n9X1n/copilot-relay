@@ -167,7 +167,7 @@ export function translateChunkToClaudeEvents(
         // input fails the stream instead of reaching the client as a tool call.
         parseUpstreamToolInput(toolCall.name, argumentsText)
         // A zero-parameter tool streams no argument text; clients parse the
-        // accumulated partial_json, and "" is not a JSON object (#114).
+        // accumulated partial_json, and "" is not a JSON object.
         const partialJson = argumentsText.trim() ? argumentsText : "{}"
         const index = state.contentBlockIndex++
         toolCall.claudeBlockIndex = index

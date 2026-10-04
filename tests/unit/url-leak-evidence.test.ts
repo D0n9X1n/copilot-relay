@@ -82,7 +82,7 @@ const startMockUpstream = async (
         server.close((error) => (error ? reject(error) : resolve()))
         // close() alone waits for existing connections, and the undici client
         // under test keeps its socket alive between requests - the same trap
-        // #35 hit in the relay's own shutdown path. Without this the suite
+        // the relay's own shutdown path avoids. Without this the suite
         // hangs instead of finishing.
         server.closeAllConnections()
       }),
@@ -129,9 +129,9 @@ test.beforeEach(async () => {
   setLogLevel("debug")
 })
 
-// Why (#47): the /models preflight is the first upstream call a relay makes, so
-// a credential-bearing base URL reaches the log before anything else. This
-// drives the real preflight -> client -> HTTPError path against a mock 500.
+// Why: the /models preflight calls the Copilot base URL at startup, so a
+// credential-bearing base URL can reach the log there. This drives the real
+// preflight -> client -> HTTPError path against a mock 500.
 test("does not leak the base url path when /models fails upstream", async () => {
   await withMockUpstream(
     (_request, response) => {
@@ -260,7 +260,7 @@ test("redacts canonicalized and fragment-dropped variants", async () => {
 
 // Why: hot reload registers the new base URL without removing the old one. A
 // request against the previous URL can still be in flight, and its error must
-// stay redacted on the way to the log. See #47.
+// stay redacted on the way to the log.
 test("keeps redacting the old base url after a new one is registered", async () => {
   registerSensitiveOrigin("https://old-gateway.test.invalid/tenant/OLD_SECRET")
   registerSensitiveOrigin("https://new-gateway.test.invalid/tenant/NEW_SECRET")

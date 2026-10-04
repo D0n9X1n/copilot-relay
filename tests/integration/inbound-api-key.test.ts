@@ -16,7 +16,7 @@ import {
   withoutProxyVariables,
 } from "../fixtures/network"
 
-// Why (#159): apiKey crosses boundaries that unit tests reach one at a time:
+// Why: apiKey crosses boundaries that unit tests reach one at a time:
 // daemon admission, config hot reload, the Claude Code settings writer, the
 // `status` probes and the startup warning. This runs the real CLI against a
 // local fake Copilot upstream and a local stand-in for GitHub auth, so nothing
