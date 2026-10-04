@@ -731,37 +731,36 @@ copilot-relay cache --hourly             # 最近 24 小时的按小时趋势
 copilot-relay cache --daily              # 所有保留日志的按天趋势
 copilot-relay cache --since 6h           # 一段时长，或 ISO 日期或时间
 copilot-relay cache --model opus         # 名称包含 "opus" 的模型，不区分大小写
-copilot-relay cache --goal 97.5          # 标出低于 97.5% 的行（默认 95）
+copilot-relay cache --goal 97.5          # 低于 97.5% 的命中率显示为红色（默认 95）
 copilot-relay cache --json               # 行数组，供脚本使用
 ```
 
 ```text
 Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
 
-  MODEL               ROUTE              REQUESTS  UNKNOWN  0-READ   INPUT  CACHE READ  UNCACHED  CACHE WRITE  HIT RATE
-  claude-opus-5-5     /v1/messages              1        0       0  31,654      31,136       518          516    98.36%
-  claude-opus-5.5     /chat/completions         2        1       0  31,431      30,924       507            -    98.38%
-  gpt-5.5-2026-04-23  /responses                1        0       0  19,297      17,920     1,377            -    92.86%  below goal
+  MODEL               ROUTE              REQUESTS  HIT RATE
+  claude-opus-5-5     /v1/messages              1    98.36%
+  claude-opus-5.5     /chat/completions         2    98.38%
+  gpt-5.5-2026-04-23  /responses                1    92.86%
 
-UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token columns and HIT RATE.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 ```
 
 | 列 | 含义 |
 | --- | --- |
 | `MODEL`、`ROUTE` | 上游报告的模型（条目中没有时为 `unknown`）和上游路径。同一模型在不同路由上可能以不同名称报告，例如 `claude-opus-5.5` 与 `claude-opus-5-5`。 |
 | `REQUESTS` | 返回 HTTP 200 并记录了 `input_tokens` 的上游调用，包括用量到达后才被中断的调用，以及缓存情况未知的调用。 |
-| `UNKNOWN` | 条目中没有 `cache_read_input_tokens` 的调用。它们的缓存情况是未知，不是零，因此不计入任何 token 列和 `HIT RATE`。 |
-| `0-READ` | 报告的缓存读取恰好为 0 的调用。 |
-| `INPUT` | 包含缓存输入的输入 token，按下文所述逐路由归一化。 |
-| `CACHE READ` | 由 prompt 缓存提供的输入 token。 |
-| `UNCACHED` | `INPUT` 减去 `CACHE READ`。 |
-| `CACHE WRITE` | `cache_creation_input_tokens`；该行没有调用报告它时为 `-`。 |
-| `HIT RATE` | `CACHE READ` 除以 `INPUT`，截断到两位小数；该行没有缓存情况已知的调用时为 `-`。 |
+| `HIT RATE` | 由 prompt 缓存提供的输入 token 除以总输入，截断到两位小数。在彩色终端中，达到 `--goal` 时为绿色，低于时为红色。该行没有调用报告缓存情况时为灰色的 `-`。 |
 
-低于 `--goal` 的行以 `below goal` 结尾，在彩色终端中显示为红色。这几个字无论如何都会
-打印，所以在 `NO_COLOR` 和管道中也不会丢失；`HIT RATE` 截断而不是四舍五入，所以低于
-目标的行永远不会显示成目标值本身。`--goal` 最多两位小数；一行打印出的 `HIT RATE` 低于
-目标时，它才会被标出，且一定会被标出。
+条目中没有 `cache_read_input_tokens` 的调用，缓存情况是未知，不是零。它计入 `REQUESTS`，
+但不计入 `HIT RATE`；表格下方一行说明这样的调用有多少，没有时不显示这一行。
+命中率所依据的 token 计数（总输入、缓存读取、未缓存与缓存写入），
+以及缓存情况未知和缓存读取为 0 的调用数，都在 `--json` 中。
+
+`HIT RATE` 的颜色是表格中未达到目标的唯一标记。没有颜色时（`NO_COLOR`，或输出到管道），
+请把命中率与标题中的目标比较，或读取 `--json` 中的 `belowGoal`。`HIT RATE` 截断而不是
+四舍五入，所以低于目标的命中率永远不会显示成目标值本身。`--goal` 最多两位小数；打印出的
+`HIT RATE` 低于目标时，它才显示为红色，且一定显示为红色。
 
 `--hourly` 和 `--daily` 会增加一列本地时间的 `HOUR` 或 `DAY`，与日志文件名中的日期一致。
 时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
@@ -788,9 +787,10 @@ UNKNOWN calls logged no cache_read_input_tokens; they are left out of the token 
 因此从不读取它：计入它会把调用算两次。格式错误的行，以及中继仍在写入的最后一行，都会被
 跳过。
 
-`input_tokens` 在不同路由上含义不同，因此 `INPUT` 需要归一化：
+`input_tokens` 在不同路由上含义不同，因此 `HIT RATE` 所除的总输入（`--json` 中的
+`totalInputTokens`）需要归一化：
 
-| 路由 | `INPUT` |
+| 路由 | 总输入 |
 | --- | --- |
 | `/chat/completions`、`/responses` | `input_tokens`，已包含缓存输入 |
 | `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |

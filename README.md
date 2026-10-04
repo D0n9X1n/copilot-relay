@@ -55,7 +55,7 @@ running daemon. Add `--details` for safe failure evidence and private replay hin
 Use `copilot-relay status --deep` for daemon health, and `copilot-relay stop` when finished.
 
 Check how well prompt caching works per model and upstream route. The report reads
-only local logs and flags rows below a hit-rate goal, 95% by default:
+only local logs and shows a hit rate below the goal, 95% by default, in red:
 
 ```sh
 copilot-relay cache                  # last 24 hours
