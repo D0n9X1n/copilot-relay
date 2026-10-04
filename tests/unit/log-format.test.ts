@@ -1,4 +1,4 @@
-import test from "node:test"
+import test, { type TestContext } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -6,6 +6,8 @@ import path from "node:path"
 import { inspect, promisify, type InspectOptions } from "node:util"
 import { execFile } from "node:child_process"
 import { fileURLToPath } from "node:url"
+
+import { readLogs } from "../fixtures/logs"
 
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
@@ -37,7 +39,7 @@ log.setReporters([{
 const readActiveLog = async (): Promise<string> => {
   // File writes are fire-and-forget so logging never blocks a request.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const content = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const content = await readLogs()
     if (content) {
       return content
     }
@@ -46,6 +48,12 @@ const readActiveLog = async (): Promise<string> => {
   }
 
   throw new Error("log file was never written")
+}
+
+// Pins Date at the real time, so the file the writer picks and the path a test names stay on the
+// same day. Timers stay real: the writer reads the clock only to stamp entries and schedule cleanup.
+const pinClock = (t: TestContext) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() })
 }
 
 test.beforeEach(async () => {
@@ -75,7 +83,7 @@ test("console-only quiet scopes retain file evidence without suppressing other r
 
   assert.deepEqual(consoleOutput, ["visible request"])
 
-  const file = await fs.readFile(getLogPath(), "utf8")
+  const file = await readLogs()
   assert.match(file, /quiet setup/)
   assert.match(file, /quiet error/)
   assert.match(file, /visible request/)
@@ -149,7 +157,7 @@ for (const [name, payload] of [
 
     // Strip the timestamp, level and trailing newline to compare the file line
     // with what the console received.
-    const file = await fs.readFile(getLogPath(), "utf8")
+    const file = await readLogs()
     const rendered = file.slice(0, -1).replace(/^\S+ error /, "")
     assert.ok(Buffer.byteLength(rendered) <= 16 * 1024, "one rendered argument exceeded 16 KiB")
     assert.equal(consoleOutput.length, 1)
@@ -170,7 +178,7 @@ test("bounds a multi-argument entry to 64 KiB including file framing", async () 
   )
   await flushLogs()
 
-  const file = await fs.readFile(getLogPath(), "utf8")
+  const file = await readLogs()
   const rendered = file.slice(0, -1).replace(/^\S+ error /, "")
   assert.ok(Buffer.byteLength(file) <= 64 * 1024, "whole entry exceeded 64 KiB")
   assert.equal(consoleOutput.length, 1)
@@ -234,7 +242,9 @@ for (const [name, separator] of [["LF", "\n"], ["CRLF", "\r\n"], ["CR", "\r"]]) 
 for (const existing of [false, true]) {
   test(`keeps ${existing ? "existing" : "new"} log paths private under umask 022`, {
     skip: process.platform === "win32",
-  }, async () => {
+  }, async (t) => {
+    pinClock(t)
+
     await fs.rm(paths.appDir, { recursive: true, force: true })
     const previousUmask = process.umask(0o022)
     try {
@@ -341,6 +351,8 @@ test("debug logging reflects the current file log level", () => {
 })
 
 test("flushLogs waits for queued writes without making logging synchronous", async (t) => {
+  pinClock(t)
+
   let release!: () => void
   let opened!: () => void
   const waiting = new Promise<void>((resolve) => {
@@ -419,6 +431,7 @@ test("concurrent flushLogs calls both resolve", async () => {
 // Why: each entry used to run its own directory checks, open, stat, chmod, append and close, and a
 // burst of them could finish out of order. A burst now shares one open and keeps call order.
 test("a burst of entries is appended in call order through one open", async (t) => {
+  pinClock(t)
   const open = t.mock.method(fs, "open")
 
   for (let index = 0; index < 50; index += 1) {
@@ -452,9 +465,25 @@ test("an entry is stamped when it is logged, not when it is written", async (t) 
   )
 })
 
+// An entry logged just before local midnight stays in that day's file, while getLogPath() names the
+// next day's once the date changes. readLogs() reads every dated file, so it still finds the entry.
+test("readLogs finds an entry logged before local midnight after the date changes", async (t) => {
+  const loggedAt = new Date(2026, 6, 24, 23, 59, 59)
+  t.mock.timers.enable({ apis: ["Date"], now: loggedAt })
+
+  log.info("logged before midnight")
+  t.mock.timers.setTime(loggedAt.getTime() + 2_000)
+  await flushLogs()
+
+  assert.notEqual(getLogPath(), getLogPath(loggedAt))
+  assert.match(await readLogs(), /logged before midnight/)
+})
+
 // Why: the log file stays open between batches written within a second. A file that was renamed,
 // replaced, linked elsewhere or loosened must not keep receiving entries through the reused handle.
-test("an entry logged after the active file is renamed goes to a new file", async () => {
+test("an entry logged after the active file is renamed goes to a new file", async (t) => {
+  pinClock(t)
+
   log.info("before rename")
   await readActiveLog()
   await fs.rename(getLogPath(), `${getLogPath()}.old`)
@@ -469,7 +498,9 @@ test("an entry logged after the active file is renamed goes to a new file", asyn
 // Why: a rotation tool may rename the active file and create an empty one at its path. lstat shows
 // the new file as a regular private file with one link, like the open one; only the file identity
 // tells them apart.
-test("an entry logged after the active file is replaced goes to the new file", async () => {
+test("an entry logged after the active file is replaced goes to the new file", async (t) => {
+  pinClock(t)
+
   log.info("before replace")
   await readActiveLog()
   await fs.rename(getLogPath(), `${getLogPath()}.old`)
@@ -485,6 +516,7 @@ test("an entry logged after the active file is replaced goes to the new file", a
 // Why: reusing one open handle across batches is the point of the writer. A reuse check that never
 // passed would reopen the file for every batch and still pass the tests above.
 test("batches written within a second share one open of the unchanged file", async (t) => {
+  pinClock(t)
   const open = t.mock.method(fs, "open")
   log.info("first batch")
   await readActiveLog()
@@ -498,7 +530,9 @@ test("batches written within a second share one open of the unchanged file", asy
   assert.match(await fs.readFile(getLogPath(), "utf8"), /first batch\n.*second batch\n.*third batch\n$/)
 })
 
-test("an entry is not appended through a second hard link to the active file", async () => {
+test("an entry is not appended through a second hard link to the active file", async (t) => {
+  pinClock(t)
+
   log.info("before link")
   await readActiveLog()
   const linked = path.join(paths.logsDir, "linked.log")
@@ -512,7 +546,9 @@ test("an entry is not appended through a second hard link to the active file", a
 
 test("a loosened active log mode is restored before the next append", {
   skip: process.platform === "win32",
-}, async () => {
+}, async (t) => {
+  pinClock(t)
+
   log.info("before chmod")
   await readActiveLog()
   await fs.chmod(getLogPath(), 0o644)
@@ -527,7 +563,9 @@ test("a loosened active log mode is restored before the next append", {
 // Why: lstat of the log path follows links in its parent path. A logs folder replaced by a link to
 // the folder the open file was moved to leads back to the same file, so the directories are
 // checked before the handle is reused.
-test("an entry is not appended through a logs folder replaced by a link", async () => {
+test("an entry is not appended through a logs folder replaced by a link", async (t) => {
+  pinClock(t)
+
   log.info("before move")
   await readActiveLog()
   const moved = path.join(paths.appDir, "logs-moved")
@@ -548,7 +586,9 @@ test("an entry is not appended through a logs folder replaced by a link", async 
 
 test("a loosened logs folder mode is restored before the next append", {
   skip: process.platform === "win32",
-}, async () => {
+}, async (t) => {
+  pinClock(t)
+
   log.info("before folder chmod")
   await readActiveLog()
   await fs.chmod(paths.logsDir, 0o755)
@@ -563,6 +603,7 @@ test("a loosened logs folder mode is restored before the next append", {
 // Why: Windows cannot rename or move a folder while a file in it is open, and the kept-open handle
 // locked the logs folder for as long as the relay ran.
 test("the log file is closed after a second without entries", async (t) => {
+  pinClock(t)
   const open = t.mock.method(fs, "open")
   log.info("before idle")
   await readActiveLog()

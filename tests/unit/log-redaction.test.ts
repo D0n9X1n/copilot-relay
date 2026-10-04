@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { inspect } from "node:util"
 
+import { readLogs } from "../fixtures/logs"
 import { withProxyEnvironment } from "../fixtures/network"
 
 // See log-rotation.test.ts: the home directory must be redirected before
@@ -24,7 +25,7 @@ const {
   registerLogSecret
 } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
-const { getLogPath, paths } = await import("../../src/lib/paths")
+const { paths } = await import("../../src/lib/paths")
 const { readAppConfig } = await import("../../src/lib/app-config")
 const { parseCompletionLine } = await import("../../src/lib/cache-report")
 const { configureUpstreamDispatcher } = await import("../../src/lib/upstream-dispatcher")
@@ -52,7 +53,7 @@ consola.setReporters([
 const readActiveLog = async (): Promise<string> => {
   // File writes are fire-and-forget so logging never blocks a request.
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    const content = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const content = await readLogs()
     if (content) {
       return content
     }
@@ -240,7 +241,7 @@ for (const [name, separator, escaped] of [
       log.error("Adjacent URLs", value)
       await flushLogs()
 
-      const fileContent = await fs.readFile(getLogPath(), "utf8")
+      const fileContent = await readLogs()
       assert.ok(fileContent.endsWith("\n"))
       assert.equal(consoleOutput.length, 1)
 
@@ -293,7 +294,7 @@ for (const [name, separator] of [
       log.error("Nested adjacent URLs", value)
       await flushLogs()
 
-      const file = await fs.readFile(getLogPath(), "utf8")
+      const file = await readLogs()
       assert.ok(file.endsWith("\n"))
       assert.equal(consoleOutput.length, 1)
 
@@ -318,7 +319,7 @@ for (const [name, separator] of [
 const readSinkValue = async (): Promise<string> => {
   await flushLogs()
 
-  const file = await fs.readFile(getLogPath(), "utf8")
+  const file = await readLogs()
   assert.ok(file.endsWith("\n"))
   assert.equal(consoleOutput.length, 1)
 

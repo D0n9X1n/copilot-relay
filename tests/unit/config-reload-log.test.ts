@@ -4,6 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
+import { readLogs } from "../fixtures/logs"
+
 // paths.ts resolves the home directory when it loads, and Windows reads USERPROFILE, not HOME.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-config-reload-log-"))
 process.env.HOME = home
@@ -12,7 +14,7 @@ process.env.CONSOLA_LEVEL = "0"
 
 const { readAppConfig, watchAppConfig } = await import("../../src/lib/app-config")
 const { flushLogs, log, withoutConsoleLogging } = await import("../../src/lib/log")
-const { getLogPath, paths } = await import("../../src/lib/paths")
+const { paths } = await import("../../src/lib/paths")
 
 test.after(async () => {
   await flushLogs()
@@ -26,7 +28,7 @@ const readReloadEntry = async (): Promise<string> => {
   // File writes are fire-and-forget, so poll until the entry lands.
   for (let attempt = 0; attempt < 50; attempt += 1) {
     await flushLogs()
-    const content = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const content = await readLogs()
     const entry = content.split("\n").find((line) => line.includes("Could not reload config"))
     if (entry) {
       return entry

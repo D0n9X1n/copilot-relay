@@ -10,6 +10,7 @@ import type { ClaudeMessagesPayload, ClaudeTool } from "../../src/claude/types"
 import type { ChatCompletionsPayload, Message } from "../../src/copilot/types"
 import type { CopilotModel } from "../../src/copilot/models"
 import type { ProxyConfig } from "../../src/lib/config"
+import { readLogs } from "../fixtures/logs"
 
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
@@ -28,7 +29,6 @@ const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names
 const { HTTPError } = await import("../../src/lib/error")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
-const { getLogPath } = await import("../../src/lib/paths")
 
 test.after(async () => {
   await flushLogs()
@@ -435,7 +435,7 @@ test("WebSearch logs bounded metadata with tool correlation and no response cont
       // File writes are fire-and-forget, so poll until the correlated entry lands.
       let logText = ""
       for (let attempt = 0; attempt < 50; attempt++) {
-        logText = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+        logText = await readLogs()
         if (logText.includes(`tool_use_id=${tool.id}`)) {
           break
         }

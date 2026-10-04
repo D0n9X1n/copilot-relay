@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import test, { type TestContext } from "node:test"
 
+import { readLogs } from "../fixtures/logs"
+
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-http-admission-"))
@@ -15,7 +17,6 @@ process.env.CONSOLA_LEVEL = "0"
 const { createServer, startServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs, withoutLogging } = await import("../../src/lib/log")
-const { getLogPath } = await import("../../src/lib/paths")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 const configFor = (fields: Partial<ProxyConfig> = {}): ProxyConfig => ({
@@ -468,7 +469,7 @@ const authFailure = {
 const readLogUntil = async (ready: (text: string) => boolean): Promise<string> => {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     await flushLogs()
-    const text = await fs.readFile(getLogPath(), "utf8").catch(() => "")
+    const text = await readLogs()
     if (ready(text)) {
       return text
     }

@@ -6,6 +6,7 @@ import path from "node:path"
 import test from "node:test"
 
 import type { ProxyConfig } from "../../src/lib/config"
+import { readLogs } from "../fixtures/logs"
 
 // See log-rotation.test.ts: the home directory must be redirected before
 // paths.ts loads, and Windows resolves it from USERPROFILE rather than HOME.
@@ -18,7 +19,6 @@ const { isRetryableFetchError } = await import("../../src/copilot/client")
 const { HTTPError } = await import("../../src/lib/error")
 const { runtimeState } = await import("../../src/lib/state")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
-const { getLogPath } = await import("../../src/lib/paths")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 
 test.after(async () => {
@@ -262,13 +262,7 @@ test("info logs show requested and effective effort without normal request paylo
       let contents = ""
       let summary: string | undefined
       for (let attempt = 0; attempt < 100; attempt++) {
-        try {
-          contents = await fs.readFile(getLogPath(), "utf8")
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error
-          }
-        }
+        contents = await readLogs()
 
         summary = contents.split("\n").find(
           (line) => line.includes(`request_id=${id}`) && line.includes(" info Model request "),
@@ -303,7 +297,7 @@ test("info logs show requested and effective effort without normal request paylo
       messages: [{ role: "user", content: "hello" }],
     }, { requestId: "effort-info-suppressed" })
 
-    assert.doesNotMatch(await fs.readFile(getLogPath(), "utf8"), /effort-info-suppressed/)
+    assert.doesNotMatch(await readLogs(), /effort-info-suppressed/)
   } finally {
     setLogLevel("info")
     delete runtimeState.thinkEffort

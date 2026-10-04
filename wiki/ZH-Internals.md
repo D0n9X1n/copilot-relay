@@ -1100,6 +1100,14 @@ const { readAppConfig } = await import("../../src/lib/app-config")
 都发往 stderr，运行器把它作为诊断信息报告。测试自己启动的进程保留其 stdout，因为测试把它当作
 数据读取。
 
+### 测试读取日志
+
+日志器在记录条目时按本地日期选择文件，因此午夜前刚记录的条目留在当天的文件中，而此时
+`getLogPath()` 已经指向下一天的文件。查找自己记录的条目的测试使用 `tests/fixtures/logs.ts`
+中的 `readLogs()`，它按从旧到新的顺序读取每个带日期的日志文件。测试日志写入器本身的用例按路径
+操作当天的文件，因此用 `t.mock.timers` 固定时钟。它只 mock `Date`：写入器只在给条目加时间戳和
+安排清理时读取时钟，空闲关闭的定时器仍是真实的。
+
 ### mock 上游
 
 集成测试让 Hono app 跑在本地 mock 的 Copilot HTTP server 之上。它们绝不可以调用真实
