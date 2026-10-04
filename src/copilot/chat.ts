@@ -52,6 +52,9 @@ type ClientKind = "claude" | "generic"
 
 interface CreateChatCompletionsOptions {
   client?: ClientKind
+  // The x-initiator header. Only a caller relaying a person's turn says "user"; absent means
+  // "agent", as for the relay's own requests.
+  initiator?: "agent" | "user"
   requestId?: string
   requestedModel?: string
   requestedThinkEffort?: string
@@ -156,13 +159,6 @@ const normalizeFinalAssistantPrefill = (
   messages.push({ role: "user", content: continuePrefillPrompt })
   return { ...payload, messages }
 }
-
-const isAgentInitiator = (
-  messages: ChatCompletionsPayload["messages"],
-): "agent" | "user" =>
-  messages.some((message) => message.role === "assistant" || message.role === "tool") ?
-    "agent"
-  : "user"
 
 const holdsImage = (message: Message): boolean =>
   Array.isArray(message.content) && message.content.some((part) => part.type === "image_url")
@@ -297,7 +293,7 @@ export const createChatCompletions = async (
 
   const provider = getCopilotProviderContext(config)
   const enableVision = messagesIncludeImage(compatiblePayload.messages)
-  const initiator = isAgentInitiator(compatiblePayload.messages)
+  const initiator = options.initiator ?? "agent"
   const requestPayload = buildRequestPayload(compatiblePayload)
 
   // Undefined only when the model advertises no effort support and none was requested.
@@ -313,6 +309,7 @@ export const createChatCompletions = async (
       `requested_think_effort=${requestedThinkEffort}`,
       `requested_thinking=${requestedThinking}`,
       `effective_think_effort=${effectiveEffortLabel}`,
+      `initiator=${initiator}`,
     ].join(" ")),
   )
 

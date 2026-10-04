@@ -107,7 +107,9 @@ Log volume is bounded by time, not size. Accepted (#25).
 
 Write for the next human reader. Brace every `if`/`else`/`for`/`while`/`do` body, put one statement per line, keep `else`/`catch`/`finally` on the line that closes the previous block, and leave a blank line after each multi-line block statement. `tests/unit/code-style.test.ts` enforces these and the other mechanical rules (`===`, `const`/`let` with one variable each, no nested ternaries, no blank line just inside braces or two in a row, no compound one-line statements in Python) and fails CI with `file:line`. It needs no linter: it parses source with the TypeScript compiler API the project already depends on.
 
-The test cannot check judgment: blank lines between logical steps, names that say what a value is or does, and comments that explain *why* rather than *what*. The full rule table, the closest ESLint rules and the reasons are under "Code style" in `wiki/EN-Development.md` and `wiki/ZH-Development.md`.
+The test cannot check judgment: blank lines between logical steps, names that say what a value is or does, and comments that state how the code works and why rather than restate the next line. The full rule table, the closest ESLint rules and the reasons are under "Code style" in `wiki/EN-Development.md` and `wiki/ZH-Development.md`.
+
+**Code states how it works, never its history.** Comments, test names and strings say what the code does, how it works and the facts it depends on. They never cite an issue or PR number (such as "See #34") or tell how a bug was found. That history belongs in commit messages, PR descriptions and the wiki; a reader must not need the issue tracker to understand the code.
 
 Keep formatting-only commits apart from renames and logic changes, so a reviewer can confirm the formatting commit compiles to the same program.
 

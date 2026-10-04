@@ -152,6 +152,7 @@ opusModel: claude-opus-5.5
 | `src/claude/types.ts` | 只包含代理需要的那部分 Claude Messages API 类型。刻意不做成完整 SDK。 |
 | `src/claude/translate.ts` | 双向非流式翻译，包括 tool call 与 thinking/text block。 |
 | `src/claude/billing-line.ts` | 在任何路由读取之前，从顶层 system prompt 移除 Claude Code 的计费归属行。 |
+| `src/claude/initiator.ts` | 判定请求由本人还是 Claude Code 发起，用于 `x-initiator` header。 |
 | `src/claude/stream.ts` | 把流式 Copilot chunk 转成 Claude SSE 事件。有状态，因为 Claude 要求显式的 block start/delta/stop。 |
 | `src/claude/web-search-stream.ts` | 让声明了 WebSearch 的回合依然可以流式输出。 |
 | `src/claude/tool-names.ts` | 把 Claude 工具名规范化成 Copilot 可接受的名字，并在响应里映射回来。 |

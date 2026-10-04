@@ -210,6 +210,57 @@ message, Claude Code's instructions included. On a relay without this fix,
 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` in Claude Code's environment stops Claude Code from
 sending the line.
 
+### Who started a request: `x-initiator`
+
+Every Copilot call carries `x-initiator: user` or `agent`. `getClaudeRequestInitiator`
+in `src/claude/initiator.ts` decides it once per `POST /v1/messages`, from the body as
+Claude Code sent it. That is before `removeBillingLine`, and before the relay adds turns
+of its own, such as the `Continue based on the context above.` turn the chat route
+appends.
+
+The request is `agent` when:
+
+- the billing line carries `cc_is_subagent=true;`, which marks every request from a
+  subagent;
+- it is a compaction request: a system block starts with Claude Code's summarizer
+  prompt, or the turn holds its compaction instruction;
+- it ends on an assistant message (a prefill), or holds no user message.
+
+Otherwise the rule reads the originating turn, meaning the user messages after the last
+assistant message. It skips `role: "system"` turns and removes `<system-reminder>` spans.
+
+Texts Claude Code writes itself are not the person's:
+
+- interrupt notices;
+- the summary that resumes a session after compaction;
+- hook feedback;
+- plugin, scheduled and non-user messages;
+- retry nudges.
+
+How the turn is labeled:
+
+- **No tool result in the turn.** `user` when the person's text, an image or a document
+  remains.
+- **A tool result in the turn.** `agent`, with two exceptions:
+  - Claude Code stopped a call for the person (an interrupt notice), and the person's
+    content remains;
+  - the turn delivers a message the person sent while the model was working.
+
+The relay's own requests are `agent`:
+
+- the WebSearch execution;
+- the WebSearch final pass;
+- the native WebSearch follow-up;
+- the startup preflight.
+
+Retries reuse the value of the attempt they replace. Only the header changes: the
+upstream body is the same either way, so prompt-cache prefixes are untouched. The
+`Model request` log line records the value as `initiator=`.
+
+The recognized texts are Claude Code 2.1.288's. If a later version rewords one, that
+case falls back to the general rule. With `CLAUDE_CODE_ATTRIBUTION_HEADER=0` there is no
+billing line, so a subagent's first request reads as `user`.
+
 ### Translated history
 
 `src/claude/translate.ts` handles non-streaming payloads in both directions:
