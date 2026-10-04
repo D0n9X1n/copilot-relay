@@ -322,6 +322,22 @@ test("a call that logged no cache read is unknown, not a zero read", async () =>
   // The line under the table counts the calls of unknown caching in every row: one in each here.
   assert.ok(renderCacheReport(rows, options).includes("HIT RATE leaves out 2 calls that logged no cache_read_input_tokens."))
   assert.ok(renderCacheReport(rows.slice(0, 1), options).includes("HIT RATE leaves out 1 call that logged no cache_read_input_tokens."))
+
+  // A row whose calls all have unknown caching has no rate: a dash, gray on a color terminal, never
+  // a rate of 0.
+  assert.deepEqual(renderCacheReport(rows, options), [
+    "Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%",
+    "",
+    "  MODEL            ROUTE              REQUESTS  HIT RATE",
+    "  claude-opus-5-5  /v1/messages              1         -",
+    "  claude-opus-5.5  /chat/completions         3    60.00%",
+    "",
+    "HIT RATE leaves out 2 calls that logged no cache_read_input_tokens.",
+  ])
+
+  const colored = renderCacheReport(rows, options, true).join("\n")
+  assert.ok(colored.includes("\u001b[90m       -\u001b[0m"))
+  assert.ok(colored.includes("\u001b[31m  60.00%\u001b[0m"))
 })
 
 test("hourly and daily trends bucket by local time", async () => {
@@ -359,6 +375,28 @@ test("hourly and daily trends bucket by local time", async () => {
     ["2026-10-02", 1, 100, 90],
     ["2026-10-03", 4, 1400, 730],
   ])
+})
+
+test("the daily table leads with the local day, and colors only the rate", async () => {
+  await writeLogs({
+    [dated("2026-09-30")]: entries(chatCall("2026-09-30T10:00:00.000Z", "input_tokens=50 cache_read_input_tokens=50")),
+    [dated("2026-10-03")]: entries(chatCall("2026-10-03T06:30:00.000Z", "input_tokens=400 cache_read_input_tokens=300")),
+  })
+
+  const options: CacheReportOptions = { view: "daily", goal: 95 }
+  const rows = await buildCacheReport(options)
+
+  assert.deepEqual(renderCacheReport(rows, options), [
+    "Prompt-cache hit rate by local day across all retained logs, goal 95%",
+    "",
+    "  DAY         MODEL            ROUTE              REQUESTS  HIT RATE",
+    "  2026-09-30  claude-opus-5.5  /chat/completions         1   100.00%",
+    "  2026-10-03  claude-opus-5.5  /chat/completions         1    75.00%",
+  ])
+
+  const colored = renderCacheReport(rows, options, true).join("\n")
+  assert.ok(colored.includes("  2026-09-30  claude-opus-5.5  /chat/completions         1  \u001b[32m 100.00%\u001b[0m"))
+  assert.ok(colored.includes("  2026-10-03  claude-opus-5.5  /chat/completions         1  \u001b[31m  75.00%\u001b[0m"))
 })
 
 // The suite runs in Asia/Kolkata, which has no daylight saving. These tests need other zones.
