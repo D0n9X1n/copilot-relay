@@ -43,8 +43,8 @@ const blankLineRuns = /(?:^|\n)(?:[ \t]*\r?\n){2,}/g
 // Issue and PR citations are searched for in prose only: comments and the text of string and
 // template literals. Code around them is not read, so an object key named issues that holds a count
 // is not a citation. A template literal is read whole, with the code in each ${} field replaced by
-// x's, so a link continues across a field and a field's code never reads as prose. In prose, a
-// citation is:
+// x's, so a link continues across a field and a field's code never reads as prose; a string inside a
+// field is read on its own. In prose, a citation is:
 // - a hash and a number, alone or after a project name or owner/repo;
 // - "issue", "PR", "pull request" or "GH", then a space, "#", ":", "-", "no." or "number", then a
 //   number;
@@ -496,11 +496,14 @@ const runPythonChecker = (files: string[]): string[] => {
   return output.split(/\r?\n/).filter((line) => line.trim() !== "")
 }
 
-// Python comments and strings, one JSON line each: the file, the line it starts on and its text. An
-// f-string or t-string is read whole, from its prefix to its closing quote, with the code in each {}
-// field replaced by x's, as a template literal is. Python 3.11 returns it as one STRING token; from
-// Python 3.12 it is the span from FSTRING_START to the matching FSTRING_END (TSTRING_* from 3.14).
-// Token columns count characters, so that span is sliced from the decoded source.
+// Python comments and strings, one JSON line each: the file, the line it starts on and its text.
+// From Python 3.12 the tokenizer splits an f-string into its text and the tokens of each {} field,
+// and from 3.14 a t-string too. Such a string is read whole, from its prefix to its closing quote,
+// with each field's code replaced by x's, as a template literal is; strings and comments inside a
+// field are read on their own. Field boundaries come from the tokenizer, so quotes, brackets and
+// format specs inside a field cannot move them. Up to Python 3.11 an f-string is one STRING token
+// whose fields are not split out, so its text is not read. Token columns count characters, so spans
+// are sliced from the decoded source.
 const pythonProse = String.raw`
 import io
 import json
@@ -521,63 +524,62 @@ def is_formatted(text):
     return any(letter in prefix for letter in "fFtT")
 
 
-def mask_fields(text):
-    masked = list(text)
-    index = len(text) - len(text.lstrip(prefix_letters))
-    depth = 0
-    quote = ""
-    field_start = 0
-    while index < len(text):
-        character = text[index]
-        if depth == 0:
-            if character in "{}" and text[index + 1:index + 2] == character:
-                index += 2
-                continue
-            if character == "{":
-                depth = 1
-                field_start = index + 1
-        elif quote:
-            if character == quote:
-                quote = ""
-        elif character in "'\"":
-            quote = character
-        elif character in "{[(":
-            depth += 1
-        elif character in "}])":
-            depth -= 1
-            if depth == 0:
-                for position in range(field_start, index):
-                    if masked[position] not in "\r\n":
-                        masked[position] = "x"
-        index += 1
-    return "".join(masked)
+def offset(line_starts, position):
+    return line_starts[position[0] - 1] + position[1]
+
+
+def new_field(begin):
+    return {"kind": "field", "spec": False, "depth": 0, "begin": begin}
+
+
+def close_field(frames, end):
+    field = frames.pop()
+    if frames[-1]["kind"] == "string":
+        frames[-1]["fields"].append((field["begin"], end))
+
+
+def masked(code, begin, end, fields):
+    characters = list(code[begin:end])
+    for field_begin, field_end in fields:
+        for position in range(field_begin - begin, field_end - begin):
+            if characters[position] not in "\r\n":
+                characters[position] = "x"
+    return "".join(characters)
 
 
 for path in sys.argv[1:]:
-    with open(path, "rb") as source:
-        data = source.read()
+    with open(path, "rb") as handle:
+        data = handle.read()
     encoding = tokenize.detect_encoding(io.BytesIO(data).readline)[0]
-    text = data.decode(encoding)
+    code = data.decode(encoding)
     line_starts = [0]
-    for line in text.split("\n"):
+    for line in code.split("\n"):
         line_starts.append(line_starts[-1] + len(line) + 1)
-    depth = 0
-    opened = (0, 0)
+    frames = []
     for token in tokenize.tokenize(io.BytesIO(data).readline):
+        top = frames[-1] if frames else {"kind": ""}
         if token.type in starts:
-            if depth == 0:
-                opened = token.start
-            depth += 1
+            frames.append({"kind": "string", "line": token.start[0], "begin": offset(line_starts, token.start), "fields": []})
         elif token.type in ends:
-            depth -= 1
-            if depth == 0:
-                begin = line_starts[opened[0] - 1] + opened[1]
-                finish = line_starts[token.end[0] - 1] + token.end[1]
-                emit(path, opened[0], mask_fields(text[begin:finish]))
-        elif depth == 0 and token.type == tokenize.COMMENT:
+            frame = frames.pop()
+            emit(path, frame["line"], masked(code, frame["begin"], offset(line_starts, token.end), frame["fields"]))
+        elif token.type == tokenize.OP and top["kind"] == "string" and token.string == "{":
+            frames.append(new_field(offset(line_starts, token.end)))
+        elif token.type == tokenize.OP and top["kind"] == "field":
+            if token.string == "{" and top["spec"]:
+                frames.append(new_field(offset(line_starts, token.end)))
+            elif token.string in ("(", "[", "{"):
+                top["depth"] += 1
+            elif token.string in (")", "]", "}") and top["depth"] > 0:
+                top["depth"] -= 1
+            elif token.string == "}":
+                close_field(frames, offset(line_starts, token.start))
+            elif token.string == ":" and top["depth"] == 0:
+                top["spec"] = True
+        elif token.type == tokenize.COMMENT:
             emit(path, token.start[0], token.string)
-        elif depth == 0 and token.type == tokenize.STRING:
-            emit(path, token.start[0], mask_fields(token.string) if is_formatted(token.string) else token.string)
+        elif token.type == tokenize.STRING and not is_formatted(token.string):
+            emit(path, token.start[0], token.string)
 `
 
 interface PythonProse {
@@ -857,7 +859,7 @@ test("the issue-number check reports citations and leaves other uses of # alone"
   assert.deepEqual(found, [...citations.map((_, index) => index + 1), lastLineNumber])
 })
 
-test("the Python issue-number check reads comments and strings, and leaves colors, links and f-string fields alone", (t) => {
+test("the Python issue-number check reads comments and strings, and leaves colors and links alone", (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
 
@@ -870,13 +872,39 @@ test("the Python issue-number check reads comments and strings, and leaves color
     "LINK = \"https://example.com/page#" + "12\"",
     "NOTE = \"\"\"First line.",
     "See issue " + "56.\"\"\"",
-    "SUMMARY = f\"Resolved {issues" + ":3} issues.\"",
-    "URL = f\"https://example.com/page?q={query}#" + "123\"",
-    "CITED = f\"{name} cites #" + "78.\"",
   ]
   fs.writeFileSync(file, sample.join("\n") + "\n")
 
-  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`, `${file}:9`])
+  assert.deepEqual(pythonCitations([file]), [`${file}:2`, `${file}:3`, `${file}:6`])
+})
+
+test("the Python issue-number check reads f-strings without their fields' code, from Python 3.12", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-code-style-"))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+
+  // Built by concatenation, so this file cites nothing itself.
+  const file = path.join(directory, "sample.py")
+  const sample = [
+    "SUMMARY = f\"Resolved {issues" + ":3} issues.\"",
+    "URL = f\"https://example.com/page?q={query}#" + "123\"",
+    "CITED = f\"{name} cites #" + "78.\"",
+    "QUOTED = f\"\"\"{'''can't'''} See #" + "12 {'''won't'''}\"\"\"",
+    "FILL = f\"{name:[>{width}} {issues" + ":3}\"",
+    "FILLED = f\"[{name:[>8} See #" + "12]\"",
+    "NESTED = f\"Result: {'See #" + "12' if fallback else name}\"",
+    "INNER = f\"{f'see #" + "12'}\"",
+    "MULTI = f\"\"\"{",
+    "    value  # see #" + "12",
+    "}\"\"\"",
+  ]
+  fs.writeFileSync(file, sample.join("\n") + "\n")
+
+  // Up to Python 3.11 an f-string is one token, so none of its text is read.
+  const probe = "import tokenize\nprint(hasattr(tokenize, \"FSTRING_START\"))\n"
+  const splitsFstrings = execFileSync(python, ["-"], { cwd: repoRoot, input: probe, encoding: "utf8" }).trim() === "True"
+  const expected = splitsFstrings ? [3, 4, 6, 7, 8, 10] : []
+
+  assert.deepEqual(pythonCitations([file]), expected.map((line) => `${file}:${line}`))
 })
 
 test("the Python checker reports compound one-liners, continued ones and case clauses included, and semicolons", (t) => {
