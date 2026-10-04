@@ -23,7 +23,7 @@ const {
   withoutConsoleLogging,
   withoutLogging
 } = await import("../../src/lib/log")
-const { getLogPath, paths } = await import("../../src/lib/paths")
+const { formatLogDate, getLogPath, paths } = await import("../../src/lib/paths")
 
 // Capture console output instead of printing it, so tests can compare it with
 // the file.
@@ -466,17 +466,43 @@ test("an entry is stamped when it is logged, not when it is written", async (t) 
 })
 
 // An entry logged just before local midnight stays in that day's file, while getLogPath() names the
-// next day's once the date changes. readLogs() reads every dated file, so it still finds the entry.
-test("readLogs finds an entry logged before local midnight after the date changes", async (t) => {
-  const loggedAt = new Date(2026, 6, 24, 23, 59, 59)
-  t.mock.timers.enable({ apis: ["Date"], now: loggedAt })
+// next day's once the date changes. readLogs() reads every dated file, so it returns the entries from
+// both sides of midnight, in the order they were logged.
+test("readLogs returns the entries from both sides of local midnight in order", async (t) => {
+  const beforeMidnight = new Date(2026, 6, 24, 23, 59, 59)
+  const afterMidnight = new Date(2026, 6, 25, 0, 0, 1)
+  t.mock.timers.enable({ apis: ["Date"], now: beforeMidnight })
 
   log.info("logged before midnight")
-  t.mock.timers.setTime(loggedAt.getTime() + 2_000)
+  t.mock.timers.setTime(afterMidnight.getTime())
+  log.info("logged after midnight")
   await flushLogs()
 
-  assert.notEqual(getLogPath(), getLogPath(loggedAt))
-  assert.match(await readLogs(), /logged before midnight/)
+  assert.match(await fs.readFile(getLogPath(beforeMidnight), "utf8"), /^\S+ info logged before midnight\n$/)
+  assert.match(await fs.readFile(getLogPath(afterMidnight), "utf8"), /^\S+ info logged after midnight\n$/)
+  assert.deepEqual(
+    (await readLogs()).trimEnd().split("\n").map((line) => line.replace(/^\S+ info /, "")),
+    ["logged before midnight", "logged after midnight"],
+  )
+})
+
+// The folder lists its files in whatever order the filesystem keeps. readLogs() sorts the dated names,
+// so the oldest day comes first, and skips every file that is not a dated log.
+test("readLogs joins the dated log files oldest first and skips other files", async (t) => {
+  const days = [new Date(2026, 6, 23, 12), new Date(2026, 6, 24, 12), new Date(2026, 6, 25, 12)]
+  await fs.mkdir(paths.logsDir, { recursive: true })
+  for (const day of days) {
+    await fs.writeFile(getLogPath(day), `entry from ${formatLogDate(day)}\n`)
+  }
+
+  const otherFile = path.join(paths.logsDir, "copilot-relay.old.log")
+  await fs.writeFile(otherFile, "not a dated log\n")
+
+  // The listing starts with the other file, then the dated files newest first.
+  const newestFirst = [otherFile, ...days.map((day) => getLogPath(day)).reverse()].map((file) => path.basename(file))
+  t.mock.method(fs, "readdir", async () => newestFirst)
+
+  assert.equal(await readLogs(), "entry from 2026-07-23\nentry from 2026-07-24\nentry from 2026-07-25\n")
 })
 
 // Why: the log file stays open between batches written within a second. A file that was renamed,
