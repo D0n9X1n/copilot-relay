@@ -18,7 +18,7 @@ test.after(async () => {
   await fs.rm(tempHome, { force: true, recursive: true })
 })
 
-// Why (#159): a relay bound beyond loopback with no apiKey serves any client
+// Why: a relay bound beyond loopback with no apiKey serves any client
 // that reaches it. Startup warns rather than refusing, so an existing 0.0.0.0
 // setup keeps working, and the warning names the setting that closes it.
 test("warns about a listener beyond loopback without an apiKey", () => {

@@ -5,7 +5,7 @@ import { translateErrorToClaudeErrorEvent } from "../../src/claude/stream"
 import { toPromptTooLongError } from "../../src/copilot/client"
 import { HTTPError, PromptTooLongError } from "../../src/lib/error"
 
-// #158: Copilot rejects a prompt over the model's max_prompt_tokens in its own wording. Claude
+// Copilot rejects a prompt over the model's max_prompt_tokens in its own wording. Claude
 // Code 2.1.288 recognizes an overflow only by these phrases and reads both counts with this
 // pattern, so the tests check the relay's message against the client's own checks.
 const isClaudeCodeOverflow = (text: string): boolean => {

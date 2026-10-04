@@ -511,7 +511,7 @@ test("status stays port-scoped while stop finds verified relays globally", async
   const fixture = inventory(t, [p])
 
   assert.equal(await findRelayOnPort({ host: "127.0.0.1", port: 45002 }), undefined)
-  // status must not fall back to the global process scan (#33).
+  // status must not fall back to the global process scan.
   assert.equal(
     fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")),
     false
@@ -716,7 +716,7 @@ test("status reports an initial unknown port candidate instead of claiming no re
   }
 
   await assert.rejects(findRelayOnPort({ host: "127.0.0.1", port: 45001 }), /Could not verify/)
-  // status must not fall back to the global process scan (#33).
+  // status must not fall back to the global process scan.
   assert.equal(
     fixture.commands.some(({ args }) => args.includes("-axo") || args.join(" ").includes("ForEach-Object")),
     false
@@ -765,7 +765,7 @@ test("invalid PID-record address falls back to the same port listener record", a
 
   const detected = await findRelayOnPort({ host: "127.0.0.3", port: 45001 })
 
-  // The pid and the address must come from one record (#33).
+  // The pid and the address must come from one record.
   assert.deepEqual(detected, { pid: p.pid, host: "127.0.0.3", port: 45001, startedAt: "" })
   assert.deepEqual(fixture.signals, [])
 })
@@ -898,7 +898,7 @@ for (const command of ["status", "restart", "stop"] as const) {
   })
 }
 
-// #113: a release runtime extracted under a version-named directory, e.g.
+// A release runtime extracted under a version-named directory, e.g.
 // ~/.copilot-relay/runtime/0.4.1/dist/main.js. Identity comes from the package
 // manifest beside the entrypoint, not from the directory name.
 const versionRuntimes = [

@@ -1,7 +1,7 @@
 // Stand-ins that keep tests off the network: GitHub answered locally, no socket that leaves this
 // machine, proxy variables under the test's control, and a local proxy that records what it is sent.
 //
-// The relay sends GitHub calls through the same undici dispatcher as Copilot calls (#153), so a
+// The relay sends GitHub calls through the same undici dispatcher as Copilot calls, so a
 // test can neither replace the global fetch to fake GitHub nor let a call reach github.com.
 import { createServer, request as forward, type IncomingMessage, type ServerResponse } from "node:http"
 import net from "node:net"

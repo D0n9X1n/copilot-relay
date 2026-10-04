@@ -182,7 +182,7 @@ test("does not treat literal data or property names as schema keywords", () => {
   assert.deepEqual(normalizeResponsesToolSchema(schema), schema)
 })
 
-// Why: every request rebuilt every tool schema, though most need no change (#141).
+// Why: every request rebuilt every tool schema, though most need no change.
 test("returns a schema that needs no change as the same object", () => {
   const schema = {
     type: "object",

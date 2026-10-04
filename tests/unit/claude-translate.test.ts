@@ -152,7 +152,7 @@ test("drops synthesized web-search blocks from replayed assistant history", () =
   assert.equal(payload.messages.at(-2)?.content, "Tokio is the most widely used.")
 })
 
-// #114: upstream sends `arguments: ""` for zero-parameter tools (e.g.
+// Upstream sends `arguments: ""` for zero-parameter tools (e.g.
 // mcp__playwright__browser_close). That is `{}`, not a 500.
 const toolCallResponse = (argumentsText: string): ChatCompletionResponse => {
   const response = createChatResponse("test-model")

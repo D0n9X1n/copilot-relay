@@ -4,7 +4,7 @@ import test from "node:test"
 import { readBillingLineField, removeBillingLine } from "../../src/claude/billing-line"
 import type { ClaudeMessagesPayload } from "../../src/claude/types"
 
-// The first system block Claude Code 2.1.288 sent in #157.
+// The first system block Claude Code 2.1.288 sends.
 const billingLine = "x-anthropic-billing-header: cc_version=2.1.288.976; cc_entrypoint=sdk-cli;"
 const identity = "You are Claude Code, Anthropic's official CLI for Claude."
 const instructions = "Answer in one sentence."

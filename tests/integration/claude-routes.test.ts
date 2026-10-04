@@ -19,7 +19,7 @@ import {
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-relay-itest-"))
 process.env.HOME = tempHome
 process.env.USERPROFILE = tempHome
-// Why (#48): application stdout can corrupt the Node test-runner IPC framing.
+// Why: application stdout can corrupt the Node test-runner IPC framing.
 process.env.CONSOLA_LEVEL = "0"
 
 const { createServer } = await import("../../src/server")
@@ -285,7 +285,7 @@ const startMockCopilot = async (
       }
 
       // The recompose pass after a search. Emitting a client tool call here is
-      // the behavior #37 made impossible: with no tools on the wire the model
+      // the behavior a tool-less recompose pass would prevent: with no tools on the wire the model
       // could only describe what it intended to do. Non-streaming only: the
       // recompose pass is always buffered, so a streamed request that reaches
       // here is an ordinary turn and should fall through to the text response.
@@ -913,7 +913,7 @@ test("relay-generated stream errors include their correlation ID without interna
   }
 })
 
-// #158: Copilot rejects a prompt over the model's max_prompt_tokens with HTTP 400 on every
+// Copilot rejects a prompt over the model's max_prompt_tokens with HTTP 400 on every
 // inference route. The catalog request still succeeds, as it does on the live service.
 const startFailingCopilot = async (status: number, body: string) => {
   const paths: Array<string> = []
@@ -2018,7 +2018,7 @@ test("unsupported Claude API routes return structured 500", async () => {
   assert.equal(body.error?.message, "Unsupported Claude API route")
 })
 
-// Why: regression coverage for #37. Claude Code advertises WebSearch alongside
+// Why: Claude Code advertises WebSearch alongside
 // its own tools, and the relay's recompose pass used to send `tools: undefined`,
 // so the model could not emit a tool_use block and every search turn ended as an
 // unactioned plan. The recompose request must keep the client's tools, drop only
@@ -2105,7 +2105,7 @@ test("HEAD and GET /api/hello return 200 without contacting upstream", async () 
   }
 })
 
-// Why (#43): /healthz is the source `status` prefers for the daemon's version,
+// Why: /healthz is the source `status` prefers for the daemon's version,
 // because it is answered by the process itself and so cannot be stale. It has
 // to carry the running build's version, and — like every other thing /healthz
 // does — must not contact Copilot to do it.
@@ -2126,7 +2126,7 @@ test("GET /healthz reports the running version without contacting upstream", asy
   }
 })
 
-// Why: regression coverage for #40. Advertising WebSearch used to force
+// Why: advertising WebSearch used to force
 // `stream: false` on the decision pass, even when the model never selected it.
 // Claude Code advertises WebSearch by default, so most streaming turns paid for
 // a full non-streaming completion that was then replayed as synthetic SSE. The
@@ -2167,7 +2167,7 @@ test("POST /v1/messages streams turns that advertise WebSearch but do not use it
   }
 })
 
-// #114: Copilot sends `arguments: ""` for zero-parameter tools such as
+// Copilot sends `arguments: ""` for zero-parameter tools such as
 // mcp__playwright__browser_close. Both paths must return `input: {}`; text that
 // is non-empty but invalid must map to an error naming the tool, not a bare 500.
 const startToolArgumentsCopilot = async (argumentsText: string) => {

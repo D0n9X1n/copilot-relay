@@ -581,7 +581,7 @@ claudeRoutes.post("/messages", async (c) => {
   // Decided before the billing line is removed, because that line marks a subagent's requests.
   // The relay's own model probe marks itself in-process, where no client can.
   const initiator = c.env?.relayProbe === true ? "agent" : getClaudeRequestInitiator(receivedPayload)
-  // Every route reads the system prompt without Claude Code's billing line (#157).
+  // Every route reads the system prompt without Claude Code's billing line.
   const claudePayload = removeBillingLine(receivedPayload)
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {

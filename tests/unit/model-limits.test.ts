@@ -319,7 +319,7 @@ test("native deep probe accepts only the verified Opus 5.5 provider spelling", a
 })
 
 // Copilot answers some undated IDs with a dated snapshot of the same model: gpt-5.5 reported
-// gpt-5.5-2026-04-23 (#137). Only the requested ID plus one -YYYY-MM-DD date matches; a dated
+// gpt-5.5-2026-04-23. Only the requested ID plus one -YYYY-MM-DD date matches; a dated
 // request must match exactly, and an alias served by another model is still a mismatch.
 test("deep probe accepts a dated snapshot of the requested undated ID and nothing looser", async (t) => {
   const { withRecordedTransport } = await import("../../src/lib/request-trace")
@@ -362,7 +362,7 @@ test("deep probe accepts a dated snapshot of the requested undated ID and nothin
 })
 
 // trajectory-compaction is listed in the catalog, yet upstream answers HTTP 400
-// model_not_supported (#137). That gets its own result, apart from payload rejections.
+// model_not_supported. That gets its own result, apart from payload rejections.
 test("deep probe labels an upstream model_not_supported apart from other HTTP 400s", async (t) => {
   const { withRecordedTransport } = await import("../../src/lib/request-trace")
   const id = "listed-model"

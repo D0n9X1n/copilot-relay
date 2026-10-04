@@ -20,7 +20,7 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
 
     // Every outgoing connection and the global fetch throw, so reaching authentication or the
     // upstream preflight shows as NETWORK_ACCESS_FORBIDDEN. Both go through the relay's upstream
-    // dispatcher rather than the global fetch (#153), so the socket is guarded too. The preflight's
+    // dispatcher rather than the global fetch, so the socket is guarded too. The preflight's
     // log line is checked as well.
     const script = `
       import net from "node:net";
@@ -43,7 +43,7 @@ for (const effort of ["none", "NONE", "ultra", "\"\""]) {
             cwd,
             // Each child compiles the relay through tsx with its disk cache disabled. In full
             // local runs on Windows the first case took longer than the others and sometimes
-            // reached a 10-second limit (#172). A child that hangs still fails, after 60 seconds.
+            // reached a 10-second limit. A child that hangs still fails, after 60 seconds.
             timeout: 60_000,
             env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
           },

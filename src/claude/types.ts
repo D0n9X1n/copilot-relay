@@ -47,7 +47,7 @@ interface ClaudeImageBlock {
 export interface ClaudeToolResultBlock {
   type: "tool_result"
   tool_use_id: string
-  // Claude Code sends an array when a tool returns more than text, such as an image (#150).
+  // Claude Code sends an array when a tool returns more than text, such as an image.
   content: string | Array<ClaudeTextBlock | ClaudeImageBlock>
   is_error?: boolean
 }

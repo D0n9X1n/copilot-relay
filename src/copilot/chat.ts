@@ -190,12 +190,12 @@ const toContentParts = (content: Message["content"]): Array<ContentPart> => {
 // Replaces the content of a tool result that held only images.
 const toolImageNote = "Image output follows in the next user message."
 
-// Copilot accepts image_url parts in a tool message, but in #150 only claude-opus-5.5 read them
-// there: gpt-5-mini answered that no image arrived, and gemini-3.8-flash named colors it never saw.
+// Copilot accepts image_url parts in a tool message, but only claude-opus-5.5 reads them there:
+// gpt-5-mini answers that no image arrived, and gemini-3.8-flash names colors it never saw.
 // Both read the same image when it follows in a user message. So a tool message keeps its text, and
 // its images move to the user message that follows its run of tool messages, each call's images led
-// by a label naming the tool call. Claude models keep the original shape: they read it, and the #147
-// cache marks rely on it.
+// by a label naming the tool call. Claude models keep the original shape: they read it, and the chat
+// route's cache marks rely on it.
 export const moveToolImagesToUserMessages = (
   payload: ChatCompletionsPayload,
 ): ChatCompletionsPayload => {

@@ -40,8 +40,8 @@ test.after(async () => {
   await fs.rm(home, { recursive: true, force: true })
 })
 
-// Why: before #153 every upstream call connected directly. Until a command has read its config,
-// that must stay so, whatever proxy variables are set.
+// Why: until a command has read its config, every upstream call connects directly, whatever
+// proxy variables are set.
 test("upstream calls connect directly until a command configures the dispatcher", () => {
   assert.equal(getUpstreamDispatcher().constructor, Agent)
 })
@@ -94,7 +94,7 @@ const hintLines = async (): Promise<Array<string>> => {
 // nothing says why; the hint names the fix. Once per process, and never for a configured proxy or
 // a cancelled request, which are different failures.
 //
-// Why (#168): models --deep runs its probes under withoutLogging, where log.error writes nothing.
+// Why: models --deep runs its probes under withoutLogging, where log.error writes nothing.
 // A failure there must leave the hint for a later one. This uses the real logger and reads the log
 // file, because a mocked log.error never sees the suppression. withoutConsoleLogging only keeps the
 // hint off the test output; the file still gets it.
@@ -125,8 +125,8 @@ test("a direct failure while a proxy variable is set logs the upstreamProxy hint
   assert.match(hints[0], /set upstreamProxy: env in .+config\.yaml/)
 })
 
-// Why: before #153 sign-in used the global fetch, which ignores the relay's dispatcher, so a user
-// behind a proxy could not sign in. Device login, the token poll, the Copilot token exchange and
+// Why: the global fetch ignores the relay's dispatcher, so sign-in through it fails for a user
+// behind a proxy. Device login, the token poll, the Copilot token exchange and
 // the user lookup must all go through the dispatcher every Copilot call uses.
 test("GitHub sign-in uses the shared upstream dispatcher", async (t) => {
   t.mock.method(globalThis, "fetch", () => {
@@ -199,7 +199,7 @@ const rejectionOf = async (promise: Promise<unknown>): Promise<unknown> => {
   throw new Error("Expected a rejection")
 }
 
-// Why (#168): a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
+// Why: a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
 // in the error, and a reply that echoes Proxy-Authorization would carry the password, raw and in
 // Basic form, into every log line that prints the error. Both proxy modes.
 test("a malformed CONNECT reply that echoes the proxy password leaves none of it in the error", async (t) => {
@@ -235,7 +235,7 @@ test("a malformed CONNECT reply that echoes the proxy password leaves none of it
   assert.deepEqual(proxy.targets, ["copilot.invalid:443", "copilot.invalid:443"])
 })
 
-// Why (#168): the error is cleaned in place, so callers still read its type, code and cause; usage
+// Why: the error is cleaned in place, so callers still read its type, code and cause; usage
 // names a failure by its cause's message or code. Credentials are replaced in its messages even
 // when they are too short to register with the log redaction: only this error changes.
 test("a transport error keeps its type, code and cause but loses every form of the proxy credentials", async (t) => {

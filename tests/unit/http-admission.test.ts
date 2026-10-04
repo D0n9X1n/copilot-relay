@@ -452,7 +452,7 @@ test("rejects an unexpected authority before reading its body or reaching upstre
   assert.deepEqual(upstream.requests, [])
 })
 
-// The relay's own inbound key (#159). A fixture value only.
+// The relay's own inbound key. A fixture value only.
 const relayKey = "relay-fixture-key-0001"
 
 // Anthropic's error shape. The message is fixed, so it can never echo a presented value.
@@ -542,7 +542,7 @@ test("an apiKey refuses a missing or wrong key with 401 in Anthropic's error sha
   assert.deepEqual(upstream.requests, [])
 })
 
-// Why (#159): Claude Code sends ANTHROPIC_AUTH_TOKEN as Authorization: Bearer;
+// Why: Claude Code sends ANTHROPIC_AUTH_TOKEN as Authorization: Bearer;
 // other clients send x-api-key. Either header can carry the key.
 test("the key is accepted as x-api-key or Authorization: Bearer, in any scheme case", async (t) => {
   const upstream = await fakeUpstream(t)
@@ -571,7 +571,7 @@ test("the key is accepted as x-api-key or Authorization: Bearer, in any scheme c
   assert.equal(upstream.requests.filter((path) => path === "/chat/completions").length, accepted.length)
 })
 
-// Why (#159): health checks and Claude Code's reachability probe must keep
+// Why: health checks and Claude Code's reachability probe must keep
 // working without the key. Every other route needs it, unknown routes included.
 test("with an apiKey, only GET /healthz and GET|HEAD /api/hello stay open", async () => {
   const app = createServer(configFor({ apiKey: relayKey }))
@@ -603,7 +603,7 @@ test("with an apiKey, only GET /healthz and GET|HEAD /api/hello stay open", asyn
   }
 })
 
-// Why (#159): an unknown route logs its payload by design. An unauthenticated
+// Why: an unknown route logs its payload by design. An unauthenticated
 // request is refused before that, so a stranger's body and guessed key never
 // reach the log.
 test("an unauthenticated request is refused before its body is read or logged", async (t) => {
@@ -659,7 +659,7 @@ test("authority and Origin are checked before the key, and the key before the co
   assert.equal((await send("localhost", { "x-api-key": relayKey, "content-type": "text/plain" })).status, 415)
 })
 
-// Why (#159): hot reload mutates the live config, and admission reads the key
+// Why: hot reload mutates the live config, and admission reads the key
 // from it on every request, so a rotated key applies to the very next one.
 test("a key changed on the live config applies to the next request", async () => {
   const config = configFor({ apiKey: relayKey })
@@ -707,7 +707,7 @@ test("the HTTP adapter applies the apiKey to a request read from a real socket",
   assert.equal(await send("/healthz"), 200)
 })
 
-// Why (#159): deep probes run the real admission in process, so with an apiKey
+// Why: deep probes run the real admission in process, so with an apiKey
 // set they must present it, or every row would fail with 401.
 test("isolated model probes carry the configured apiKey through admission", async (t) => {
   const upstream = await fakeUpstream(t)

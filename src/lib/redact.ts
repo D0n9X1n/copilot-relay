@@ -5,7 +5,7 @@
 // working custom-gateway config, used as `${base}/models`. That value was
 // written verbatim to the log on every start and into `status` output, which is
 // the one file wiki/EN-Logging-Troubleshooting.md asks users to paste into an
-// issue. See #47.
+// issue.
 //
 // Pure and dependency-free on purpose: it sits on the logging path, so anything
 // that could throw or block here would take a request down with it.
@@ -124,7 +124,7 @@ export const formatUpstreamProxyForDisplay = (upstreamProxy: string): string => 
  * `status` prints config values directly to stdout. A config string carrying
  * raw control bytes could clear the line and paint status rows the relay never
  * produced. The config file is user-owned, so this is hardening rather than a
- * vulnerability — but it costs nothing to make the output non-forgeable. #47.
+ * vulnerability — but it costs nothing to make the output non-forgeable.
  */
 export const sanitizeTerminalString = (text: string): string =>
   text.replace(ansiEscapePattern, "").replace(controlBytePattern, "")

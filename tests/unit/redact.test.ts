@@ -44,7 +44,7 @@ test("displays an origin-only url unchanged", () => {
   )
 })
 
-// Why: the path is where a gateway credential lives (#47). Display must keep
+// Why: the path is where a gateway credential lives. Display must keep
 // the origin — which is the operationally useful half — and say plainly that
 // something was withheld rather than silently truncating.
 test("hides path, query and fragment behind an explicit marker", () => {
@@ -80,7 +80,7 @@ test("does not throw on a value that is not a url", () => {
 
 // Why: status writes config values straight to the terminal. A config string
 // carrying raw ANSI or C0 bytes could repaint the screen and fake status rows
-// the relay never emitted. #47's companion hardening item.
+// the relay never emitted.
 test("strips ansi escapes and control bytes from terminal output", () => {
   const injected = "\u001B[2K\rhealth     ok\u0007"
   const cleaned = sanitizeTerminalString(injected)
@@ -113,7 +113,7 @@ test("registering an origin-only url adds no policy", () => {
   assert.equal(scrubSensitiveUrls(text), text)
 })
 
-// Why: the core of #47. Once an origin is known to carry a secret in its path,
+// Why: once an origin is known to carry a secret in its path,
 // every URL on that origin must keep only the origin, whatever tail the
 // upstream client appended.
 test("redacts everything after the origin for a registered origin", () => {

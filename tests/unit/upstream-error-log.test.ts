@@ -39,8 +39,8 @@ const readErrorEntry = async (): Promise<string> => {
   throw new Error("the upstream error was never logged")
 }
 
-// #144: a gpt-5.4 failure entry hit the argument bound inside the request, so the
-// upstream body that explained the HTTP 400 never reached the log.
+// A request alone can reach the argument bound; the upstream body that explains the HTTP 400
+// must still reach the log.
 test("a request longer than the log bound keeps the upstream body in the entry", async (t) => {
   const upstream = createServer((request, response) => {
     request.resume()

@@ -159,7 +159,7 @@ test("nondebug observations create no capture directory", async () => {
 })
 
 // Why: every upstream request body used to be copied into a Buffer just to count its bytes, even
-// when the trace records nothing (#141).
+// when the trace records nothing.
 test("an unrecorded upstream request body is counted without being copied", async (t) => {
   const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000030", new Request("http://localhost/v1/messages"), config, {}, false)
   const body = JSON.stringify({ content: "診断".repeat(1000) })
@@ -455,7 +455,7 @@ test("capture retention keeps the cutoff local calendar day", async () => {
   assert.equal(await fs.stat(remove).then(() => true, () => false), false)
 })
 
-// Why (#159): admission accepts the relay's apiKey in either header, and a copy
+// Why: admission accepts the relay's apiKey in either header, and a copy
 // of it in any other allowlisted header must still be withheld from metadata.
 // The configured key is protected whichever header carried it.
 test("capture metadata never records the relay apiKey, whichever header carried it", async () => {

@@ -128,9 +128,9 @@ export const prepareClaudeWebSearchDecisionPayload = (
   }
 }
 
-// A tool result holds a string or an array of blocks, such as text and an image (#150). Each text
+// A tool result holds a string or an array of blocks, such as text and an image. Each text
 // block keeps its text and any other block is named by its type, so an image reads as "[image]"
-// rather than "[object Object]" (#161). A client can omit the content.
+// rather than "[object Object]". A client can omit the content.
 const toolResultText = (content: ClaudeToolResultBlock["content"] | undefined): string => {
   if (typeof content === "string") {
     return content

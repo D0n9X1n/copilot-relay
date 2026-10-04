@@ -106,7 +106,7 @@ const getModels = async (origin: string): Promise<void> => {
   await response.text()
 }
 
-// Why (#153): where only a proxy reaches the internet, every Copilot call has to go through it. A
+// Why: where only a proxy reaches the internet, every Copilot call has to go through it. A
 // URL's user name and password become the tunnel's Proxy-Authorization and never reach Copilot.
 test("upstreamProxy as a URL sends Copilot calls through the proxy with its credentials", async (t) => {
   const copilot = await startJsonServer({ data: [] })
@@ -132,7 +132,7 @@ test("upstreamProxy as a URL sends Copilot calls through the proxy with its cred
   }])
 })
 
-// Why: the default. An empty upstreamProxy connects directly, as before #153, even when the shell
+// Why: the default. An empty upstreamProxy connects directly, even when the shell
 // has proxy variables set; only upstreamProxy: env reads them.
 test("an empty upstreamProxy connects directly even when proxy variables are set", async (t) => {
   const copilot = await startJsonServer({ data: [] })
@@ -174,7 +174,7 @@ test("upstreamProxy env uses the proxy variables and honours NO_PROXY", async (t
   assert.equal(exempt.requests.length, 1)
 })
 
-// Why (#141): Copilot sends no Keep-Alive hint, so undici's 4 s default would close a connection
+// Why: Copilot sends no Keep-Alive hint, so undici's 4 s default would close a connection
 // idle for longer, and the next request would pay for a new handshake. Through a proxy that also
 // means a new tunnel, so both proxy kinds must keep the relay's 50 s keep-alive.
 test("a proxied connection idle for longer than undici's 4 s default is reused", async (t) => {
@@ -227,7 +227,7 @@ test("status probes connect to the relay directly while upstreamProxy is set", a
   assert.deepEqual(relay.requests.map((request) => `${request.method} ${request.url}`), ["POST /v1/messages"])
 })
 
-// Why (#168): with NODE_USE_ENV_PROXY=1, Node's own fetch sends even a request to localhost through
+// Why: with NODE_USE_ENV_PROXY=1, Node's own fetch sends even a request to localhost through
 // HTTP_PROXY when NO_PROXY does not exempt it. Through a proxy that refuses, status would report a
 // healthy relay as unusable. The probes use a direct dispatcher of their own. On a Node without
 // that mode, this passes trivially.
@@ -372,7 +372,7 @@ const prepareHome = async (t: TestContext, proxyUrl: string, copilotBaseUrl: str
   return childHome
 }
 
-// Why (#153): start builds the dispatcher from its config before its first upstream call, so the
+// Why: start builds the dispatcher from its config before its first upstream call, so the
 // GitHub user lookup and the startup preflight both go through the proxy. The proxy refuses both,
 // so start stops at the preflight and never listens.
 test("start sends its GitHub and Copilot calls through upstreamProxy", async (t) => {
@@ -391,7 +391,7 @@ test("start sends its GitHub and Copilot calls through upstreamProxy", async (t)
   )
 })
 
-// Why (#153): device login is the first call auth makes, and a user behind a proxy signs in this
+// Why: device login is the first call auth makes, and a user behind a proxy signs in this
 // way first. Had auth bypassed the proxy, the connection guard would have thrown
 // UNEXPECTED_NETWORK_ACCESS and the proxy would have recorded nothing.
 test("auth starts device login through upstreamProxy", async (t) => {
@@ -407,7 +407,7 @@ test("auth starts device login through upstreamProxy", async (t) => {
   assert.deepEqual(proxy.records.map((record) => `${record.method} ${record.target}`), ["CONNECT github.com:443"])
 })
 
-// Why (#153): models runs in its own process and builds its own dispatcher. Its GitHub user lookup
+// Why: models runs in its own process and builds its own dispatcher. Its GitHub user lookup
 // and the catalog request both go through the proxy. The proxy refuses only GitHub, and a failed
 // user lookup does not stop the listing.
 test("models reads the catalog through upstreamProxy", async (t) => {
@@ -438,7 +438,7 @@ const readLogs = async (childHome: string): Promise<string> => {
   return contents.join("\n")
 }
 
-// Why (#168): a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
+// Why: a proxy that answers CONNECT with a reply undici cannot parse leaves the unparsed rest
 // in the error, and start logs that error for the GitHub user lookup and for the startup
 // preflight. A reply that echoes Proxy-Authorization must not carry the password, raw or in Basic
 // form, to the terminal or the log, whether the proxy comes from config.yaml or HTTPS_PROXY.

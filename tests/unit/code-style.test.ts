@@ -1,4 +1,4 @@
-// Mechanical rules of the repository code style (#127), enforced here so they cannot drift.
+// Mechanical rules of the repository code style, enforced here so they cannot drift.
 // Readability that needs judgment (grouping steps with blank lines, naming, why-comments)
 // is reviewed instead. "Code style" in wiki/EN-Development.md lists every rule and its precedent.
 import assert from "node:assert/strict"

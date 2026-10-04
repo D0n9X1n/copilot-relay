@@ -28,7 +28,7 @@ import { colorEnabled, colorText, withoutHiddenCharacters } from "~/lib/terminal
  * for different responses - restart the service versus re-authenticate.
  *
  * A failed health probe is a 2, not a 0. Printing FAILED while exiting 0 would
- * make every scripted caller treat an unreachable relay as fine. See #34.
+ * make every scripted caller treat an unreachable relay as fine.
  */
 const exitCodes = {
   notRunning: 1,
@@ -60,13 +60,13 @@ interface ProbeResult {
  * `copilotBaseUrl` is the display form, not the raw value. It is user-supplied
  * and may legitimately carry a credential in its path, and `status` output is
  * what a user pastes into a bug report. Mapped here rather than at each render
- * site so the text block and `--json` cannot disagree about it. See #47.
+ * site so the text block and `--json` cannot disagree about it.
  *
  * `apiKey` is never the key itself: `[redacted]` when one is set, empty when
  * none is. For the same reason, and mapped here for the same reason.
  *
  * `upstreamProxy` is the display form too: a proxy URL can carry a user name
- * and password, so only its origin is shown. See #153.
+ * and password, so only its origin is shown.
  */
 export type StatusConfig = Omit<AppConfig, "upstreamProxy" | "webSearchBackend"> & {
   upstreamProxy: string | null
@@ -95,7 +95,6 @@ export interface RelayStatus {
    * The version the running daemon reports about itself, which is not
    * necessarily `version` — that one is whichever CLI was invoked. Undefined
    * when nothing is running, or when the daemon predates version reporting.
-   * See #43.
    */
   daemonVersion?: string
   deep?: ProbeResult
@@ -131,9 +130,9 @@ export const hasVersionMismatch = (status: RelayStatus): boolean =>
  *
  * 0 requires a live process *and* a passing health probe. Printing FAILED while
  * exiting 0 would make every scripted caller treat an unreachable relay as
- * fine. See #34.
+ * fine.
  *
- * A version mismatch stays 0 on purpose (#43). The relay works; it is just not
+ * A version mismatch stays 0 on purpose. The relay works; it is just not
  * the build that was installed. Mapping it to 2 would overstate it and break
  * every scripted caller that treats non-zero as broken. It is surfaced in the
  * text instead.
@@ -243,7 +242,7 @@ const renderConfig = (
 
     // Every value is user-supplied and lands on a terminal unescaped. Raw
     // control bytes could clear the line and paint status rows the relay never
-    // produced, so no config value is trusted to be printable. See #47.
+    // produced, so no config value is trusted to be printable.
     return `    ${key.padEnd(24)}${sanitizeTerminalString(rendered)}`
   })
 
@@ -282,7 +281,7 @@ export const renderStatus = (status: RelayStatus, color = false): Array<string> 
   // The daemon's own build, distinct from the header line above, which is the
   // CLI that was invoked. Always shown when running: the case this exists for
   // is an upgrade the user believes landed, and a row that appears only on
-  // mismatch would leave "did it even check?" unanswered. See #43.
+  // mismatch would leave "did it even check?" unanswered.
   if (status.daemonVersion === undefined) {
     lines.push(
       `  version    ${colorText("unknown", "muted", color)} (daemon predates version reporting — restart to report it)`,
@@ -339,7 +338,7 @@ export const renderStatus = (status: RelayStatus, color = false): Array<string> 
   // A mismatch is nearly always an upgrade that installed but never restarted,
   // so the next step is named rather than left to be inferred. Surfaced, not
   // just recorded: the version row alone reads as trivia next to a green
-  // health line. See #43.
+  // health line.
   if (hasVersionMismatch(status)) {
     lines.push(
       "",
@@ -404,7 +403,7 @@ const describeError = (error: unknown): string => {
  * The version rides along on a probe `status` already makes, so asking what is
  * running costs nothing extra. Absent for a daemon older than v0.3.1, which is
  * itself informative, so it stays optional rather than defaulting to the
- * caller's version - that substitution is the bug. See #43.
+ * caller's version - that substitution is the bug.
  */
 const checkHealth = async (
   baseUrl: string,
@@ -536,7 +535,7 @@ export const collectStatus = async (options: {
 
   // Before any probe runs, so a URL this origin appears in - a fetch failure
   // from checkHealth or checkDeep, which quotes the URL it tried - is already
-  // covered by the time it reaches a detail string. See #47.
+  // covered by the time it reaches a detail string.
   registerSensitiveOrigin(appConfig.copilotBaseUrl)
   // The /v1 probes below send the relay's apiKey, and the output is scrubbed of it.
   registerLogSecret(appConfig.apiKey)
@@ -556,7 +555,7 @@ export const collectStatus = async (options: {
   // Scoped to the configured port on purpose. `stop` scans globally so it can
   // clean up strays; `status` was asked about one relay, and reporting a
   // different one is worse than reporting nothing because it looks
-  // authoritative. See #33.
+  // authoritative.
   const relay = await findRelayOnPort(readProxyConfig(appConfig))
   if (!relay) {
     return { ...base, running: false }
@@ -578,7 +577,7 @@ export const collectStatus = async (options: {
   // stale. The pid file backs it up for a daemon that is up but not yet
   // healthy, which is exactly when the two sources are complementary. Both
   // absent means a daemon older than v0.3.1 — reported as unknown rather than
-  // silently filled in with the CLI's version. See #43.
+  // silently filled in with the CLI's version.
   const daemonVersion = health.version ?? relay.version
 
   return {
@@ -641,7 +640,7 @@ export const status = defineCommand({
     // handles the copilotBaseUrl row, but a probe failure detail quotes the URL
     // it tried, and those strings come from fetch rather than from config. This
     // is the backstop for every such path, including --deep. Applied to the
-    // complete output so legitimate newlines between rows survive. See #47.
+    // complete output so legitimate newlines between rows survive.
     // scrubLogSecrets is the same backstop for the apiKey, which toStatusConfig
     // already replaces in the config block. Hidden characters are removed first,
     // keeping colors and newlines, because one inside a value can split the key

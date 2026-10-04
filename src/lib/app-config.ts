@@ -61,7 +61,7 @@ const defaultConfig: AppConfig = {
   upstreamTimeoutSeconds: 180,
   webSearchBackend: undefined,
   // Empty, not "env": this default is written into every existing config on upgrade, and an
-  // install with an unrelated HTTPS_PROXY set must not silently change its route (#153).
+  // install with an unrelated HTTPS_PROXY set must not silently change its route.
   upstreamProxy: undefined,
   claudeUpstreamApi: "chat-completions",
 }
@@ -205,7 +205,7 @@ export const normalizeApiKey = (value: unknown): string | undefined => {
  * through. None of them can be found again in arbitrary log text: practical URL
  * detection anchors on a literal "://", and loosening that to chase a bare
  * "https:" would start matching ordinary prose. Requiring the authority prefix
- * is the one boundary where this has a definite answer. See #47.
+ * is the one boundary where this has a definite answer.
  */
 const conventionalHttpUrlPattern = /^https?:\/\//i
 
@@ -223,7 +223,7 @@ const conventionalHttpUrlPattern = /^https?:\/\//i
  *
  * Rejecting the raw byte costs nothing: every one of these has a
  * percent-encoded spelling that is unambiguous in log text and is accepted
- * here unchanged. See #47.
+ * here unchanged.
  */
 const unsafeRawDelimiterPattern = /['"`<>\s\u0000-\u001F\u007F]/
 
@@ -242,7 +242,7 @@ const copilotBaseUrlDelimiterMessage =
 /**
  * Validates copilotBaseUrl as a conventional HTTP(S) URL without credentials.
  *
- * Four rules, all learned from #47:
+ * Four rules:
  *
  * The value is concatenated as `${base}${path}` for every upstream call, so it
  * must be something Undici will accept. A relative or non-HTTP value fails at

@@ -163,7 +163,7 @@ export const isRelayStartProcess = (command: string, cwd?: string): boolean => {
 }
 
 // A relay entrypoint installed under a directory with any name, e.g. a release
-// runtime at ~/.copilot-relay/runtime/0.4.1/dist/main.js (#113). The argv shape
+// runtime at ~/.copilot-relay/runtime/0.4.1/dist/main.js. The argv shape
 // is only a candidate; packageEntryProof decides from the filesystem.
 const packagedEntryCandidate = (command: string, cwd?: string): string | undefined => {
   const entry = nodeDaemonEntry(commandArgs(command))
@@ -524,7 +524,7 @@ export const writeRelayPidFile = async (
     startedAt: new Date().toISOString(),
     // Written by the daemon at startup, so it is the build actually serving —
     // unlike `status`, which used to report the version of whichever CLI was
-    // invoked. See #43. Covers the window before the daemon answers /healthz.
+    // invoked. Covers the window before the daemon answers /healthz.
     version: appVersion,
   }
 
@@ -775,7 +775,7 @@ export const findRelayOnPort = async (
   // No usable pid file - fall back to whoever holds the port. Covers a relay
   // started before pid files, or one whose pid file was removed. No version
   // here on purpose: nothing in this path knows the daemon's build, and
-  // borrowing the caller's would recreate #43.
+  // borrowing the caller's would report the invoked CLI's version as the daemon's.
   for (const pid of await getPortListenerPids(config.port)) {
     if (await isRelayPid(pid)) {
       return {

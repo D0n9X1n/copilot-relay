@@ -138,7 +138,7 @@ const parseStringArray = (value: unknown): string[] | undefined => {
 
 // Copilot marks a model without effort support either with reasoning_effort: false or by leaving
 // the key out of a well-formed supports object; every chat model it lists that way rejected effort
-// with invalid_reasoning_effort (#137). A missing supports object, true, null or a malformed value
+// with invalid_reasoning_effort. A missing supports object, true, null or a malformed value
 // stays unknown.
 const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): string[] | undefined => {
   if (supports === undefined) {

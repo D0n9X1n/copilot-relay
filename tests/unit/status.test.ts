@@ -173,7 +173,7 @@ test("reports pid, address, and uptime when running", () => {
   assert.match(out, /http:\/\/127\.0\.0\.1:4142/)
 })
 
-// Why: this is the #29 lesson encoded. /healthz and /v1/models both pass on a
+// Why: /healthz and /v1/models both pass on a
 // relay whose Copilot token expired an hour ago, so a green status line without
 // --deep must not read as "working".
 test("states upstream was not checked without --deep", () => {
@@ -356,7 +356,7 @@ test("shows the dated log path", () => {
   assert.doesNotMatch(out, /logs\/copilot-relay\.log/)
 })
 
-// Why (#34): the exit code is the contract every scripted caller depends on.
+// Why: the exit code is the contract every scripted caller depends on.
 // It exited 0 while printing "health FAILED", so anything gating on it treated
 // an unreachable relay as fine.
 test("exits non-zero when the health probe fails", () => {
@@ -370,7 +370,7 @@ test("exits non-zero when the health probe fails", () => {
 })
 
 // Why: absent health is not passing health. Defaulting to 0 on missing data
-// would reintroduce #34 through a different door.
+// would make a broken relay exit 0.
 test("treats absent health as not usable", () => {
   const status = { ...runningStatus }
   delete status.health
@@ -393,7 +393,7 @@ test("exits 0 only when running and healthy", () => {
   assert.equal(resolveExitCode({ ...runningStatus, deep: { ms: 8, ok: true } }), 0)
 })
 
-// Why (#43): status reported the version of the CLI being invoked, never
+// Why: status reported the version of the CLI being invoked, never
 // asking the daemon. After `npm i -g copilot-relay@X` without a restart it
 // confidently printed the new version while the old process kept serving —
 // wrong in exactly the situation you would run it to check.
@@ -493,7 +493,7 @@ test("reads a pre-v0.3.1 pid file without a version", async () => {
   await fs.rm(paths.pidPath, { force: true })
 })
 
-// Why (#33): status paired a pid found by scanning every process on the machine
+// Why: status paired a pid found by scanning every process on the machine
 // with an address taken from config, so it reported a relay "running" on a port
 // nothing was listening on. Detection must be scoped to the port asked about.
 test("ignores a pid file describing a different port", async () => {
@@ -526,7 +526,7 @@ test("returns nothing when no pid file and nothing is listening", async () => {
   )
 })
 
-// Why (#45): status collapsed the whole resolved config into
+// Why: status collapsed the whole resolved config into
 // "(logLevel=info, thinkEffort=max)" — 2 of 11 keys. The other nine were
 // invisible in text and in --json, so the command you run when something looks
 // wrong could not answer "which model is this actually routing to?".
@@ -571,7 +571,7 @@ test("prints webSearchBackend when it is set", () => {
   assert.doesNotMatch(out, /\(unset — uses gptModel\)/)
 })
 
-// Why (#153): unset, upstreamProxy means the relay connects directly. A blank
+// Why: unset, upstreamProxy means the relay connects directly. A blank
 // value would read like a bug that dropped the key, and "direct" is not
 // guessable from the key name.
 test("names the direct route for an unset upstreamProxy", () => {
@@ -592,7 +592,7 @@ test("prints upstreamProxy env as written", () => {
 // Why: these are the values on disk, which is not the same question as what a
 // live daemon is honouring. applyRuntimeConfig() never reads claudeSetup, does
 // not rebind the socket on host/port changes and does not rebuild the upstream
-// dispatcher on upstreamProxy changes (#153) — so printing every key beside a
+// dispatcher on upstreamProxy changes — so printing every key beside a
 // green health line would imply the running process had read values it has not.
 test("flags the restart-only keys while running", () => {
   const out = render(runningStatus)
@@ -696,7 +696,7 @@ test("leaves an origin-only copilot base url unchanged", () => {
   assert.match(out, /^\s+copilotBaseUrl\s+https:\/\/api\.githubcopilot\.com$/m)
 })
 
-// Why: #47. `status` is the command a user runs when reporting a problem, and
+// Why: `status` is the command a user runs when reporting a problem, and
 // its output is what they paste into an issue. A credential in the configured
 // path must not survive into that text.
 test("hides copilot base url path, query and fragment in text output", () => {
@@ -730,7 +730,7 @@ test("hides copilot base url path, query and fragment in --json output", () => {
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
 })
 
-// Why (#153): a proxy URL can carry a user name and password, and `status`
+// Why: a proxy URL can carry a user name and password, and `status`
 // output is what a user pastes into an issue. Text and --json show only the
 // proxy's origin, and say that credentials were there.
 test("hides upstreamProxy credentials in text and --json output", () => {
@@ -750,7 +750,7 @@ test("hides upstreamProxy credentials in text and --json output", () => {
   assert.equal(plain.upstreamProxy, "http://proxy.example:3128")
 })
 
-// Why: the companion hardening item in #47. status writes config values
+// Why: status writes config values
 // straight to stdout, so raw control bytes in a config string could clear the
 // line and paint status rows the relay never produced.
 test("cannot inject terminal rows from a config value", () => {
@@ -808,7 +808,7 @@ test("keeps key order and exit codes unchanged under redaction", () => {
   )
 })
 
-// Why (#159): status output is pasted into bug reports, so the apiKey row says
+// Why: status output is pasted into bug reports, so the apiKey row says
 // whether a key is set and never what it is, in text and in --json alike.
 test("shows whether an apiKey is set, never the key itself", () => {
   const key = "STATUS_RENDER_KEY_SENTINEL"
@@ -823,7 +823,7 @@ test("shows whether an apiKey is set, never the key itself", () => {
   assert.ok(!JSON.stringify(status).includes(key))
 })
 
-// Why (#159): with an apiKey set, the /v1 routes answer 401 without it, so the
+// Why: with an apiKey set, the /v1 routes answer 401 without it, so the
 // probes of those routes send it, and only when one is configured.
 test("the models probe sends the apiKey only when one is configured", async (t) => {
   const calls: Array<{ url: unknown; headers: unknown }> = []
@@ -861,13 +861,13 @@ test("the deep probe sends the apiKey with its message request", async (t) => {
   })
 })
 
-// Why (#159): the key must never reach printed status, in text or --json. The
+// Why: the key must never reach printed status, in text or --json. The
 // config row is redacted, and the whole output is scrubbed as a backstop.
 test("status command output never contains the configured apiKey", async (t) => {
   const { status: command } = await import("../../src/status")
   const key = "STATUS_COMMAND_KEY_SENTINEL"
   await fs.mkdir(paths.appDir, { recursive: true })
-  // Why (#159 re-review): the key split by a character a terminal does not show, here U+200B and
+  // Why: the key split by a character a terminal does not show, here U+200B and
   // the C1 control U+0085 in the model settings, passed the final scrub unchanged.
   await fs.writeFile(paths.configPath, [
     "port: 4199",
@@ -909,7 +909,7 @@ test.after(async () => {
   await fs.rm(tempHome, { force: true, recursive: true })
   assert.deepEqual(signalCalls, [])
 
-  // Each port lookup asked about 4199 only and never scanned every process (#33).
+  // Each port lookup asked about 4199 only and never scanned every process.
   assert.equal(discoveryCalls.length, 5)
   for (const { file, args } of discoveryCalls) {
     if (process.platform === "win32") {

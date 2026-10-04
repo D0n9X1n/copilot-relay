@@ -22,7 +22,7 @@ test("relay base URLs replace wildcard binds and bracket concrete IPv6", async (
   }
 })
 
-// Why (#159): the startup warning is for a bind host that other machines may
+// Why: the startup warning is for a bind host that other machines may
 // reach. Only literal loopback addresses and the name localhost count as local;
 // a wildcard, another address or any other name does not.
 test("only loopback literals and localhost are loopback bind hosts", async () => {

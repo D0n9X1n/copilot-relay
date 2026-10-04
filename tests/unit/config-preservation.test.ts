@@ -310,7 +310,7 @@ test("generated config guidance identifies all restart-only settings", async () 
   assert.doesNotMatch(written, /This file is hot-reloaded while/)
 })
 
-// Why (#153): readAppConfig writes the default into every existing config on upgrade. A default
+// Why: readAppConfig writes the default into every existing config on upgrade. A default
 // taken from HTTPS_PROXY would silently move an install with an unrelated proxy variable onto it.
 test("a fresh install leaves upstreamProxy empty even when a proxy variable is set", async () => {
   const config = await withProxyEnvironment(
@@ -349,7 +349,7 @@ test("hot reload applies a complete valid edit without rewriting the document", 
   assert.deepEqual(watcher.errors, [])
 })
 
-// Admission reads the live key on every request (#159), so a valid edit must reach it at once. A
+// Admission reads the live key on every request, so a valid edit must reach it at once. A
 // rejected edit keeps the previous key: dropping it would leave the relay open.
 test("hot reload applies a changed or cleared apiKey and keeps the previous key through a rejected edit", async (t) => {
   const firstKey = "reload-fixture-key-0001"

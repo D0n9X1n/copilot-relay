@@ -401,7 +401,7 @@ test("ctime-only reacquisition cannot accept different bytes with matching metad
   assert.equal(await realRead(file, "utf8"), "original\n")
 })
 
-// Why (#159 review): publication kept the existing mode, so a 0644 settings file that gained the
+// Why: publication kept the existing mode, so a 0644 settings file that gained the
 // relay's apiKey stayed readable by other local users.
 test("an owner-only write publishes 0600 and still checks the mode it read", {
   skip: process.platform === "win32",
