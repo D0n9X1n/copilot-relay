@@ -6,6 +6,7 @@ import test from "node:test"
 import { encode } from "gpt-tokenizer/encoding/o200k_base"
 
 import type { ChatCompletionsPayload, ContentPart, ToolCall } from "../../src/copilot/types"
+import { refuseExternalConnections } from "../fixtures/network"
 
 const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "relay-image-tokens-"))
 process.env.HOME = tempHome
@@ -21,10 +22,15 @@ const fetch = test.mock.method(globalThis, "fetch", () => {
   assert.fail("Token estimation must not fetch image data or URLs")
 })
 
+// The relay's own network calls go through undici's dispatcher rather than fetch (#153), so a
+// socket to any other host throws as well.
+const restoreConnections = refuseExternalConnections()
+
 // Also pin the count, in case the code under test swallows the mock's failure.
 test.after(() => {
   assert.equal(fetch.mock.callCount(), 0)
   test.mock.restoreAll()
+  restoreConnections()
 })
 
 const model = { id: "test-model", capabilities: { tokenizer: "o200k_base" } }

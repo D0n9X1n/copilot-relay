@@ -62,11 +62,16 @@ interface CliResult {
   stderr: string
 }
 
-// Runs `copilot-relay <args>` with the temporary home. fetch throws in the child, so a network call
-// would fail the run instead of reaching out.
+const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
+
+// Runs `copilot-relay <args>` with the temporary home. In the child, fetch throws and so does any
+// socket to another host, so a network call fails the run instead of reaching out. GitHub and
+// Copilot calls go through undici's dispatcher rather than fetch (#153), hence the socket guard.
 const run = async (args: Array<string>): Promise<CliResult> => {
   const before = await snapshot(home)
   const script = `
+    const { refuseExternalConnections } = await import(${JSON.stringify(networkFixture.href)});
+    refuseExternalConnections();
     globalThis.fetch = async () => {
       throw new Error("UNEXPECTED_NETWORK_ACCESS");
     };
