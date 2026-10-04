@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { removeBillingLine } from "../../src/claude/billing-line"
+import { readBillingLineField, removeBillingLine } from "../../src/claude/billing-line"
 import type { ClaudeMessagesPayload } from "../../src/claude/types"
 
 // The first system block Claude Code 2.1.288 sent in #157.
@@ -91,4 +91,38 @@ test("passes malformed values through for validation to reject", () => {
 
   assert.equal(removeBillingLine(payload), payload)
   assert.equal(removeBillingLine(null as unknown as ClaudeMessagesPayload), null)
+})
+
+// The initiator rule reads Claude Code's subagent marker from this line.
+test("reads a field from the billing line in a block or a string system prompt", () => {
+  const marked = `${billingLine} cc_is_subagent=true;`
+
+  for (const system of [
+    [{ type: "text", text: marked }, { type: "text", text: identity }],
+    [{ type: "text", text: `${marked}\n\n${identity}` }],
+    [{ type: "text", text: identity }, { type: "text", text: marked }],
+    `${marked}\r\n${identity}`,
+  ]) {
+    const payload = payloadWith(system)
+
+    assert.equal(readBillingLineField(payload, "cc_is_subagent"), "true")
+    assert.equal(readBillingLineField(payload, "cc_entrypoint"), "sdk-cli")
+  }
+})
+
+test("reads only the billing line, and only a field with that exact name", () => {
+  for (const system of [
+    undefined,
+    identity,
+    [{ type: "text", text: billingLine }],
+    [{ type: "text", text: billingLine }, { type: "text", text: "cc_is_subagent=true;" }],
+    [{ type: "text", text: `${billingLine}\ncc_is_subagent=true;` }],
+    [{ type: "text", text: `${identity}\n${billingLine} cc_is_subagent=true;` }],
+    [{ type: "text", text: `${billingLine} xcc_is_subagent=true;` }],
+    [null, "text", { type: "text", text: 42 }],
+  ]) {
+    assert.equal(readBillingLineField(payloadWith(system), "cc_is_subagent"), undefined)
+  }
+
+  assert.equal(readBillingLineField(null as unknown as ClaudeMessagesPayload, "cc_is_subagent"), undefined)
 })

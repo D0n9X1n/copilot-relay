@@ -36,6 +36,7 @@ test.after(async () => {
 interface CapturedRequest {
   body: unknown
   path: string
+  initiator?: string | Array<string>
 }
 
 const uuidPattern =
@@ -153,8 +154,9 @@ const startMockCopilot = async (
   const server = createHttpServer(async (request, response) => {
     const path = request.url ?? "/"
     const body = await readJsonBody(request)
-    requests.push({ body, path })
-    onRequest?.({ body, path })
+    const captured = { body, path, initiator: request.headers["x-initiator"] }
+    requests.push(captured)
+    onRequest?.(captured)
 
     response.setHeader("content-type", "application/json")
 
@@ -1809,6 +1811,84 @@ test("POST /v1/messages handles Claude server-side WebSearch", async () => {
     ])
     assert.equal(body.content[2]?.text, "OK")
     assert.equal(body.usage?.server_tool_use?.web_search_requests, 1)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("POST /v1/messages reports only a typed prompt to Copilot as the person's", async () => {
+  const billingHeader = "x-anthropic-billing-header: cc_version=2.1.288.976; cc_entrypoint=cli;"
+  const tokenReminder = { role: "system", content: "<total_tokens>900 tokens left</total_tokens>" }
+  const readTool = { name: "Read", input_schema: { type: "object" } }
+  const history = [
+    { role: "user", content: "Fix the failing test." },
+    { role: "assistant", content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "a.ts" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_read", content: "export const a = 1" }] },
+    { role: "assistant", content: [{ type: "text", text: "Fixed it." }] },
+  ]
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    // Sends one request and returns the requests it made to Copilot, leaving out the model catalog.
+    const send = async (system: string, messages: Array<unknown>, tools: Array<unknown> = [readTool]) => {
+      const before = mock.requests.length
+      const response = await app.fetch(new Request("http://localhost/v1/messages", {
+        body: JSON.stringify({ max_tokens: 16, model: "opus", system, messages: [...messages, tokenReminder], tools }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }))
+      assert.equal(response.status, 200)
+      return mock.requests.slice(before).filter((request) => request.path !== "/models")
+    }
+
+    const typed = await send(`${billingHeader}\nYou are Claude Code.`, [...history, { role: "user", content: "Now add a test." }])
+    const continued = await send(`${billingHeader}\nYou are Claude Code.`, [
+      ...history,
+      { role: "user", content: "Run it." },
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_run", name: "Read", input: { file_path: "a.test.ts" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_run", content: "ok" }] },
+    ])
+    const subagent = await send(
+      `${billingHeader} cc_is_subagent=true;\nYou are Claude Code.`,
+      [...history, { role: "user", content: "Now add a test." }],
+    )
+    const searched = await send(
+      `${billingHeader}\nYou are Claude Code.`,
+      [
+        { role: "user", content: "Hello." },
+        { role: "assistant", content: [{ type: "text", text: "Hi." }] },
+        { role: "user", content: "Search the web for copilot docs." },
+      ],
+      [{ name: "web_search", type: "web_search_20250305", max_uses: 1 }],
+    )
+
+    assert.deepEqual(typed.map((request) => request.initiator), ["user"])
+    assert.deepEqual(continued.map((request) => request.initiator), ["agent"])
+
+    // The subagent marker changes only the header, so the request keeps its cached prefix.
+    assert.deepEqual(subagent.map((request) => request.initiator), ["agent"])
+    assert.equal(JSON.stringify(subagent[0]?.body), JSON.stringify(typed[0]?.body))
+
+    // The decision pass carries the person's prompt; the search and the final pass are the relay's.
+    assert.deepEqual(searched.map((request) => [request.path, request.initiator]), [
+      ["/chat/completions", "user"],
+      ["/responses", "agent"],
+      ["/chat/completions", "agent"],
+    ])
+
+    // The model probe marks itself in-process, and the status --deep probe is known by its prompt.
+    // The model probe's body sent by a client is the person's.
+    const probeRequest = (content: string) => new Request("http://localhost/v1/messages", {
+      body: JSON.stringify({ max_tokens: 16, model: "opus", messages: [{ role: "user", content }] }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    })
+    const beforeProbe = mock.requests.length
+    await (await app.fetch(probeRequest("Reply with OK only."), { relayProbe: true })).text()
+    await (await app.fetch(probeRequest("Reply with the single word: ok"))).text()
+    await (await app.fetch(probeRequest("Reply with OK only."))).text()
+    const probed = mock.requests.slice(beforeProbe).filter((request) => request.path !== "/models")
+    assert.deepEqual(probed.map((request) => request.initiator), ["agent", "agent", "user"])
   } finally {
     await mock.close()
   }

@@ -378,8 +378,12 @@ Reviewed rather than enforced:
 - Names say what a value is or does; booleans read as predicates; no unexplained
   abbreviations. Renames never change public API, config keys, error codes or
   wire fields.
-- Comments explain why — an invariant, ordering constraint or non-obvious reason —
-  not what the next line does. Fix stale comments instead of adding more.
+- Comments state how the code works and why — an invariant, ordering constraint or
+  non-obvious reason — not what the next line already says. Fix stale comments
+  instead of adding more.
+- Code states how it works today, never its history. Comments, test names and
+  strings never cite an issue or PR number or tell how a bug was found; that
+  history belongs in commit messages, PR descriptions and the wiki.
 - Prefer guard clauses to deep nesting.
 - Tests separate arrange, act and assert with blank lines; fixtures do not hide
   the behavior under test.

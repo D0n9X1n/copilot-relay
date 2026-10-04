@@ -8,19 +8,26 @@ import type { ClaudeMessagesPayload, ClaudeTextBlock } from "~/claude/types"
 // and the chat route joins every system block into one message, so the whole prompt was lost.
 const billingLinePrefix = "x-anthropic-billing-header:"
 
-// The text after a leading billing line, without the blank lines that followed it, or
-// undefined when the text does not start with one. A later mention is ordinary text.
-const afterBillingLine = (text: string): string | undefined => {
+// The billing line a text starts with, without its line break, or undefined when the text does
+// not start with one. A later mention is ordinary text.
+const leadingBillingLine = (text: string): string | undefined => {
   if (!text.startsWith(billingLinePrefix)) {
     return undefined
   }
 
   const lineEnd = text.indexOf("\n")
-  if (lineEnd === -1) {
-    return ""
+  return lineEnd === -1 ? text : text.slice(0, lineEnd)
+}
+
+// The text after a leading billing line, without the blank lines that followed it, or
+// undefined when the text does not start with one.
+const afterBillingLine = (text: string): string | undefined => {
+  const line = leadingBillingLine(text)
+  if (line === undefined) {
+    return undefined
   }
 
-  return text.slice(lineEnd + 1).replace(/^(?:\r?\n)+/, "")
+  return text.slice(line.length).replace(/^(?:\r?\n)+/, "")
 }
 
 const isTextBlock = (block: unknown): block is ClaudeTextBlock =>
@@ -80,4 +87,37 @@ export const removeBillingLine = (payload: ClaudeMessagesPayload): ClaudeMessage
   }
 
   return withSystem(payload, kept.length > 0 ? kept : undefined)
+}
+
+const systemTexts = (system: unknown): Array<string> => {
+  if (typeof system === "string") {
+    return [system]
+  }
+
+  return Array.isArray(system) ? system.filter(isTextBlock).map((block) => block.text) : []
+}
+
+// The value of one field of the billing line, such as "true" for cc_is_subagent, or
+// undefined when there is no billing line or it lacks that field. Never logs the line.
+export const readBillingLineField = (payload: ClaudeMessagesPayload, name: string): string | undefined => {
+  // A malformed body has no billing line.
+  if (typeof payload !== "object" || payload === null) {
+    return undefined
+  }
+
+  const line = systemTexts(payload.system)
+    .map((text) => leadingBillingLine(text))
+    .find((text) => text !== undefined)
+  if (line === undefined) {
+    return undefined
+  }
+
+  for (const field of line.slice(billingLinePrefix.length).split(";")) {
+    const separator = field.indexOf("=")
+    if (separator !== -1 && field.slice(0, separator).trim() === name) {
+      return field.slice(separator + 1).trim()
+    }
+  }
+
+  return undefined
 }

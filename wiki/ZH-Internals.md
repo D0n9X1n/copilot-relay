@@ -180,6 +180,57 @@ HTTP 200，但模型没有答出该消息中的暗号，token 计数也与 Copil
 Claude Code 的指令）一致。在没有这项修复的 relay 上，在 Claude Code 的环境中设置
 `CLAUDE_CODE_ATTRIBUTION_HEADER=0`，Claude Code 就不再发送这一行。
 
+### 谁发起了请求：`x-initiator`
+
+每个 Copilot 调用都带 `x-initiator: user` 或 `agent`。`src/claude/initiator.ts` 的
+`getClaudeRequestInitiator` 在每个 `POST /v1/messages` 中只判定一次，依据 Claude Code
+发来的原始正文。判定发生在 `removeBillingLine` 之前，也在 relay 添加自己的回合之前，例如
+chat 路由追加的 `Continue based on the context above.`。
+
+以下情况为 `agent`：
+
+- 计费行带有 `cc_is_subagent=true;`（subagent 的每个请求）或 `cc_workload=cron;`
+  （定时任务的 cron 作业）；
+- 某个 system block 以 Claude Code 自己发起的请求的 prompt 开头：专门的压缩摘要器，或
+  会话标题；
+- 请求以 assistant 消息结尾（prefill），或没有 user 消息。
+
+否则，规则从回合末尾向前读，停在第一个能说明由谁发起的 block。回合是最后一条 assistant
+消息之后的 user 消息。规则跳过 `role: "system"` 回合，并去掉 `<system-reminder>` 片段，
+包括嵌套的片段。
+
+- tool result 为 `agent`：tool 后续。
+- 粘贴的图片或附加的文档为 `user`。
+- 本人在模型工作时发来的消息，无论直接发送还是经由绑定的 thread，为 `user`。
+- 不经本人而发起请求的文本为 `agent`：
+  - 压缩指令，两部分都在时；
+  - 压缩后恢复会话的摘要；
+  - 恢复与重试提示；
+  - hook 反馈；
+  - 来自插件、其他会话、观察者、channel、teammate 和定时任务的消息。
+- Claude Code 在发起内容旁附加的文本不参与判定：中断提示、hook 的附加上下文，以及
+  Skill 工具之后的 skill 正文。因此中断后输入的 prompt 为 `user`。
+- 其余文本都是本人的，因此为 `user`，包括批准 tool 调用时输入的指令。
+
+relay 自己的请求是 `agent`：
+
+- WebSearch 执行；
+- WebSearch 最终轮；
+- 原生 WebSearch 后续轮；
+- 启动 preflight；
+- `models --deep` 的探测请求，它们在进程内标记自己，客户端无法这样做；
+- `status --deep` 的探测请求，它经由 HTTP 到达 relay，靠完整的正文识别：固定的 prompt、
+  固定的 `max_tokens`，没有其他字段。Claude Code 总会附加 system prompt，所以本人输入同样的
+  文字仍读作 `user`。
+
+重试沿用被替换那次尝试的值。只有这个 header 会变：上游正文完全相同，因此 prompt 缓存
+前缀不受影响。`Model request` 日志行以 `initiator=` 记录该值。
+
+识别的文本来自 Claude Code 2.1.288。如果之后的版本改了其中某条的措辞，该情况按普通文本
+处理。本人的文本若与 Claude Code 的某条文本开头完全相同，例如粘贴的 hook 反馈，会被读作
+Claude Code 的。设置 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` 时没有计费行，因此 subagent 的
+第一个请求会被读作 `user`。
+
 ### 翻译后的历史
 
 `src/claude/translate.ts` 处理双向非流式 payload：Claude 请求 -> Copilot chat 请求，

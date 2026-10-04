@@ -404,3 +404,66 @@ for (const [supportedEndpoints, adapted] of autoModeCases) {
     }
   })
 }
+
+test("a retry keeps the initiator of the attempt it replaces", async () => {
+  const initiators: Array<string | null> = []
+  let lastPath = ""
+  // A transient failure, an expired token, then Copilot refusing the chat endpoint for this model.
+  const failures = [
+    new Response("busy", { status: 503 }),
+    new Response("unauthorized", { status: 401 }),
+    Response.json({ error: { code: "unsupported_api_for_model" } }, { status: 400 }),
+  ]
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      initiators.push(new Headers(request.headers).get("x-initiator"))
+      lastPath = request.path
+      const failure = failures.shift()
+      if (failure) {
+        return failure
+      }
+
+      return Response.json({
+        id: "resp_fixture",
+        model: "claude-opus-5.5",
+        created_at: 1,
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      })
+    },
+    refresh: async () => {},
+  }, async () => {
+    const app = createRelay({
+      host: "localhost",
+      port: 0,
+      copilotBaseUrl: "https://fixture.invalid",
+      copilotToken: "fixture",
+      vsCodeVersion: "test",
+      upstreamTimeoutMs: 30_000,
+      refreshCopilotToken: async () => {},
+      claudeUpstreamApi: "auto",
+      modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([["claude-opus-5.5", { supportedEndpoints: undefined }]]) },
+    })
+    const response = await withoutConsoleLogging(() => app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "opus",
+        max_tokens: 32,
+        messages: [
+          { role: "user", content: "Fix the failing test." },
+          { role: "assistant", content: "Fixed it." },
+          { role: "user", content: "Now add a test." },
+        ],
+      }),
+    })))
+    await response.text()
+    assert.equal(response.status, 200)
+  })
+
+  // The person's prompt stays "user" on the 5xx retry, the token-refresh retry and the /responses fallback.
+  assert.deepEqual(initiators, ["user", "user", "user", "user"])
+  assert.ok(lastPath.endsWith("/responses"))
+})

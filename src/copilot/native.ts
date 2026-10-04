@@ -62,6 +62,8 @@ type NativeEvent = Record<string, unknown> & {
 
 interface NativeOptions {
   requestId: string
+  // The x-initiator header, as for createChatCompletions: absent means "agent".
+  initiator?: "agent" | "user"
   signal?: AbortSignal
   headers?: Headers
 }
@@ -271,9 +273,10 @@ export async function createNativeMessages(
   }
 
   const effortLabel = effort === undefined ? "omitted" : getClaudeTurnEffort(body).effective
+  const initiator = options.initiator ?? "agent"
 
   log.info(sanitizeTerminalString(
-    `request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${effortLabel}`,
+    `request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${effortLabel} initiator=${initiator}`,
   ))
 
   const response = await fetchCopilot(
@@ -288,7 +291,7 @@ export async function createNativeMessages(
       requestId: options.requestId,
       signal: options.signal,
       timeoutMs: config.upstreamTimeoutMs,
-      initiator: payload.messages.some((message) => message.role === "assistant") ? "agent" : "user",
+      initiator,
     },
   )
 
@@ -662,7 +665,8 @@ export async function handleNativeMessages(
         { role: "user", content: [upstreamToolResult] },
       ],
     },
-    { ...options, signal },
+    // The follow-up after a search is the relay's own pass, whoever started the request.
+    { ...options, signal, initiator: "agent" },
   )
 
   // The client's message is still open, so this pass only adds blocks after the decision

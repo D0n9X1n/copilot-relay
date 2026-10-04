@@ -384,7 +384,7 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 At `info` (also included at `debug`):
 
 ```text
-info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
+info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high initiator=user
 ```
 
 | Field | Meaning |
@@ -395,6 +395,7 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 | `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `unset` when absent |
 | `requested_thinking` | Claude Code `thinking` config, including budget when present |
 | `effective_think_effort` | request effort when supplied; otherwise the configured default sent upstream, or `omitted` when the model advertises no effort support and none was requested |
+| `initiator` | `x-initiator` sent to Copilot: `user` for a prompt a person typed; `agent` for tool continuations, subagents, compaction and the relay's own requests |
 
 Use this line first when debugging "why did my request use this model/effort?"
 `requested_think_effort=unset` means the request supplied no effort; the effective
