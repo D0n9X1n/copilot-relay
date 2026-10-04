@@ -1092,6 +1092,14 @@ const { readAppConfig } = await import("../../src/lib/app-config")
 会跑 `windows-latest`，所以只设 `HOME` 会让重定向在那里悄无声息地失效。不这么做的话，
 测试每跑一次都会写进开发者真实的 `~/.copilot-relay/logs`。
 
+### 测试的 stdout
+
+测试文件的 stdout 承载运行器读回的结果帧，因此不能写入其他内容。帧前的普通文本可能让 Node 的
+运行器把两次读取按错误顺序拼接，从而丢失该文件的结果。在运行器启动的测试文件中（由
+`NODE_TEST_CONTEXT=child-v8` 和作为 `argv[1]` 的文件识别），bootstrap 把中继日志和 console
+都发往 stderr，运行器把它作为诊断信息报告。测试自己启动的进程保留其 stdout，因为测试把它当作
+数据读取。
+
 ### mock 上游
 
 集成测试让 Hono app 跑在本地 mock 的 Copilot HTTP server 之上。它们绝不可以调用真实

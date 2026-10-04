@@ -1312,6 +1312,16 @@ runs `windows-latest`, so setting only `HOME` leaves the redirect silently
 ineffective there. Without this the suite writes into the developer's live
 `~/.copilot-relay/logs` on every run.
 
+### Test stdout
+
+A test file's stdout carries the result frames its runner reads back, so nothing
+else may write there. Plain text before a frame can make Node's runner join two
+reads out of order and lose the file's results. In a test file the runner started,
+recognized by `NODE_TEST_CONTEXT=child-v8` and the file as `argv[1]`, the bootstrap
+sends the relay logger and the console to stderr, which the runner reports as
+diagnostics. A process a test starts itself keeps its stdout, because the test
+reads it as data.
+
 ### Mocked upstream
 
 Integration tests run the Hono app against a local mocked Copilot HTTP server.
