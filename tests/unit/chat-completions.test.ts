@@ -29,6 +29,7 @@ test.after(async () => {
 interface CapturedRequest {
   body: unknown
   path: string
+  initiator?: string | Array<string>
 }
 
 const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
@@ -45,7 +46,7 @@ const startMockCopilot = async () => {
   const server = createHttpServer(async (request, response) => {
     const path = request.url ?? "/"
     const body = await readJsonBody(request)
-    requests.push({ body, path })
+    requests.push({ body, path, initiator: request.headers["x-initiator"] })
 
     response.setHeader("content-type", "application/json")
     response.end(JSON.stringify({
@@ -140,6 +141,40 @@ test("normalizes final assistant prefill before chat completions upstream calls"
     assert.match(
       request.messages?.at(-1)?.content ?? "",
       /Continue the assistant response/,
+    )
+  } finally {
+    await mock.close()
+  }
+})
+
+test("sends the caller's initiator, and agent when the caller names none", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const config: ProxyConfig = {
+      copilotBaseUrl: mock.baseUrl,
+      copilotToken: "test-token",
+      host: "127.0.0.1",
+      port: 0,
+      upstreamTimeoutMs: 180_000,
+      vsCodeVersion: "1.99.3",
+    }
+    const messages = [
+      { role: "user" as const, content: "Fix the failing test." },
+      { role: "assistant" as const, content: "Fixed it." },
+      { role: "user" as const, content: "Now add a test." },
+    ]
+
+    // The Claude route decides who started a request. A caller that relays no person's turn,
+    // such as the startup preflight, names none, and its request goes out as agent.
+    await createChatCompletions(config, { max_tokens: 16, messages, model: "claude-opus-4.8", stream: false }, {
+      client: "claude",
+      initiator: "user",
+    })
+    await createChatCompletions(config, { max_tokens: 16, messages: messages.slice(0, 1), model: "claude-opus-4.8", stream: false })
+
+    assert.deepEqual(
+      mock.requests.filter((request) => request.path === "/chat/completions").map((request) => request.initiator),
+      ["user", "agent"],
     )
   } finally {
     await mock.close()
@@ -248,6 +283,7 @@ test("info logs show requested and effective effort without normal request paylo
       assert.ok(summary, "No info-level model summary was written")
       assert.match(summary, new RegExp(`requested_think_effort=${effort ?? "unset"}\\b`))
       assert.match(summary, new RegExp(`effective_think_effort=${expected}\\b`))
+      assert.match(summary, /\binitiator=agent\b/)
       assert.ok(!summary.includes("\u001b"))
       assert.match(summary, /metadata-gateway\.example\[redacted\]/)
       assert.doesNotMatch(contents, /ROUTING_SECRET_SENTINEL/)

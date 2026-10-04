@@ -25,6 +25,7 @@ test.after(async () => {
 interface CapturedRequest {
   body: unknown
   path: string
+  initiator?: string | Array<string>
 }
 
 const readJsonBody = async (request: IncomingMessage): Promise<unknown> => {
@@ -44,7 +45,7 @@ const startMockCopilot = async (
   const server = createHttpServer(async (request, response) => {
     const path = request.url ?? "/"
     const body = await readJsonBody(request)
-    requests.push({ body, path })
+    requests.push({ body, path, initiator: request.headers["x-initiator"] })
     response.setHeader("content-type", "application/json")
 
     if (path === "/models") {
@@ -161,6 +162,12 @@ test("preflight uses canonical upstream model ids", async () => {
     )
     assert.deepEqual(upstreamModels, ["gpt-6-astra", "claude-opus-4.8"])
     assert.equal(upstreamModels.some((model) => model?.includes("[1m]")), false)
+
+    // The preflight is the relay's own request, not a person's prompt.
+    assert.deepEqual(
+      mock.requests.flatMap((request) => request.path === "/models" ? [] : [request.initiator]),
+      ["agent", "agent"],
+    )
 
     const responsesRequest = mock.requests.find((request) => request.path === "/responses")
     assert.equal(

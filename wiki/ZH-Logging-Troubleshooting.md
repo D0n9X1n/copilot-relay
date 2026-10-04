@@ -329,7 +329,7 @@ info request_id=3b241101-e2bb-4255-8caf-4136c566a962 POST /v1/messages -> 400 12
 在 `info` 级别（`debug` 也包含这些内容）：
 
 ```text
-info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high
+info Model request client=claude requested_model=opus upstream_model=claude-opus-5 requested_think_effort=high requested_thinking=type:enabled,budget:2048 effective_think_effort=high initiator=user
 ```
 
 | 字段 | 含义 |
@@ -340,6 +340,7 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 | `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `unset` |
 | `requested_thinking` | Claude Code 的 `thinking` 配置，有 budget 时一并包含 |
 | `effective_think_effort` | 有请求 effort 时使用该值；否则使用配置的默认值；模型明确声明不支持 effort 且请求未指定时为 `omitted` |
+| `initiator` | 发给 Copilot 的 `x-initiator`：本人输入的 prompt 为 `user`；tool 后续、subagent、压缩和 relay 自己的请求为 `agent` |
 
 调试"我的请求为什么用了这个模型/effort？"时，先看这一行。
 `requested_think_effort=unset` 表示请求未指定 effort：此时有效值为配置默认值；

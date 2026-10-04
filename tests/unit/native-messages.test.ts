@@ -298,6 +298,71 @@ test("native streamed trailing usage cannot erase refusal reason or category", a
   assert.equal(emitted.filter((event) => event.type === "message_stop").length, 1)
 })
 
+test("native requests carry the caller's initiator, and the relay's own passes are agent", async () => {
+  const tool = { name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }
+  const decision = message([{ type: "tool_use", id: "toolu_search", name: "WebSearch", input: { query: "copilot docs" } }], "tool_use")
+  const initiators: Array<string | null> = []
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      initiators.push(new Headers(request.headers).get("x-initiator"))
+      if (initiators.length === 1) {
+        return Response.json(decision)
+      }
+
+      if (request.path === "/responses") {
+        return Response.json({
+          id: "resp_search",
+          model: "gpt-test",
+          status: "completed",
+          output: [
+            { type: "web_search_call", status: "completed" },
+            { type: "message", content: [{ type: "output_text", text: "Docs https://example.com/docs" }] },
+          ],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        })
+      }
+
+      return Response.json(message([{ type: "text", text: "Answer" }]))
+    },
+    refresh: async () => {},
+  }, () => handleNativeMessages(
+    config,
+    {
+      model: "claude-opus-5.5",
+      max_tokens: 512,
+      messages: [
+        { role: "user", content: "Fix the failing test." },
+        { role: "assistant", content: [{ type: "text", text: "Fixed it." }] },
+        { role: "user", content: "Look up the docs." },
+      ],
+      tools: [tool],
+    },
+    { requestId: "native-initiator", initiator: "user" },
+  ))
+
+  // The decision pass carries the person's prompt; the search and the follow-up are the relay's.
+  assert.deepEqual(initiators, ["user", "agent", "agent"])
+})
+
+test("a native request whose caller names no initiator is agent", async () => {
+  const initiators: Array<string | null> = []
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      initiators.push(new Headers(request.headers).get("x-initiator"))
+      return Response.json(message([{ type: "text", text: "OK" }]))
+    },
+    refresh: async () => {},
+  }, () => createNativeMessages(
+    config,
+    { model: "claude-opus-5.5", max_tokens: 512, messages: [{ role: "user", content: "Reply with OK." }] },
+    { requestId: "native-probe" },
+  ))
+
+  assert.deepEqual(initiators, ["agent"])
+})
+
 test("native search history reconstructs the exact signed continuation prefix", async () => {
   const history = [{ role: "user" as const, content: "Look up a reference." }]
   const tool = { name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }

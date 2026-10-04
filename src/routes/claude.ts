@@ -10,6 +10,7 @@ import {
   type ClaudeStreamState,
 } from "~/claude/types"
 import { removeBillingLine } from "~/claude/billing-line"
+import { getClaudeRequestInitiator } from "~/claude/initiator"
 import {
   translateModelName,
   translateToClaude,
@@ -273,6 +274,7 @@ const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: str
 const handleClaudeMessageRequest = async (
   config: ProxyEnv["Variables"]["config"],
   claudePayload: ClaudeMessagesPayload,
+  initiator: "agent" | "user",
   requestSignal: AbortSignal | undefined,
   requestId: string,
   writeEvent?: ClaudeStreamEventWriter,
@@ -283,7 +285,7 @@ const handleClaudeMessageRequest = async (
     return handleNativeMessages(
       config,
       { ...claudePayload, model: upstreamModel },
-      { requestId, signal: requestSignal, headers: requestHeaders },
+      { requestId, initiator, signal: requestSignal, headers: requestHeaders },
       writeEvent,
     )
   }
@@ -310,6 +312,7 @@ const handleClaudeMessageRequest = async (
 
   const response = await createChatCompletions(config, openAIPayload, {
     client: "claude",
+    initiator,
     requestedModel: claudePayload.model,
     requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
     requestedThinking: getClaudeRequestedThinking(claudePayload),
@@ -424,6 +427,8 @@ const handleClaudeMessageRequest = async (
           createFinalWebSearchPayload(openAIPayload, search, toolNameMapper),
           {
             client: "claude",
+            // The final pass after a search is the relay's own, whoever started the request.
+            initiator: "agent",
             requestedModel: claudePayload.model,
             requestedThinkEffort: getClaudeRequestedThinkEffort(claudePayload),
             requestedThinking: getClaudeRequestedThinking(claudePayload),
@@ -572,8 +577,11 @@ claudeRoutes.get("/models", (c) =>
 claudeRoutes.post("/messages", async (c) => {
   const config = c.get("config")
   const requestId = c.get("requestId")
+  const receivedPayload = await c.req.json<ClaudeMessagesPayload>()
+  // Decided before the billing line is removed, because that line marks a subagent's requests.
+  const initiator = getClaudeRequestInitiator(receivedPayload)
   // Every route reads the system prompt without Claude Code's billing line (#157).
-  const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
+  const claudePayload = removeBillingLine(receivedPayload)
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
   try {
     // Rejects a malformed effort control with HTTP 400 before any other work.
@@ -653,6 +661,7 @@ claudeRoutes.post("/messages", async (c) => {
         await handleClaudeMessageRequest(
           config,
           claudePayload,
+          initiator,
           requestSignal,
           requestId,
           writeEvent,
@@ -683,6 +692,7 @@ claudeRoutes.post("/messages", async (c) => {
     return c.json(await handleClaudeMessageRequest(
       config,
       claudePayload,
+      initiator,
       requestSignal,
       requestId,
       undefined,
