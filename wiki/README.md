@@ -21,6 +21,8 @@ a service, and working on it. Every page exists in English and 中文.
 
 - [How copilot-relay works](EN-How-It-Works.md) — the short version
 - [Configuration](EN-Configuration.md) — every key, hot reload vs restart
+- [Commands](EN-Commands.md) — every command, its options and exit codes
+- [Prompt caching](EN-Prompt-Caching.md) — what Copilot caches, what the relay sends, measuring the hit rate
 - [Logs and troubleshooting](EN-Logging-Troubleshooting.md) — log format, grep recipes, failure modes
 
 **Running it as a long-lived background service** — setup, verification, shutdown:
@@ -46,6 +48,8 @@ the platform's own restart policy.
 
 - [运行原理](ZH-How-It-Works.md) —— 简版说明
 - [配置说明](ZH-Configuration.md) —— 每个配置键、热重载与需要重启
+- [命令](ZH-Commands.md) —— 每个命令、它的选项与退出码
+- [Prompt 缓存](ZH-Prompt-Caching.md) —— Copilot 缓存什么、中继发送什么、如何测量命中率
 - [日志与问题排查](ZH-Logging-Troubleshooting.md) —— 日志格式、grep 配方、故障模式
 
 **后台长期运行** —— 注册、验证、停止：

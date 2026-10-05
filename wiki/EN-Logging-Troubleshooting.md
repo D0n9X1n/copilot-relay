@@ -824,95 +824,10 @@ local is much larger, inspect stream translation or client-side behavior.
 
 ## Prompt-cache hit rate
 
-`copilot-relay cache` reports how much of each model's input the prompt cache
-served, per upstream route. It reads only the local log files: it contacts
-neither the relay nor Copilot, and writes nothing.
-
-```sh
-copilot-relay cache                      # last 24 hours, one row per model and route
-copilot-relay cache --hourly             # hourly trend over the last 24 hours
-copilot-relay cache --daily              # daily trend across the retained logs
-copilot-relay cache --since 6h           # a duration, or an ISO date or time
-copilot-relay cache --model opus         # names containing "opus", ignoring case
-copilot-relay cache --goal 97.5          # rates below 97.5% in red (default 95)
-copilot-relay cache --json               # an array of rows, for scripts
-```
-
-```text
-Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
-
-  MODEL               ROUTE              REQUESTS  HIT RATE
-  claude-opus-5-5     /v1/messages              1    98.36%
-  claude-opus-5.5     /chat/completions         2    98.38%
-  gpt-5.5-2026-04-23  /responses                1    92.86%
-
-HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
-```
-
-| Column | Meaning |
-| --- | --- |
-| `MODEL`, `ROUTE` | The model the upstream reported, or `unknown` when the entry has none, and the upstream path. One model can be reported under different names on different routes, such as `claude-opus-5.5` and `claude-opus-5-5`. |
-| `REQUESTS` | Upstream calls that answered HTTP 200 and logged `input_tokens`, including calls cut off after their usage arrived and calls whose caching is unknown. |
-| `HIT RATE` | Input tokens read from the prompt cache, divided by total input, truncated to two decimals. On a color terminal it is green at or above `--goal` and red below it. It is `-`, in gray, when no call in the row reported its caching. |
-
-A call whose entry carried no `cache_read_input_tokens` has unknown caching, not
-zero. It counts in `REQUESTS` but not in `HIT RATE`, and the line under the table
-says how many such calls there are; with none, the line is left out. The token
-counts behind the rate (total input, cache read, uncached and cache write), and
-the counts of calls with unknown caching and with a cache read of 0, are in
-`--json`.
-
-The color of `HIT RATE` is the table's only mark of a missed goal. Without color
-(`NO_COLOR`, or output to a pipe), compare the rate with the goal in the title, or
-read `belowGoal` in `--json`. `HIT RATE` is truncated rather than rounded, so a rate
-below the goal never prints as the goal. `--goal` takes at most two decimals, and a
-rate is red exactly when the printed `HIT RATE` is below the goal.
-
-`--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
-the dates in the log file names. When clocks go back, a local hour that happens
-twice gets one row per real hour, each ending in its UTC offset, such as
-`2026-11-01 01:00 UTC-04:00` and `2026-11-01 01:00 UTC-05:00`. Without `--since`,
-the summary and the hourly trend cover the last 24 hours and the daily trend
-covers every retained day. A duration counts back from now; a date, or a time
-without `Z` or an offset, is local.
-
-`--json` prints one object per row with `bucket`, `model`, `route`, `requests`,
-`unknownCacheRequests`, `zeroCacheReadRequests`, `totalInputTokens`,
-`cacheReadTokens`, `uncachedInputTokens`, `cacheWriteTokens`, `hitRate` and
-`belowGoal`. `hitRate` is a fraction from 0 to 1, or `null`; `bucket` is `null`
-in the summary, and `cacheWriteTokens` is `null` when no call in the row reported
-it. With no data it prints `[]`.
-
-An unusable flag, or a logs directory that cannot be read, prints the reason on
-stderr and exits `1`. Any report, an empty one included, exits `0`.
-
-### What is counted
-
-The command reads the `completion` entry the relay logs at `info` for each
-upstream call, from the dated files in `~/.copilot-relay/logs/`. An entry counts
-only with `http_status=200`, a numeric `input_tokens`, and a route of
-`/chat/completions`, `/responses` or `/v1/messages`. Its `body` and `terminal`
-values do not matter, so a call cut off after its usage arrived still shows what
-it read from cache. The `request outcome` entry reports usage again, for the
-client request (both entries are described under HTTP requests above), so it is
-never read: counting it would count calls twice. Malformed lines, and a last line
-the relay is still writing, are skipped.
-
-`input_tokens` means different things per route, so the total input that `HIT RATE`
-divides by (`totalInputTokens` in `--json`) is normalized:
-
-| Route | Total input |
-| --- | --- |
-| `/chat/completions`, `/responses` | `input_tokens`, which already includes cached input |
-| `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |
-
-On `/v1/messages`, an absent `cache_creation_input_tokens` counts as 0. Hours and
-days are local time.
-
-How far back the command can see depends on `logRetentionDays` (default `3`).
-`completion` entries are written at `info`, so a relay running with
-`logLevel: error` leaves nothing to read, and the command says it found no data
-rather than printing an empty table.
+`copilot-relay cache` reports prompt-cache hit rates per model and upstream route,
+from the local log files. The report, its `--json` fields and what it counts are
+under "Measure the hit rate" in [Prompt caching](EN-Prompt-Caching.md); its options
+and exit codes are under `cache` in [Commands](EN-Commands.md).
 
 ### Finding a regression
 

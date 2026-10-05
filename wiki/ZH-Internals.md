@@ -647,6 +647,9 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 应将较早的 chat/Responses 翻译路径测量，与下文 2026-09-30 的有限原生对照分开看待；
 两者都不能证明所有账号或工作负载的表现。
 
+[Prompt 缓存](ZH-Prompt-Caching.md)按路由说明中继为缓存发送什么、如何测量命中率；本节保留
+符号、精确机制与实测数据。
+
 ### 用 `prompt_cache_key` 提示 `/responses` 缓存路由
 
 Relay 发送稳定的 `prompt_cache_key` 作为缓存路由提示。此前对 GPT-5.5/5.6 系列的
@@ -660,8 +663,9 @@ Copilot `/responses` 测试观察到，省略该 key 时缓存读取会掉到 0�
   `payload.user` 上体现）；
 - 没有 user id 时，退化为 system prompt 的哈希。
 
-key 本身是一个 SHA-256 摘要（`cr-` 加 32 位十六进制字符），所以
-`prompt_cache_key` 本身不会暴露它是从哪个标识符派生出来的。
+key 本身是一个 SHA-256 摘要：来自 user id 时为 `cr-` 加 32 位十六进制字符，来自 system prompt
+时为 `cr-sys-` 加 32 位十六进制字符，两者都没有时不发送 key。所以 `prompt_cache_key` 本身不会
+暴露它是从哪个标识符派生出来的。
 
 **但这并不等于整个请求做了匿名化。**
 `buildResponsesRequestPayload` 在设置 `prompt_cache_key` 的同时，还会单独设置
@@ -1130,5 +1134,7 @@ GitHub 调用经过 relay 的上游 dispatcher，而不是全局 `fetch`，所�
 `tests/unit/wiki-docs.test.ts` 用机器强制文档契约本身：`wiki/` 是扁平的、每个 `EN-`
 页面都有对应的 `ZH-` 页面、每个相对链接都能解析，以及真正的代码感知
 `scripts/publish-wiki.py` 变换不留下坏导航。它调用与 workflow 相同的脚本及 Python
-fixture，不另写一份正则替代变换。套件不导入 relay 源码，Python 子进程仍隔离两个 home
+fixture，不另写一份正则替代变换。它还检查每个“命令”页面都为 `src/main.ts` 注册的每个命令写出
+一节，并写出其选项与参数；它用 TypeScript 编译器 API 读取这些源文件，而不是导入它们。套件不导入
+relay 源码，Python 子进程仍隔离两个 home
 变量。离线及发布后校验见[开发指南](ZH-Development.md)。
