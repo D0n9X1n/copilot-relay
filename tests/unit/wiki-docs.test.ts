@@ -285,6 +285,29 @@ test("each Commands page documents every registered command and its options", ()
   }
 })
 
+test("the Commands coverage check reads literal definitions and rejects shapes it cannot read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-commands-"))
+  const write = (name: string, definition: string): string => {
+    const file = path.join(directory, name)
+    fs.writeFileSync(file, `import { defineCommand } from "citty"\nexport const command = defineCommand(${definition})\n`)
+    return file
+  }
+
+  try {
+    assert.deepEqual(
+      argumentLabels(write("literal.ts", `{ args: { extra: { type: "boolean" }, target: { type: "positional", required: true }, search: { type: "positional", required: false }, since: { type: "positional", default: "1d" } } }`)),
+      ["--extra", "<TARGET>", "[SEARCH]", "[SINCE]"],
+    )
+
+    assert.throws(() => argumentLabels(write("outer-spread.ts", `{ ...{ args: { extra: { type: "boolean" } } } }`)), /spread or a computed key/)
+    assert.throws(() => argumentLabels(write("computed-key.ts", `{ ["args"]: { extra: { type: "boolean" } } }`)), /spread or a computed key/)
+    assert.throws(() => argumentLabels(write("args-spread.ts", `{ args: { ...{ extra: { type: "boolean" } } } }`)), /named object literal/)
+    assert.throws(() => argumentLabels(write("option-spread.ts", `{ args: { extra: { ...{ type: "boolean" } } } }`)), /spread or a computed key/)
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
 
 // Execute production publishing code, never a second copy of its transform.

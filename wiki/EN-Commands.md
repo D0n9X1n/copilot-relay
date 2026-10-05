@@ -178,8 +178,10 @@ new one. It logs the GitHub account it signed in to when GitHub returns it. It
 starts no relay.
 
 Its requests go through `upstreamProxy`, so when GitHub is reachable only through a
-proxy, set `upstreamProxy` in `config.yaml` first. It exits `0` when it completes,
-and `1` when a step fails, including when `config.yaml` cannot be loaded.
+proxy, set `upstreamProxy` in `config.yaml` first. It exits `1` when loading
+`config.yaml`, the sign-in or getting the Copilot token fails, and `0` otherwise.
+Looking up the account name is best effort: when it fails, the command logs that
+and still exits `0`.
 
 `start` and `models` run the same device-code sign-in when no GitHub token is
 stored, so `auth` is for signing in ahead of time or replacing a stored token.
@@ -205,20 +207,23 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 | `--timeout` | Positive per-probe timeout in seconds (default 30; bounded by configured timeout). |
 | `--total-timeout` | Positive timeout in seconds for all probes (default 300). |
 
-Lists the models in Copilot's catalog for the signed-in account. Unquoted words form
-one search, and a search prints the matching models and the `config.yaml` line that
-selects one. `--deep` sends real requests, to the `--model` ID or to every model in
-the catalog, through a relay pipeline built inside the command's own process rather
-than a running relay; it consumes Copilot usage. Every other option requires
-`--deep`, and a search cannot be combined with it: find the ID first, then test it
-with `--deep --model <id>`. It loads `config.yaml` and signs in as `start` does;
-with `--deep`, the device-code prompt goes to stderr.
+Lists the model IDs Copilot's catalog advertises, marking the ones the relay cannot
+use; the listing does not verify that a model works. Unquoted words form one search,
+and a search prints the matching models and the `config.yaml` line that selects one.
+`--deep` checks the `--model` ID, or every entry in the catalog. It sends a real
+request only to an entry it can probe before the total timeout; the other entries
+get a status without a request. The requests go through a relay pipeline built
+inside the command's own process rather than a running relay, and consume Copilot
+usage. Every other option requires `--deep`, and a search cannot be combined with
+it: find the ID first, then test it with `--deep --model <id>`. It loads
+`config.yaml` and signs in as `start` does; with `--deep`, the device-code prompt
+goes to stderr.
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | The list was printed, a search matched, or every `--deep` probe passed. |
+| `0` | The list was printed, a search matched, or every entry `--deep` checked passed. |
 | `1` | A search matched nothing (the closest IDs are printed, if any), an option was unusable, the `--model` ID is not in the catalog, or loading the config, signing in, loading the catalog or running the checks failed. |
-| `2` | A `--deep` probe did not pass, or no probe ran. |
+| `2` | An entry `--deep` checked did not pass, including one it could not probe, or there was no entry to check. |
 | `130` | `SIGINT` or `SIGTERM` interrupted `--deep`. |
 
 How to choose models, and how to read the `--deep` output, are under "Choose models
