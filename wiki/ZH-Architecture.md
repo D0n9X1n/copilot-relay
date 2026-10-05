@@ -310,7 +310,7 @@ Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留�
 `upstream_api=messages` 及生效 effort。完成元数据把 HTTP 状态与 stop/finish 原因、
 拒答、截断及已报告缓存用量分开。HTTP 200 或流关闭不等于答案已完成。
 `copilot-relay cache` 读回上游 `completion` 条目，按模型与路由报告 prompt 缓存命中率；
-见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+见[Prompt 缓存](ZH-Prompt-Caching.md)。
 
 中央日志器在写入两个 sink 前都通过 `scrubSensitiveUrls` 处理输出值，在 `debug`
 级别也会脱敏敏感 URL 尾部；这不是通用 payload 脱敏。普通 payload 渲染仍有界且单行。

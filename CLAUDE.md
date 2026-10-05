@@ -54,6 +54,8 @@ Both audiences live there. High-level architecture *and* precise technical detai
 - `EN-Internals` / `ZH-Internals` — precise mechanics and the invariants that hold them: translation, streaming, prompt caching, lifecycle, logging, testing. Name source paths and symbols, not line numbers — line numbers go stale, names do not.
 - `EN-Development` / `ZH-Development` — setup, tests, CI matrix, workflow, releasing.
 - `EN-Configuration` / `ZH-Configuration` — user-facing config reference.
+- `EN-Commands` / `ZH-Commands` — every CLI command: options, what it reads, writes and contacts, exit codes. `tests/unit/wiki-docs.test.ts` fails when a page misses a command `src/main.ts` registers, or one of its options.
+- `EN-Prompt-Caching` / `ZH-Prompt-Caching` — how prompt caching works: what Claude Code marks, what the relay sends on each route, how to measure the hit rate.
 - `EN-Logging-Troubleshooting` / `ZH-Logging-Troubleshooting` — log format and operational recipes.
 - Per-platform service pages.
 

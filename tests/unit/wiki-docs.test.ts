@@ -5,12 +5,15 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import ts from "typescript"
 
 // Why: wiki/ is the only in-repo documentation tree and the source for the
 // GitHub Wiki tab. This suite pins the structural contract that makes that
-// true -- flatness, EN/ZH parity, resolvable links, and a publish transform
-// that leaves no broken link behind. It imports nothing from src/; Python
-// subprocesses use temporary folders with both HOME and USERPROFILE isolated.
+// true -- flatness, EN/ZH parity, resolvable links, a publish transform that
+// leaves no broken link behind, and Commands pages that cover every command. It
+// imports nothing from src/: command definitions are parsed with the TypeScript
+// compiler API. Python subprocesses use temporary folders with both HOME and
+// USERPROFILE isolated.
 const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../..")
 const wikiDir = path.join(repoRoot, "wiki")
 
@@ -84,9 +87,194 @@ test("the consolidated documentation pages exist in both languages", () => {
     "ZH-How-It-Works.md",
     "EN-Configuration.md",
     "ZH-Configuration.md",
+    "EN-Commands.md",
+    "ZH-Commands.md",
+    "EN-Prompt-Caching.md",
+    "ZH-Prompt-Caching.md",
     "README.md",
   ]) {
     assert.ok(pages.has(required), `wiki/${required} must exist`)
+  }
+})
+
+// The Commands pages are the reference for every command and option.
+const sourceFile = (file: string): ts.SourceFile =>
+  ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true)
+
+// The key of an object literal property, or undefined for a spread or a computed key.
+const propertyKey = (property: ts.ObjectLiteralElementLike): string | undefined => {
+  if (ts.isSpreadAssignment(property)) {
+    return undefined
+  }
+
+  if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) {
+    return property.name.text
+  }
+
+  return undefined
+}
+
+const findProperty = (
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.ObjectLiteralElementLike | undefined =>
+  object.properties.find((property) => propertyKey(property) === name)
+
+// The object literal passed to citty's defineCommand; each command file makes exactly one call.
+const commandDefinition = (file: string): ts.ObjectLiteralExpression => {
+  const found: ts.ObjectLiteralExpression[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "defineCommand") {
+      const argument = node.arguments[0]
+      if (argument === undefined || !ts.isObjectLiteralExpression(argument)) {
+        throw new Error(`${file}: defineCommand takes an object literal`)
+      }
+
+      found.push(argument)
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile(file))
+  if (found.length !== 1) {
+    throw new Error(`${file}: expected one defineCommand call, found ${found.length}`)
+  }
+
+  return found[0]
+}
+
+// Each named import from a relative module, by local name, resolved to its .ts file.
+const relativeImports = (file: string): Map<string, string> => {
+  const imports = new Map<string, string>()
+  for (const statement of sourceFile(file).statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue
+    }
+
+    const specifier = statement.moduleSpecifier.text
+    const bindings = statement.importClause?.namedBindings
+    if (!specifier.startsWith("./") || bindings === undefined || !ts.isNamedImports(bindings)) {
+      continue
+    }
+
+    for (const element of bindings.elements) {
+      imports.set(element.name.text, path.join(path.dirname(file), `${specifier}.ts`))
+    }
+  }
+
+  return imports
+}
+
+const isBooleanLiteral = (node: ts.Expression): boolean =>
+  node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword
+
+// How citty's --help names each option and positional argument of a command: an option as
+// --name; a positional as <NAME>, or [NAME] when it is optional (required: false or a default).
+const argumentLabels = (file: string): string[] => {
+  const args = findProperty(commandDefinition(file), "args")
+  if (args === undefined) {
+    return []
+  }
+
+  if (!ts.isPropertyAssignment(args) || !ts.isObjectLiteralExpression(args.initializer)) {
+    throw new Error(`${file}: args must be an object literal`)
+  }
+
+  return args.initializer.properties.map((property) => {
+    const name = propertyKey(property)
+    if (name === undefined || !ts.isPropertyAssignment(property) || !ts.isObjectLiteralExpression(property.initializer)) {
+      throw new Error(`${file}: each argument must be a named object literal`)
+    }
+
+    const argumentType = findProperty(property.initializer, "type")
+    if (argumentType === undefined || !ts.isPropertyAssignment(argumentType) || !ts.isStringLiteral(argumentType.initializer)) {
+      throw new Error(`${file}: argument ${name} needs a literal type`)
+    }
+
+    if (argumentType.initializer.text !== "positional") {
+      return `--${name}`
+    }
+
+    const required = findProperty(property.initializer, "required")
+    if (required !== undefined && (!ts.isPropertyAssignment(required) || !isBooleanLiteral(required.initializer))) {
+      throw new Error(`${file}: argument ${name} needs a literal required`)
+    }
+
+    const hasDefault = findProperty(property.initializer, "default") !== undefined
+    const markedOptional = required !== undefined
+      && ts.isPropertyAssignment(required)
+      && required.initializer.kind === ts.SyntaxKind.FalseKeyword
+
+    return hasDefault || markedOptional ? `[${name.toUpperCase()}]` : `<${name.toUpperCase()}>`
+  })
+}
+
+// The commands src/main.ts registers, by name, each with its argument labels.
+const registeredCommands = (): Map<string, string[]> => {
+  const mainFile = path.join(repoRoot, "src", "main.ts")
+  const imports = relativeImports(mainFile)
+  const subCommands = findProperty(commandDefinition(mainFile), "subCommands")
+  if (subCommands === undefined || !ts.isPropertyAssignment(subCommands) || !ts.isObjectLiteralExpression(subCommands.initializer)) {
+    throw new Error("src/main.ts: subCommands must be an object literal")
+  }
+
+  const commands = new Map<string, string[]>()
+  for (const property of subCommands.initializer.properties) {
+    if (!ts.isShorthandPropertyAssignment(property)) {
+      throw new Error("src/main.ts: each command must be registered as a shorthand property")
+    }
+
+    const name = property.name.text
+    const file = imports.get(name)
+    if (file === undefined) {
+      throw new Error(`src/main.ts: ${name} is not imported from a relative module`)
+    }
+
+    commands.set(name, argumentLabels(file))
+  }
+
+  return commands
+}
+
+// Each "## `name`" section of a Commands page, by command name.
+const commandSections = (body: string): Map<string, string> => {
+  const sections = new Map<string, string>()
+  for (const section of body.split(/^## /m).slice(1)) {
+    const heading = section.split("\n", 1)[0]
+    const match = /^`([a-z]+)`\s*$/.exec(heading)
+    if (match?.[1] === undefined) {
+      continue
+    }
+
+    assert.equal(sections.has(match[1]), false, `the ${match[1]} section appears twice`)
+    sections.set(match[1], section)
+  }
+
+  return sections
+}
+
+test("each Commands page documents every registered command and its options", () => {
+  const commands = registeredCommands()
+
+  assert.ok(commands.size > 0, "src/main.ts must register commands")
+  for (const page of ["EN-Commands.md", "ZH-Commands.md"]) {
+    const sections = commandSections(readPage(page))
+
+    assert.deepEqual(
+      [...sections.keys()].sort(),
+      [...commands.keys()].sort(),
+      `wiki/${page} must have one section for each command src/main.ts registers`,
+    )
+
+    for (const [name, labels] of commands) {
+      for (const label of labels) {
+        assert.ok(
+          sections.get(name)?.includes(`\`${label}\``),
+          `wiki/${page} must name ${label} in the ${name} section`,
+        )
+      }
+    }
   }
 })
 

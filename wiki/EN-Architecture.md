@@ -345,7 +345,7 @@ metadata separates HTTP status from stop/finish reason, refusal, truncation and
 reported cache usage. HTTP 200 or a closed stream is not proof of a completed answer.
 `copilot-relay cache` reads the upstream `completion` entries back to report
 prompt-cache hit rates per model and route; see
-[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+[Prompt caching](EN-Prompt-Caching.md).
 
 The central logger passes emitted values through `scrubSensitiveUrls` before both
 sinks, redacting sensitive URL tails even at `debug`. This is not general payload

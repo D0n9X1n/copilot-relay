@@ -783,6 +783,10 @@ are the main lever for input-token cost and latency. Keep the earlier translated
 chat/Responses measurements separate from the bounded 2026-09-30 native comparison
 below; neither establishes behavior for every account or workload.
 
+[Prompt caching](EN-Prompt-Caching.md) describes, route by route, what the relay
+sends for caching and how to measure the hit rate; this section keeps the symbols,
+the precise mechanics and the measurements.
+
 ### `/responses` cache routing with `prompt_cache_key`
 
 The relay sends a stable `prompt_cache_key` as a cache-routing hint. Earlier
@@ -797,8 +801,9 @@ neither guarantees a cache hit nor replaces a stable prompt prefix.
   `metadata.user_id`, surfaced as `payload.user`);
 - fall back to a hash of the system prompt when there is no user id.
 
-The key itself is a SHA-256 digest (`cr-` plus 32 hex characters), so
-`prompt_cache_key` does not expose the identifier it was derived from.
+The key itself is a SHA-256 digest: `cr-` plus 32 hex characters from a user id,
+`cr-sys-` plus 32 hex characters from the system prompt, and no key with neither.
+So `prompt_cache_key` does not expose the identifier it was derived from.
 
 **That is not an anonymization guarantee for the request as a whole.**
 `buildResponsesRequestPayload` sets `prompt_cache_key` *and*, separately,
@@ -1361,5 +1366,8 @@ never exits.
 relative link resolves, and that the real code-aware `scripts/publish-wiki.py`
 transform leaves no broken published navigation. It invokes the same script as
 the workflow, plus Python fixtures; it does not maintain a second regex transform.
-The suite imports no relay source, and isolates both home variables for its Python
+It also checks that each Commands page has a section for every command
+`src/main.ts` registers, naming its options and arguments; it reads those source
+files with the TypeScript compiler API rather than importing them. The suite
+imports no relay source, and isolates both home variables for its Python
 subprocesses. See [Development](EN-Development.md) for offline and post-publish checks.

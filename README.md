@@ -72,7 +72,7 @@ scripts. It asks GitHub with the stored token, so no relay needs to run.
 
 - [Configure models and deep checks](wiki/EN-Configuration.md) · [中文](wiki/ZH-Configuration.md)
 - Run at login: [macOS](wiki/EN-macOS-LaunchAgent.md) · [Windows](wiki/EN-Windows-Service.md) · [Linux](wiki/EN-Linux-systemd.md)
-- [Troubleshoot](wiki/EN-Logging-Troubleshooting.md) · [Understand the architecture](wiki/EN-Architecture.md) · [Contribute](wiki/EN-Development.md)
+- [Commands](wiki/EN-Commands.md) · [Prompt caching](wiki/EN-Prompt-Caching.md) · [Troubleshoot](wiki/EN-Logging-Troubleshooting.md) · [Understand the architecture](wiki/EN-Architecture.md) · [Contribute](wiki/EN-Development.md)
 
 Unofficial research project; not affiliated with GitHub or Anthropic. Upstream
 services and compatibility can change. Model and tool support are not guaranteed;

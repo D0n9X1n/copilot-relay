@@ -722,85 +722,9 @@ debug Copilot POST /chat/completions -> 200 8287ms (attempt 1)
 
 ## Prompt 缓存命中率
 
-`copilot-relay cache` 按上游路由报告每个模型的输入中有多少由 prompt 缓存提供。它只读
-本地日志文件：既不联系中继，也不联系 Copilot，也不写入任何东西。
-
-```sh
-copilot-relay cache                      # 最近 24 小时，每个模型与路由一行
-copilot-relay cache --hourly             # 最近 24 小时的按小时趋势
-copilot-relay cache --daily              # 所有保留日志的按天趋势
-copilot-relay cache --since 6h           # 一段时长，或 ISO 日期或时间
-copilot-relay cache --model opus         # 名称包含 "opus" 的模型，不区分大小写
-copilot-relay cache --goal 97.5          # 低于 97.5% 的命中率显示为红色（默认 95）
-copilot-relay cache --json               # 行数组，供脚本使用
-```
-
-```text
-Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
-
-  MODEL               ROUTE              REQUESTS  HIT RATE
-  claude-opus-5-5     /v1/messages              1    98.36%
-  claude-opus-5.5     /chat/completions         2    98.38%
-  gpt-5.5-2026-04-23  /responses                1    92.86%
-
-HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
-```
-
-| 列 | 含义 |
-| --- | --- |
-| `MODEL`、`ROUTE` | 上游报告的模型（条目中没有时为 `unknown`）和上游路径。同一模型在不同路由上可能以不同名称报告，例如 `claude-opus-5.5` 与 `claude-opus-5-5`。 |
-| `REQUESTS` | 返回 HTTP 200 并记录了 `input_tokens` 的上游调用，包括用量到达后才被中断的调用，以及缓存情况未知的调用。 |
-| `HIT RATE` | 由 prompt 缓存提供的输入 token 除以总输入，截断到两位小数。在彩色终端中，达到 `--goal` 时为绿色，低于时为红色。该行没有调用报告缓存情况时为灰色的 `-`。 |
-
-条目中没有 `cache_read_input_tokens` 的调用，缓存情况是未知，不是零。它计入 `REQUESTS`，
-但不计入 `HIT RATE`；表格下方一行说明这样的调用有多少，没有时不显示这一行。
-命中率所依据的 token 计数（总输入、缓存读取、未缓存与缓存写入），
-以及缓存情况未知和缓存读取为 0 的调用数，都在 `--json` 中。
-
-`HIT RATE` 的颜色是表格中未达到目标的唯一标记。没有颜色时（`NO_COLOR`，或输出到管道），
-请把命中率与标题中的目标比较，或读取 `--json` 中的 `belowGoal`。`HIT RATE` 截断而不是
-四舍五入，所以低于目标的命中率永远不会显示成目标值本身。`--goal` 最多两位小数；打印出的
-`HIT RATE` 低于目标时，它才显示为红色，且一定显示为红色。
-
-`--hourly` 和 `--daily` 会增加一列本地时间的 `HOUR` 或 `DAY`，与日志文件名中的日期一致。
-时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
-`2026-11-01 01:00 UTC-04:00` 和 `2026-11-01 01:00 UTC-05:00`。不加 `--since` 时，汇总和
-按小时趋势覆盖最近 24 小时，按天趋势覆盖每个保留的日期。时长从现在往回计算；日期，或没有
-`Z` 和偏移量的时间，按本地时间解释。
-
-`--json` 为每一行打印一个对象，包含 `bucket`、`model`、`route`、`requests`、
-`unknownCacheRequests`、`zeroCacheReadRequests`、`totalInputTokens`、
-`cacheReadTokens`、`uncachedInputTokens`、`cacheWriteTokens`、`hitRate` 和
-`belowGoal`。`hitRate` 是 0 到 1 之间的小数，或 `null`；汇总中 `bucket` 为 `null`，
-该行没有调用报告缓存写入时 `cacheWriteTokens` 为 `null`。没有数据时打印 `[]`。
-
-参数无法使用，或日志目录无法读取时，命令在 stderr 说明原因并以 `1` 退出。任何报告，
-包括空报告，都以 `0` 退出。
-
-### 统计口径
-
-命令读取中继为每次上游调用在 `info` 级别记录的 `completion` 条目，来源是
-`~/.copilot-relay/logs/` 下按日期命名的文件。只有 `http_status=200`、`input_tokens` 为
-数字，且路由是 `/chat/completions`、`/responses` 或 `/v1/messages` 的条目才会计入。条目的
-`body` 和 `terminal` 取值不影响计入，所以用量到达后才被中断的调用，仍会显示它从缓存读取了
-多少。`request outcome` 条目会为客户端请求再次报告用量（两种条目见上文 HTTP 请求一节），
-因此从不读取它：计入它会把调用算两次。格式错误的行，以及中继仍在写入的最后一行，都会被
-跳过。
-
-`input_tokens` 在不同路由上含义不同，因此 `HIT RATE` 所除的总输入（`--json` 中的
-`totalInputTokens`）需要归一化：
-
-| 路由 | 总输入 |
-| --- | --- |
-| `/chat/completions`、`/responses` | `input_tokens`，已包含缓存输入 |
-| `/v1/messages` | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` |
-
-在 `/v1/messages` 上，缺少 `cache_creation_input_tokens` 时按 0 计算。小时和日期都是
-本地时间。
-
-命令能回看多远取决于 `logRetentionDays`（默认 `3`）。`completion` 条目在 `info` 级别
-写入，所以以 `logLevel: error` 运行的中继不会留下可读的数据，此时命令会说明没有找到
-数据，而不是打印一张空表。
+`copilot-relay cache` 根据本地日志文件，按模型与上游路由报告 prompt 缓存命中率。报告本身、它的
+`--json` 字段与统计口径见[Prompt 缓存](ZH-Prompt-Caching.md)中的“测量命中率”；选项与退出码见
+[命令](ZH-Commands.md)中的 `cache`。
 
 ### 定位退化
 

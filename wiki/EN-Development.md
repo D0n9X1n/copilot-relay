@@ -329,7 +329,9 @@ not a claim the live wiki was published or verified.
 `tests/unit/wiki-docs.test.ts` enforces the rules above mechanically: `docs/` is
 absent, `wiki/` is flat, `EN-`/`ZH-` pairs match, every relative link resolves,
 no cross-page anchor link exists, the publish transform leaves no broken link,
-and no tracked file references the removed `docs/` tree.
+no tracked file references the removed `docs/` tree, and each Commands page has a
+section for every command `src/main.ts` registers, naming its options and
+arguments.
 
 It invokes the production publisher on the real wiki and also runs
 `scripts/publish-wiki_tests.py`: offline fixtures for navigation, code spans,
