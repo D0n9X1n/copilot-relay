@@ -217,7 +217,7 @@ with `--deep`, the device-code prompt goes to stderr.
 | Exit | Meaning |
 | --- | --- |
 | `0` | The list was printed, a search matched, or every `--deep` probe passed. |
-| `1` | A search matched nothing (the closest models are printed), an option was unusable, the `--model` ID is not in the catalog, or loading the config, signing in, loading the catalog or running the checks failed. |
+| `1` | A search matched nothing (the closest IDs are printed, if any), an option was unusable, the `--model` ID is not in the catalog, or loading the config, signing in, loading the catalog or running the checks failed. |
 | `2` | A `--deep` probe did not pass, or no probe ran. |
 | `130` | `SIGINT` or `SIGTERM` interrupted `--deep`. |
 

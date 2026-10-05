@@ -84,7 +84,8 @@ Claude Code 以 Messages API 的形式接收用量：`input_tokens` 表示未缓
 | `/responses` | `input_tokens`（已包含缓存输入）和 `input_tokens_details.cached_tokens` | `input_tokens` = `input_tokens` 减去 `cached_tokens`；`cache_read_input_tokens` = `cached_tokens` |
 
 只有 `/v1/messages` 报告缓存写入。Copilot 没有报告缓存数量时，中继省略
-`cache_read_input_tokens`，而不是发送 `0`。中继自己的日志按 Copilot 报告的原样保留各路由的计数，
+`cache_read_input_tokens`，而不是发送 `0`。例外是由中继自己执行 WebSearch 的 `/v1/messages`
+请求：中继把该请求各轮的用量相加，并总是发送两个缓存字段，缺少的值按 `0` 计算。中继自己的日志按 Copilot 报告的原样保留各路由的计数，
 所以日志中的 `input_tokens` 在 `/chat/completions` 和 `/responses` 上包含缓存输入，在
 `/v1/messages` 上不包含；`copilot-relay cache` 会处理这一点，见下文“统计口径”。
 

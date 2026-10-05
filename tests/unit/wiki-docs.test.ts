@@ -114,11 +114,18 @@ const propertyKey = (property: ts.ObjectLiteralElementLike): string | undefined 
   return undefined
 }
 
+// A spread or a computed key could supply the property under a name this cannot read, so the
+// lookup fails rather than report the property missing.
 const findProperty = (
   object: ts.ObjectLiteralExpression,
   name: string,
-): ts.ObjectLiteralElementLike | undefined =>
-  object.properties.find((property) => propertyKey(property) === name)
+): ts.ObjectLiteralElementLike | undefined => {
+  if (object.properties.some((property) => propertyKey(property) === undefined)) {
+    throw new Error(`${object.getSourceFile().fileName}: an object literal has a spread or a computed key`)
+  }
+
+  return object.properties.find((property) => propertyKey(property) === name)
+}
 
 // The object literal passed to citty's defineCommand; each command file makes exactly one call.
 const commandDefinition = (file: string): ts.ObjectLiteralExpression => {

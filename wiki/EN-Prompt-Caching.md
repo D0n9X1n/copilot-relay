@@ -104,7 +104,10 @@ reports usage differently per route, and the relay maps it:
 | `/responses` | `input_tokens`, which includes cached input, and `input_tokens_details.cached_tokens` | `input_tokens` = `input_tokens` minus `cached_tokens`; `cache_read_input_tokens` = `cached_tokens` |
 
 Only `/v1/messages` reports cache writes. When Copilot reports no cached count, the
-relay leaves `cache_read_input_tokens` out rather than sending `0`. The relay's own
+relay leaves `cache_read_input_tokens` out rather than sending `0`. The exception is
+a `/v1/messages` request whose WebSearch the relay runs itself: it adds up the usage
+of that request's passes and always sends both cache fields, counting a missing
+value as `0`. The relay's own
 log keeps each route's counts as Copilot reported them, so its `input_tokens`
 includes cached input on `/chat/completions` and `/responses` but not on
 `/v1/messages`; `copilot-relay cache` accounts for that, as "What is counted" below
