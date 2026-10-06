@@ -169,6 +169,7 @@ opusModel: claude-opus-5.5
 | `src/usage.ts` | `copilot-relay usage`：显示 GitHub 为已保存 GitHub token 报告的 Copilot 套餐与配额。不需要中继在运行；不加 HTTP 路由，不换取 Copilot token，不写任何文件。 |
 | `src/lib/usage.ts` | 读取已保存的 token 和 `upstreamProxy`（不改写 `config.yaml`），通过 `getCopilotUsage` 请求 `copilot_internal/user`，只保留套餐与配额字段，渲染报告，并把每种失败转换为一行消息。 |
 | `src/lib/atomic-file.ts` | 用户文件的快照冲突检查与原子目标替换。 |
+| `src/lib/file-identity.ts` | 判断两次 stat 是否指向同一个文件：两次路径 stat 用 `sameFile`（比较 `dev` 和 `ino`）；句柄 stat 与路径 stat 用 `sameOpenedFile`，它在 Windows 上把为 0 的 `dev` 视为未报告。 |
 | `src/lib/address.ts` | 安全格式化监听/客户端 URL，包括 IPv6 与通配监听地址。 |
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |

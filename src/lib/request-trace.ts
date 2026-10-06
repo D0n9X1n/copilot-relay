@@ -4,6 +4,7 @@ import type { Stats } from "node:fs"
 import path from "node:path"
 
 import type { ProxyConfig } from "./config"
+import { sameFile, sameOpenedFile } from "./file-identity"
 import { log, registerLogSecret } from "./log"
 import { formatLogDate, paths } from "./paths"
 import type { RuntimeState } from "./state"
@@ -48,7 +49,6 @@ export const markDiscardedResponse = (response: Response): void => {
 
 const credentialPattern = /(?:gh[pousr]_|github_pat_|sk-|eyJ)[A-Za-z0-9_-]+/
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
-const sameFile = (left: Stats, right: Stats): boolean => left.dev === right.dev && left.ino === right.ino
 
 // Node defines no O_NOFOLLOW on Windows.
 const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW
@@ -382,7 +382,7 @@ const privateDirectory = async (directory: string): Promise<Stats> => {
   const handle = await fs.open(directory, fs.constants.O_RDONLY | noFollow)
   try {
     const opened = await handle.stat()
-    if (!opened.isDirectory() || !sameFile(observed, opened)) {
+    if (!opened.isDirectory() || !sameOpenedFile(observed, opened)) {
       throw new Error("Capture directory changed.")
     }
 
@@ -407,7 +407,7 @@ const createPrivateFile = async (file: string): Promise<FileHandle> => {
       !opened.isFile()
       || opened.nlink !== 1
       || current.isSymbolicLink()
-      || !sameFile(opened, current)
+      || !sameOpenedFile(opened, current)
     ) {
       throw new Error("Unsafe capture file.")
     }
@@ -1005,7 +1005,7 @@ export class RequestTrace {
           !current.isFile()
           || current.isSymbolicLink()
           || opened.nlink !== 1
-          || !sameFile(opened, current)
+          || !sameOpenedFile(opened, current)
         ) {
           throw new Error("Capture file changed.")
         }
@@ -1101,7 +1101,7 @@ export class RequestTrace {
             || current.isSymbolicLink()
             || current.nlink !== 1
             || !this.metadataStat
-            || !sameFile(current, this.metadataStat)
+            || !sameOpenedFile(current, this.metadataStat)
             || current.size !== this.metadataStat.size
             || current.mtimeMs !== this.metadataStat.mtimeMs
             || current.ctimeMs !== this.metadataStat.ctimeMs
@@ -1172,7 +1172,7 @@ const readRetentionManifest = async (file: string): Promise<unknown> => {
   const handle = await fs.open(file, fs.constants.O_RDONLY | noFollow)
   try {
     const opened = await handle.stat()
-    if (!sameFile(observed, opened) || opened.nlink !== 1 || opened.size !== observed.size) {
+    if (!sameOpenedFile(observed, opened) || opened.nlink !== 1 || opened.size !== observed.size) {
       throw new Error("Capture metadata changed.")
     }
 
@@ -1191,7 +1191,7 @@ const readRetentionManifest = async (file: string): Promise<unknown> => {
 
     const current = await fs.lstat(file)
     if (
-      !sameFile(opened, current)
+      !sameOpenedFile(opened, current)
       || current.size !== opened.size
       || current.mtimeMs !== opened.mtimeMs
     ) {

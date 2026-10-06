@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import type { PathLike } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -453,6 +454,27 @@ test("capture retention keeps the cutoff local calendar day", async () => {
   await cleanupCaptures(3, now)
 
   assert.equal((await fs.stat(keep)).isDirectory(), true)
+  assert.equal(await fs.stat(remove).then(() => true, () => false), false)
+})
+
+// On Windows, Node 22.13.1 reports dev 0 for a path stat and the volume serial number for a stat
+// of the open handle, for the same file. Every path stat is made to look like that, whatever Node
+// runs the test.
+test("capture retention removes an expired capture while path stats report dev 0 on Windows", { skip: process.platform !== "win32" }, async (t) => {
+  const lstat = fs.lstat
+  t.mock.method(fs, "lstat", async (target: PathLike) => {
+    const stat = await lstat(target)
+    stat.dev = 0
+    return stat
+  })
+
+  const now = new Date(2026, 10, 2, 12)
+  const expiredDay = new Date(now)
+  expiredDay.setDate(expiredDay.getDate() - 3)
+  const remove = await seedCapture(formatLogDate(expiredDay), "48", "complete")
+
+  await cleanupCaptures(3, now)
+
   assert.equal(await fs.stat(remove).then(() => true, () => false), false)
 })
 

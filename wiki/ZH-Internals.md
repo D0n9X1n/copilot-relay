@@ -1052,6 +1052,13 @@ drain 进行中执行。它的定时器来自 `node:timers`，而不是全局 `s
 失败；它丢弃这一批并关闭句柄。`flushLogs` 等待队列中的写入完成，再关闭文件；每次调用只
 等待自己排入的关闭，所以重叠的调用都会结束。
 
+在 Windows 上，对同一个文件，已打开句柄的 stat 与其路径的 stat 可能报告不同的 `dev`：
+Node 22.13.1 的路径 stat 报告 `dev` 为 0，句柄 stat 报告卷序列号，所以在那里比较 `dev` 会
+拒绝每次打开并丢弃每一批。因此 `src/lib/file-identity.ts` 的 `sameOpenedFile` 在 Windows 上
+把为 0 的 `dev` 视为未报告，只比较文件索引（`ino`），这比同时比较两者的证据弱；两个非 0 的
+`dev` 仍必须相等，其他平台比较两者。两次路径 stat 用严格的 `sameFile` 比较。debug 捕获写入、
+捕获保留清理和 `copilot-relay replay` 使用同一对函数。
+
 #141 之前，每条日志各自执行目录检查、open、stat、chmod、追加和 close，一批突发日志可能
 乱序写入文件。`tests/unit/log-format.test.ts` 覆盖调用顺序、调用时的时间戳和复用检查。
 

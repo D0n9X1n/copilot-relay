@@ -9,6 +9,7 @@ import { inspect } from "node:util"
 import consola from "consola"
 
 import type { LogLevelName } from "~/lib/app-config"
+import { sameFile, sameOpenedFile } from "~/lib/file-identity"
 import { getLogPath, paths } from "~/lib/paths"
 import { scrubSensitiveUrls } from "~/lib/redact"
 
@@ -194,9 +195,6 @@ const escapeLogLineSeparators = (value: string): string =>
 const isMissing = (error: unknown): boolean =>
   (error as NodeJS.ErrnoException).code === "ENOENT"
 
-const sameFile = (left: Stats, right: Stats): boolean =>
-  left.dev === right.dev && left.ino === right.ino
-
 // Do not chmod through an arbitrary symlink. Open the already checked directory
 // without following its final component, and operate on the handle on POSIX.
 // Returns the checked directory's lstat, so a reused log handle can tell it was not replaced.
@@ -220,7 +218,7 @@ const ensurePrivateDirectory = async (directory: string): Promise<Stats> => {
   const handle = await fs.open(directory, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)
   try {
     const opened = await handle.stat()
-    if (!opened.isDirectory() || !sameFile(observed, opened)) {
+    if (!opened.isDirectory() || !sameOpenedFile(observed, opened)) {
       throw new Error("Log directory changed while opening")
     }
 
@@ -294,7 +292,7 @@ const isStillActive = async (active: ActiveLog): Promise<boolean> => {
   return current !== undefined
     && current.isFile()
     && current.nlink === 1
-    && sameFile(current, active.identity)
+    && sameOpenedFile(current, active.identity)
     && hasMode(current, 0o600)
     && active.directories.every((checked, index) => isSameDirectory(directories[index], checked))
 }
@@ -326,8 +324,8 @@ const openPrivateLog = async (filePath: string, directories: Array<Stats>): Prom
       !opened.isFile()
       || opened.nlink !== 1
       || current.isSymbolicLink()
-      || !sameFile(opened, current)
-      || (observed && !sameFile(observed, opened))
+      || !sameOpenedFile(opened, current)
+      || (observed && !sameOpenedFile(observed, opened))
     ) {
       throw new Error("Log file changed while opening")
     }

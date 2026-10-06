@@ -1267,6 +1267,15 @@ that batch and closes the handle. `flushLogs` waits for queued writes, then clos
 the file; each call waits for the close it queued, so overlapping calls both
 finish.
 
+On Windows a stat of the open handle and a stat of its path can disagree on `dev` for the
+same file: Node 22.13.1 reports `dev` 0 for the path stat and the volume serial number for
+the handle stat, so comparing `dev` there would refuse every open and drop each batch.
+`sameOpenedFile` in `src/lib/file-identity.ts` therefore treats a `dev` of 0 on Windows as
+unreported and compares only the file index (`ino`), which is weaker evidence than both;
+two nonzero `dev` values must still match, and other platforms compare both. Two path
+stats are compared with the strict `sameFile`. The debug capture writer, capture retention
+and `copilot-relay replay` use the same pair.
+
 Before #141 each entry ran its own directory checks, open, stat, chmod, append and
 close, and a burst could reach the file out of order.
 `tests/unit/log-format.test.ts` covers call order, call-time stamps and the reuse
