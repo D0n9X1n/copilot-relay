@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util"
 import { defineCommand } from "citty"
 
 import type { ProxyConfig } from "./lib/config"
+import { sameOpenedFile } from "./lib/file-identity"
 import { withoutLogging } from "./lib/log"
 import { paths } from "./lib/paths"
 import { isConfiguredReasoningEffort } from "./lib/models"
@@ -379,12 +380,11 @@ const readCaptureFile = async (
     fs.constants.O_RDONLY | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW),
   )
   try {
-    // Same device and inode: the opened file is the one lstat checked.
+    // The opened file is the one lstat checked.
     const opened = await handle.stat()
     requireValid(
       opened.isFile()
-      && opened.ino === before.ino
-      && opened.dev === before.dev
+      && sameOpenedFile(opened, before)
       && opened.size === before.size,
     )
 
@@ -401,8 +401,7 @@ const readCaptureFile = async (
     const after = await fs.lstat(filePath)
     requireValid(
       !after.isSymbolicLink()
-      && after.ino === opened.ino
-      && after.dev === opened.dev
+      && sameOpenedFile(after, opened)
       && after.size === opened.size
       && after.mtimeMs === opened.mtimeMs,
     )

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import type { PathLike } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -50,6 +51,21 @@ test.after(async () => {
 })
 
 test("request IDs resolve only the private captures date tree", async () => {
+  const capture = await fixture()
+  assert.equal((await replayCapture(capture.id)).verdict, "MATCH")
+})
+
+// On Windows, Node 22.13.1 reports dev 0 for a path stat and the volume serial number for a stat
+// of the open handle, for the same file. Every path stat is made to look like that, whatever Node
+// runs the test.
+test("a capture written and replayed while path stats report dev 0 on Windows matches", { skip: process.platform !== "win32" }, async (t) => {
+  const lstat = fs.lstat
+  t.mock.method(fs, "lstat", async (target: PathLike) => {
+    const stat = await lstat(target)
+    stat.dev = 0
+    return stat
+  })
+
   const capture = await fixture()
   assert.equal((await replayCapture(capture.id)).verdict, "MATCH")
 })
