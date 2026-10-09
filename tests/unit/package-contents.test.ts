@@ -9,8 +9,8 @@ const execute = promisify(execFile)
 const root = fileURLToPath(new URL("../../", import.meta.url))
 
 // npm always packs package.json, README and LICENSE; the `files` allowlist in
-// package.json adds config.default.yaml and dist/. Repository media such as the
-// README's introduction video under .github/assets must never be published.
+// package.json adds config.default.yaml and dist/. Nothing else, and no image
+// or video file, may reach the published tarball.
 const allowedTopLevel = new Set(["package.json", "README.md", "LICENSE", "config.default.yaml"])
 
 test("npm package contains only the manifest, docs, default config and build output", { timeout: 60_000 }, async () => {
