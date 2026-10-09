@@ -8,10 +8,10 @@ import { promisify } from "node:util"
 const execute = promisify(execFile)
 const root = fileURLToPath(new URL("../../", import.meta.url))
 
-// npm always packs package.json, README and LICENSE; `files` in package.json
-// allowlists the rest. Repository media such as the README's introduction
-// video under .github/assets must never reach the published tarball.
-const alwaysPacked = new Set(["package.json", "README.md", "LICENSE", "config.default.yaml"])
+// npm always packs package.json, README and LICENSE; the `files` allowlist in
+// package.json adds config.default.yaml and dist/. Repository media such as the
+// README's introduction video under .github/assets must never be published.
+const allowedTopLevel = new Set(["package.json", "README.md", "LICENSE", "config.default.yaml"])
 
 test("npm package contains only the manifest, docs, default config and build output", { timeout: 60_000 }, async () => {
   // Run npm's CLI script through Node: on Windows, execFile cannot launch the npm.cmd shim.
@@ -24,7 +24,7 @@ test("npm package contains only the manifest, docs, default config and build out
 
   assert(packed.includes("package.json"))
   for (const file of packed) {
-    assert(alwaysPacked.has(file) || file.startsWith("dist/"), `unexpected file in the npm package: ${file}`)
+    assert(allowedTopLevel.has(file) || file.startsWith("dist/"), `unexpected file in the npm package: ${file}`)
     assert.doesNotMatch(file, /\.(mp4|mov|webm|gif|png|jpe?g)$/i, `media file in the npm package: ${file}`)
   }
 })
