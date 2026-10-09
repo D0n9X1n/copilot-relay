@@ -2,10 +2,10 @@
 
 **Use Claude Code with the models available through your GitHub Copilot subscription.**
 
-[![CI](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/copilot-relay.svg?logo=npm)](https://www.npmjs.com/package/copilot-relay)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/D0n9X1n/copilot-relay/ci.yml?branch=main&logo=githubactions&logoColor=white&label=CI)](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/copilot-relay?logo=npm)](https://www.npmjs.com/package/copilot-relay) [![npm downloads](https://img.shields.io/npm/dm/copilot-relay?logo=npm&label=downloads)](https://www.npmjs.com/package/copilot-relay) [![GitHub release](https://img.shields.io/github/v/release/D0n9X1n/copilot-relay?logo=github)](https://github.com/D0n9X1n/copilot-relay/releases/latest)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json) [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](wiki/README.md) [![License: MIT](https://img.shields.io/github/license/D0n9X1n/copilot-relay?color=blue)](LICENSE)
+
+[![Watch the 80-second introduction to copilot-relay](https://raw.githubusercontent.com/D0n9X1n/copilot-relay/main/.github/assets/copilot-relay-explained.jpg)](https://github.com/D0n9X1n/copilot-relay/blob/main/.github/assets/copilot-relay-explained.mp4)
 
 ## Features
 
