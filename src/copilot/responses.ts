@@ -215,6 +215,10 @@ interface CreateChunkOptions {
   usage?: ChatCompletionChunk["usage"]
 }
 
+// Copilot /responses refuses a max_output_tokens below this, with HTTP 400. Clients send less to
+// probe a model, as the Claude Code app does with max_tokens 1.
+const minResponsesOutputTokens = 16
+
 export function buildResponsesRequestPayload(
   payload: ChatCompletionsPayload,
   reasoningEffort: ResponsesReasoningEffort | undefined,
@@ -226,7 +230,9 @@ export function buildResponsesRequestPayload(
     model: payload.model,
     input: translateMessagesToResponsesInput(payload.messages),
     stream: payload.stream,
-    max_output_tokens: payload.max_tokens,
+    max_output_tokens: typeof payload.max_tokens === "number" ?
+        Math.max(payload.max_tokens, minResponsesOutputTokens)
+      : payload.max_tokens,
     temperature: payload.temperature,
     top_p: payload.top_p,
     user: sanitizeUserIdentifier(payload.user),
