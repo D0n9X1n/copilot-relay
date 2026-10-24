@@ -599,6 +599,34 @@ test("README stays a concise feature overview and quick start with valid Wiki li
   }
 })
 
+// Why: every request the relay forwards runs on the stored token's Copilot seat,
+// and the relay only checks apiKey, so it cannot tell whose request it serves.
+// The docs must say the relay is for the account owner alone, not only that an
+// open port is a security risk.
+test("README and both Configuration guides limit the relay to the account owner", () => {
+  const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
+
+  assert.match(readme, /personal use/i, "README must say the relay is for personal use")
+  assert.match(readme, /EN-Configuration\.md#personal-use-only/, "README must link the English personal-use section")
+  assert.match(readme, /ZH-Configuration\.md#仅限个人使用/, "README must link the Chinese personal-use section")
+
+  const pages: [string, string, string[]][] = [
+    ["EN-Configuration.md", "### Personal use only", ["seat", "quota", "0.0.0.0", "tunnel", "GitHub Copilot app", "terms"]],
+    ["ZH-Configuration.md", "### 仅限个人使用", ["席位", "配额", "0.0.0.0", "隧道", "GitHub Copilot app", "条款"]],
+  ]
+
+  for (const [page, heading, terms] of pages) {
+    const body = readPage(page)
+    const keySection = body.split(/^## /m).find((section) => /^(Require a client key|要求客户端密钥)/.test(section)) ?? ""
+    const personalUse = keySection.split(heading)[1]?.split(/^### /m)[0] ?? ""
+
+    assert.notEqual(personalUse, "", `${page} must have ${heading} under the client-key section`)
+    for (const term of terms) {
+      assert(personalUse.includes(term), `${page} ${heading} must mention ${term}`)
+    }
+  }
+})
+
 test("Configuration documents live model discovery and simple updates", () => {
   for (const page of ["EN-Configuration.md", "ZH-Configuration.md"]) {
     const body = readPage(page)
