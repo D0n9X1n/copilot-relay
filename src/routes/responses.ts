@@ -1,7 +1,9 @@
 // OpenAI Responses route for Codex CLI and the Codex app: POST /v1/responses, forwarded to Copilot's
 // /responses with only the fields Copilot rejects changed, and its SSE or JSON returned unchanged.
+// A Claude model is translated to Copilot's native Messages API instead (src/codex/messages.ts).
 import { Hono } from "hono"
 
+import { collectCodexResponse, encodeSse, toClaudeRequest, toCodexEvents } from "~/codex/messages"
 import {
   contextOverflowStream,
   getCodexInitiator,
@@ -18,8 +20,9 @@ import {
   toPromptTooLongError,
 } from "~/copilot/client"
 import { getCachedCopilotModel } from "~/copilot/models"
+import { createNativeMessages, nativeEvents } from "~/copilot/native"
 import type { ProxyEnv } from "~/lib/config"
-import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
+import { HTTPError, PromptTooLongError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
 import { sanitizeTerminalString } from "~/lib/redact"
 import type { RequestTrace } from "~/lib/request-trace"
@@ -57,14 +60,26 @@ const readSubagent = (value: string | undefined): string | undefined => {
   return /^[\w.-]{1,64}$/.test(value) ? value : "other"
 }
 
+// What settleWhenDone reads: a response body's reader, or a generator of translated events.
+interface ChunkSource {
+  read(): Promise<{ done?: boolean; value?: Uint8Array }>
+  cancel(reason?: unknown): Promise<unknown>
+}
+
+const sourceOf = (chunks: AsyncGenerator<Uint8Array>): ChunkSource => ({
+  read: async () => await chunks.next(),
+  cancel: async () => await chunks.return(undefined),
+})
+
+const sseHeaders = { "content-type": "text/event-stream", "cache-control": "no-cache" }
+
 /**
  * Passes the upstream body to the client and settles the request trace when it ends.
  *
  * The trace cancels every upstream body still open once the handler settles, so a streamed answer
  * must settle the handler only after its last byte, an error, or the client's cancellation.
  */
-const settleWhenDone = (body: ReadableStream<Uint8Array>, trace: RequestTrace | undefined): ReadableStream<Uint8Array> => {
-  const reader = body.getReader()
+const settleWhenDone = (source: ChunkSource, trace: RequestTrace | undefined): ReadableStream<Uint8Array> => {
   // The end, an error and the client's cancellation can race; whichever comes first settles.
   let settled = false
   const settle = (error?: unknown) => {
@@ -79,12 +94,12 @@ const settleWhenDone = (body: ReadableStream<Uint8Array>, trace: RequestTrace | 
   return new ReadableStream<Uint8Array>({
     pull: async (controller) => {
       try {
-        const next = await reader.read()
+        const next = await source.read()
         if (settled) {
           return
         }
 
-        if (next.done) {
+        if (next.done || next.value === undefined) {
           controller.close()
           settle()
           return
@@ -101,7 +116,7 @@ const settleWhenDone = (body: ReadableStream<Uint8Array>, trace: RequestTrace | 
     },
     cancel: async (reason) => {
       settle()
-      await reader.cancel(reason).catch(() => {})
+      await source.cancel(reason).catch(() => {})
     },
   }, { highWaterMark: 0 })
 }
@@ -118,16 +133,42 @@ responsesRoutes.post("/responses", async (c) => {
     const payload = parseCodexPayload(await c.req.text())
     stream = payload.stream === true
 
-    const model = await resolveCodexModel(config, payload.model)
-    const prepared = prepareCodexPayload(payload, model, getCachedCopilotModel(config, model))
+    const route = await resolveCodexModel(config, payload.model)
+    const capabilities = getCachedCopilotModel(config, route.model)
     const subagent = readSubagent(c.req.header("x-openai-subagent"))
     const initiator = getCodexInitiator(payload.input, subagent)
+
+    if (route.api === "messages") {
+      const request = toClaudeRequest(payload, route.model, capabilities)
+      if (request.dropped.length > 0) {
+        log.info(sanitizeTerminalString(`request_id=${requestId} Codex items Claude has no equivalent for, dropped: ${request.dropped.join(",")}`))
+      }
+
+      const upstream = await createNativeMessages(config, request.payload, {
+        requestId,
+        initiator,
+        signal,
+        client: "codex",
+        requestedModel: payload.model,
+      })
+      const events = toCodexEvents(nativeEvents(upstream), payload.model, request.tools)
+
+      if (!stream) {
+        const final = await collectCodexResponse(events)
+        return c.json(final, final.status === "failed" ? 502 : 200)
+      }
+
+      trace?.deferHandler()
+      return new Response(settleWhenDone(sourceOf(encodeSse(events)), trace), { status: 200, headers: sseHeaders })
+    }
+
+    const prepared = prepareCodexPayload(payload, route.model, capabilities)
 
     log.info(sanitizeTerminalString([
       `request_id=${requestId}`,
       "Model request client=codex",
       `requested_model=${payload.model}`,
-      `upstream_model=${model}`,
+      `upstream_model=${route.model}`,
       "upstream_api=responses",
       `requested_think_effort=${prepared.requestedEffort ?? "unset"}`,
       `effective_think_effort=${prepared.effectiveEffort ?? "omitted"}`,
@@ -160,10 +201,7 @@ responsesRoutes.post("/responses", async (c) => {
       if (overflow && stream) {
         c.set("requestErrorMessage", overflow.message)
         log.error(`request_id=${requestId} ${overflow.message}; sent to Codex as context_length_exceeded`)
-        return new Response(contextOverflowStream(requestId, overflow.message), {
-          status: 200,
-          headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-        })
+        return new Response(contextOverflowStream(requestId, overflow.message), { status: 200, headers: sseHeaders })
       }
 
       // The body goes to Codex as it is; the log gets only the status, since a cut of upstream
@@ -181,6 +219,13 @@ responsesRoutes.post("/responses", async (c) => {
 
     if (!(error instanceof HTTPError)) {
       throw error
+    }
+
+    // The Claude path reports a prompt over the input limit this way; Codex compacts on this event.
+    if (error instanceof PromptTooLongError && stream) {
+      c.set("requestErrorMessage", error.message)
+      log.error(`request_id=${requestId} ${error.message}; sent to Codex as context_length_exceeded`)
+      return new Response(contextOverflowStream(requestId, error.message), { status: 200, headers: sseHeaders })
     }
 
     // A rejected request's message can quote the client's model name, so it is made terminal-safe.
@@ -207,5 +252,5 @@ responsesRoutes.post("/responses", async (c) => {
   }
 
   trace?.deferHandler()
-  return new Response(settleWhenDone(response.body, trace), { status: response.status, headers })
+  return new Response(settleWhenDone(response.body.getReader(), trace), { status: response.status, headers })
 })

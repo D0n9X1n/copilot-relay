@@ -10,7 +10,7 @@ import {
   prepareCodexPayload,
   resolveCodexModel,
 } from "../../src/codex/request"
-import type { CopilotModel } from "../../src/copilot/models"
+import { pinCopilotModelCatalog, type CopilotModel } from "../../src/copilot/models"
 import type { ProxyConfig } from "../../src/lib/config"
 import { HTTPError } from "../../src/lib/error"
 import { runtimeState } from "../../src/lib/state"
@@ -162,28 +162,37 @@ test("includesImage finds images in messages and in tool output", () => {
   assert.equal(includesImage("input_image"), false)
 })
 
-test("resolveCodexModel sends a listed model as named", async () => {
+test("resolveCodexModel sends a listed GPT model as named to /responses", async () => {
   const config = configWith([["gpt-6-astra", { supportedEndpoints: ["/responses"], type: "chat" }]])
 
-  assert.equal(await resolveCodexModel(config, "gpt-6-astra"), "gpt-6-astra")
+  assert.deepEqual(await resolveCodexModel(config, "gpt-6-astra"), { model: "gpt-6-astra", api: "responses" })
 })
 
-test("resolveCodexModel refuses Claude models and models without /responses", async () => {
+test("resolveCodexModel sends a listed Claude model with /v1/messages to the Messages translation", async () => {
+  const config = configWith([["claude-opus-5.5", { supportedEndpoints: ["/v1/messages", "/chat/completions"], type: "chat" }]])
+
+  assert.deepEqual(await resolveCodexModel(config, "claude-opus-5.5"), { model: "claude-opus-5.5", api: "messages" })
+})
+
+test("resolveCodexModel refuses unlisted Claude models and models without a usable endpoint", async () => {
   const config = configWith([
-    ["claude-opus-5.5", { supportedEndpoints: ["/v1/messages", "/chat/completions"], type: "chat" }],
+    ["claude-haiku-4.5", { supportedEndpoints: ["/chat/completions"], type: "chat" }],
     ["gpt-4o", { supportedEndpoints: ["/chat/completions"], type: "chat" }],
     ["text-embedding-3-small", { type: "embeddings" }],
   ])
+  // A pinned catalog is not refreshed, so the unlisted name is decided without a network call.
+  pinCopilotModelCatalog(config)
 
-  assert.equal(await errorCode(resolveCodexModel(config, "claude-opus-5.5")), "relay_unsupported_model")
+  assert.equal(await errorCode(resolveCodexModel(config, "claude-opus-9")), "relay_unsupported_model")
+  assert.equal(await errorCode(resolveCodexModel(config, "claude-haiku-4.5")), "relay_unsupported_endpoint")
   assert.equal(await errorCode(resolveCodexModel(config, "gpt-4o")), "relay_unsupported_endpoint")
   assert.equal(await errorCode(resolveCodexModel(config, "text-embedding-3-small")), "relay_unsupported_endpoint")
 })
 
-test("resolveCodexModel forwards any model when no catalog describes the upstream", async () => {
+test("resolveCodexModel forwards any non-Claude model when no catalog describes the upstream", async () => {
   const config: ProxyConfig = { ...configWith([]), modelCatalog: undefined }
 
-  assert.equal(await resolveCodexModel(config, "gpt-9-future"), "gpt-9-future")
+  assert.deepEqual(await resolveCodexModel(config, "gpt-9-future"), { model: "gpt-9-future", api: "responses" })
 })
 
 test("contextOverflowStream is one response.failed event with code context_length_exceeded", () => {

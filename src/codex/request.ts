@@ -61,29 +61,48 @@ export const parseCodexPayload = (text: string): CodexPayload => {
 const catalogDescribesUpstream = (config: ProxyConfig): boolean =>
   config.modelCatalog?.baseUrl === config.copilotBaseUrl
 
+export interface CodexRoute {
+  model: string
+  // responses: Copilot /responses, forwarded. messages: Copilot /v1/messages, translated.
+  api: "responses" | "messages"
+}
+
 /**
- * The Copilot model a Codex request is sent to.
+ * The Copilot model a Codex request is sent to, and the API that serves it.
  *
  * A model Copilot's catalog lists is used as named, so Codex's own model IDs reach the same
- * Copilot model. A name the catalog does not list, such as Codex's internal codex-auto-review,
- * goes to the configured gptModel, as Claude Code's aliases do. Without a catalog the name is
- * forwarded unchanged. Claude models are refused: Copilot serves them only on Messages and Chat
- * Completions.
+ * Copilot model. A GPT model listed with /responses is forwarded there; a Claude model listed with
+ * /v1/messages is translated to Messages, because Copilot serves Claude only there and on Chat
+ * Completions. A name the catalog does not list, such as Codex's internal codex-auto-review, goes
+ * to the configured gptModel, as Claude Code's aliases do. Without a catalog a non-Claude name is
+ * forwarded unchanged.
  */
-export const resolveCodexModel = async (config: ProxyConfig, requested: string): Promise<string> => {
-  if (isClaudeModelId(requested)) {
-    throw codexRequestError(
-      `${requested} is not available through the Responses API: Copilot serves Claude models only on Messages and Chat Completions. Choose a GPT model.`,
-      "relay_unsupported_model",
-    )
-  }
-
+export const resolveCodexModel = async (config: ProxyConfig, requested: string): Promise<CodexRoute> => {
   const normalized = normalizeCopilotModelId(requested)
 
   // Refreshes the catalog once when it does not list the model, so a newly added model is found,
   // then pins it: the effort clamp later reads the same capabilities that admitted the request.
   await ensureCopilotModelCatalog(config, normalized)
   pinCopilotModelCatalog(config)
+
+  if (isClaudeModelId(normalized)) {
+    const capabilities = getCachedCopilotModel(config, normalized)
+    if (capabilities === undefined) {
+      throw codexRequestError(
+        `${requested} is not in Copilot's model list. Check copilot-relay models for the exact Claude model ID.`,
+        "relay_unsupported_model",
+      )
+    }
+
+    if (capabilities.supportedEndpoints !== undefined && !capabilities.supportedEndpoints.includes("/v1/messages")) {
+      throw codexRequestError(
+        `${normalized} does not serve Claude Messages on Copilot, which Codex needs for Claude models.`,
+        "relay_unsupported_endpoint",
+      )
+    }
+
+    return { model: normalized, api: "messages" }
+  }
 
   const listed = getCachedCopilotModel(config, normalized) !== undefined
   const model = !listed && catalogDescribesUpstream(config) ? getModelRouting().gptModel : normalized
@@ -99,7 +118,7 @@ export const resolveCodexModel = async (config: ProxyConfig, requested: string):
     )
   }
 
-  return model
+  return { model, api: "responses" }
 }
 
 const effortRank = (effort: string): number => effortOrder.indexOf(effort)
