@@ -17,7 +17,7 @@ const main = defineCommand({
   meta: {
     name: "copilot-relay",
     description:
-      "Yet, just another relay for Claude Code to use a GitHub Copilot subscription.",
+      "Yet, just another relay for Claude Code and Codex to use a GitHub Copilot subscription.",
   },
   subCommands: { auth, cache, models, replay, restart, start, status, stop, usage },
 })

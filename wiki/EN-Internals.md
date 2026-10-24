@@ -22,6 +22,10 @@ src/
   replay.ts                   replayCapture: validated offline current-handler replay
 
   routes/claude.ts            POST /v1/messages, count_tokens, GET /v1/models
+  routes/responses.ts         POST /v1/responses: Codex passthrough to Copilot /responses
+
+  codex/
+    request.ts                Codex model choice, Copilot field rewrites, x-initiator
 
   claude/
     types.ts                  the subset of Claude Messages types used
@@ -661,6 +665,71 @@ hint for a later failure. The default is not `env`:
 existing install that sets those variables for other tools.
 `tests/integration/upstream-proxy.test.ts` runs each mode against a local
 recording proxy.
+
+## Codex: the Responses route
+
+`POST /v1/responses` (`src/routes/responses.ts`, `src/codex/request.ts`) serves
+Codex CLI and the Codex app. Codex speaks only the OpenAI Responses API, and Copilot
+serves its GPT models on `/responses`, so the route is a passthrough. It does not
+reuse `buildResponsesRequestPayload`: that builds a body from chat messages, so it
+would turn Codex's `custom` grammar tool (`apply_patch`) into a function tool, drop
+`include`, and lose encrypted reasoning. Setup is on [Codex](EN-Codex.md).
+
+**Model.** `resolveCodexModel` refreshes the catalog once when it does not list the
+requested ID (`ensureCopilotModelCatalog`), pins it, and then:
+
+- a `claude-*` ID is refused: Copilot lists Claude models only on Messages and Chat
+  Completions;
+- a listed ID is sent as named, so Codex's own IDs, which match Copilot's, keep
+  Codex's bundled metadata (its `apply_patch` tool, reasoning levels and context
+  window);
+- an unlisted ID, such as Codex's internal `codex-auto-review`, goes to `gptModel`;
+- a model whose entry is not `chat`, or lacks `/responses`, is refused before any
+  upstream call.
+
+Without a catalog the ID is forwarded unchanged.
+
+**Rewrites.** `prepareCodexPayload` changes only what Copilot answered with HTTP 400
+when probed with Codex-shaped bodies on 2026-10-23 (`gpt-5.4-nano`, `gpt-6-astra`,
+`gpt-5.6-sol`): `service_tier` (any value), a tool of type `image_generation`, and
+`reasoning.effort` `ultra`. `clampReasoningEffort` sends the highest level the
+catalog lists at or below the request, the lowest listed level when none is below,
+and no effort for a model that lists none. When the catalog lists no levels it uses
+the ones Copilot's own error names, `none` through `max`. The same probes accepted
+`store: false`, `include`, `client_metadata`, `prompt_cache_key`,
+`parallel_tool_calls`, `text.verbosity`, `reasoning.summary`, `custom` grammar tools,
+`web_search`, namespace tools, `developer` messages, every image `detail` value, and
+a replayed `custom_tool_call` carrying its ~420-character upstream `id`; those pass
+through. Leaving Codex's body intact keeps its `prompt_cache_key` and prefix stable:
+in a two-turn live check the second turn read 10,897 of 11,067 input tokens from
+cache.
+
+**Initiator.** `getCodexInitiator` returns `agent` when `x-openai-subagent` is set
+(Codex sends `review`, `compact`, `memory_consolidation` or `collab_spawn`) or when
+the last input item is not a user message, and `user` otherwise. It answers the same
+question `getClaudeRequestInitiator` answers for Claude Code: who started this turn.
+`includesImage` sets `copilot-vision-request` for an image anywhere in the input,
+including tool output.
+
+**Response.** SSE and JSON come back unchanged, with a short header allowlist.
+Upstream errors keep their status, body and `retry-after`. Codex treats HTTP 400 as
+fatal and recognizes a context overflow only as `response.failed` with code
+`context_length_exceeded`. So a streaming request whose prompt Copilot rejects as
+too long (`toPromptTooLongError`) gets that one event instead
+(`contextOverflowStream`), and Codex compacts. Errors the relay raises itself use
+the Responses shape `{error: {message, type, code}}`.
+
+**Trace.** The route runs inside the `/v1/*` capture middleware, so its upstream call
+logs the usual `completion path=/responses` entry that `copilot-relay cache` reads.
+`RequestTrace.handlerSettled` cancels every upstream body still open, so the route
+calls `deferHandler`, and `settleWhenDone` settles the handler only after the body's
+last byte, an error, or the client's cancellation. Codex closes its stream as soon
+as it reads `response.completed`, slightly before Copilot ends the body, so a
+finished Codex request often logs `body=cancelled` with
+`response_status=completed terminal=true`.
+
+`tests/unit/codex-request.test.ts` pins the pure decisions, and
+`tests/integration/codex-responses.test.ts` runs the route against a mocked Copilot.
 
 ## Streaming
 

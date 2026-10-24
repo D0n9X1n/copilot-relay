@@ -5,17 +5,18 @@
 
 ## 目标与边界
 
-`copilot-relay` 只是又一个让 Claude Code 使用 GitHub Copilot 订阅的中继。公开 API
-只兼容 Claude Code：
+`copilot-relay` 只是又一个让 Claude Code 和 Codex 使用 GitHub Copilot 订阅的中继。公开
+API 服务 Claude Code 和 Codex：
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses`（Codex CLI 和 Codex app）
 
-Relay 内部可调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`，
-不因此新增公开 OpenAI 路由。没有产品决策，不要扩展公开接口。通过接入检查的未知路由
+Relay 内部可调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`。
+`POST /v1/responses` 是为 Codex 增加的唯一公开 OpenAI 兼容路由；没有产品决策，不要再扩展公开接口。通过接入检查的未知路由
 返回 `500` 并记录有界兼容性诊断。Host/Origin/JSON 接入检查不是网络认证，真实监听器
 应保持 loopback。见[架构](ZH-Architecture.md)。
 

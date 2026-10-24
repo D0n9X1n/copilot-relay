@@ -180,13 +180,13 @@ payload 的第一个片段，而不是匹配的那条日志；按字节算，它
 | --- | --- |
 | `error` | 启动、preflight、请求、token 刷新和上游失败。 |
 | `info` | error 的内容，加上启动/preflight 状态、request ID、模型与 effort 摘要、上游生命周期、HTTP 状态码和完成/拒答/缓存元数据。 |
-| `debug` | info 的内容，加上详细耗时/捕获路径日志，并为通过接入检查的 Messages/token 计数 POST 自动捕获完整原始正文；不做常规完整 payload 日志转储。 |
+| `debug` | info 的内容，加上详细耗时/捕获路径日志，并为通过接入检查的 Messages/token 计数/Responses POST 自动捕获完整原始正文；不做常规完整 payload 日志转储。 |
 
 `warn`、`trace`、`silent` 之类的非法值会让启动失败。文件日志与控制台日志遵循同一个
 `logLevel` 过滤。
 
 先用 `info`。只在明确、短暂的捕获窗口内开启 `logLevel: debug`，之后恢复 `info`。
-这会捕获**窗口内全部通过接入检查的 Messages/token 计数 POST**，不只是你在调查的那次
+这会捕获**窗口内全部通过接入检查的 Messages/token 计数/Responses POST**，不只是你在调查的那次
 请求；不能补回之前的流量。GET/静态探针，以及被 Host/Origin/content-type 接入检查拒绝
 的请求，不进行完整正文捕获。
 
@@ -334,7 +334,7 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 
 | 字段 | 含义 |
 | --- | --- |
-| `client` | Claude Code 流量为 `claude`，内部启动 preflight 为 `generic` |
+| `client` | Claude Code 流量为 `claude`，`POST /v1/responses` 为 `codex`，内部启动 preflight 为 `generic` |
 | `requested_model` | Claude Code 发来的模型名 |
 | `upstream_model` | 实际使用的 Copilot 模型 |
 | `requested_think_effort` | Claude Code 的 `output_config.effort`、旧字段 `reasoning_effort`，缺失时为 `unset` |
@@ -348,6 +348,8 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 该摘要只包含元数据，不包含普通 prompt/工具 payload 转储，并会移除终端控制字符以保持单行。
 原生路由的摘要更简短，包含 `upstream_api=messages`、路由后模型及生效 effort。完整的
 原始模型/控制字段在 debug 捕获中保留，不保证两种摘要格式完全相同。
+Codex 路由记录 `client=codex … upstream_api=responses`，包含请求与生效的 effort 和 initiator，
+Codex subagent 还会带 `subagent=`，因 Copilot 拒绝而删除的字段记在 `removed=`，见 [Codex](ZH-Codex.md)。
 
 ### 上游 Copilot 调用
 

@@ -23,6 +23,7 @@ a service, and working on it. Every page exists in English and 中文.
 - [Configuration](EN-Configuration.md) — every key, hot reload vs restart
 - [Commands](EN-Commands.md) — every command, its options and exit codes
 - [Prompt caching](EN-Prompt-Caching.md) — what Copilot caches, what the relay sends, measuring the hit rate
+- [Codex CLI and the Codex app](EN-Codex.md) — point Codex at the relay, model choice, limits
 - [Logs and troubleshooting](EN-Logging-Troubleshooting.md) — log format, grep recipes, failure modes
 
 **Running it as a long-lived background service** — setup, verification, shutdown:
@@ -50,6 +51,7 @@ the platform's own restart policy.
 - [配置说明](ZH-Configuration.md) —— 每个配置键、热重载与需要重启
 - [命令](ZH-Commands.md) —— 每个命令、它的选项与退出码
 - [Prompt 缓存](ZH-Prompt-Caching.md) —— Copilot 缓存什么、中继发送什么、如何测量命中率
+- [Codex CLI 与 Codex app](ZH-Codex.md) —— 让 Codex 使用中继、选择模型、限制
 - [日志与问题排查](ZH-Logging-Troubleshooting.md) —— 日志格式、grep 配方、故障模式
 
 **后台长期运行** —— 注册、验证、停止：

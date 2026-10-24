@@ -56,6 +56,7 @@ Both audiences live there. High-level architecture *and* precise technical detai
 - `EN-Configuration` / `ZH-Configuration` — user-facing config reference.
 - `EN-Commands` / `ZH-Commands` — every CLI command: options, what it reads, writes and contacts, exit codes. `tests/unit/wiki-docs.test.ts` fails when a page misses a command `src/main.ts` registers, or one of its options.
 - `EN-Prompt-Caching` / `ZH-Prompt-Caching` — how prompt caching works: what Claude Code marks, what the relay sends on each route, how to measure the hit rate.
+- `EN-Codex` / `ZH-Codex` — Codex CLI and Codex app setup, model choice, what the relay changes, limits.
 - `EN-Logging-Troubleshooting` / `ZH-Logging-Troubleshooting` — log format and operational recipes.
 - Per-platform service pages.
 
@@ -136,9 +137,9 @@ Integration tests mock upstream Copilot. They must never call the real service.
 
 ## Public API
 
-Claude Code-compatible only: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`, `GET|HEAD /api/hello`. Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision. `/api/hello` is Claude Code's reachability probe, answered statically by `src/server.ts` — the client sends it, so it is part of the surface rather than scaffolding to remove.
+Claude Code-compatible routes plus the Responses route Codex uses: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`, `GET|HEAD /api/hello`, and `POST /v1/responses` (Codex CLI and the Codex app; a passthrough to Copilot `/responses` that changes only the fields Copilot rejects, see `wiki/EN-Codex.md`). Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision. `/api/hello` is Claude Code's reachability probe, answered statically by `src/server.ts` — the client sends it, so it is part of the surface rather than scaffolding to remove.
 
-**`/healthz`, `/v1/models`, and `/api/hello` prove nothing about upstream.** The first and third are static handlers; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes all three. Only `POST /v1/messages` exercises token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
+**`/healthz`, `/v1/models`, and `/api/hello` prove nothing about upstream.** The first and third are static handlers; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes all three. Only `POST /v1/messages` and `POST /v1/responses` exercise token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
 
 **`status` and `stop` ask different questions, and must detect differently.** `status` uses `findRelayOnPort` — pid file when its port matches, else the port-listener check, never the global process scan. `stop` uses `findRelayProcessIds`, which does scan globally, because cleaning up strays on any port is the point. Do not "unify" these: giving `status` the global scan makes it report a relay on a port nothing is listening on (#33), and scoping `stop` would leave strays behind.
 

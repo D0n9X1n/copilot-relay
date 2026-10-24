@@ -1,8 +1,9 @@
 # Architecture
 
-`copilot-relay` is just another relay for Claude Code to use a GitHub Copilot
-subscription. It exposes Claude-compatible endpoints on localhost and translates
-those requests into GitHub Copilot upstream calls.
+`copilot-relay` is just another relay for Claude Code and Codex to use a GitHub
+Copilot subscription. It exposes Claude-compatible endpoints on localhost and
+translates those requests into GitHub Copilot upstream calls. Codex's OpenAI
+Responses requests are passed through to Copilot.
 
 This page is the map: what the pieces are, how a request moves through them, and
 where the boundaries sit. For the precise mechanics behind each boundary — module
@@ -83,24 +84,27 @@ as they are observed, not a second independent read of an unconsumed stream.
 
 ## Public API
 
-Only Claude Code-facing endpoints are public:
+Claude Code's endpoints, and the Responses route Codex uses, are public:
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses` (Codex)
 
 The relay calls Copilot `/chat/completions`, `/responses`, or native `/v1/messages`
-internally, but does not expose public OpenAI-compatible routes. Unknown routes
-that pass admission return `500` with bounded diagnostics for compatibility work.
+internally. The only public OpenAI-compatible route is `POST /v1/responses`, a
+passthrough to Copilot `/responses` for Codex; see [Codex](EN-Codex.md) and
+[Internals](EN-Internals.md). Unknown routes that pass admission return `500` with
+bounded diagnostics for compatibility work.
 
 `src/server.ts` validates the request authority/Host against loopback or the
 configured hostname and actual listener port. A supplied Origin must match that
 origin; mismatches return `403`. When `apiKey` is set, every request except
 `GET /healthz` and `GET`/`HEAD /api/hello` must then carry the key as `x-api-key`
 or `Authorization: Bearer`, or it gets `401` before its body is read or any route
-runs. Nonempty Messages/count-token POST bodies require `application/json` (`415`
+runs. Nonempty Messages/count-token/Responses POST bodies require `application/json` (`415`
 otherwise). Without `apiKey` these are **local admission controls, not network
 authentication**: the dummy Claude token does not protect a LAN listener. Keep the
 bind address on loopback, or set `apiKey` first; see
@@ -353,7 +357,7 @@ sinks, redacting sensitive URL tails even at `debug`. This is not general payloa
 redaction. Ordinary payload rendering remains bounded and one-line.
 
 `logLevel: debug` also enables **raw full observed body** capture for admitted
-Messages/count-token POSTs under `captures/<local-date>/<request-id>/`, with private
+Messages/count-token/Responses POSTs under `captures/<local-date>/<request-id>/`, with private
 0700 directories and 0600 files on POSIX. Metadata headers are allowlisted; auth
 headers are excluded. Body bytes bypass log rendering and redaction: prompts,
 tool payloads and upstream echoes can themselves contain secrets. **Never share

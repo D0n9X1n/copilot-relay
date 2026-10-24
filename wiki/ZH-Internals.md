@@ -19,6 +19,10 @@ src/
   replay.ts                   replayCapture：校验捕获，用当前 handler 离线重放
 
   routes/claude.ts            POST /v1/messages、count_tokens、GET /v1/models
+  routes/responses.ts         POST /v1/responses：Codex 直通 Copilot /responses
+
+  codex/
+    request.ts                Codex 模型选择、Copilot 字段改写、x-initiator
 
   claude/
     types.ts                  用到的那部分 Claude Messages 类型
@@ -547,6 +551,59 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 的失败。默认值不是 `env`：`readAppConfig` 会把每个键写回磁盘，`env` 默认值会让已经为
 其他工具设置这些变量的现有安装悄悄改走代理。`tests/integration/upstream-proxy.test.ts`
 用本地记录代理覆盖每种模式。
+
+## Codex：Responses 路由
+
+`POST /v1/responses`（`src/routes/responses.ts`、`src/codex/request.ts`）为 Codex CLI
+和 Codex app 服务。Codex 只使用 OpenAI Responses API，而 Copilot 在 `/responses` 上提供
+它的 GPT 模型，所以这个路由是直通的。它不复用 `buildResponsesRequestPayload`：那个函数
+从 chat 消息构造请求体，会把 Codex 的 `custom` 语法工具（`apply_patch`）变成 function
+工具、丢掉 `include`，并丢失加密推理内容。配置方法见 [Codex](ZH-Codex.md)。
+
+**模型。** 目录中没有所请求的 ID 时，`resolveCodexModel` 会刷新一次目录
+（`ensureCopilotModelCatalog`），固定它，然后：
+
+- `claude-*` ID 被拒绝：Copilot 只在 Messages 和 Chat Completions 上列出 Claude 模型；
+- 目录中列出的 ID 原样发送，所以 Codex 自己的 ID（与 Copilot 的相同）会保留 Codex
+  自带的元数据（`apply_patch` 工具、推理等级和上下文窗口）；
+- 目录中没有的 ID，例如 Codex 内部的 `codex-auto-review`，发往 `gptModel`；
+- 条目不是 `chat`、或没有 `/responses` 的模型，在任何上游调用之前就被拒绝。
+
+没有目录时，ID 原样转发。
+
+**改写。** `prepareCodexPayload` 只改动 2026-10-23 用 Codex 形态的请求体探测时
+（`gpt-5.4-nano`、`gpt-6-astra`、`gpt-5.6-sol`）Copilot 返回 HTTP 400 的部分：
+`service_tier`（任何取值）、类型为 `image_generation` 的工具，以及 `reasoning.effort`
+为 `ultra`。`clampReasoningEffort` 发送目录列出的、不高于请求值的最高等级；没有更低的
+等级时发送最低的列出等级；模型一个等级都没列出时不发送 effort。目录未列出等级时，使用
+Copilot 自身错误信息列出的等级，即 `none` 到 `max`。同样的探测接受了 `store: false`、
+`include`、`client_metadata`、`prompt_cache_key`、`parallel_tool_calls`、`text.verbosity`、
+`reasoning.summary`、`custom` 语法工具、`web_search`、namespace 工具、`developer` 消息、
+所有图片 `detail` 取值，以及带有约 420 字符上游 `id` 的回放 `custom_tool_call`；这些都原样
+转发。保持 Codex 的请求体不变，可让它的 `prompt_cache_key` 和前缀保持稳定：在一次两轮的
+实测中，第二轮的 11,067 个输入 token 中有 10,897 个读自缓存。
+
+**发起方。** 设置了 `x-openai-subagent`（Codex 发送 `review`、`compact`、
+`memory_consolidation` 或 `collab_spawn`）或最后一个输入项不是用户消息时，
+`getCodexInitiator` 返回 `agent`，否则返回 `user`。它回答的问题与
+`getClaudeRequestInitiator` 为 Claude Code 回答的相同：这一轮是谁发起的。输入中任何位置
+出现图片（包括工具输出）时，`includesImage` 会设置 `copilot-vision-request`。
+
+**响应。** SSE 和 JSON 原样返回，只转发一小组允许的响应头。上游错误保留状态码、正文和
+`retry-after`。Codex 把 HTTP 400 视为致命错误，只把 code 为 `context_length_exceeded` 的
+`response.failed` 识别为上下文溢出。因此，对 Copilot 以 prompt 过长拒绝的流式请求
+（`toPromptTooLongError`），中继改为只发送这一个事件（`contextOverflowStream`），Codex
+随后压缩对话。中继自己产生的错误使用 Responses 的格式 `{error: {message, type, code}}`。
+
+**追踪。** 该路由运行在 `/v1/*` 捕获中间件之内，所以它的上游调用会写出
+`copilot-relay cache` 读取的常规 `completion path=/responses` 日志。
+`RequestTrace.handlerSettled` 会取消所有仍未结束的上游响应体，所以路由调用
+`deferHandler`，由 `settleWhenDone` 在响应体最后一个字节、出错或客户端取消之后才结束
+handler。Codex 一读到 `response.completed` 就关闭流，比 Copilot 结束响应体略早，所以已完成
+的 Codex 请求常被记录为 `body=cancelled`，同时带有 `response_status=completed terminal=true`。
+
+`tests/unit/codex-request.test.ts` 固定纯逻辑的决策，`tests/integration/codex-responses.test.ts`
+用模拟的 Copilot 运行该路由。
 
 ## 流式
 
