@@ -738,8 +738,8 @@ on every event. For a streamed GPT reply, `StableItemIds` (`src/codex/item-ids.t
 rewrites `item_id`, `item.id` and the terminal `response.output` ids to the id of
 that output index's `response.output_item.added`; the Codex app keys items by id and
 would otherwise render the streamed text and the finished item separately. Frames
-are split on blank lines across chunks, and one that needs no change is passed on
-byte for byte.
+are split on blank lines across chunks, an event's `data:` lines are joined as SSE
+defines, and a frame that needs no change is passed on byte for byte.
 
 **Claude models.** `toClaudeRequest` and `toCodexEvents` (`src/codex/messages.ts`)
 translate a Codex request for a `claude-*` model into a native Messages request,

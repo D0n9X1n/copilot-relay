@@ -12,7 +12,9 @@ const frameEnd = /\r?\n\r?\n/
 
 /**
  * Rewrites SSE frames as they stream so that every event about one output item names it by the same
- * id. A frame that needs no change is passed on byte for byte.
+ * id. A frame that needs no change is passed on byte for byte, except that a UTF-8 byte order mark at
+ * the start of the stream is dropped, which SSE ignores anyway. Frames end in a blank line after LF
+ * or CRLF, as Copilot sends them.
  */
 export class StableItemIds {
   private readonly decoder = new TextDecoder()

@@ -611,8 +611,8 @@ handler。Codex 一读到 `response.completed` 就关闭流，比 Copilot 结束
 **每项一个 id。** Copilot 的 `/responses` SSE 在每个事件中给同一个输出项一个新的不透明 id。
 对流式 GPT 回答，`StableItemIds`（`src/codex/item-ids.ts`）把 `item_id`、`item.id` 和终止
 `response.output` 中的 id 改写为该输出位置 `response.output_item.added` 的 id；Codex app 按 id
-区分项目，否则会把流式文本和完成的项目分别显示。帧按空行跨 chunk 切分，不需要改动的帧逐字节
-原样传递。
+区分项目，否则会把流式文本和完成的项目分别显示。帧按空行跨 chunk 切分，事件的多行 `data:` 按 SSE
+规定合并，不需要改动的帧逐字节原样传递。
 
 **Claude 模型。** `toClaudeRequest` 和 `toCodexEvents`（`src/codex/messages.ts`）把发给
 `claude-*` 模型的 Codex 请求翻译成原生 Messages 请求，经 `createNativeMessages` 发送，再把
