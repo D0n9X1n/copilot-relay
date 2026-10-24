@@ -439,7 +439,7 @@ test("rejects a short, spaced, non-ASCII or non-string apiKey without repeating 
   ]) {
     assert.throws(
       () => normalizeApiKey(value),
-      { message: "Invalid apiKey: expected empty, or at least 16 visible ASCII characters with no spaces; run copilot-relay setup to generate one" },
+      { message: "Invalid apiKey: expected empty, or at least 16 visible ASCII characters with no spaces; leave it empty to accept any key" },
       String(value),
     )
   }

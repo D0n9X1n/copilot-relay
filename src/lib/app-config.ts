@@ -1,5 +1,4 @@
 // Runtime YAML config loader/writer with hot-reload support for ~/.copilot-relay/config.yaml.
-import { randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -172,7 +171,7 @@ const normalizeRequiredString = (value: unknown, key: string): string | undefine
 }
 
 // A fixed string: the rejected value is never interpolated, for the reason given in normalizeLogLevel.
-const invalidApiKeyMessage = "Invalid apiKey: expected empty, or at least 16 visible ASCII characters with no spaces; run copilot-relay setup to generate one"
+const invalidApiKeyMessage = "Invalid apiKey: expected empty, or at least 16 visible ASCII characters with no spaces; leave it empty to accept any key"
 
 /**
  * Validates the optional inbound apiKey. Empty disables it.
@@ -797,30 +796,4 @@ export const watchAppConfig = (
   }
 
   return timer
-}
-
-/**
- * Gives config.yaml an apiKey when it has none: "cr-" and 32 random URL-safe characters, written into
- * the existing empty apiKey line so every other line stays as it is. The file then holds a credential,
- * so it is published owner-only. Returns the key in use and whether this call created it. A running
- * relay hot-reloads the new key.
- */
-export async function ensureApiKey(): Promise<{ apiKey: string; created: boolean }> {
-  const config = await readAppConfig()
-  if (config.apiKey) {
-    return { apiKey: config.apiKey, created: false }
-  }
-
-  const snapshot = await readFileSnapshot(paths.configPath)
-  const document = snapshot.raw ?? ""
-  const apiKey = `cr-${randomBytes(24).toString("base64url")}`
-  const emptyLine = /^((?:apiKey|api_key)[ \t]*:)[ \t]*(?:""|'')?[ \t]*(#.*)?$/m
-  if (!emptyLine.test(document)) {
-    throw new Error(`Could not find the empty apiKey line in ${paths.configPath}; set apiKey there by hand.`)
-  }
-
-  const next = document.replace(emptyLine, (_line, key: string, comment: string | undefined) =>
-    `${key} "${apiKey}"${comment ? ` ${comment}` : ""}`)
-  await writeFileSnapshot(snapshot, next, { ownerOnly: true })
-  return { apiKey, created: true }
 }
