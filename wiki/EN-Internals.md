@@ -27,6 +27,7 @@ src/
   codex/
     request.ts                Codex model choice, Copilot field rewrites, x-initiator
     messages.ts               Responses <-> Claude Messages translation for Claude models
+    item-ids.ts               one id per output item in a streamed GPT reply
     catalog.ts                the two-model catalog Codex reads (model_catalog_json)
     setup.ts                  codexSetup: catalog file and config.toml edits at start
     thinking.ts               Claude thinking carried in a reasoning item's encrypted_content
@@ -731,6 +732,14 @@ last byte, an error, or the client's cancellation. Codex closes its stream as so
 as it reads `response.completed`, slightly before Copilot ends the body, so a
 finished Codex request often logs `body=cancelled` with
 `response_status=completed terminal=true`.
+
+**One id per item.** Copilot's `/responses` SSE gives one output item a new opaque id
+on every event. For a streamed GPT reply, `StableItemIds` (`src/codex/item-ids.ts`)
+rewrites `item_id`, `item.id` and the terminal `response.output` ids to the id of
+that output index's `response.output_item.added`; the Codex app keys items by id and
+would otherwise render the streamed text and the finished item separately. Frames
+are split on blank lines across chunks, an event's `data:` lines are joined as SSE
+defines, and a frame that needs no change is passed on byte for byte.
 
 **Claude models.** `toClaudeRequest` and `toCodexEvents` (`src/codex/messages.ts`)
 translate a Codex request for a `claude-*` model into a native Messages request,

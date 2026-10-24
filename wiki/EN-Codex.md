@@ -101,7 +101,9 @@ Copilot answers with HTTP 400 is changed:
 | a tool of type `image_generation` | removes that tool |
 | a `reasoning.effort` the model does not take, such as `ultra` | sends the highest level the model lists below it, such as `max` |
 
-Copilot's SSE comes back unchanged. Upstream errors keep their status, body and
+Copilot's SSE comes back as it is sent, except that every event about one output
+item names it by the same id: Copilot gives each event a new id, and the Codex app
+would show the reply twice. Upstream errors keep their status, body and
 `retry-after`.
 
 ## Claude models

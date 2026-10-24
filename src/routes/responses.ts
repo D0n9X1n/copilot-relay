@@ -1,8 +1,10 @@
 // OpenAI Responses route for Codex CLI and the Codex app: POST /v1/responses, forwarded to Copilot's
-// /responses with only the fields Copilot rejects changed, and its SSE or JSON returned unchanged.
+// /responses with only the fields Copilot rejects changed, and its SSE or JSON returned as it came,
+// apart from one id per output item in the SSE (src/codex/item-ids.ts).
 // A Claude model is translated to Copilot's native Messages API instead (src/codex/messages.ts).
 import { Hono } from "hono"
 
+import { StableItemIds } from "~/codex/item-ids"
 import { collectCodexResponse, encodeSse, toClaudeRequest, toCodexEvents } from "~/codex/messages"
 import {
   contextOverflowStream,
@@ -70,6 +72,32 @@ const sourceOf = (chunks: AsyncGenerator<Uint8Array>): ChunkSource => ({
   read: async () => await chunks.next(),
   cancel: async () => await chunks.return(undefined),
 })
+
+// Copilot's SSE with one id per output item (StableItemIds). A read that completes no frame reads on.
+const withStableItemIds = (reader: ReadableStreamDefaultReader<Uint8Array>): ChunkSource => {
+  const ids = new StableItemIds()
+  let ended = false
+  return {
+    read: async () => {
+      while (!ended) {
+        const next = await reader.read()
+        if (next.done || next.value === undefined) {
+          ended = true
+          const rest = ids.flush()
+          return rest.byteLength > 0 ? { value: rest } : { done: true }
+        }
+
+        const bytes = ids.push(next.value)
+        if (bytes.byteLength > 0) {
+          return { value: bytes }
+        }
+      }
+
+      return { done: true }
+    },
+    cancel: async (reason) => await reader.cancel(reason),
+  }
+}
 
 const sseHeaders = { "content-type": "text/event-stream", "cache-control": "no-cache" }
 
@@ -252,5 +280,7 @@ responsesRoutes.post("/responses", async (c) => {
   }
 
   trace?.deferHandler()
-  return new Response(settleWhenDone(response.body.getReader(), trace), { status: response.status, headers })
+  const reader = response.body.getReader()
+  const source = stream && response.ok ? withStableItemIds(reader) : reader
+  return new Response(settleWhenDone(source, trace), { status: response.status, headers })
 })

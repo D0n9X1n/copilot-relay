@@ -520,3 +520,22 @@ test("a Claude model's upstream error keeps its status and retry-after", async (
   assert.equal(response.status, 429)
   assert.equal(response.headers.get("retry-after"), "37")
 })
+
+test("a streamed reply reaches Codex with one id per output item", async (t) => {
+  const rotating = [
+    { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "first", role: "assistant", content: [] } },
+    { type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: "second", delta: "ok" },
+    { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "third", role: "assistant", content: [] } },
+    { type: "response.completed", response: { id: "resp", status: "completed", output: [{ type: "message", id: "fourth", content: [] }] } },
+  ]
+  const relay = await startRelay(t, (response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" })
+    response.end(rotating.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""))
+  })
+  const received = (await (await relay.send(codexBody())).text())
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice(6)))
+
+  assert.deepEqual(received.map((event) => event.item_id ?? event.item?.id ?? event.response.output[0].id), ["first", "first", "first", "first"])
+})

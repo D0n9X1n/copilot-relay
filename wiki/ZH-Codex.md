@@ -92,7 +92,8 @@ supports_websockets = false
 | 类型为 `image_generation` 的工具 | 删除该工具 |
 | 模型不支持的 `reasoning.effort`，例如 `ultra` | 改为模型列出的、低于它的最高等级，例如 `max` |
 
-Copilot 的 SSE 原样返回。上游错误保留状态码、正文和 `retry-after`。
+Copilot 的 SSE 按原样返回，只是同一个输出项的所有事件使用同一个 id：Copilot 给每个事件一个新
+id，Codex app 会因此把回答显示两次。上游错误保留状态码、正文和 `retry-after`。
 
 ## Claude 模型
 
