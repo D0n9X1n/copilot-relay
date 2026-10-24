@@ -23,12 +23,13 @@ copilot-relay models --help
 | `restart` | 先执行 `stop`，再执行 `start` | GitHub、Copilot |
 | `status` | 显示配置端口上的中继是否在运行、是否可用 | 中继；加 `--deep` 时经中继联系 Copilot |
 | `auth` | 用设备码登录 GitHub | GitHub |
+| `setup` | 把 Claude Code CLI 与 app、Codex CLI 与 app 指向中继 | GitHub、Copilot |
 | `models` | 列出、搜索或测试 Copilot 的模型 | GitHub、Copilot |
 | `usage` | 显示 Copilot 套餐与配额 | GitHub |
 | `cache` | 从本地日志报告 prompt 缓存命中率 | 无 |
 | `replay` | 离线重放 debug 捕获 | 无 |
 
-`start`、`restart`、`stop`、`status`、`auth` 和 `models` 像中继一样加载 `config.yaml`：文件
+`start`、`restart`、`stop`、`status`、`auth`、`setup` 和 `models` 像中继一样加载 `config.yaml`：文件
 不存在时创建它，缺少的键以默认值补上，已有的键保持原样。无法解析、或含有中继拒绝的值的文件不会
 被重写。`usage` 读取该文件，但从不写它。`cache` 和 `replay` 不读取它。
 
@@ -153,6 +154,47 @@ token：保存在 `~/.copilot-relay/copilot_token.json` 的 token 剩余时间�
 没有保存 GitHub token 时，`start` 和 `models` 会执行同样的设备码登录，所以 `auth` 用于提前登录，
 或替换已保存的 token。`usage` 从不登录。两个 token 文件见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)中的“Token 缓存问题”。
+
+## `setup`
+
+```sh
+copilot-relay setup                     # 所有客户端
+copilot-relay setup claude-code-app codex-app
+copilot-relay setup codex-cli --force   # Codex 尚未在本机运行过也配置
+```
+
+把客户端指向 `config.yaml` 中 `host` 和 `port` 上的中继，使用 `gptModel` 和 `opusModel`，并且
+无需登录 claude.ai 或 ChatGPT。目标为 `claude-code-cli`、`claude-code-app`、`codex-cli` 和
+`codex-app`；不指定时配置全部四个。每个目标只修改它管理的键，保留其他所有设置。
+
+| 目标 | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `claude-code-cli` | `~/.claude/settings.json` | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| `claude-code-app` | `~/Library/Application Support/Claude-3p/` | `$XDG_CONFIG_HOME/Claude-3p/`，默认 `~/.config/Claude-3p/` | `%LOCALAPPDATA%\Claude-3p\` |
+| `codex-cli`、`codex-app` | `~/.codex/config.toml` | `~/.codex/config.toml` | `%USERPROFILE%\.codex\config.toml` |
+
+`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME` 分别改变 Claude Code CLI 与 Codex 文件的位置，与这两个客户端
+自己的行为一致。
+
+| 参数或选项 | 含义 |
+| --- | --- |
+| `[TARGETS]` | 要配置的客户端：`claude-code-cli`、`claude-code-app`、`codex-cli`、`codex-app`。默认全部。 |
+| `--force` | 客户端尚未在本机运行过也配置。 |
+
+- `claude-code-cli` 写入与 `start` 时 `claudeSetup` 相同的 `env` 块。
+- `claude-code-app` 设置 Claude app 的第三方模式：`configLibrary/` 中已应用的配置得到
+  `inferenceProvider: gateway`、中继地址、apiKey，以及由 `opusModel`（默认，tier `opus`）和
+  `gptModel`（tier `sonnet`）组成的 `inferenceModels` 列表，带 Copilot 的名称，Copilot 报告支持时
+  标记 1M 上下文。没有这个列表时，app 只显示 Claude 模型。`claude_desktop_config.json` 得到
+  `deploymentMode: "3p"`，所以 app 直接打开中继，而不是 claude.ai 登录。运行 setup 前请退出
+  app，之后再打开：它在启动时读取这些文件，运行时还会重写它们。
+- `codex-cli` 和 `codex-app` 共用一个 `config.toml` 和模型列表，写法与 `start` 时 `codexSetup`
+  相同（见 [Codex](ZH-Codex.md)）；同时指定两者只写一次。
+
+从未在本机运行过的客户端，即其目录不存在时，会被跳过，除非指定 `--force`。setup 会读取
+Copilot 的模型目录以获取模型名称、上下文大小和推理等级，没有保存 token 时先登录 GitHub；失败时
+它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。未知目标以 `1` 退出，任一目标失败
+以 `2` 退出，否则以 `0` 退出。
 
 ## `models`
 

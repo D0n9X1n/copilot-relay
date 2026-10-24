@@ -196,6 +196,7 @@ for selection and [Internals](EN-Internals.md) for history and cache boundaries.
 | `src/copilot/stream.ts` | Shared stream accumulation; lets JSON callers use output sizes that require upstream SSE without hiding incomplete responses. |
 | `src/lib/app-config.ts` | Loads and writes `~/.copilot-relay/config.yaml`. Hot-reloads while running. |
 | `src/lib/models.ts` | Config-driven model routing and `thinkEffort` validation. |
+| `src/lib/client-setup.ts` | Points Claude Code CLI, the Claude Code app (`src/lib/claude-app.ts`) and Codex at the relay, for `copilot-relay setup` and `start`. |
 | `src/lib/auth.ts` | GitHub device login, token storage, Copilot bearer refresh before expiry, and the `copilot_internal/user` request behind `copilot-relay usage`. |
 | `src/lib/upstream-dispatcher.ts` | The one undici dispatcher for Copilot and GitHub calls, built from `upstreamProxy`: direct, the proxy variables, or one proxy URL. |
 | `src/lib/preflight.ts` | Runs at startup before binding: verifies configured models exist and the configured effort is usable. |

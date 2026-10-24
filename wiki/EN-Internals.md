@@ -19,6 +19,7 @@ src/
   restart.ts                  stop + start
   status.ts                   detection, health probe, --deep, --json, exit codes
   auth.ts                     GitHub device login command
+  setup.ts                    setup command: Claude Code CLI/app, Codex CLI/app
   replay.ts                   replayCapture: validated offline current-handler replay
 
   routes/claude.ts            POST /v1/messages, count_tokens, GET /v1/models

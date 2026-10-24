@@ -26,13 +26,14 @@ or `unknown` for a relay that does not report one.
 | `restart` | Runs `stop`, then `start` | GitHub, Copilot |
 | `status` | Shows whether the relay on the configured port is running and usable | The relay; with `--deep`, Copilot through it |
 | `auth` | Signs in to GitHub with a device code | GitHub |
+| `setup` | Points Claude Code CLI and app, Codex CLI and app at the relay | GitHub, Copilot |
 | `models` | Lists, searches or tests Copilot's models | GitHub, Copilot |
 | `usage` | Shows the Copilot plan and quota | GitHub |
 | `cache` | Reports prompt-cache hit rates from local logs | Nothing |
 | `replay` | Replays a debug capture offline | Nothing |
 
-`start`, `restart`, `stop`, `status`, `auth` and `models` load `config.yaml` the
-way the relay does: they create it when it is missing and add any missing key with
+`start`, `restart`, `stop`, `status`, `auth`, `setup` and `models` load
+`config.yaml` the way the relay does: they create it when it is missing and add any missing key with
 its default, leaving existing keys as they are. A file that cannot be parsed, or
 that holds a value the relay rejects, is not rewritten. `usage` reads the file and
 never writes it. `cache` and `replay` do not read it.
@@ -191,6 +192,54 @@ and still exits `0`.
 stored, so `auth` is for signing in ahead of time or replacing a stored token.
 `usage` never signs in. Both token files are described under "Token cache
 problems" in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+
+## `setup`
+
+```sh
+copilot-relay setup                     # every client
+copilot-relay setup claude-code-app codex-app
+copilot-relay setup codex-cli --force   # even before Codex has run here
+```
+
+Points clients at the relay at `host` and `port` from `config.yaml`, with
+`gptModel` and `opusModel`, and no sign-in to claude.ai or ChatGPT. The targets are
+`claude-code-cli`, `claude-code-app`, `codex-cli` and `codex-app`; with none, it
+sets up all four. Each target changes only the keys it manages and keeps every
+other setting.
+
+| Target | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `claude-code-cli` | `~/.claude/settings.json` | `~/.claude/settings.json` | `%USERPROFILE%\.claude\settings.json` |
+| `claude-code-app` | `~/Library/Application Support/Claude-3p/` | `$XDG_CONFIG_HOME/Claude-3p/`, default `~/.config/Claude-3p/` | `%LOCALAPPDATA%\Claude-3p\` |
+| `codex-cli`, `codex-app` | `~/.codex/config.toml` | `~/.codex/config.toml` | `%USERPROFILE%\.codex\config.toml` |
+
+`CLAUDE_CONFIG_DIR` moves the Claude Code CLI file and `CODEX_HOME` moves the
+Codex one, as they do for those clients.
+
+| Argument or option | Description |
+| --- | --- |
+| `[TARGETS]` | Clients to set up: `claude-code-cli`, `claude-code-app`, `codex-cli`, `codex-app`. Default: all. |
+| `--force` | Also set up a client that has not run on this machine yet. |
+
+- `claude-code-cli` writes the same `env` block `claudeSetup` writes at `start`.
+- `claude-code-app` sets the Claude app's third-party mode: the applied
+  configuration in `configLibrary/` gets `inferenceProvider: gateway`, the relay URL,
+  the apiKey and an `inferenceModels` list of `opusModel` (the default, tier `opus`)
+  and `gptModel` (tier `sonnet`), with Copilot's names and 1M context where Copilot
+  reports it. Without that list the app shows only Claude models.
+  `claude_desktop_config.json` gets `deploymentMode: "3p"`, so the app opens on
+  the relay instead of the claude.ai sign-in. Quit the app before running setup and
+  reopen it after: it reads these files at launch and rewrites them while it runs.
+- `codex-cli` and `codex-app` share one `config.toml` and model list, written as
+  `codexSetup` writes them at `start` (see [Codex](EN-Codex.md)); naming both
+  writes it once.
+
+A client that has never run on the machine, meaning its directory does not exist,
+is skipped unless `--force` is given. Setup reads Copilot's model catalog for
+model names, context sizes and reasoning levels, signing in to GitHub first when
+no token is stored; when that fails it says so and writes the model IDs alone. It
+starts no relay, and it never prints the apiKey. It exits `1` for an unknown
+target, `2` when any target fails, and `0` otherwise.
 
 ## `models`
 

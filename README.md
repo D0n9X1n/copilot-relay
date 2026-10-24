@@ -30,8 +30,8 @@ copilot-relay auth
 copilot-relay start
 ```
 
-Follow the device-login prompt. Keep the relay running in this terminal; by default,
-startup configures Claude Code's connection in `~/.claude/settings.json`.
+Follow the device-login prompt and keep the relay running; startup configures Claude
+Code and Codex. `copilot-relay setup` also sets up their desktop apps ([Commands](wiki/EN-Commands.md)).
 Open a **second terminal** and run:
 
 ```sh

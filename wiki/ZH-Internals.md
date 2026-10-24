@@ -16,6 +16,7 @@ src/
   restart.ts                  stop + start
   status.ts                   检测、健康探测、--deep、--json、退出码
   auth.ts                     GitHub device login 命令
+  setup.ts                    setup 命令：Claude Code CLI/app、Codex CLI/app
   replay.ts                   replayCapture：校验捕获，用当前 handler 离线重放
 
   routes/claude.ts            POST /v1/messages、count_tokens、GET /v1/models

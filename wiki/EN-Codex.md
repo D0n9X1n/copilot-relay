@@ -14,7 +14,9 @@ shell command and completed, and the app server listed exactly those two models.
 
 With `codexSetup: true`, the default, `copilot-relay start` sets Codex up when it
 is installed, that is when `$CODEX_HOME` (default `~/.codex`) exists. Restart Codex,
-or the Codex app, afterwards so it reads the files.
+or the Codex app, afterwards so it reads the files. `copilot-relay setup codex-app`
+does the same without starting the relay, and `--force` sets Codex up before it
+has run here.
 
 `start` writes two things:
 

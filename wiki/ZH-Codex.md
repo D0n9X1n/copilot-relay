@@ -12,7 +12,8 @@ Codex CLI、Codex app 和 IDE 扩展读取同一个 `~/.codex/config.toml`，运
 ## 配置 Codex
 
 `codexSetup: true`（默认）时，如果 Codex 已安装，即 `$CODEX_HOME`（默认 `~/.codex`）存在，
-`copilot-relay start` 会为它完成配置。之后请重启 Codex 或 Codex app，让它重新读取文件。
+`copilot-relay start` 会为它完成配置。之后请重启 Codex 或 Codex app，让它重新读取文件。`copilot-relay setup codex-app` 无需启动中继
+即可完成同样的配置，`--force` 可在 Codex 尚未运行过时配置。
 
 `start` 会写入两处：
 
