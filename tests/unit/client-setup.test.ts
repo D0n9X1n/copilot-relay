@@ -115,3 +115,65 @@ test("setup targets default to all and reject unknown names", () => {
   assert.deepEqual(parseSetupTargets(["codex-app"]), ["codex-app"])
   assert.throws(() => parseSetupTargets(["claude-desktop"]), /Unknown target claude-desktop/)
 })
+
+test("app setup makes a key-bearing entry owner-only again even when its content is current", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "relay-claude-app-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const dataDir = path.join(root, "Claude-3p")
+  const input = { baseUrl: "http://127.0.0.1:4142", models, dataDir, force: true, apiKey: "relay-key-123456" }
+  await applyClaudeAppSetup(input)
+
+  const meta = JSON.parse(await fs.readFile(path.join(dataDir, "configLibrary", "_meta.json"), "utf8"))
+  const entryPath = path.join(dataDir, "configLibrary", `${meta.appliedId}.json`)
+  await fs.chmod(entryPath, 0o644)
+
+  const again = await applyClaudeAppSetup(input)
+  assert.equal(again.changed, true)
+  assert.equal((await fs.stat(entryPath)).mode & 0o777, 0o600)
+})
+
+test("Claude Code CLI setup reports a settings file it will not touch as a failure", async (t) => {
+  const { setupClaudeCodeCli } = await import("../../src/lib/client-setup")
+  const dir = process.env.CLAUDE_CONFIG_DIR!
+  await fs.mkdir(dir, { recursive: true })
+  const settings = path.join(dir, "settings.json")
+  await fs.writeFile(settings, "{ not json")
+  t.after(() => fs.rm(settings, { force: true }))
+
+  const outcome = await setupClaudeCodeCli({
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+    force: false,
+  })
+
+  assert.match(outcome.status, /^failed: left unchanged because it is not valid JSON/)
+  assert.equal(await fs.readFile(settings, "utf8"), "{ not json")
+})
+
+test("app setup refuses a configuration file that is JSON but not an object", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "relay-claude-app-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const dataDir = path.join(root, "Claude-3p")
+  await fs.mkdir(dataDir, { recursive: true })
+  await fs.writeFile(path.join(dataDir, "claude_desktop_config.json"), "[1, 2]\n")
+
+  await assert.rejects(applyClaudeAppSetup({ baseUrl: "http://127.0.0.1:4142", models, dataDir }), /not a JSON object/)
+  assert.equal(await fs.readFile(path.join(dataDir, "claude_desktop_config.json"), "utf8"), "[1, 2]\n")
+})
+
+test("Claude Code CLI setup skips a machine where Claude Code never ran, unless forced", async (t) => {
+  const { setupClaudeCodeCli } = await import("../../src/lib/client-setup")
+  const dir = process.env.CLAUDE_CONFIG_DIR!
+  await fs.rm(dir, { recursive: true, force: true })
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const context = {
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+  }
+
+  assert.match((await setupClaudeCodeCli({ ...context, force: false })).status, /^skipped/)
+  await assert.rejects(fs.stat(dir))
+  assert.equal((await setupClaudeCodeCli({ ...context, force: true })).status, "updated")
+})

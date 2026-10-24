@@ -93,17 +93,26 @@ const readJson = (snapshot: FileSnapshot): JsonRecord => {
     return {}
   }
 
+  let parsed: unknown
   try {
-    const parsed: unknown = JSON.parse(snapshot.raw)
-    return isRecord(parsed) ? parsed : {}
+    parsed = JSON.parse(snapshot.raw)
   } catch {
     throw new Error(`${snapshot.requestedPath} is not valid JSON; fix or remove it, then run setup again.`)
   }
+
+  if (!isRecord(parsed)) {
+    throw new Error(`${snapshot.requestedPath} is not a JSON object; fix or remove it, then run setup again.`)
+  }
+
+  return parsed
 }
 
+// A file holding the key is published again when other local users can read it, even when its
+// content is current. Windows has no POSIX mode bits.
 const writeJson = async (snapshot: FileSnapshot, value: JsonRecord, ownerOnly: boolean): Promise<boolean> => {
   const content = `${JSON.stringify(value, null, 2)}\n`
-  if (snapshot.raw === content) {
+  const exposed = ownerOnly && process.platform !== "win32" && snapshot.raw !== null && (snapshot.mode & 0o077) !== 0
+  if (snapshot.raw === content && !exposed) {
     return false
   }
 

@@ -1,6 +1,9 @@
 // Points each client at the relay: Claude Code CLI, the Claude Code desktop app, and Codex (CLI and
 // app share one config). Used by `copilot-relay setup` for any of them, and by `start` for the ones
 // its claudeSetup and codexSetup keys turn on.
+import fs from "node:fs/promises"
+import path from "node:path"
+
 import { applyCodexSetup } from "~/codex/setup"
 import type { CopilotModelCatalog } from "~/copilot/models"
 import type { AppConfig } from "~/lib/app-config"
@@ -34,18 +37,28 @@ const capabilities = (context: SetupContext, id: string) => context.catalog?.mod
 
 export const setupClaudeCodeCli = async (context: SetupContext): Promise<SetupOutcome> => {
   const { appConfig } = context
+  const configPath = getClaudeConfigPath()
+  const configDir = await fs.stat(path.dirname(configPath)).catch(() => undefined)
+  if (!context.force && !configDir?.isDirectory()) {
+    return { target: "claude-code-cli", path: configPath, status: "skipped: Claude Code has not run here" }
+  }
+
   const gptLimits = capabilities(context, appConfig.gptModel)?.limits
   const opusLimits = capabilities(context, appConfig.opusModel)?.limits
   const result = await applyClaudeConfig({
     apiKey: appConfig.apiKey,
     baseUrl: context.baseUrl,
-    configPath: getClaudeConfigPath(),
+    configPath,
     gptModel: appConfig.gptModel,
     gptLimits,
     maxOutputTokens: gptLimits && opusLimits ?
         Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
       : undefined,
   })
+
+  if (result.skippedReason) {
+    return { target: "claude-code-cli", path: result.configPath, status: `failed: left unchanged because ${result.skippedReason}` }
+  }
 
   return { target: "claude-code-cli", path: result.configPath, status: result.changed ? "updated" : "already up to date" }
 }

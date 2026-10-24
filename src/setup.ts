@@ -75,7 +75,10 @@ export const setup = defineCommand({
     let catalog: CopilotModelCatalog | undefined
     try {
       catalog = await withoutConsoleLogging(async () => {
-        await setupProxyAuth(config)
+        // Logging is off here, which would hide the sign-in prompt, so the code is printed directly.
+        await setupProxyAuth(config, {
+          onDeviceCode: (url, code) => console.error(`Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`),
+        })
         return await loadCopilotModelCatalog(config)
       })
     } catch {
