@@ -49,6 +49,7 @@
     "fetch-event-stream": "^0.1.6",
     "gpt-tokenizer": "^3.4.0",
     "hono": "^4.9.9",
+    "smol-toml": "^1.9.1",
     "undici": "^7.30.0"
   },
   "devDependencies": {

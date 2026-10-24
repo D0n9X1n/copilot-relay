@@ -144,3 +144,80 @@ test("applyCodexSetup skips a machine without Codex and writes both files when C
   assert.deepEqual(catalog.models.map((model) => model.slug), ["gpt-6-astra", "claude-opus-5.5"])
   assert.match(await fs.readFile(path.join(codexHome, "config.toml"), "utf8"), /model_provider = "copilot-relay"/)
 })
+
+test("editCodexConfig replaces a quoted top-level key instead of adding a second one", () => {
+  const text = editCodexConfig("\"model_provider\" = \"openai\"\n", input)
+
+  assert.equal(text.match(/^"?model_provider"? =/gm)?.length, 1)
+  assert.match(text, /^model_provider = "copilot-relay"$/m)
+})
+
+test("editCodexConfig leaves a key-like line inside a multi-line string alone", () => {
+  const existing = "developer_instructions = '''\nmodel = \"other\"\n'''\n"
+  const text = editCodexConfig(existing, input)
+
+  assert.match(text, /^developer_instructions = '''\nmodel = "other"\n'''\n/)
+  assert.match(text, /^model = "gpt-6-astra"$/m)
+})
+
+test("editCodexConfig reads triple quotes in a comment as a comment", () => {
+  const existing = "# use \"\"\" for long text\nmodel = \"x\"\n\n[tui]\ntheme = \"dark\"\n"
+  const text = editCodexConfig(existing, input)
+
+  assert.match(text, /^model_provider = "copilot-relay"$/m)
+  assert.equal(editCodexConfig(text, input), text)
+})
+
+test("editCodexConfig keeps a table whose quoted name holds brackets after the managed table", () => {
+  const existing = [
+    "[model_providers.copilot-relay]",
+    "name = \"old\"",
+    "",
+    "[projects.\"/tmp/Archive [2024]\"]",
+    "trust_level = \"trusted\"",
+    "",
+  ].join("\n")
+  const text = editCodexConfig(existing, input)
+
+  assert.match(text, /\[projects\."\/tmp\/Archive \[2024\]"\]\ntrust_level = "trusted"/)
+  assert.doesNotMatch(text, /"old"/)
+})
+
+test("editCodexConfig refuses an inline model_providers table and a file that is not TOML", () => {
+  assert.throws(
+    () => editCodexConfig("model_providers = { other = { name = \"Other\" } }\n", input),
+    CodexConfigError,
+  )
+  assert.throws(() => editCodexConfig("model = \n", input), (error: unknown) => {
+    return error instanceof CodexConfigError && /line 1/.test(error.message)
+  })
+})
+
+test("editCodexConfig refuses an edit it cannot make without changing other values", () => {
+  const existing = "model = \"\"\"\ngpt-5\n\"\"\"\n"
+
+  assert.throws(() => editCodexConfig(existing, input), CodexConfigError)
+})
+
+test("applyCodexSetup makes a config.toml holding the apiKey owner-only again", { skip: process.platform === "win32" }, async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "relay-codex-mode-"))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const codexHome = path.join(root, ".codex")
+  await fs.mkdir(codexHome)
+  const setup = {
+    apiKey: "relay-key-1234567890",
+    baseUrl: "http://127.0.0.1:4142",
+    catalogPath: path.join(root, ".copilot-relay", "codex-models.json"),
+    codexHome,
+    models: [{ id: "gpt-6-astra" }, { id: "claude-opus-5.5" }],
+  }
+  const configPath = path.join(codexHome, "config.toml")
+
+  await applyCodexSetup(setup)
+  assert.equal((await fs.stat(configPath)).mode & 0o777, 0o600)
+
+  await fs.chmod(configPath, 0o644)
+  const again = await applyCodexSetup(setup)
+  assert.equal(again.changed, true)
+  assert.equal((await fs.stat(configPath)).mode & 0o777, 0o600)
+})

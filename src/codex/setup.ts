@@ -4,7 +4,9 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { readFileSnapshot, writeFileSnapshot } from "~/lib/atomic-file"
+import { parse, TomlError } from "smol-toml"
+
+import { readFileSnapshot, writeFileSnapshot, type FileSnapshot } from "~/lib/atomic-file"
 import { buildCodexCatalog, readCodexVendorFiles, type CatalogModel } from "./catalog"
 
 export const codexProviderId = "copilot-relay"
@@ -39,50 +41,16 @@ export class CodexConfigError extends Error {
   }
 }
 
+type TomlTable = Record<string, unknown>
+
+const isTable = (value: unknown): value is TomlTable =>
+  typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
+
 const tomlString = (value: string): string => JSON.stringify(value)
 
-// A TOML key or table path as its parts, with quotes and spaces removed.
-const keyPath = (key: string): Array<string> =>
-  key.split(".").map((part) => part.trim().replace(/^(["'])(.*)\1$/, "$2"))
+const providerPath = ["model_providers", codexProviderId]
 
-const headerPattern = /^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/
-const keyPattern = /^\s*((?:[A-Za-z0-9_-]+|"[^"]*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"[^"]*"|'[^']*'))*)\s*=/
-
-const isProviderPath = (parts: Array<string>): boolean =>
-  parts[0] === "model_providers" && parts[1] === codexProviderId
-
-// The number of times a triple-quoted string opens or closes on a line.
-const tripleQuotes = (line: string): number =>
-  (line.match(/"""|'''/g) ?? []).length
-
-interface ParsedLine {
-  text: string
-  // The table this line belongs to, as its path parts; [] before the first header.
-  table: Array<string>
-  header: boolean
-  // Inside a multi-line string, where nothing is a header or a key.
-  inString: boolean
-}
-
-const parseLines = (lines: Array<string>): Array<ParsedLine> => {
-  const parsed: Array<ParsedLine> = []
-  let table: Array<string> = []
-  let inString = false
-  for (const text of lines) {
-    const header = !inString ? headerPattern.exec(text) : null
-    if (header) {
-      table = keyPath(header[1]!)
-    }
-
-    parsed.push({ text, table, header: header !== null, inString })
-    if (tripleQuotes(text) % 2 === 1) {
-      inString = !inString
-    }
-  }
-
-  return parsed
-}
-
+// The provider table as config.toml lines, and as the value TOML reads from those lines.
 const providerBlock = (input: CodexConfigInput): Array<string> => [
   `[model_providers.${codexProviderId}]`,
   "# Written by copilot-relay start (codexSetup); edits in this table are replaced on the next start.",
@@ -94,9 +62,234 @@ const providerBlock = (input: CodexConfigInput): Array<string> => [
   ...(input.apiKey ? [`http_headers = { "x-api-key" = ${tomlString(input.apiKey)} }`] : []),
 ]
 
-const topLevelValue = (line: string, key: string): string | undefined => {
-  const match = new RegExp(`^\\s*${key}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(line)
-  return match ? (match[1] ?? match[2]) : undefined
+const providerValue = (input: CodexConfigInput): TomlTable => ({
+  name: codexProviderId,
+  base_url: `${input.baseUrl}/v1`,
+  wire_api: "responses",
+  requires_openai_auth: false,
+  supports_websockets: false,
+  ...(input.apiKey ? { http_headers: { "x-api-key": input.apiKey } } : {}),
+})
+
+const isProviderPath = (parts: Array<string>): boolean =>
+  providerPath.every((part, index) => parts[index] === part)
+
+// Where the quote that opened just before `from` closes, or -1. Basic strings skip backslash escapes.
+const findClose = (line: string, from: number, quote: string): number => {
+  let at = from
+  while (at < line.length) {
+    if (quote === "\"" && line[at] === "\\") {
+      at += 2
+    } else if (line[at] === quote) {
+      return at
+    } else {
+      at++
+    }
+  }
+
+  return -1
+}
+
+const unescapeBasic = (raw: string): string => {
+  try {
+    return JSON.parse(`"${raw}"`) as string
+  } catch {
+    return raw
+  }
+}
+
+const skipSpace = (line: string, from: number): number => {
+  let at = from
+  while (line[at] === " " || line[at] === "\t") {
+    at++
+  }
+
+  return at
+}
+
+const bareKey = /[A-Za-z0-9_-]+/y
+
+// The dotted key starting at `start`, as its unquoted parts, and the index after it.
+const readKey = (line: string, start: number): { parts: Array<string>; end: number } | undefined => {
+  const parts: Array<string> = []
+  let at = skipSpace(line, start)
+  while (at < line.length) {
+    const quote = line[at]!
+    if (quote === "\"" || quote === "'") {
+      const close = findClose(line, at + 1, quote)
+      if (close === -1) {
+        return undefined
+      }
+
+      const raw = line.slice(at + 1, close)
+      parts.push(quote === "\"" ? unescapeBasic(raw) : raw)
+      at = close + 1
+    } else {
+      bareKey.lastIndex = at
+      const match = bareKey.exec(line)
+      if (!match) {
+        return undefined
+      }
+
+      parts.push(match[0])
+      at = bareKey.lastIndex
+    }
+
+    at = skipSpace(line, at)
+    if (line[at] !== ".") {
+      return { parts, end: at }
+    }
+
+    at = skipSpace(line, at + 1)
+  }
+
+  return undefined
+}
+
+// A table header's path, or undefined when the line is not a header.
+const readHeader = (line: string): Array<string> | undefined => {
+  const open = /^\s*\[\[?/.exec(line)
+  if (!open) {
+    return undefined
+  }
+
+  const key = readKey(line, open[0].length)
+  if (!key) {
+    return undefined
+  }
+
+  const close = open[0].trimStart() === "[[" ? "]]" : "]"
+  const rest = line.slice(key.end)
+  if (!rest.startsWith(close) || !/^\s*(?:#.*)?$/.test(rest.slice(close.length))) {
+    return undefined
+  }
+
+  return key.parts
+}
+
+// The key a `key = value` line assigns, or undefined for any other line.
+const readAssignedKey = (line: string): Array<string> | undefined => {
+  const key = readKey(line, 0)
+  if (!key || line[key.end] !== "=") {
+    return undefined
+  }
+
+  return key.parts
+}
+
+type StringState = "" | "\"\"\"" | "'''"
+
+// The multi-line string delimiter still open at the end of a line, or "" when none is.
+const stringStateAfter = (line: string, state: StringState): StringState => {
+  let open = state
+  let at = 0
+  while (at < line.length) {
+    const char = line[at]!
+    if (open === "\"\"\"" && char === "\\") {
+      at += 2
+    } else if (open !== "" && line.startsWith(open, at)) {
+      at += 3
+      // A closing delimiter can be followed by up to two quotes that belong to the string.
+      while (line[at] === open[0]) {
+        at++
+      }
+
+      open = ""
+    } else if (open !== "") {
+      at++
+    } else if (char === "#") {
+      return ""
+    } else if (line.startsWith("\"\"\"", at) || line.startsWith("'''", at)) {
+      open = line.slice(at, at + 3) as StringState
+      at += 3
+    } else if (char === "\"" || char === "'") {
+      const close = findClose(line, at + 1, char)
+      at = close === -1 ? line.length : close + 1
+    } else {
+      at++
+    }
+  }
+
+  return open
+}
+
+interface ParsedLine {
+  text: string
+  // The table this line belongs to, as its path parts; [] before the first header.
+  table: Array<string>
+  header: boolean
+  // The key this line assigns, relative to its table.
+  key?: Array<string>
+}
+
+// Each line with its table and, for a header or an assignment, what it names. A line inside a
+// multi-line string names nothing.
+const parseLines = (lines: Array<string>): Array<ParsedLine> => {
+  const parsed: Array<ParsedLine> = []
+  let table: Array<string> = []
+  let state: StringState = ""
+  for (const text of lines) {
+    if (state !== "") {
+      parsed.push({ text, table, header: false })
+    } else {
+      const header = readHeader(text)
+      if (header) {
+        table = header
+      }
+
+      const key = header ? undefined : readAssignedKey(text)
+      parsed.push({ text, table, header: header !== undefined, ...(key && { key }) })
+    }
+
+    state = stringStateAfter(text, state)
+  }
+
+  return parsed
+}
+
+const parseToml = (text: string): TomlTable => {
+  try {
+    return parse(text) as TomlTable
+  } catch (error) {
+    if (error instanceof TomlError) {
+      // The parser's message quotes the line, which can hold a credential, so only its number is kept.
+      throw new CodexConfigError(`config.toml is not valid TOML (line ${error.line}); fix it, or set codexSetup: false.`)
+    }
+
+    throw error
+  }
+}
+
+// A parsed TOML value in a form two parses can be compared by: keys sorted, dates as text.
+const canonical = (value: unknown): unknown => {
+  if (value instanceof Date) {
+    return `date:${value.toISOString()}`
+  }
+
+  if (typeof value === "bigint" || (typeof value === "number" && !Number.isFinite(value))) {
+    return `number:${String(value)}`
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(canonical)
+  }
+
+  if (isTable(value)) {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
+  }
+
+  return value
+}
+
+const sameToml = (left: TomlTable, right: TomlTable): boolean =>
+  JSON.stringify(canonical(left)) === JSON.stringify(canonical(right))
+
+const parsesTo = (text: string): TomlTable | undefined => {
+  try {
+    return parse(text) as TomlTable
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -104,22 +297,29 @@ const topLevelValue = (line: string, key: string): string | undefined => {
  *
  * Sets the top-level model_provider and model_catalog_json, and model when it does not already name
  * one of the catalog's models. Replaces the [model_providers.copilot-relay] table, or appends it.
- * Refuses when that provider is also defined some other way, such as with dotted keys or an inline
- * table, which it could not replace without leaving two definitions.
+ * The edit works line by line so comments and layout stay, and is then checked by parsing: unless
+ * the result reads as the original with only those values changed, it throws instead.
  */
 export const editCodexConfig = (text: string, input: CodexConfigInput): string => {
+  const original = parseToml(text)
   const eol = text.includes("\r\n") ? "\r\n" : "\n"
   const parsed = parseLines(text.length === 0 ? [] : text.replace(/\r?\n$/, "").split(/\r?\n/))
 
   for (const [index, line] of parsed.entries()) {
-    if (line.inString || line.header || isProviderPath(line.table)) {
+    if (line.key === undefined || isProviderPath(line.table)) {
       continue
     }
 
-    const key = keyPattern.exec(line.text)
-    if (key && isProviderPath([...line.table, ...keyPath(key[1]!)])) {
+    const assigned = [...line.table, ...line.key]
+    if (isProviderPath(assigned)) {
       throw new CodexConfigError(
         `config.toml line ${index + 1} defines model_providers.${codexProviderId} outside its own table; move it into [model_providers.${codexProviderId}] or remove it.`,
+      )
+    }
+
+    if (assigned.length === 1 && assigned[0] === "model_providers") {
+      throw new CodexConfigError(
+        `config.toml line ${index + 1} defines model_providers as an inline table, which cannot take a [model_providers.${codexProviderId}] table; write it as [model_providers.<name>] tables.`,
       )
     }
   }
@@ -132,25 +332,21 @@ export const editCodexConfig = (text: string, input: CodexConfigInput): string =
     firstHeader = lines.length
   }
 
-  const currentModel = lines
-    .slice(0, firstHeader)
-    .map((line) => topLevelValue(line, "model"))
-    .find((value) => value !== undefined)
+  const currentModel = typeof original.model === "string" ? original.model : undefined
   const model = currentModel !== undefined && input.models.includes(currentModel) ? currentModel : input.models[0]!
 
   const settings: Array<[string, string]> = [
-    ["model_provider", tomlString(codexProviderId)],
-    ["model_catalog_json", tomlString(input.catalogPath)],
-    ["model", tomlString(model)],
+    ["model_provider", codexProviderId],
+    ["model_catalog_json", input.catalogPath],
+    ["model", model],
   ]
   const inserted: Array<string> = []
   for (const [key, value] of settings) {
-    const pattern = new RegExp(`^\\s*${key}\\s*=`)
-    const existing = lines.slice(0, firstHeader).findIndex((line) => pattern.test(line))
+    const existing = kept.findIndex((line, index) => index < firstHeader && line.key?.length === 1 && line.key[0] === key)
     if (existing === -1) {
-      inserted.push(`${key} = ${value}`)
+      inserted.push(`${key} = ${tomlString(value)}`)
     } else {
-      lines[existing] = `${key} = ${value}`
+      lines[existing] = `${key} = ${tomlString(value)}`
     }
   }
 
@@ -170,17 +366,36 @@ export const editCodexConfig = (text: string, input: CodexConfigInput): string =
   }
 
   const block = providerBlock(input)
-  const result = lines.length > 0 ? [...lines, "", ...block] : block
-  return result.join(eol) + eol
+  const result = (lines.length > 0 ? [...lines, "", ...block] : block).join(eol) + eol
+
+  const otherProviders = isTable(original.model_providers) ? original.model_providers : {}
+  const expected: TomlTable = {
+    ...original,
+    model_provider: codexProviderId,
+    model_catalog_json: input.catalogPath,
+    model,
+    model_providers: { ...otherProviders, [codexProviderId]: providerValue(input) },
+  }
+  const actual = parsesTo(result)
+  if (actual === undefined || !sameToml(actual, expected)) {
+    throw new CodexConfigError(
+      `config.toml could not be edited without changing other settings; add the ${codexProviderId} provider by hand, or set codexSetup: false.`,
+    )
+  }
+
+  return result
 }
 
-const writeIfChanged = async (filePath: string, content: string, ownerOnly: boolean): Promise<boolean> => {
-  const snapshot = await readFileSnapshot(filePath)
-  if (snapshot.raw === content) {
+// Publishes content to the file a snapshot read, unless it is already current. A file holding the
+// apiKey is published owner-only, and published again when its mode lets other local users read it,
+// even if its content is current. Windows has no POSIX mode bits.
+const publish = async (snapshot: FileSnapshot, content: string, holdsKey: boolean): Promise<boolean> => {
+  const keyExposed = holdsKey && process.platform !== "win32" && snapshot.raw !== null && (snapshot.mode & 0o077) !== 0
+  if (snapshot.raw === content && !keyExposed) {
     return false
   }
 
-  await writeFileSnapshot(snapshot, content, { ownerOnly })
+  await writeFileSnapshot(snapshot, content, { ownerOnly: holdsKey })
   return true
 }
 
@@ -188,7 +403,8 @@ const writeIfChanged = async (filePath: string, content: string, ownerOnly: bool
  * Sets up Codex for this relay when Codex is installed, that is when $CODEX_HOME exists.
  *
  * Writes the two-model catalog, then config.toml. Neither file is rewritten when it is already
- * current. config.toml is published owner-only when it holds the apiKey.
+ * current. config.toml is edited from the snapshot it is published against, so an edit saved in
+ * between is refused as a conflict rather than lost.
  */
 export const applyCodexSetup = async (input: CodexSetupInput): Promise<CodexSetupResult> => {
   const configPath = path.join(input.codexHome, "config.toml")
@@ -199,11 +415,12 @@ export const applyCodexSetup = async (input: CodexSetupInput): Promise<CodexSetu
 
   const catalog = buildCodexCatalog(input.models, await readCodexVendorFiles())
   await fs.mkdir(path.dirname(input.catalogPath), { recursive: true })
-  const catalogChanged = await writeIfChanged(input.catalogPath, `${JSON.stringify(catalog, null, 2)}\n`, false)
+  const catalogSnapshot = await readFileSnapshot(input.catalogPath)
+  const catalogChanged = await publish(catalogSnapshot, `${JSON.stringify(catalog, null, 2)}\n`, false)
 
   const snapshot = await readFileSnapshot(configPath)
   const next = editCodexConfig(snapshot.raw ?? "", { ...input, models: input.models.map((model) => model.id) })
-  const configChanged = await writeIfChanged(configPath, next, Boolean(input.apiKey))
+  const configChanged = await publish(snapshot, next, Boolean(input.apiKey))
 
   return { configPath, skipped: false, changed: catalogChanged || configChanged }
 }

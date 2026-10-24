@@ -21,6 +21,8 @@ if (isMainThread) {
   // reads TMPDIR, TMP or TEMP depending on the platform, so every variant is set.
   process.env.HOME = home
   process.env.USERPROFILE = home
+  // Codex's home is its own variable; an exported one would point codexSetup at the real config.
+  process.env.CODEX_HOME = join(home, ".codex")
   process.env.TMPDIR = temporary
   process.env.TMP = temporary
   process.env.TEMP = temporary
