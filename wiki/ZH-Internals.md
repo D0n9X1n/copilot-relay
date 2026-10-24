@@ -24,6 +24,7 @@ src/
   codex/
     request.ts                Codex 模型选择、Copilot 字段改写、x-initiator
     messages.ts               Claude 模型的 Responses <-> Claude Messages 翻译
+    item-ids.ts               流式 GPT 回答中每个输出项使用同一个 id
     catalog.ts                Codex 读取的两个模型的目录（model_catalog_json）
     setup.ts                  codexSetup：start 时写目录文件并修改 config.toml
     thinking.ts               reasoning 项 encrypted_content 中携带的 Claude 思考
@@ -606,6 +607,12 @@ Copilot 自身错误信息列出的等级，即 `none` 到 `max`。同样的探�
 `deferHandler`，由 `settleWhenDone` 在响应体最后一个字节、出错或客户端取消之后才结束
 handler。Codex 一读到 `response.completed` 就关闭流，比 Copilot 结束响应体略早，所以已完成
 的 Codex 请求常被记录为 `body=cancelled`，同时带有 `response_status=completed terminal=true`。
+
+**每项一个 id。** Copilot 的 `/responses` SSE 在每个事件中给同一个输出项一个新的不透明 id。
+对流式 GPT 回答，`StableItemIds`（`src/codex/item-ids.ts`）把 `item_id`、`item.id` 和终止
+`response.output` 中的 id 改写为该输出位置 `response.output_item.added` 的 id；Codex app 按 id
+区分项目，否则会把流式文本和完成的项目分别显示。帧按空行跨 chunk 切分，不需要改动的帧逐字节
+原样传递。
 
 **Claude 模型。** `toClaudeRequest` 和 `toCodexEvents`（`src/codex/messages.ts`）把发给
 `claude-*` 模型的 Codex 请求翻译成原生 Messages 请求，经 `createNativeMessages` 发送，再把
