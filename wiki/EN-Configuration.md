@@ -53,7 +53,7 @@ opusModel: claude-opus-5.5
 | --- | --- |
 | `host` | Local bind host for the Claude-compatible HTTP server. Keep `127.0.0.1` for local-only use; set `apiKey` before binding beyond loopback. |
 | `port` | Local port. Default: `4142`. |
-| `apiKey` | Optional key that clients must send as `x-api-key` or `Authorization: Bearer`. Empty, the default, disables the check. Hot-reloads. See [Require a client key](#require-a-client-key). |
+| `apiKey` | Optional key that clients must send as `x-api-key` or `Authorization: Bearer`. Empty, the default, disables the check. A set key is at least 16 visible ASCII characters with no spaces; a shorter one is rejected and the previous key stays. `copilot-relay setup` creates one when it is empty. Hot-reloads. See [Require a client key](#require-a-client-key). |
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `upstreamProxy` | Outbound proxy for Copilot and GitHub calls, sign-in included. Empty (the default) connects directly; `env` uses `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; otherwise an absolute `http://` or `https://` proxy URL. Requires restart. See [upstreamProxy rules](#upstreamproxy-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |

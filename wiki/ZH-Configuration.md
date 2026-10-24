@@ -48,7 +48,7 @@ opusModel: claude-opus-5.5
 | --- | --- |
 | `host` | 本地 Claude 兼容 HTTP 服务监听地址。建议保持 `127.0.0.1`，只允许本机访问；绑定到 loopback 以外的地址前先设置 `apiKey`。 |
 | `port` | 本地端口，默认 `4142`。 |
-| `apiKey` | 可选的客户端密钥，客户端须以 `x-api-key` 或 `Authorization: Bearer` 发送。留空（默认）即关闭该检查。支持热重载。参见[要求客户端密钥](#要求客户端密钥)。 |
+| `apiKey` | 可选的客户端密钥，客户端须以 `x-api-key` 或 `Authorization: Bearer` 发送。留空（默认）即关闭该检查。设置的密钥至少 16 个可见 ASCII 字符且不含空格；更短的会被拒绝，并保留原来的密钥。为空时 `copilot-relay setup` 会创建一个。支持热重载。参见[要求客户端密钥](#要求客户端密钥)。 |
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `upstreamProxy` | Copilot 与 GitHub 调用（包括登录）使用的出站代理。留空（默认）表示直连；`env` 表示使用 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`；否则写绝对的 `http://` 或 `https://` 代理地址。需要重启。参见 [upstreamProxy 规则](#upstreamproxy-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
