@@ -56,12 +56,32 @@ export interface ClaudeAppModel {
   tier: "opus" | "sonnet" | "haiku"
 }
 
+// For a gateway, the app keeps an inferenceModels entry only when its name looks like an Anthropic
+// model: it must name claude, a Claude family or anthropic, and must not contain a marker of another
+// vendor. These are the markers the app checks.
+const otherVendorMarker = /ark-code|astron|command-r|deepseek|doubao|gemini|gemma|glm|gpt|grok|hermes|hy3|kimi|lfm|\bling\b|llama|longcat|mimo|minimax|mistral|mixtral|moonshot|nemotron|openai|phi-|qianfan|qwen|tc-code|\bunic\b|yi-|stepfun|step-3|seed-|bytedance|hunyuan|granite|amazon\.nova|nova-|devstral|ministral|ernie|codex|arcee|trinity|abab|phi\d|\bk2\.|\bm2\.|jamba|arctic|solar|mercury|zamba|kat-coder|\bds-|dpsk/
+
+const looksAnthropic = (id: string): boolean => {
+  const lower = id.toLowerCase()
+  return !otherVendorMarker.test(lower) && ["claude", "anthropic", "opus", "sonnet", "haiku"].some((word) => lower.includes(word))
+}
+
+/**
+ * The name the app sends for a model: its own ID when the app accepts it, otherwise a Claude-style
+ * route for its tier, such as claude-sonnet-5. The relay sends every model name without "opus" to
+ * gptModel and every one with it to opusModel, so the route reaches the same upstream model.
+ */
+export const appModelName = (model: Pick<ClaudeAppModel, "id" | "tier">): string =>
+  looksAnthropic(model.id) ? model.id : `claude-${model.tier}-5`
+
 // An entry of the app's inferenceModels list for one Copilot model.
 export const inferenceModel = (model: ClaudeAppModel): JsonRecord => {
   const promptTokens = model.capabilities?.limits?.max_prompt_tokens ?? 0
-  const label = model.capabilities?.name?.trim()
+  const name = appModelName(model)
+  // A route name says nothing about the model behind it, so the label names that model.
+  const label = model.capabilities?.name?.trim() || (name === model.id ? undefined : model.id)
   return {
-    name: model.id,
+    name,
     ...(label ? { labelOverride: label } : {}),
     ...(promptTokens >= 1_000_000 ? { supports1m: true } : {}),
     anthropicFamilyTier: model.tier,

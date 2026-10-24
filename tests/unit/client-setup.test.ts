@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
-import { applyClaudeAppSetup, claudeAppDataDir, inferenceModel } from "../../src/lib/claude-app"
+import { applyClaudeAppSetup, appModelName, claudeAppDataDir, inferenceModel } from "../../src/lib/claude-app"
 import { parseSetupTargets } from "../../src/setup"
 
 test("the Claude app's third-party directory follows each OS", () => {
@@ -27,7 +27,7 @@ test("the Claude app's third-party directory follows each OS", () => {
 test("a model entry carries its Copilot name, 1M support and tier", () => {
   assert.deepEqual(
     inferenceModel({ id: "gpt-6-astra", tier: "sonnet", capabilities: { name: "GPT-6 Astra", limits: { max_prompt_tokens: 1_000_000 } } as never }),
-    { name: "gpt-6-astra", labelOverride: "GPT-6 Astra", supports1m: true, anthropicFamilyTier: "sonnet" },
+    { name: "claude-sonnet-5", labelOverride: "GPT-6 Astra", supports1m: true, anthropicFamilyTier: "sonnet" },
   )
   assert.deepEqual(inferenceModel({ id: "claude-opus-5.5", tier: "opus" }), { name: "claude-opus-5.5", anthropicFamilyTier: "opus" })
 })
@@ -57,7 +57,8 @@ test("app setup skips a machine where the app never ran, and forced setup create
   assert.equal(entry.inferenceProvider, "gateway")
   assert.equal(entry.inferenceGatewayBaseUrl, "http://127.0.0.1:4142")
   assert.equal(entry.inferenceGatewayApiKey, "relay-key-123456")
-  assert.deepEqual(entry.inferenceModels.map((model: { name: string }) => model.name), ["claude-opus-5.5", "gpt-6-astra"])
+  assert.deepEqual(entry.inferenceModels.map((model: { name: string }) => model.name), ["claude-opus-5.5", "claude-sonnet-5"])
+  assert.equal(entry.inferenceModels[1].labelOverride, "gpt-6-astra")
 
   const desktop = JSON.parse(await fs.readFile(path.join(dataDir, "claude_desktop_config.json"), "utf8"))
   assert.equal(desktop.deploymentMode, "3p")
@@ -176,4 +177,13 @@ test("Claude Code CLI setup skips a machine where Claude Code never ran, unless 
   assert.match((await setupClaudeCodeCli({ ...context, force: false })).status, /^skipped/)
   await assert.rejects(fs.stat(dir))
   assert.equal((await setupClaudeCodeCli({ ...context, force: true })).status, "updated")
+})
+
+test("a model the app would refuse is listed under a Claude route name for its tier", () => {
+  assert.equal(appModelName({ id: "claude-opus-5.5", tier: "opus" }), "claude-opus-5.5")
+  assert.equal(appModelName({ id: "gpt-6-astra", tier: "sonnet" }), "claude-sonnet-5")
+  assert.equal(appModelName({ id: "gpt-6-astra", tier: "haiku" }), "claude-haiku-5")
+  assert.equal(appModelName({ id: "gemini-3-pro", tier: "sonnet" }), "claude-sonnet-5")
+  // A route without "opus" reaches gptModel at the relay; one with it reaches opusModel.
+  assert.doesNotMatch(appModelName({ id: "gpt-6-astra", tier: "sonnet" }), /opus/)
 })
