@@ -1,4 +1,4 @@
-// HTTP server assembly: exposes only Claude Code-compatible public routes.
+// HTTP server assembly: exposes the Claude Code routes and the OpenAI Responses route Codex uses.
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto"
 import { isIPv4 } from "node:net"
 
@@ -11,6 +11,7 @@ import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
 import { cleanupCapturesIfDue, getReplayRequestId, isReplayTransport, RequestTrace, withRequestTrace } from "~/lib/request-trace"
 import { appVersion } from "~/lib/version"
 import { claudeRoutes } from "~/routes/claude"
+import { responsesRoutes } from "~/routes/responses"
 
 const loggedRequestHeaders = [
   "anthropic-beta",
@@ -108,6 +109,9 @@ const presentsApiKey = (headers: Headers, apiKey: string): boolean => {
 
 // Static probes: they answer every caller the same way and never contact Copilot, so health
 // checks and Claude Code's reachability probe work without the key. See their handlers below.
+// Routes whose request body is JSON; a body sent with another content type is refused with 415.
+const jsonBodyPaths = new Set(["/v1/messages", "/v1/messages/count_tokens", "/v1/responses"])
+
 const isOpenProbe = (method: string, path: string): boolean =>
   (method === "GET" && path === "/healthz")
   || ((method === "GET" || method === "HEAD") && path === "/api/hello")
@@ -205,7 +209,7 @@ export const createServer = (config: ProxyConfig) => {
     // A message request that carries a body must declare it as JSON.
     if (
       c.req.method === "POST"
-      && (c.req.path === "/v1/messages" || c.req.path === "/v1/messages/count_tokens")
+      && jsonBodyPaths.has(c.req.path)
       && (incoming
         ? Boolean(incoming.headers["transfer-encoding"]) || Number(incoming.headers["content-length"] ?? 0) > 0
         : c.req.raw.body !== null)
@@ -280,6 +284,7 @@ export const createServer = (config: ProxyConfig) => {
   app.on(["GET", "HEAD"], "/api/hello", (c) => c.body(null, 200))
 
   app.route("/v1", claudeRoutes)
+  app.route("/v1", responsesRoutes)
 
   app.notFound(async (c) => {
     const message = "Unsupported Claude API route"
