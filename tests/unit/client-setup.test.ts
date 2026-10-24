@@ -59,6 +59,7 @@ test("app setup skips a machine where the app never ran, and forced setup create
   assert.equal(entry.inferenceGatewayApiKey, "relay-key-123456")
   assert.deepEqual(entry.inferenceModels.map((model: { name: string }) => model.name), ["claude-opus-5.5", "claude-sonnet-5"])
   assert.equal(entry.inferenceModels[1].labelOverride, "gpt-6-astra")
+  assert.equal(entry.modelDiscoveryEnabled, false)
 
   const desktop = JSON.parse(await fs.readFile(path.join(dataDir, "claude_desktop_config.json"), "utf8"))
   assert.equal(desktop.deploymentMode, "3p")

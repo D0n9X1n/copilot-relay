@@ -181,6 +181,10 @@ export const applyClaudeAppSetup = async (input: ClaudeAppSetupInput): Promise<C
     inferenceGatewayApiKey: input.apiKey || existingKey || "copilot-relay",
     inferenceCredentialKind: "static",
     inferenceModels: input.models.map(inferenceModel),
+    // The list names every model by its full ID, so the app needs no discovery. With it on, the app
+    // also asks the relay's /v1/models and flags a route name, such as claude-sonnet-5, that the
+    // relay does not list.
+    modelDiscoveryEnabled: false,
   }
 
   const desktopSnapshot = await readFileSnapshot(path.join(dataDir, "claude_desktop_config.json"))
