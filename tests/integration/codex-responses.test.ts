@@ -511,3 +511,12 @@ test("a non-streamed Claude request returns the final response as JSON", async (
   assert.equal(body.status, "completed")
   assert.equal(body.output.length, 3)
 })
+
+test("a Claude model's upstream error keeps its status and retry-after", async (t) => {
+  const error = { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } }
+  const relay = await startRelay(t, replyJson(429, error, { "retry-after": "37" }), { models: [["gpt-6-astra", astra], opusModel] })
+  const response = await relay.send(codexBody({ model: "claude-opus-5.5" }))
+
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get("retry-after"), "37")
+})

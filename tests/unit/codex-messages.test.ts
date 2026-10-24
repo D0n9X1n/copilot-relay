@@ -230,3 +230,70 @@ test("decodeThinking accepts only the relay's own blocks", () => {
   assert.equal(decodeThinking(undefined), undefined)
   assert.equal(decodeThinking("copilot-relay.claude-thinking.v1:not-json"), undefined)
 })
+
+test("toClaudeRequest keeps a custom tool inside a namespace and its namespace on replay", () => {
+  const { payload, tools: names, dropped } = toClaudeRequest({
+    model: "claude-opus-5.5",
+    tools: [{ type: "namespace", name: "files", description: "", tools: [applyPatch] }],
+    input: [
+      userText("Edit"),
+      { type: "custom_tool_call", call_id: "call_1", name: "apply_patch", namespace: "files", input: "*** Begin Patch" },
+      { type: "custom_tool_call_output", call_id: "call_1", output: "done" },
+    ],
+  }, "claude-opus-5.5", opus)
+
+  const body = payload as unknown as JsonRecord
+  assert.deepEqual(body.tools.map((tool: JsonRecord) => tool.name), ["files__apply_patch"])
+  assert.equal(body.messages[1].content[0].name, "files__apply_patch")
+  assert.deepEqual(names.target("files__apply_patch"), { kind: "custom", name: "apply_patch", namespace: "files" })
+  assert.deepEqual(dropped, [])
+})
+
+test("toClaudeRequest gives Claude an output schema as an instruction", () => {
+  const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] }
+  const { payload } = toClaudeRequest({
+    model: "claude-opus-5.5",
+    input: "hi",
+    text: { format: { type: "json_schema", name: "out", schema, strict: true } },
+  }, "claude-opus-5.5", opus)
+
+  const system = (payload as unknown as JsonRecord).system
+  assert.match(system.at(-1).text, /JSON Schema/)
+  assert.ok(system.at(-1).text.includes(JSON.stringify(schema)))
+})
+
+test("toCodexEvents holds tool calls until Claude stops with tool_use", async () => {
+  const truncated = await collect(toCodexEvents(fromArray([
+    ...nativeStream.slice(0, 15),
+    { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ]), "claude-opus-5.5", toolNames()))
+
+  const items = truncated.filter((event) => event.type === "response.output_item.added").map((event) => event.item.type)
+  assert.deepEqual(items, ["reasoning", "message"])
+  assert.equal(truncated.at(-1)!.type, "response.incomplete")
+  assert.equal(truncated.at(-1)!.response.output.length, 2)
+})
+
+test("toCodexEvents reports a refusal as response.incomplete", async () => {
+  const refused = await collect(toCodexEvents(fromArray([
+    nativeStream[0]!,
+    { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } },
+    { type: "message_stop" },
+  ]), "claude-opus-5.5", new CodexToolNames()))
+
+  assert.equal(refused.at(-1)!.type, "response.incomplete")
+  assert.deepEqual(refused.at(-1)!.response.incomplete_details, { reason: "content_filter" })
+})
+
+test("toCodexEvents fails a stream that stops with a block still open", async () => {
+  const unclosed = await collect(toCodexEvents(fromArray([
+    nativeStream[0]!,
+    nativeStream[5]!,
+    nativeStream[6]!,
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+    { type: "message_stop" },
+  ]), "claude-opus-5.5", new CodexToolNames()))
+
+  assert.equal(unclosed.at(-1)!.type, "response.failed")
+})

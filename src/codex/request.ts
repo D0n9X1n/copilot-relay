@@ -9,6 +9,7 @@ import {
   pinCopilotModelCatalog,
   type CopilotModel,
 } from "~/copilot/models"
+import { isRelayThinking } from "./thinking"
 
 export type CodexPayload = Record<string, unknown> & { model: string; input: unknown }
 
@@ -155,8 +156,9 @@ export const clampReasoningEffort = (
  * The body sent to Copilot for a Codex request.
  *
  * Copilot answers HTTP 400 to `service_tier`, to an `image_generation` tool, and to an effort it
- * does not accept; those are the only changes. Every other field, including Codex's
- * prompt_cache_key and its encrypted reasoning, is forwarded unchanged.
+ * does not accept, so those change. Reasoning items holding the relay's Claude thinking are removed.
+ * Every other field, including Codex's prompt_cache_key and GPT's encrypted reasoning, is forwarded
+ * unchanged.
  */
 export const prepareCodexPayload = (
   payload: CodexPayload,
@@ -169,6 +171,17 @@ export const prepareCodexPayload = (
   if (Object.hasOwn(prepared, "service_tier")) {
     delete prepared.service_tier
     removed.push("service_tier")
+  }
+
+  // A conversation that switched from a Claude model carries the relay's Claude thinking in
+  // reasoning items. Only Claude can read it; GPT models get the rest of the history.
+  if (Array.isArray(prepared.input)) {
+    const input = prepared.input.filter((item) => !(isRecord(item) && item.type === "reasoning" && isRelayThinking(item.encrypted_content)))
+
+    if (input.length !== prepared.input.length) {
+      prepared.input = input
+      removed.push("claude_reasoning")
+    }
   }
 
   if (Array.isArray(prepared.tools)) {

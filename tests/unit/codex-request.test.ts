@@ -208,3 +208,20 @@ test("contextOverflowStream is one response.failed event with code context_lengt
   assert.equal(event.response.status, "failed")
   assert.deepEqual(event.response.error, { code: "context_length_exceeded", message: "prompt is too long: 9 tokens > 8 maximum" })
 })
+
+test("prepareCodexPayload removes the relay's Claude thinking and keeps GPT's reasoning", () => {
+  const claudeThinking = `copilot-relay.claude-thinking.v1:${Buffer.from(JSON.stringify({ type: "thinking", thinking: "t", signature: "s" })).toString("base64url")}`
+  const gptReasoning = { type: "reasoning", summary: [], encrypted_content: "gAAAA-openai" }
+  const payload = {
+    model: "gpt-6-astra",
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      { type: "reasoning", summary: [], encrypted_content: claudeThinking },
+      gptReasoning,
+    ],
+  }
+  const prepared = prepareCodexPayload(payload, "gpt-6-astra", undefined)
+
+  assert.deepEqual((prepared.payload.input as Array<unknown>).slice(1), [gptReasoning])
+  assert.deepEqual(prepared.removed, ["claude_reasoning"])
+})

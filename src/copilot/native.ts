@@ -309,9 +309,16 @@ export async function createNativeMessages(
       throw promptTooLong
     }
 
+    // Retry-After still holds, and a client backs off by it.
+    const headers = new Headers({ "content-type": contentType })
+    const retryAfter = response.headers.get("retry-after")
+    if (retryAfter !== null) {
+      headers.set("retry-after", retryAfter)
+    }
+
     throw new HTTPError("Native upstream request failed", new Response(detail, {
       status: response.status,
-      headers: { "content-type": contentType },
+      headers,
     }))
   }
 

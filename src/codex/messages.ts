@@ -5,6 +5,9 @@ import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { NativeEvent } from "~/copilot/native"
 import type { CopilotModel } from "~/copilot/models"
 import { clampReasoningEffort, type CodexPayload } from "./request"
+import { decodeThinking, encodeThinking } from "./thinking"
+
+export { decodeThinking }
 
 type JsonRecord = Record<string, unknown>
 type ClaudeBlock = JsonRecord & { type: string }
@@ -32,44 +35,8 @@ const claudeReasoningEfforts = ["low", "medium", "high", "xhigh", "max"]
 
 const defaultMaxTokens = 32_000
 
-// Marks a reasoning item's encrypted_content as the relay's: base64url JSON of the Claude thinking
-// block it carries. Codex keeps encrypted_content on reasoning items and sends it back, so Claude
-// gets its signed thinking again on the next turn.
-const thinkingPrefix = "copilot-relay.claude-thinking.v1:"
-
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value)
-
-const encodeThinking = (block: JsonRecord): string =>
-  thinkingPrefix + Buffer.from(JSON.stringify(block), "utf8").toString("base64url")
-
-/** The Claude thinking block a reasoning item carries, or undefined when it is not the relay's. */
-export const decodeThinking = (encrypted: unknown): ClaudeBlock | undefined => {
-  if (typeof encrypted !== "string" || !encrypted.startsWith(thinkingPrefix)) {
-    return undefined
-  }
-
-  let block: unknown
-  try {
-    block = JSON.parse(Buffer.from(encrypted.slice(thinkingPrefix.length), "base64url").toString("utf8"))
-  } catch {
-    return undefined
-  }
-
-  if (!isRecord(block)) {
-    return undefined
-  }
-
-  if (block.type === "thinking" && typeof block.thinking === "string" && typeof block.signature === "string") {
-    return { type: "thinking", thinking: block.thinking, signature: block.signature }
-  }
-
-  if (block.type === "redacted_thinking" && typeof block.data === "string") {
-    return { type: "redacted_thinking", data: block.data }
-  }
-
-  return undefined
-}
 
 const nameLimit = 64
 
@@ -134,6 +101,28 @@ const functionTool = (tool: JsonRecord, name: string): JsonRecord => ({
   input_schema: isRecord(tool.parameters) ? tool.parameters : { type: "object", properties: {} },
 })
 
+// A function or custom tool as a Claude tool, or undefined for a tool Claude has no equivalent for.
+const convertTool = (tool: JsonRecord, names: CodexToolNames, namespace: string | undefined): JsonRecord | undefined => {
+  if (typeof tool.name !== "string") {
+    return undefined
+  }
+
+  const scope = namespace === undefined ? {} : { namespace }
+  if (tool.type === "function") {
+    return functionTool(tool, names.claudeName({ kind: "function", name: tool.name, ...scope }))
+  }
+
+  if (tool.type === "custom") {
+    return {
+      name: names.claudeName({ kind: "custom", name: tool.name, ...scope }),
+      description: customDescription(tool),
+      input_schema: customInputSchema,
+    }
+  }
+
+  return undefined
+}
+
 const convertTools = (
   tools: unknown,
   names: CodexToolNames,
@@ -149,20 +138,26 @@ const convertTools = (
       continue
     }
 
-    if (tool.type === "function" && typeof tool.name === "string") {
-      converted.push(functionTool(tool, names.claudeName({ kind: "function", name: tool.name })))
-    } else if (tool.type === "custom" && typeof tool.name === "string") {
-      converted.push({
-        name: names.claudeName({ kind: "custom", name: tool.name }),
-        description: customDescription(tool),
-        input_schema: customInputSchema,
-      })
-    } else if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
+    if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
       for (const inner of tool.tools) {
-        if (isRecord(inner) && inner.type === "function" && typeof inner.name === "string") {
-          converted.push(functionTool(inner, names.claudeName({ kind: "function", name: inner.name, namespace: tool.name })))
+        if (!isRecord(inner)) {
+          continue
+        }
+
+        const claudeTool = convertTool(inner, names, tool.name)
+        if (claudeTool) {
+          converted.push(claudeTool)
+        } else {
+          dropped.add(`tool:${tool.name}.${String(inner.type)}`)
         }
       }
+
+      continue
+    }
+
+    const claudeTool = convertTool(tool, names, undefined)
+    if (claudeTool) {
+      converted.push(claudeTool)
     } else {
       dropped.add(`tool:${tool.type}`)
     }
@@ -300,6 +295,17 @@ const toolChoice = (choice: unknown, parallel: unknown, names: CodexToolNames): 
   return selected
 }
 
+// Codex's --output-schema arrives as text.format of type json_schema. Copilot's Messages endpoint
+// takes no output schema, so Claude gets it as an instruction; the reply is not validated.
+const jsonSchemaFormat = (text: unknown): string | undefined => {
+  const format = isRecord(text) && isRecord(text.format) ? text.format : undefined
+  if (format?.type !== "json_schema" || !isRecord(format.schema)) {
+    return undefined
+  }
+
+  return `Your final answer must be a single JSON value that matches this JSON Schema, with no other text and no code fence:\n${JSON.stringify(format.schema)}`
+}
+
 /**
  * The Claude Messages request for a Codex Responses request.
  *
@@ -321,6 +327,11 @@ export const toClaudeRequest = (
 
   if (typeof payload.instructions === "string" && payload.instructions) {
     system.push({ type: "text", text: payload.instructions })
+  }
+
+  const outputSchema = jsonSchemaFormat(payload.text)
+  if (outputSchema !== undefined) {
+    system.push({ type: "text", text: outputSchema })
   }
 
   const items = typeof payload.input === "string" ? [{ type: "message", role: "user", content: payload.input }] : payload.input
@@ -347,24 +358,19 @@ export const toClaudeRequest = (
       } else {
         dropped.add("reasoning")
       }
-    } else if (type === "function_call" && typeof item.name === "string") {
+    } else if ((type === "function_call" || type === "custom_tool_call") && typeof item.name === "string") {
+      const custom = type === "custom_tool_call"
       const target: CodexToolTarget = {
-        kind: "function",
+        kind: custom ? "custom" : "function",
         name: item.name,
         ...(typeof item.namespace === "string" && { namespace: item.namespace }),
       }
+      const input = custom ? { input: typeof item.input === "string" ? item.input : "" } : parseArguments(item.arguments)
       pushBlocks(turns, "assistant", [{
         type: "tool_use",
         id: toolId(item.call_id),
         name: names.claudeName(target),
-        input: parseArguments(item.arguments),
-      }])
-    } else if (type === "custom_tool_call" && typeof item.name === "string") {
-      pushBlocks(turns, "assistant", [{
-        type: "tool_use",
-        id: toolId(item.call_id),
-        name: names.claudeName({ kind: "custom", name: item.name }),
-        input: { input: typeof item.input === "string" ? item.input : "" },
+        input,
       }])
     } else if (type === "function_call_output" || type === "custom_tool_call_output") {
       pushBlocks(turns, "user", [toolResult(toolId(item.call_id), item.output)])
@@ -415,9 +421,11 @@ type OpenBlock =
   | { kind: "message"; id: string; index: number; text: string }
   | { kind: "reasoning"; id: string; index: number; thinking: string; signature: string }
   | { kind: "redacted"; id: string; index: number; data: string }
-  | { kind: "call"; id: string; index: number; callId: string; target: CodexToolTarget; json: string }
+  | { kind: "call"; callId: string; target: CodexToolTarget; json: string }
 
-const callItem = (block: Extract<OpenBlock, { kind: "call" }>, status: string): JsonRecord => {
+type CallBlock = Extract<OpenBlock, { kind: "call" }>
+
+const callItem = (block: CallBlock & { id: string }, status: string): JsonRecord => {
   if (block.target.kind === "custom") {
     let input = block.json
     try {
@@ -429,7 +437,15 @@ const callItem = (block: Extract<OpenBlock, { kind: "call" }>, status: string): 
       // A partial or non-JSON input is passed on as it arrived.
     }
 
-    return { type: "custom_tool_call", id: block.id, call_id: block.callId, name: block.target.name, input, status }
+    return {
+      type: "custom_tool_call",
+      id: block.id,
+      call_id: block.callId,
+      name: block.target.name,
+      ...(block.target.namespace !== undefined && { namespace: block.target.namespace }),
+      input,
+      status,
+    }
   }
 
   return {
@@ -441,6 +457,12 @@ const callItem = (block: Extract<OpenBlock, { kind: "call" }>, status: string): 
     arguments: status === "completed" ? block.json || "{}" : "",
     status,
   }
+}
+
+// Claude stop reasons that end a Responses turn as incomplete, with the reason Responses gives.
+const incompleteReasons: Record<string, string> = {
+  max_tokens: "max_output_tokens",
+  refusal: "content_filter",
 }
 
 const count = (value: unknown): number =>
@@ -465,9 +487,11 @@ const responsesUsage = (usage: JsonRecord): JsonRecord => {
  *
  * Text becomes a message item, thinking a reasoning item whose summary is the thinking text and
  * whose encrypted_content carries the signed block back on the next turn, and tool_use a
- * function_call or custom_tool_call. The stream ends with response.completed, or
- * response.incomplete when Claude stopped at max_tokens. An upstream failure ends it with
- * response.failed, which Codex retries.
+ * function_call or custom_tool_call. Codex runs a call as soon as its item is done, so calls are
+ * held until Claude stops with tool_use and dropped when it stops any other way, as when max_tokens
+ * cuts one short. The stream ends with response.completed, or response.incomplete when Claude stopped
+ * at max_tokens or refused. An upstream failure, or a stream that ends with a block still open, ends
+ * it with response.failed, which Codex retries.
  */
 export async function* toCodexEvents(
   events: AsyncIterable<NativeEvent>,
@@ -478,6 +502,7 @@ export async function* toCodexEvents(
   const createdAt = Math.floor(Date.now() / 1000)
   const output: Array<JsonRecord> = []
   const open = new Map<number, OpenBlock>()
+  const calls: Array<CallBlock> = []
   let usage: JsonRecord = {}
   let stopReason: unknown
   let nextIndex = 0
@@ -552,17 +577,12 @@ export async function* toCodexEvents(
             item: { type: "reasoning", id: itemId, summary: [] },
           }
         } else if (start.type === "tool_use" && typeof start.name === "string") {
-          nextIndex++
-          const block: OpenBlock = {
+          open.set(event.index, {
             kind: "call",
-            id: itemId,
-            index,
-            callId: typeof start.id === "string" ? start.id : itemId,
+            callId: typeof start.id === "string" ? start.id : `${responseId}_call_${event.index}`,
             target: names.target(start.name),
             json: "",
-          }
-          open.set(event.index, block)
-          yield { type: "response.output_item.added", output_index: index, item: callItem(block, "in_progress") }
+          })
         }
       } else if (event.type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
         const block = open.get(event.index)
@@ -583,14 +603,6 @@ export async function* toCodexEvents(
           block.signature += delta.signature
         } else if (block?.kind === "call" && delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
           block.json += delta.partial_json
-          if (block.target.kind === "function") {
-            yield {
-              type: "response.function_call_arguments.delta",
-              item_id: block.id,
-              output_index: block.index,
-              delta: delta.partial_json,
-            }
-          }
         }
       } else if (event.type === "content_block_stop" && typeof event.index === "number") {
         const block = open.get(event.index)
@@ -636,18 +648,7 @@ export async function* toCodexEvents(
           output[block.index] = item
           yield { type: "response.output_item.done", output_index: block.index, item }
         } else if (block?.kind === "call") {
-          const item = callItem(block, "completed")
-          output[block.index] = item
-          if (block.target.kind === "function") {
-            yield {
-              type: "response.function_call_arguments.done",
-              item_id: block.id,
-              output_index: block.index,
-              arguments: item.arguments,
-            }
-          }
-
-          yield { type: "response.output_item.done", output_index: block.index, item }
+          calls.push(block)
         }
       } else if (event.type === "message_delta") {
         if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") {
@@ -657,12 +658,33 @@ export async function* toCodexEvents(
         usage = { ...usage, ...(isRecord(event.usage) ? event.usage : {}) }
       } else if (event.type === "message_stop") {
         stopped = true
-        if (stopReason === "max_tokens") {
+        if (open.size > 0) {
+          throw new Error("Claude stream stopped with a content block still open.")
+        }
+
+        if (stopReason === "tool_use") {
+          for (const block of calls) {
+            const index = nextIndex
+            nextIndex++
+            const item = callItem({ ...block, id: `${responseId}_${index}` }, "completed")
+            output[index] = item
+            yield { type: "response.output_item.added", output_index: index, item: callItem({ ...block, id: item.id as string }, "in_progress") }
+            if (block.target.kind === "function") {
+              yield { type: "response.function_call_arguments.delta", item_id: item.id, output_index: index, delta: item.arguments }
+              yield { type: "response.function_call_arguments.done", item_id: item.id, output_index: index, arguments: item.arguments }
+            }
+
+            yield { type: "response.output_item.done", output_index: index, item }
+          }
+        }
+
+        const incompleteReason = incompleteReasons[String(stopReason)]
+        if (incompleteReason !== undefined) {
           yield {
             type: "response.incomplete",
             response: response("incomplete", {
               usage: responsesUsage(usage),
-              incomplete_details: { reason: "max_output_tokens" },
+              incomplete_details: { reason: incompleteReason },
             }),
           }
         } else {
