@@ -23,6 +23,9 @@ src/
 
   codex/
     request.ts                Codex 模型选择、Copilot 字段改写、x-initiator
+    messages.ts               Claude 模型的 Responses <-> Claude Messages 翻译
+    catalog.ts                Codex 读取的两个模型的目录（model_catalog_json）
+    setup.ts                  codexSetup：start 时写目录文件并修改 config.toml
 
   claude/
     types.ts                  用到的那部分 Claude Messages 类型
@@ -563,7 +566,8 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 **模型。** 目录中没有所请求的 ID 时，`resolveCodexModel` 会刷新一次目录
 （`ensureCopilotModelCatalog`），固定它，然后：
 
-- `claude-*` ID 被拒绝：Copilot 只在 Messages 和 Chat Completions 上列出 Claude 模型；
+- Copilot 列出且带 `/v1/messages` 的 `claude-*` ID 翻译为 Messages（见下文 **Claude 模型**）；
+  未列出或没有 `/v1/messages` 的会被拒绝；
 - 目录中列出的 ID 原样发送，所以 Codex 自己的 ID（与 Copilot 的相同）会保留 Codex
   自带的元数据（`apply_patch` 工具、推理等级和上下文窗口）；
 - 目录中没有的 ID，例如 Codex 内部的 `codex-auto-review`，发往 `gptModel`；
@@ -602,8 +606,30 @@ Copilot 自身错误信息列出的等级，即 `none` 到 `max`。同样的探�
 handler。Codex 一读到 `response.completed` 就关闭流，比 Copilot 结束响应体略早，所以已完成
 的 Codex 请求常被记录为 `body=cancelled`，同时带有 `response_status=completed terminal=true`。
 
-`tests/unit/codex-request.test.ts` 固定纯逻辑的决策，`tests/integration/codex-responses.test.ts`
-用模拟的 Copilot 运行该路由。
+**Claude 模型。** `toClaudeRequest` 和 `toCodexEvents`（`src/codex/messages.ts`）把发给
+`claude-*` 模型的 Codex 请求翻译成原生 Messages 请求，经 `createNativeMessages` 发送，再把
+Claude 的流翻译回 Responses 事件。`instructions` 和开头的 developer 消息成为 `system`；之后的
+developer 消息在原位置成为用户文本，从而保持历史顺序和缓存前缀。函数和 namespace 工具保留
+schema，名称由 `CodexToolNames` 转成 Claude 可接受的形式并映射回去；`custom` 工具
+（`apply_patch`）只有一个字符串 `input`，语法写在描述中；托管工具被丢弃。reasoning 项的
+`encrypted_content` 以中继前缀携带带签名的 Claude 思考块（`decodeThinking`），所以下一轮
+Claude 会原样收到它；其他模型的 reasoning 被丢弃。effort 限制到 Claude 的等级内，以 adaptive
+thinking 发送。缓存断点放在系统提示、最后一个工具、对话末尾以及它之前的用户轮次：共四个，即
+Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `input_tokens`，`max_tokens`
+变成 `response.incomplete`，中断的流变成 `response.failed`。
+
+**Codex 配置。** 启用 `codexSetup` 时，如果 `$CODEX_HOME` 存在，`start` 会调用
+`applyCodexSetup`（`src/codex/setup.ts`）。它用 `buildCodexCatalog`（`src/codex/catalog.ts`）
+写出 `~/.copilot-relay/codex-models.json`：先 `gptModel` 后 `opusModel`；Codex 自带的模型保留
+随包复制的 `vendor/codex/models.json` 中 Codex 自己的条目，其他模型围绕
+`vendor/codex/prompt.md` 生成。Codex 0.164 把 `model_catalog_json` 文件当作完整列表
+（`StaticModelsManager`），所以它的选择器只显示这两个模型。随后 `editCodexConfig` 设置顶层的
+`model_provider`、`model_catalog_json`，并在 `model` 不是这两个模型之一时设置 `model`，再重写
+`[model_providers.copilot-relay]` 表；它逐行解析表头和键，跳过多行字符串，遇到用点分键或内联表
+定义的 provider 时拒绝修改，而不是留下两个定义。
+
+`tests/unit/codex-request.test.ts`、`codex-messages.test.ts` 和 `codex-setup.test.ts` 固定纯逻辑的
+决策，`tests/integration/codex-responses.test.ts` 用模拟的 Copilot 运行该路由（GPT 与 Claude）。
 
 ## 流式
 

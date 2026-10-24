@@ -36,6 +36,7 @@ apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
 upstreamProxy:
 claudeSetup: true
+codexSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: max
@@ -56,6 +57,7 @@ opusModel: claude-opus-5.5
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `upstreamProxy` | Outbound proxy for Copilot and GitHub calls, sign-in included. Empty (the default) connects directly; `env` uses `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; otherwise an absolute `http://` or `https://` proxy URL. Requires restart. See [upstreamProxy rules](#upstreamproxy-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
+| `codexSetup` | When `true`, `start` sets up Codex CLI and the Codex app when `$CODEX_HOME` (default `~/.codex`) exists: a model list of only `gptModel` and `opusModel`, and `config.toml` pointed at this relay with no ChatGPT sign-in. See [Codex](EN-Codex.md). |
 | `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
 | `logRetentionDays` | Local calendar days to retain normal relay logs and debug captures, including today; positive integer, default `3`. Active/unknown captures are protected; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for cleanup rules. |
 | `thinkEffort` | Fallback reasoning effort when the request omits it: `low`, `medium`, `high`, `xhigh`, `max`. |
@@ -783,11 +785,12 @@ Requires restart:
 - `host`
 - `port`
 - `claudeSetup`
+- `codexSetup`
 - `upstreamProxy`
 
 `host` and `port` require restart because the listening socket is already bound.
-`claudeSetup` is read once during startup, so toggling it changes nothing until
-the relay starts again. `upstreamProxy` sets up the relay's upstream connections
+`claudeSetup` and `codexSetup` are read once during startup, so toggling them changes
+nothing until the relay starts again. `upstreamProxy` sets up the relay's upstream connections
 once, at startup, and a reload leaves them as they are.
 
 The relay checks `config.yaml` once per second. An edit that fails validation

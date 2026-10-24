@@ -141,7 +141,7 @@ copilot-relay 0.2.5
     …
     gptModel                gpt-6-astra
     opusModel               claude-opus-5
-    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.
 ```
 
 上面的 `config` 块是节选；`status` 会打印全部解析后的配置项。参见

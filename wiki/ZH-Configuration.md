@@ -31,6 +31,7 @@ apiKey:
 copilotBaseUrl: https://api.githubcopilot.com
 upstreamProxy:
 claudeSetup: true
+codexSetup: true
 logLevel: info
 logRetentionDays: 3
 thinkEffort: max
@@ -51,6 +52,7 @@ opusModel: claude-opus-5.5
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `upstreamProxy` | Copilot 与 GitHub 调用（包括登录）使用的出站代理。留空（默认）表示直连；`env` 表示使用 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`；否则写绝对的 `http://` 或 `https://` 代理地址。需要重启。参见 [upstreamProxy 规则](#upstreamproxy-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
+| `codexSetup` | 为 `true` 时，如果 `$CODEX_HOME`（默认 `~/.codex`）存在，`start` 会为 Codex CLI 和 Codex app 完成配置：只含 `gptModel` 和 `opusModel` 的模型列表，以及指向本中继、无需登录 ChatGPT 的 `config.toml`。见 [Codex](ZH-Codex.md)。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
 | `logRetentionDays` | 普通 relay 日志与 debug 捕获保留的本地日历天数，包含今天；正整数，默认 `3`。活动/未知捕获受到保护，清理规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。 |
 | `thinkEffort` | 请求未指定时使用的默认推理强度：`low`、`medium`、`high`、`xhigh`、`max`。 |
@@ -664,10 +666,11 @@ Upstream request failed without a response. HTTPS_PROXY or HTTP_PROXY is set, bu
 - `host`
 - `port`
 - `claudeSetup`
+- `codexSetup`
 - `upstreamProxy`
 
 `host` 和 `port` 需要重启，是因为 HTTP 监听 socket 已经绑定，运行中不能自动搬到新的
-host/port。`claudeSetup` 只在启动时读取一次，改了它要等下次启动才生效。`upstreamProxy`
+host/port。`claudeSetup` 和 `codexSetup` 只在启动时读取一次，改了它们要等下次启动才生效。`upstreamProxy`
 只在启动时建立一次 relay 的上游连接，重载不会改动它们。
 
 relay 每秒检查一次 `config.yaml`。未通过校验的修改会保留之前的运行时设置，并记录一条
