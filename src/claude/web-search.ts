@@ -873,9 +873,18 @@ export const createClaudeWebSearchResponse = (
   // The client keeps this text in its history. A final pass replaces it with the answer
   // (mergeWebSearchAndFinalResponse); without one, as when client tools ran beside the searches,
   // it is how the next request still sees the sources.
-  // A search that found sources but wrote no text still lists them here.
+  // The client's history keeps only this text when no final pass follows, so each search's sources
+  // are listed here too, unless its text already names every one of them.
   const texts = searches
-    .map((search) => search.text || (search.results.length > 0 ? getWebSearchResultText(search) : ""))
+    .map((search) => {
+      const unnamed = search.results.filter((result) => !search.text.includes(result.url))
+      if (unnamed.length === 0) {
+        return search.text
+      }
+
+      const sources = getWebSearchResultText({ ...search, results: unnamed })
+      return search.text ? `${search.text}\n\n${sources}` : sources
+    })
     .filter(Boolean)
   if (texts.length > 0) {
     content.push({ type: "text", text: texts.join("\n\n") })

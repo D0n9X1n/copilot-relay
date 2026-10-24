@@ -876,3 +876,13 @@ test("a search with sources but no text still lists them for the client's histor
 
   assert.match(text?.text ?? "", /Tokio - https:\/\/tokio\.rs/)
 })
+
+test("a search whose text names no source still lists its sources for the client's history", () => {
+  const response = createClaudeWebSearchResponse([{ ...searchExecution, text: "The API is documented here." }])
+  const text = (response.content.find((block) => block.type === "text") as { text: string }).text
+
+  assert.match(text, /^The API is documented here\./)
+  assert.match(text, /Tokio - https:\/\/tokio\.rs/)
+  const named = createClaudeWebSearchResponse([{ ...searchExecution, text: "See https://tokio.rs" }])
+  assert.equal((named.content.find((block) => block.type === "text") as { text: string }).text, "See https://tokio.rs")
+})
