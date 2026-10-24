@@ -101,7 +101,12 @@ interface Relay {
 const startRelay = async (
   t: TestContext,
   reply: Reply,
-  options: { models?: Array<[string, Record<string, unknown>]>; catalog?: unknown; apiKey?: string } = {},
+  options: {
+    models?: Array<[string, Record<string, unknown>]>
+    catalog?: unknown
+    apiKey?: string
+    gptModel?: string
+  } = {},
 ): Promise<Relay> => {
   const requests: Array<UpstreamRequest> = []
   const upstream = createHttpServer(async (req, res) => {
@@ -131,7 +136,7 @@ const startRelay = async (
   assert(address && typeof address === "object")
   const baseUrl = `http://127.0.0.1:${address.port}`
 
-  runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
+  runtimeState.modelRouting = { gptModel: options.gptModel ?? "gpt-6-astra", opusModel: "claude-opus-5.5" }
   const app = createServer({
     copilotBaseUrl: baseUrl,
     copilotToken: "fixture-only",
@@ -237,19 +242,96 @@ test("a tool output or a Codex subagent is sent as the agent, and an image turns
 })
 
 test("a model the catalog does not list goes to the configured gptModel", async (t) => {
-  const catalog = {
-    data: [{
-      id: "gpt-6-astra",
-      supported_endpoints: ["/responses"],
-      capabilities: { type: "chat", supports: { reasoning_effort: ["low", "medium", "high", "xhigh", "max"] } },
-    }],
-  }
-  const relay = await startRelay(t, replySse, { catalog })
+  const listed = (id: string) => ({
+    id,
+    supported_endpoints: ["/responses"],
+    capabilities: { type: "chat", supports: { reasoning_effort: ["low", "medium", "high"] } },
+  })
+  // gptModel is not the shipped default, so a hardcoded fallback would fail here.
+  const relay = await startRelay(t, replySse, {
+    catalog: { data: [listed("gpt-6-astra"), listed("gpt-6-sol")] },
+    gptModel: "gpt-6-sol",
+  })
   await (await relay.send(codexBody({ model: "codex-auto-review" }))).text()
 
   // The relay refreshes the catalog once for the unknown name before falling back.
   assert.deepEqual(relay.requests.map((request) => request.path), ["/models", "/responses"])
-  assert.equal(responsesCalls(relay)[0]?.body.model, "gpt-6-astra")
+  assert.equal(responsesCalls(relay)[0]?.body.model, "gpt-6-sol")
+})
+
+const firstEvent = `event: ${sseEvents[0]!.type}\ndata: ${JSON.stringify(sseEvents[0])}\n\n`
+const remainingEvents = sseBody.slice(firstEvent.length)
+
+// Reads from the stream until `text` has arrived, failing if the stream ends first.
+const readUntil = async (reader: ReadableStreamDefaultReader<Uint8Array>, received: string, text: string): Promise<string> => {
+  const decoder = new TextDecoder()
+  let all = received
+  while (!all.includes(text)) {
+    const chunk = await reader.read()
+    assert.equal(chunk.done, false, "the stream ended before the expected text arrived")
+    all += decoder.decode(chunk.value, { stream: true })
+  }
+
+  return all
+}
+
+test("a streamed answer reaches Codex as Copilot sends it, not after it ends", { timeout: 10_000 }, async (t) => {
+  let release = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  t.after(release)
+
+  const relay = await startRelay(t, (response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" })
+    response.write(firstEvent)
+    void released.then(() => response.end(remainingEvents))
+  })
+  const response = await relay.send(codexBody())
+  const reader = response.body!.getReader()
+
+  // Copilot has sent only the first event; it must already be readable.
+  const first = await readUntil(reader, "", "\n\n")
+  assert.equal(first, firstEvent)
+
+  release()
+  const all = await readUntil(reader, first, "response.completed")
+  assert.equal(all, sseBody)
+})
+
+test("a client that stops reading closes the upstream connection", { timeout: 10_000 }, async (t) => {
+  let upstreamClosed = () => {}
+  const closed = new Promise<void>((resolve) => {
+    upstreamClosed = resolve
+  })
+
+  const relay = await startRelay(t, (response) => {
+    response.on("close", upstreamClosed)
+    response.writeHead(200, { "content-type": "text/event-stream" })
+    response.write(firstEvent)
+  })
+  const response = await relay.send(codexBody())
+  const reader = response.body!.getReader()
+
+  await readUntil(reader, "", "\n\n")
+  await reader.cancel()
+  await closed
+})
+
+test("a rejected model name is logged without terminal control characters", async (t) => {
+  const relay = await startRelay(t, replySse)
+  const response = await relay.send(codexBody({ model: "claude-\u001b[2Jfixture" }))
+
+  assert.equal(response.status, 400)
+  await response.text()
+  await flushLogs()
+
+  const requestId = response.headers.get("x-copilot-relay-request-id")
+  const lines = (await readLogs()).split("\n").filter((line) => line.includes(`request_id=${requestId}`))
+  assert.ok(lines.length > 0)
+  for (const line of lines) {
+    assert.equal(line.includes("\u001b"), false, line)
+  }
 })
 
 test("a Claude model or a model without /responses is refused before any upstream call", async (t) => {

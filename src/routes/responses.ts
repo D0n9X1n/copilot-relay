@@ -65,26 +65,43 @@ const readSubagent = (value: string | undefined): string | undefined => {
  */
 const settleWhenDone = (body: ReadableStream<Uint8Array>, trace: RequestTrace | undefined): ReadableStream<Uint8Array> => {
   const reader = body.getReader()
+  // The end, an error and the client's cancellation can race; whichever comes first settles.
+  let settled = false
+  const settle = (error?: unknown) => {
+    if (settled) {
+      return
+    }
+
+    settled = true
+    trace?.handlerSettled(error)
+  }
 
   return new ReadableStream<Uint8Array>({
     pull: async (controller) => {
       try {
         const next = await reader.read()
+        if (settled) {
+          return
+        }
+
         if (next.done) {
           controller.close()
-          trace?.handlerSettled()
+          settle()
           return
         }
 
         controller.enqueue(next.value)
       } catch (error) {
-        controller.error(error)
-        trace?.handlerSettled(error)
+        if (!settled) {
+          controller.error(error)
+        }
+
+        settle(error)
       }
     },
     cancel: async (reason) => {
+      settle()
       await reader.cancel(reason).catch(() => {})
-      trace?.handlerSettled()
     },
   }, { highWaterMark: 0 })
 }
@@ -149,8 +166,11 @@ responsesRoutes.post("/responses", async (c) => {
         })
       }
 
-      c.set("requestErrorMessage", detail.slice(0, 240))
-      log.error(`request_id=${requestId} Copilot /responses returned ${response.status}`)
+      // The body goes to Codex as it is; the log gets only the status, since a cut of upstream
+      // text could split a secret the logger would otherwise recognize and redact.
+      const message = `Copilot /responses returned ${response.status}`
+      c.set("requestErrorMessage", message)
+      log.error(`request_id=${requestId} ${message}`)
       return new Response(detail, { status: response.status, headers: copyForwardedHeaders(response.headers) })
     }
   } catch (error) {
@@ -163,8 +183,10 @@ responsesRoutes.post("/responses", async (c) => {
       throw error
     }
 
-    c.set("requestErrorMessage", error.message)
-    log.error(`request_id=${requestId} ${error.message}`)
+    // A rejected request's message can quote the client's model name, so it is made terminal-safe.
+    const message = sanitizeTerminalString(error.message)
+    c.set("requestErrorMessage", message)
+    log.error(`request_id=${requestId} ${message}`)
     if (error.response.status === 400 && trace?.manifest.exchanges.length === 0) {
       trace.recordFailure("local-validation")
     }
