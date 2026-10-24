@@ -9,11 +9,11 @@ const execute = promisify(execFile)
 const root = fileURLToPath(new URL("../../", import.meta.url))
 
 // npm always packs package.json, README and LICENSE; the `files` allowlist in
-// package.json adds config.default.yaml and dist/. Nothing else, and no image
-// or video file, may reach the published tarball.
+// package.json adds config.default.yaml, dist/ and vendor/ (files copied from other projects,
+// with their licenses). Nothing else, and no image or video file, may reach the published tarball.
 const allowedTopLevel = new Set(["package.json", "README.md", "LICENSE", "config.default.yaml"])
 
-test("npm package contains only the manifest, docs, default config and build output", { timeout: 60_000 }, async () => {
+test("npm package contains only the manifest, docs, default config, build output and vendored files", { timeout: 60_000 }, async () => {
   // Run npm's CLI script through Node: on Windows, execFile cannot launch the npm.cmd shim.
   const npmCLI = process.env.npm_execpath ?? (process.platform === "win32"
     ? path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js") : undefined)
@@ -24,7 +24,7 @@ test("npm package contains only the manifest, docs, default config and build out
 
   assert(packed.includes("package.json"))
   for (const file of packed) {
-    assert(allowedTopLevel.has(file) || file.startsWith("dist/"), `unexpected file in the npm package: ${file}`)
+    assert(allowedTopLevel.has(file) || file.startsWith("dist/") || file.startsWith("vendor/"), `unexpected file in the npm package: ${file}`)
     assert.doesNotMatch(file, /\.(mp4|mov|webm|gif|png|jpe?g)$/i, `media file in the npm package: ${file}`)
   }
 })

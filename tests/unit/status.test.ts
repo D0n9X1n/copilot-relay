@@ -58,6 +58,7 @@ relayListener.fetch = async () => {
 const baseConfig = toStatusConfig({
   apiKey: "",
   claudeSetup: true,
+  codexSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
   gptModel: "gpt-5.6-sol",
   host: "127.0.0.1",
@@ -595,7 +596,7 @@ test("prints upstreamProxy env as written", () => {
 test("flags the restart-only keys while running", () => {
   const out = render(runningStatus)
 
-  assert.match(out, /host, port, claudeSetup and upstreamProxy take effect on restart/)
+  assert.match(out, /host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart/)
 })
 
 // Why: with nothing running every value applies at the next start, so the
@@ -618,7 +619,7 @@ test("keeps the --json config key set stable when optional keys are unset", () =
     config: Record<string, unknown>
   }
 
-  assert.equal(Object.keys(parsed.config).length, 14)
+  assert.equal(Object.keys(parsed.config).length, 15)
   assert.ok("webSearchBackend" in parsed.config)
   assert.equal(parsed.config.webSearchBackend, null)
   assert.ok("upstreamProxy" in parsed.config)
@@ -634,6 +635,7 @@ test("passes config values through unchanged except unset optional keys", () => 
   const appConfig = {
     apiKey: "",
     claudeSetup: false,
+    codexSetup: false,
     copilotBaseUrl: "https://example.invalid",
     gptModel: "gpt-x",
     host: "0.0.0.0",
@@ -661,6 +663,7 @@ test("passes config values through unchanged except unset optional keys", () => 
 const secretUrlConfig = {
   apiKey: "",
   claudeSetup: true,
+  codexSetup: true,
   copilotBaseUrl:
     "https://gateway.example/tenant/PATH_SENTINEL?key=QUERY_SENTINEL#FRAG_SENTINEL",
   gptModel: "gpt-5.6-sol",
@@ -724,7 +727,7 @@ test("hides copilot base url path, query and fragment in --json output", () => {
 
   const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
   // Key set and count must not shift just because one value is now redacted.
-  assert.equal(Object.keys(parsed.config).length, 14)
+  assert.equal(Object.keys(parsed.config).length, 15)
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
 })
 

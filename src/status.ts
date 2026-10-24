@@ -195,14 +195,15 @@ const configRowOrder: Record<keyof StatusConfig, number> = {
   copilotBaseUrl: 3,
   upstreamProxy: 4,
   claudeSetup: 5,
-  logLevel: 6,
-  logRetentionDays: 7,
-  thinkEffort: 8,
-  upstreamTimeoutSeconds: 9,
-  webSearchBackend: 10,
-  gptModel: 11,
-  opusModel: 12,
-  claudeUpstreamApi: 13,
+  codexSetup: 6,
+  logLevel: 7,
+  logRetentionDays: 8,
+  thinkEffort: 9,
+  upstreamTimeoutSeconds: 10,
+  webSearchBackend: 11,
+  gptModel: 12,
+  opusModel: 13,
+  claudeUpstreamApi: 14,
 }
 
 const configRowKeys = (
@@ -222,7 +223,7 @@ const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
  *
  * These are the values on disk. That is not the same question as "what is the
  * running daemon honouring", and the footnote says so rather than leaving it
- * implied: applyRuntimeConfig() in start.ts never reads claudeSetup, and
+ * implied: applyRuntimeConfig() in start.ts never reads claudeSetup or codexSetup, and
  * deliberately neither rebinds the listening socket when host or port changes
  * nor rebuilds the upstream dispatcher when upstreamProxy changes; it
  * hot-reloads the rest. Printing every key without that line would imply a
@@ -248,7 +249,7 @@ const renderConfig = (
 
   if (running) {
     lines.push(
-      "    host, port, claudeSetup and upstreamProxy take effect on restart; the rest hot-reload.",
+      "    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.",
     )
   }
 

@@ -8,8 +8,9 @@ import { getRelayBaseUrl, isLoopbackHost } from "~/lib/address"
 import { setupProxyAuth } from "~/lib/auth"
 import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
+import { applyCodexSetup } from "~/codex/setup"
 import { readProxyConfig } from "~/lib/config"
-import { claudeConfigPath as defaultClaudeConfigPath } from "~/lib/defaults"
+import { claudeConfigPath as defaultClaudeConfigPath, getCodexHome } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
 import { paths } from "~/lib/paths"
@@ -248,6 +249,33 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
         `Could not update claude settings (${claudeConfigPath}):`,
         error,
       )
+    }
+  }
+
+  if (appConfig.codexSetup) {
+    const codexHome = getCodexHome()
+    try {
+      // The same two models Claude Code offers; gptModel first, as Codex's default.
+      const codexResult = await applyCodexSetup({
+        apiKey: appConfig.apiKey,
+        baseUrl,
+        catalogPath: paths.codexCatalogPath,
+        codexHome,
+        models: [appConfig.gptModel, appConfig.opusModel].map((id) => ({
+          id,
+          capabilities: getCachedCopilotModel(config, id),
+        })),
+      })
+
+      if (codexResult.skipped) {
+        log.info(`codex setup skipped: ${codexHome} does not exist`)
+      } else if (codexResult.changed) {
+        log.info(`codex settings updated: ${codexResult.configPath}`)
+      } else {
+        log.info(`codex settings already up to date: ${codexResult.configPath}`)
+      }
+    } catch (error) {
+      log.error(`Could not update codex settings (${codexHome}):`, error)
     }
   }
 

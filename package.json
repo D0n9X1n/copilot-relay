@@ -27,7 +27,8 @@
   },
   "files": [
     "config.default.yaml",
-    "dist"
+    "dist",
+    "vendor"
   ],
   "publishConfig": {
     "access": "public"

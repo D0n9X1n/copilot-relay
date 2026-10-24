@@ -25,6 +25,7 @@ const completeValues: Record<keyof AppConfig, string> = {
   copilotBaseUrl: "https://config-fixture.invalid",
   upstreamProxy: "http://proxy-fixture.invalid:3128",
   claudeSetup: "false",
+  codexSetup: "false",
   logLevel: "info",
   logRetentionDays: "7",
   thinkEffort: "high",
@@ -306,7 +307,7 @@ test("generated config guidance identifies all restart-only settings", async () 
   await readAppConfig()
 
   const written = await readConfigFile()
-  assert.match(written, /host, port, claudeSetup, and upstreamProxy require restart/)
+  assert.match(written, /host, port, claudeSetup, codexSetup, and upstreamProxy require restart/)
   assert.doesNotMatch(written, /This file is hot-reloaded while/)
 })
 

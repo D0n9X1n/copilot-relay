@@ -25,6 +25,7 @@ export type LogLevelName = (typeof logLevels)[number]
 export interface AppConfig {
   apiKey: string
   claudeSetup: boolean
+  codexSetup: boolean
   copilotBaseUrl: string
   gptModel: string
   host: string
@@ -50,6 +51,7 @@ export interface AppConfig {
 const defaultConfig: AppConfig = {
   apiKey: "",
   claudeSetup: true,
+  codexSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
   gptModel: "gpt-6-astra",
   host: "127.0.0.1",
@@ -105,7 +107,7 @@ const normalizeClaudeUpstreamApi = (value: unknown): AppConfig["claudeUpstreamAp
   throw new Error("Invalid claudeUpstreamApi: expected auto, messages, or chat-completions")
 }
 
-const normalizeBoolean = (value: unknown): boolean | undefined => {
+const normalizeBoolean = (value: unknown, name: string): boolean | undefined => {
   if (value === undefined) {
     return undefined
   }
@@ -124,7 +126,7 @@ const normalizeBoolean = (value: unknown): boolean | undefined => {
     }
   }
 
-  throw new Error("Invalid claudeSetup: expected true or false")
+  throw new Error(`Invalid ${name}: expected true or false`)
 }
 
 const normalizeInteger = (
@@ -454,6 +456,7 @@ const readDefaultConfigTemplate = async (): Promise<string> => {
 const configAliases: Record<string, keyof AppConfig> = {
   api_key: "apiKey",
   claude_setup: "claudeSetup",
+  codex_setup: "codexSetup",
   copilot_base_url: "copilotBaseUrl",
   gpt_model: "gptModel",
   log_level: "logLevel",
@@ -565,7 +568,7 @@ const serializeConfig = (config: AppConfig): string =>
     "# copilot-relay configuration",
     "#",
     "# Valid complete edits hot-reload without rewriting this file.",
-    "# host, port, claudeSetup, and upstreamProxy require restart.",
+    "# host, port, claudeSetup, codexSetup, and upstreamProxy require restart.",
     "",
     "# Local host for the Claude Code-compatible HTTP server.",
     `host: ${config.host}`,
@@ -586,6 +589,9 @@ const serializeConfig = (config: AppConfig): string =>
     "",
     "# Update ~/.claude/settings.json on start.",
     `claudeSetup: ${config.claudeSetup}`,
+    "",
+    "# Update Codex's config.toml and model list on start, when Codex is installed.",
+    `codexSetup: ${config.codexSetup}`,
     "",
     "# Log verbosity:",
     "#   error - startup/preflight/request failures only",
@@ -620,7 +626,8 @@ const serializeConfig = (config: AppConfig): string =>
 
 const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
   apiKey: normalizeApiKey(raw.apiKey) ?? defaultConfig.apiKey,
-  claudeSetup: normalizeBoolean(raw.claudeSetup) ?? defaultConfig.claudeSetup,
+  claudeSetup: normalizeBoolean(raw.claudeSetup, "claudeSetup") ?? defaultConfig.claudeSetup,
+  codexSetup: normalizeBoolean(raw.codexSetup, "codexSetup") ?? defaultConfig.codexSetup,
   copilotBaseUrl: normalizeCopilotBaseUrl(
     normalizeRequiredString(raw.copilotBaseUrl, "copilotBaseUrl"),
   ) ?? defaultConfig.copilotBaseUrl,
