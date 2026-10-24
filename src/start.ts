@@ -10,7 +10,7 @@ import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } f
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { applyCodexSetup } from "~/codex/setup"
 import { readProxyConfig } from "~/lib/config"
-import { claudeConfigPath as defaultClaudeConfigPath, getCodexHome } from "~/lib/defaults"
+import { getClaudeConfigPath, getCodexHome } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
 import { paths } from "~/lib/paths"
@@ -111,7 +111,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   // so upstreamProxy, like host and port, takes effect on restart.
   configureUpstreamDispatcher(appConfig.upstreamProxy)
 
-  const claudeConfigPath = defaultClaudeConfigPath
+  const claudeConfigPath = getClaudeConfigPath()
   const config = readProxyConfig(appConfig)
 
   const applyRuntimeConfig = (nextConfig: AppConfig) => {

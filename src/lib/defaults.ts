@@ -14,11 +14,9 @@ import os from "node:os"
 export const defaultHost = "127.0.0.1"
 export const defaultPort = 4142
 
-export const claudeConfigPath = path.join(
-  os.homedir(),
-  ".claude",
-  "settings.json",
-)
+// Claude Code reads $CLAUDE_CONFIG_DIR/settings.json, or ~/.claude/settings.json when it is unset.
+export const getClaudeConfigPath = (): string =>
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "settings.json")
 
 // Codex reads $CODEX_HOME, or ~/.codex when it is unset. Resolved on each call so a test that
 // redirects the home directory or CODEX_HOME sees its own.

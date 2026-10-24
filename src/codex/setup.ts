@@ -24,6 +24,8 @@ export interface CodexConfigInput {
 export interface CodexSetupInput extends Omit<CodexConfigInput, "models"> {
   codexHome: string
   models: Array<CatalogModel>
+  // Create $CODEX_HOME when Codex has not run here yet.
+  force?: boolean
 }
 
 export interface CodexSetupResult {
@@ -413,9 +415,11 @@ const publish = async (snapshot: FileSnapshot, content: string, holdsKey: boolea
 export const applyCodexSetup = async (input: CodexSetupInput): Promise<CodexSetupResult> => {
   const configPath = path.join(input.codexHome, "config.toml")
   const home = await fs.stat(input.codexHome).catch(() => undefined)
-  if (!home?.isDirectory()) {
+  if (!home?.isDirectory() && !input.force) {
     return { configPath, skipped: true, changed: false }
   }
+
+  await fs.mkdir(input.codexHome, { recursive: true })
 
   const catalog = buildCodexCatalog(input.models, await readCodexVendorFiles())
   await fs.mkdir(path.dirname(input.catalogPath), { recursive: true })

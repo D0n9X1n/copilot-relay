@@ -8,6 +8,7 @@ import { cache } from "./cache"
 import { models } from "./models"
 import { replay } from "./replay"
 import { restart } from "./restart"
+import { setup } from "./setup"
 import { start } from "./start"
 import { status } from "./status"
 import { stop } from "./stop"
@@ -19,7 +20,7 @@ const main = defineCommand({
     description:
       "Yet, just another relay for Claude Code and Codex to use a GitHub Copilot subscription.",
   },
-  subCommands: { auth, cache, models, replay, restart, start, status, stop, usage },
+  subCommands: { auth, cache, models, replay, restart, setup, start, status, stop, usage },
 })
 
 await runMain(main)
