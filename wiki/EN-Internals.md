@@ -875,8 +875,10 @@ explicitly forced search, or unrecognized bridge history with HTTP 400 JSON befo
 upstream work/SSE, even for streaming callers. `runClaudeWebSearches` runs a turn's search calls in
 parallel, at most `maxSearchesPerTurn` (5), since each is a premium `/responses`
 request, or the tool's lower `max_uses`; later calls return a `max_uses_exceeded`
-`web_search_tool_result` error. The searches' text stays in the reply, so a turn
-that hands client tools back without a final pass keeps its sources. Each call gets
+`web_search_tool_result` error. On the chat route the searches' text, with any
+source it does not already name, stays in the reply, so a turn that hands client
+tools back without a final pass keeps its sources; the native route keeps them in
+the result blocks it restores. Each call gets
 its own marker, its result blocks follow the decision in call order, and
 `normalizeNativeHistory` restores every marker into one `tool_result` turn. A search
 requested again after the results fails rather than looping. Text/thinking can stream before a decision; tool

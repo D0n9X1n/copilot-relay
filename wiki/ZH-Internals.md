@@ -722,8 +722,9 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 `any`、显式强制搜索或无法识别的 bridge 历史，在上游操作/SSE 之前返回 HTTP 400 JSON，
 流式调用也一样。`runClaudeWebSearches` 并行执行一回合的搜索调用，最多
 `maxSearchesPerTurn`（5）次，因为每次都是一次 premium `/responses` 请求，工具设置了更低的 `max_uses` 时以它为准；之后的
-调用返回 `max_uses_exceeded` 的 `web_search_tool_result` 错误。搜索的文本保留在回复中，所以把
-客户端工具交回、没有最终回答的回合仍保留来源。每个调用有自己的标记，结果 block 按调用顺序跟在决策
+调用返回 `max_uses_exceeded` 的 `web_search_tool_result` 错误。在 chat 路由上，搜索的文本连同其中未提到的来源保留在
+回复中，所以把客户端工具交回、没有最终回答的回合仍保留来源；原生路由把来源保存在它还原的结果
+block 中。每个调用有自己的标记，结果 block 按调用顺序跟在决策
 之后，`normalizeNativeHistory` 把所有标记还原到同一个 `tool_result` 回合。拿到结果后再次请求
 搜索会直接失败，不循环。
 决策前 text/thinking 可以流出，工具 block 则暂存，直到 relay 判断是否需要执行服务端搜索。
