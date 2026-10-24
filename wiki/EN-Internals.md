@@ -1424,7 +1424,8 @@ npm run build
 
 The npm test scripts preload `scripts/test-bootstrap.mjs` **before `tsx` and any
 source import**. It assigns each test process a private `HOME`, `USERPROFILE`,
-`CODEX_HOME` (a missing `.codex` there, so `codexSetup` skips) and temporary root, and cleans up only its owned directory on exit. This protects
+`CODEX_HOME` (a missing `.codex` there, so `codexSetup` skips), `CLAUDE_CONFIG_DIR`
+and temporary root, and cleans up only its owned directory on exit. This protects
 static imports too; use the same preload when running a focused test.
 
 A suite that needs its own log/config fixture must still redirect before that

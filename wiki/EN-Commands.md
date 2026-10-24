@@ -237,11 +237,14 @@ Codex one, as they do for those clients.
 Each client gets the relay's `apiKey`. With `apiKey` empty the relay accepts any
 key, so each client gets a placeholder instead.
 
-A client that has never run on the machine, meaning its directory does not exist,
+A client that has never run on the machine, meaning its directory (`~/.claude`,
+`Claude-3p` or its standard `Claude` sibling, `~/.codex`) does not exist,
 is skipped unless `--force` is given. Setup reads Copilot's model catalog for
 model names, context sizes and reasoning levels, signing in to GitHub first when
-no token is stored; when that fails it says so and writes the model IDs alone. It
-starts no relay, and it never prints the apiKey. It exits `1` for an unknown
+no token is stored (it prints the device code to stderr); when that fails it says so and writes the model IDs alone. It
+starts no relay, and it never prints the apiKey. A Claude Code settings file that is not valid JSON or has a setting of the wrong
+type, or a Claude app file that is not a JSON object, is left unchanged and
+reported as a failure. It exits `1` for an unknown
 target or a `config.yaml` it cannot read, `2` when any target fails, and `0` otherwise.
 
 ## `models`

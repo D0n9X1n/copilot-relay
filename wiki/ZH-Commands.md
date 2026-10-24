@@ -193,9 +193,9 @@ copilot-relay setup codex-cli --force   # Codex 尚未在本机运行过也配�
 
 每个客户端得到中继的 `apiKey`。`apiKey` 为空时中继接受任何密钥，所以每个客户端得到一个占位值。
 
-从未在本机运行过的客户端，即其目录不存在时，会被跳过，除非指定 `--force`。setup 会读取
-Copilot 的模型目录以获取模型名称、上下文大小和推理等级，没有保存 token 时先登录 GitHub；失败时
-它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。未知目标或无法读取 `config.yaml` 时以 `1` 退出，任一目标失败
+从未在本机运行过的客户端，即其目录（`~/.claude`、`Claude-3p` 或同级的 `Claude`、`~/.codex`）不存在时，会被跳过，除非指定 `--force`。setup 会读取
+Copilot 的模型目录以获取模型名称、上下文大小和推理等级，没有保存 token 时先登录 GitHub（设备码打印到 stderr）；失败时
+它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。不是合法 JSON 或含有类型错误设置的 Claude Code 设置文件，以及不是 JSON 对象的 Claude app 文件，会保持不变，并报告为失败。未知目标或无法读取 `config.yaml` 时以 `1` 退出，任一目标失败
 以 `2` 退出，否则以 `0` 退出。
 
 ## `models`

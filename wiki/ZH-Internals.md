@@ -1179,7 +1179,7 @@ npm run build
 ### 重定向 home 目录
 
 npm 测试脚本在 **`tsx` 及任何源码 import 之前**预载 `scripts/test-bootstrap.mjs`。
-它给每个测试进程分配私有 `HOME`、`USERPROFILE`、`CODEX_HOME`（其中不存在的 `.codex`，所以
+它给每个测试进程分配私有 `HOME`、`USERPROFILE`、`CLAUDE_CONFIG_DIR`、`CODEX_HOME`（其中不存在的 `.codex`，所以
 `codexSetup` 会跳过）和临时根目录，退出时只清理自己拥有
 的目录。静态 import 也因此受保护；单独跑某个测试时同样使用该预载。
 

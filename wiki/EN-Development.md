@@ -37,7 +37,7 @@ unlocked dependency resolution. Keep root package and lockfile versions aligned.
 
 `npm test` runs the unit and integration suites together. Tests use Node's
 built-in runner via `tsx`, with `scripts/test-bootstrap.mjs` preloaded first to
-isolate `HOME`, `USERPROFILE`, `CODEX_HOME` and temporary paths **before any source import**.
+isolate `HOME`, `USERPROFILE`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and temporary paths **before any source import**.
 Focused tests must retain that preload; see [Internals](EN-Internals.md).
 Release-note tests also require Git and Python
 3.12 or newer (`python3` on POSIX, `python` on Windows, or the executable named by
