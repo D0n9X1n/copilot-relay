@@ -230,7 +230,9 @@ Codex one, as they do for those clients.
   drops a gateway model whose name is not Anthropic-looking, such as `gpt-6-astra`,
   so such a model is listed as a Claude-style route for its tier, `claude-sonnet-5`,
   labelled with its real name; the relay sends every model name without "opus" to
-  `gptModel`.
+  `gptModel`. Setup also sets `modelDiscoveryEnabled: false`: the list already names
+  every model, and discovery would flag the route name, which `/v1/models` does not
+  list.
   `claude_desktop_config.json` gets `deploymentMode: "3p"`, so the app opens on
   the relay instead of the claude.ai sign-in. Quit the app before running setup and
   reopen it after: it reads these files at launch and rewrites them while it runs.

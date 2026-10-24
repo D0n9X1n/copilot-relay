@@ -187,7 +187,8 @@ copilot-relay setup codex-cli --force   # Codex 尚未在本机运行过也配�
   `gptModel`（tier `sonnet`）组成的 `inferenceModels` 列表，带 Copilot 的名称，Copilot 报告支持时
   标记 1M 上下文。没有这个列表时，app 只显示 Claude 模型。app 还会丢弃名称看起来不是 Anthropic 模型的
   gateway 模型（例如 `gpt-6-astra`），所以这样的模型以其 tier 的 Claude 风格路由名列出，即
-  `claude-sonnet-5`，并以真实名称作为标签；中继把所有不含 "opus" 的模型名发往 `gptModel`。`claude_desktop_config.json` 得到
+  `claude-sonnet-5`，并以真实名称作为标签；中继把所有不含 "opus" 的模型名发往 `gptModel`。setup 还设置
+  `modelDiscoveryEnabled: false`：列表已列出每个模型，开启发现时 app 会标记 `/v1/models` 中没有的路由名。`claude_desktop_config.json` 得到
   `deploymentMode: "3p"`，所以 app 直接打开中继，而不是 claude.ai 登录。运行 setup 前请退出
   app，之后再打开：它在启动时读取这些文件，运行时还会重写它们。
 - `codex-cli` 和 `codex-app` 共用一个 `config.toml` 和模型列表，写法与 `start` 时 `codexSetup`
