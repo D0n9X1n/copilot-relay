@@ -160,6 +160,9 @@ const relayHome = async (options: { tokens: boolean }): Promise<RelayHome> => {
       ...withoutProxyVariables(process.env),
       HOME: home,
       USERPROFILE: home,
+      // Claude Code and Codex settings follow this relay's home, not the test process's.
+      CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+      CODEX_HOME: path.join(home, ".codex"),
       NO_COLOR: "1",
       CONSOLA_LEVEL: "3",
       NODE_OPTIONS: nodeOptions,

@@ -362,6 +362,7 @@ test("leaves malformed Claude settings untouched", async () => {
       configPath,
       changed: false,
       created: false,
+      skippedReason: "it is not valid JSON",
     })
   })
 })
@@ -388,11 +389,10 @@ test("leaves malformed Claude settings shapes untouched", async () => {
       })
 
       assert.equal(await fs.readFile(configPath, "utf8"), malformed)
-      assert.deepEqual(result, {
-        configPath,
-        changed: false,
-        created: false,
-      })
+      assert.equal(result.changed, false)
+      assert.equal(result.created, false)
+      assert.equal(result.configPath, configPath)
+      assert.equal(typeof result.skippedReason, "string")
     })
   }
 })

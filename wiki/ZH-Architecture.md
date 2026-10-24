@@ -178,6 +178,7 @@ opusModel: claude-opus-5.5
 | `src/copilot/stream.ts` | 共用流聚合逻辑；让 JSON 调用方使用必须通过上游 SSE 才能取得的输出长度，同时拒绝不完整的响应。 |
 | `src/lib/app-config.ts` | 读写 `~/.copilot-relay/config.yaml`，运行期热重载。 |
 | `src/lib/models.ts` | 配置驱动的模型路由与 `thinkEffort` 校验。 |
+| `src/lib/client-setup.ts` | 把 Claude Code CLI、Claude Code app（`src/lib/claude-app.ts`）和 Codex 指向中继，供 `copilot-relay setup` 和 `start` 使用。 |
 | `src/lib/auth.ts` | GitHub device login、token 存储、到期前刷新 Copilot bearer token，以及 `copilot-relay usage` 背后的 `copilot_internal/user` 请求。 |
 | `src/lib/upstream-dispatcher.ts` | Copilot 与 GitHub 调用共用的那个 undici dispatcher，按 `upstreamProxy` 构建：直连、代理变量或单个代理 URL。 |
 | `src/lib/preflight.ts` | 在绑定端口之前运行：验证配置的模型存在、配置的 effort 可用。 |

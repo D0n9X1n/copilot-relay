@@ -18,6 +18,8 @@ interface ApplyClaudeResult {
   changed: boolean
   created: boolean
   previousBaseUrl?: string
+  // Why the file was left as it is, when it could not be read safely.
+  skippedReason?: string
 }
 
 const knownModelEnvKeys = [
@@ -78,7 +80,7 @@ export async function applyClaudeConfig(
   // Only a missing file is created. An existing blank one is treated like a malformed file and left
   // as it is.
   if (!created && raw.trim().length === 0) {
-    return { configPath, changed: false, created: false }
+    return { configPath, changed: false, created: false, skippedReason: "the file is empty" }
   }
 
   if (raw.trim().length > 0) {
@@ -89,13 +91,13 @@ export async function applyClaudeConfig(
         || (value.env !== undefined && !isRecord(value.env))
         || hasMalformedModelOverride(value)
       ) {
-        return { configPath, changed: false, created: false }
+        return { configPath, changed: false, created: false, skippedReason: "it holds a setting of an unexpected type" }
       }
 
       parsed = value
     } catch {
       // Refuse to overwrite a malformed file; bail without changes.
-      return { configPath, changed: false, created: false }
+      return { configPath, changed: false, created: false, skippedReason: "it is not valid JSON" }
     }
   }
 

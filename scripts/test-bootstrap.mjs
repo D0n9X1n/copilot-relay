@@ -23,6 +23,8 @@ if (isMainThread) {
   process.env.USERPROFILE = home
   // Codex's home is its own variable; an exported one would point codexSetup at the real config.
   process.env.CODEX_HOME = join(home, ".codex")
+  // Claude Code's settings directory, for the same reason.
+  process.env.CLAUDE_CONFIG_DIR = join(home, ".claude")
   process.env.TMPDIR = temporary
   process.env.TMP = temporary
   process.env.TEMP = temporary

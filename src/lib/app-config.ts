@@ -171,7 +171,7 @@ const normalizeRequiredString = (value: unknown, key: string): string | undefine
 }
 
 // A fixed string: the rejected value is never interpolated, for the reason given in normalizeLogLevel.
-const invalidApiKeyMessage = "Invalid apiKey: expected empty, or at least 16 visible ASCII characters"
+const invalidApiKeyMessage = "Invalid apiKey: expected empty, or at least 16 visible ASCII characters with no spaces; leave it empty to accept any key"
 
 /**
  * Validates the optional inbound apiKey. Empty disables it.
