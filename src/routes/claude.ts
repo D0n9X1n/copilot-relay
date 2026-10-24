@@ -26,14 +26,14 @@ import {
   getToolNameMapperOptionsForModel,
 } from "~/claude/tool-names"
 import {
-  createClaudeWebSearchExecution,
   createClaudeWebSearchResponse,
   createFinalWebSearchPayload,
-  getClaudeWebSearchToolCallFromChatResponse,
+  getClaudeWebSearchToolCallsFromChatResponse,
   hasClaudeWebSearch,
   isClaudeWebSearchToolName,
   mergeWebSearchAndFinalResponse,
   prepareClaudeWebSearchDecisionPayload,
+  runClaudeWebSearches,
 } from "~/claude/web-search"
 import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
@@ -370,19 +370,20 @@ const handleClaudeMessageRequest = async (
   const effectiveResponse = decidedResponse ?? response
 
   if (isNonStreamingResponse(effectiveResponse)) {
-    const webSearchToolCall = shouldLetModelDecideWebSearch ?
-      getClaudeWebSearchToolCallFromChatResponse(effectiveResponse, toolNameMapper)
-    : undefined
+    const webSearchToolCalls = shouldLetModelDecideWebSearch ?
+      getClaudeWebSearchToolCallsFromChatResponse(effectiveResponse, toolNameMapper)
+    : []
     let claudeResponse: ClaudeResponse
 
-    if (webSearchToolCall) {
-      const search = await createClaudeWebSearchExecution(
+    if (webSearchToolCalls.length > 0) {
+      const searches = await runClaudeWebSearches(
         config,
         claudePayload,
-        webSearchToolCall.query,
+        webSearchToolCalls.map((call) => call.query),
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
-      const searchResponse = createClaudeWebSearchResponse(search)
+      const searchResponse = createClaudeWebSearchResponse(searches)
+      const searchCallIds = new Set(webSearchToolCalls.map((call) => call.toolCall.id))
       // The decision pass's tokens count toward the search turn's usage.
       const decisionUsage = translateToClaude(effectiveResponse, toolNameMapper).usage
       searchResponse.usage.input_tokens += decisionUsage.input_tokens
@@ -400,7 +401,7 @@ const handleClaudeMessageRequest = async (
             ...choice,
             message: {
               ...choice.message,
-              tool_calls: choice.message.tool_calls?.filter((call) => call.id !== webSearchToolCall.toolCall.id),
+              tool_calls: choice.message.tool_calls?.filter((call) => !searchCallIds.has(call.id)),
             },
           })),
         },
@@ -419,12 +420,12 @@ const handleClaudeMessageRequest = async (
           stop_reason: "tool_use",
           usage: searchResponse.usage,
         }
-      } else if (search.results.length === 0) {
+      } else if (searches.every((search) => search.results.length === 0)) {
         claudeResponse = searchResponse
       } else {
         const finalResponse = await createChatCompletions(
           config,
-          createFinalWebSearchPayload(openAIPayload, search, toolNameMapper),
+          createFinalWebSearchPayload(openAIPayload, searches, toolNameMapper),
           {
             client: "claude",
             // The final pass after a search is the relay's own, whoever started the request.

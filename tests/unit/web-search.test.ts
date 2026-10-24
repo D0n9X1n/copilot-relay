@@ -23,7 +23,10 @@ const {
   createClaudeWebSearchExecution,
   createClaudeWebSearchResponse,
   createFinalWebSearchPayload,
+  getClaudeWebSearchToolCallsFromChatResponse,
   getWebSearchBackendModel,
+  maxSearchesPerTurn,
+  runClaudeWebSearches,
 } = await import("../../src/claude/web-search")
 const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names")
 const { HTTPError } = await import("../../src/lib/error")
@@ -208,7 +211,7 @@ for (const [status, category] of [
       assert.equal(attempts(), status >= 500 ? 2 : 1)
       assert.deepEqual(search.results, [])
 
-      const result = createClaudeWebSearchResponse(search).content[1]
+      const result = createClaudeWebSearchResponse([search]).content[1]
       assert.deepEqual(result && "content" in result ? result.content : undefined, {
         type: "web_search_tool_result_error", error_code: "unavailable",
       })
@@ -309,7 +312,7 @@ for (const [name, fields, diagnostic] of [
       assert.equal(search.outputTokens, 1200)
       assert.deepEqual(search.results, [])
 
-      const result = createClaudeWebSearchResponse(search)
+      const result = createClaudeWebSearchResponse([search])
       assert.equal(result.usage.output_tokens, 1200)
       assert.equal(result.id, "resp_failure")
       assert.equal(attempts(), 1)
@@ -372,7 +375,7 @@ for (const source of ["annotation", "action", "text", "call-unreported"] as cons
       assert.equal(search.results[0]?.url, `https://example.com/${source === "text" || source === "call-unreported" ? "fallback" : "source"}`)
 
       const mapper = createClaudeToolNameMapper([])
-      const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, search, mapper)
+      const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, [search], mapper)
       assert.equal(final.messages.at(-1)?.role, "user")
       const context = String(final.messages.at(-1)?.content)
       assert.match(context, expectedProvenance(source))
@@ -411,7 +414,7 @@ test("WebSearch logs bounded metadata with tool correlation and no response cont
         "PRIVATE_QUERY",
         { requestId },
       )
-      const result = createClaudeWebSearchResponse(search)
+      const result = createClaudeWebSearchResponse([search])
       const tool = result.content[0]
       assert(tool?.type === "server_tool_use")
 
@@ -527,7 +530,7 @@ test("canonicalizes the configured WebSearch backend model", () => {
 // Why: WebSearch response metadata returns to Claude Code, so the canonical
 // Copilot ID must be restored to the Claude-facing context-selector identity.
 test("exposes the 1M identity in Claude WebSearch responses", () => {
-  const response = createClaudeWebSearchResponse({
+  const response = createClaudeWebSearchResponse([{
     id: "resp_web_search",
     inputTokens: 1,
     model: "gpt-5.6-sol",
@@ -535,7 +538,7 @@ test("exposes the 1M identity in Claude WebSearch responses", () => {
     query: "test",
     results: [],
     text: "unavailable",
-  })
+  }])
 
   assert.equal(response.model, "gpt-5.6-sol[1m]")
 })
@@ -633,7 +636,7 @@ const createFinalPayloadFixture = (
 
   return {
     mapper,
-    result: createFinalWebSearchPayload(basePayload, searchExecution, mapper),
+    result: createFinalWebSearchPayload(basePayload, [searchExecution], mapper),
   }
 }
 
@@ -781,4 +784,71 @@ test("a tool result with array content reaches the search request as text", asyn
   assert.equal(inputs.length, 1)
   assert.ok(inputs[0].includes("user: Found 2 files\n\n[image]\n\nsearch the web for copilot docs"))
   assert.equal(inputs[0].includes("[object Object]"), false)
+})
+
+const twoSearches = [
+  { ...searchExecution, id: "msg_one", query: "tokio", inputTokens: 3, outputTokens: 4, cachedInputTokens: 1 },
+  { ...searchExecution, id: "msg_two", query: "async-std", results: [{ title: "async-std", url: "https://async.rs" }], inputTokens: 5, outputTokens: 6 },
+]
+
+test("a turn with several searches returns a call and result for each, and counts each request", () => {
+  const response = createClaudeWebSearchResponse(twoSearches)
+
+  assert.deepEqual(response.content.map((block) => block.type), [
+    "server_tool_use", "web_search_tool_result", "server_tool_use", "web_search_tool_result",
+  ])
+  assert.deepEqual(response.content.filter((block) => block.type === "server_tool_use").map((block: any) => block.input.query), ["tokio", "async-std"])
+  assert.equal(response.usage.input_tokens, 8)
+  assert.equal(response.usage.output_tokens, 10)
+  assert.equal(response.usage.cache_read_input_tokens, 1)
+  assert.equal(response.usage.server_tool_use?.web_search_requests, 2)
+})
+
+test("the final pass after several searches gets every query and its sources", () => {
+  const mapper = createClaudeToolNameMapper(clientTools)
+  const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, twoSearches, mapper)
+  const context = String(final.messages.at(-1)?.content)
+
+  assert.match(context, /Search 1 of 2\..*\nQuery: tokio/s)
+  assert.match(context, /Search 2 of 2\..*\nQuery: async-std/s)
+  assert.match(context, /https:\/\/async\.rs/)
+})
+
+test("every WebSearch call in a decision is returned, in order", () => {
+  const mapper = createClaudeToolNameMapper(clientTools)
+  const search = mapper.toOpenAI("WebSearch")
+  const read = mapper.toOpenAI("Read")
+  const calls = getClaudeWebSearchToolCallsFromChatResponse({
+    id: "chat",
+    object: "chat.completion",
+    created: 0,
+    model: "opus",
+    choices: [{
+      index: 0,
+      finish_reason: "tool_calls",
+      logprobs: null,
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "a", type: "function", function: { name: search, arguments: "{\"query\":\"one\"}" } },
+          { id: "b", type: "function", function: { name: read, arguments: "{}" } },
+          { id: "c", type: "function", function: { name: search, arguments: "{\"query\":\"two\"}" } },
+        ],
+      },
+    }],
+  } as never, mapper)
+
+  assert.deepEqual(calls.map((call) => [call.toolCall.id, call.query]), [["a", "one"], ["c", "two"]])
+})
+
+test("searches past the per-turn limit are reported, not run", async () => {
+  const config = { ...createConfig("https://fixture.invalid"), modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([[getWebSearchBackendModel(createConfig("https://fixture.invalid")), { type: "embeddings" }]]) } }
+  const queries = Array.from({ length: maxSearchesPerTurn + 2 }, (_, index) => `q${index}`)
+  const searches = await runClaudeWebSearches(config as never, { model: "opus", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }, queries)
+
+  assert.equal(searches.length, queries.length)
+  assert.deepEqual(searches.map((search) => search.query), queries)
+  assert.equal(searches.filter((search) => search.skipped).length, 2)
+  assert.equal(createClaudeWebSearchResponse(searches).usage.server_tool_use?.web_search_requests, maxSearchesPerTurn)
 })

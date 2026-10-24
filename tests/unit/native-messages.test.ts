@@ -740,3 +740,68 @@ test("native rejects a delta targeting an already closed content block", async (
     { requestId: "late" },
   )))
 })
+
+test("native runs every search of a turn and restores each from history", async () => {
+  const history = [{ role: "user" as const, content: "Compare two references." }]
+  const tool = { name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }
+  const decision = message([
+    { type: "thinking", thinking: "", signature: "decision-signature" },
+    { type: "tool_use", id: "toolu_first", name: "WebSearch", input: { query: "first" } },
+    { type: "tool_use", id: "toolu_second", name: "WebSearch", input: { query: "second" } },
+  ], "tool_use")
+  const calls: Array<{ path: string; body: any }> = []
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      const body = JSON.parse(request.body!)
+      calls.push({ path: request.path, body })
+      if (request.path === "/responses") {
+        const query = JSON.stringify(body).includes("second") ? "second" : "first"
+        return Response.json({
+          id: `resp_${query}`,
+          model: "gpt-test",
+          status: "completed",
+          output: [
+            { type: "web_search_call", status: "completed" },
+            { type: "message", content: [{ type: "output_text", text: `Source https://example.com/${query}` }] },
+          ],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        })
+      }
+
+      if (calls.filter((call) => call.path === "/v1/messages").length === 1) {
+        return Response.json(decision)
+      }
+
+      return Response.json(message([{ type: "text", text: "Both answered." }]))
+    },
+    refresh: async () => {},
+  }, async () => {
+    const response = await handleNativeMessages(
+      config,
+      { model: "claude-opus-5.5", max_tokens: 512, messages: history, tools: [tool] },
+      { requestId: "native-two-searches" },
+    )
+    assert(response)
+    assert.equal(calls.filter((call) => call.path === "/responses").length, 2)
+    assert.deepEqual(response.content.map((block) => block.type), [
+      "thinking", "server_tool_use", "server_tool_use", "web_search_tool_result", "web_search_tool_result", "text",
+    ])
+    assert.equal(response.usage.server_tool_use?.web_search_requests, 2)
+
+    const final = calls.at(-1)!.body.messages
+    assert.deepEqual(final[1].content, decision.content)
+    assert.deepEqual(final[2].content.map((block: any) => block.tool_use_id), ["toolu_first", "toolu_second"])
+
+    await createNativeMessages(config, {
+      model: "claude-opus-5.5",
+      max_tokens: 512,
+      messages: [...history, { role: "assistant", content: response.content }, { role: "user", content: "Continue" }],
+      tools: [tool],
+    }, { requestId: "native-two-searches-next" })
+
+    const next = calls.at(-1)!.body.messages
+    assert.deepEqual(next.slice(0, final.length), final)
+    assert.equal(JSON.stringify(next).includes("server_tool_use"), false)
+  })
+})
