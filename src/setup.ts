@@ -4,11 +4,12 @@ import { defineCommand } from "citty"
 
 import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { getRelayBaseUrl } from "~/lib/address"
-import { readAppConfig } from "~/lib/app-config"
+import { ensureApiKey, readAppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
 import { isSetupTarget, runSetup, setupTargets, type SetupTarget } from "~/lib/client-setup"
 import { readProxyConfig } from "~/lib/config"
 import { flushLogs, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
+import { paths } from "~/lib/paths"
 import { registerSensitiveOrigin } from "~/lib/redact"
 import { terminalText } from "~/lib/terminal"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
@@ -55,7 +56,21 @@ export const setup = defineCommand({
       return
     }
 
-    const appConfig = await readAppConfig()
+    // Clients get a key the relay checks; one is created when config.yaml has none. Never printed.
+    let appConfig: Awaited<ReturnType<typeof readAppConfig>>
+    try {
+      const key = await ensureApiKey()
+      if (key.created) {
+        console.log(`apiKey: created in ${paths.configPath}; every client set up here uses it.`)
+      }
+
+      appConfig = await readAppConfig()
+    } catch (error) {
+      console.error(printable(error instanceof Error ? error.message : String(error)))
+      process.exitCode = 1
+      return
+    }
+
     setLogLevel(appConfig.logLevel)
     registerSensitiveOrigin(appConfig.copilotBaseUrl)
     registerLogSecret(appConfig.apiKey)
