@@ -417,13 +417,22 @@ export const toClaudeRequest = (
   return { payload: claudePayload, tools: names, dropped: [...dropped], requestedEffort, effectiveEffort }
 }
 
-type OpenBlock =
-  | { kind: "message"; id: string; index: number; text: string }
-  | { kind: "reasoning"; id: string; index: number; thinking: string; signature: string }
-  | { kind: "redacted"; id: string; index: number; data: string }
+// A content block as Claude streams it. Its item id and output index are given when its events are
+// sent: at once, or at the end of the turn for a block held behind a tool call.
+type Block =
+  | { kind: "message"; text: string }
+  | { kind: "reasoning"; thinking: string; signature: string }
+  | { kind: "redacted"; data: string }
   | { kind: "call"; callId: string; target: CodexToolTarget; json: string }
 
-type CallBlock = Extract<OpenBlock, { kind: "call" }>
+type CallBlock = Extract<Block, { kind: "call" }>
+type Placed = Block & { id: string; index: number }
+
+// A block still open, by Claude's index. A block streamed live is placed; a held one is not yet.
+interface OpenEntry {
+  block: Block
+  placed?: Placed
+}
 
 const callItem = (block: CallBlock & { id: string }, status: string): JsonRecord => {
   if (block.target.kind === "custom") {
@@ -459,11 +468,207 @@ const callItem = (block: CallBlock & { id: string }, status: string): JsonRecord
   }
 }
 
+const newBlock = (start: JsonRecord, names: CodexToolNames, fallbackCallId: string): Block | undefined => {
+  if (start.type === "text") {
+    return { kind: "message", text: typeof start.text === "string" ? start.text : "" }
+  }
+
+  if (start.type === "thinking") {
+    return { kind: "reasoning", thinking: typeof start.thinking === "string" ? start.thinking : "", signature: "" }
+  }
+
+  if (start.type === "redacted_thinking") {
+    return { kind: "redacted", data: typeof start.data === "string" ? start.data : "" }
+  }
+
+  if (start.type === "tool_use" && typeof start.name === "string") {
+    return {
+      kind: "call",
+      callId: typeof start.id === "string" ? start.id : fallbackCallId,
+      target: names.target(start.name),
+      json: "",
+    }
+  }
+
+  return undefined
+}
+
+// Adds a delta to its block and returns the text it streamed, or "" for none.
+const applyDelta = (block: Block, delta: JsonRecord): string => {
+  if (block.kind === "message" && delta.type === "text_delta" && typeof delta.text === "string") {
+    block.text += delta.text
+    return delta.text
+  }
+
+  if (block.kind === "reasoning" && delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+    block.thinking += delta.thinking
+    return delta.thinking
+  }
+
+  if (block.kind === "reasoning" && delta.type === "signature_delta" && typeof delta.signature === "string") {
+    block.signature += delta.signature
+    return ""
+  }
+
+  if (block.kind === "call" && delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+    block.json += delta.partial_json
+    return delta.partial_json
+  }
+
+  return ""
+}
+
+// Everything a block streamed, sent as one delta when a held block is released.
+const streamed = (block: Block): string => {
+  if (block.kind === "message") {
+    return block.text
+  }
+
+  if (block.kind === "reasoning") {
+    return block.thinking
+  }
+
+  if (block.kind === "call") {
+    return block.json
+  }
+
+  return ""
+}
+
+const itemFor = (block: Placed): JsonRecord => {
+  if (block.kind === "message") {
+    return {
+      type: "message",
+      id: block.id,
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: block.text, annotations: [] }],
+    }
+  }
+
+  if (block.kind === "reasoning") {
+    return {
+      type: "reasoning",
+      id: block.id,
+      summary: block.thinking ? [{ type: "summary_text", text: block.thinking }] : [],
+      encrypted_content: encodeThinking({ type: "thinking", thinking: block.thinking, signature: block.signature }),
+    }
+  }
+
+  if (block.kind === "redacted") {
+    return {
+      type: "reasoning",
+      id: block.id,
+      summary: [],
+      encrypted_content: encodeThinking({ type: "redacted_thinking", data: block.data }),
+    }
+  }
+
+  return callItem(block, "completed")
+}
+
+const startEvents = (block: Placed): Array<JsonRecord> => {
+  if (block.kind === "message") {
+    return [
+      {
+        type: "response.output_item.added",
+        output_index: block.index,
+        item: { type: "message", id: block.id, role: "assistant", status: "in_progress", content: [] },
+      },
+      {
+        type: "response.content_part.added",
+        item_id: block.id,
+        output_index: block.index,
+        content_index: 0,
+        part: { type: "output_text", text: "", annotations: [] },
+      },
+    ]
+  }
+
+  if (block.kind === "reasoning") {
+    return [
+      { type: "response.output_item.added", output_index: block.index, item: { type: "reasoning", id: block.id, summary: [] } },
+      {
+        type: "response.reasoning_summary_part.added",
+        item_id: block.id,
+        output_index: block.index,
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      },
+    ]
+  }
+
+  if (block.kind === "redacted") {
+    return [{ type: "response.output_item.added", output_index: block.index, item: { type: "reasoning", id: block.id, summary: [] } }]
+  }
+
+  return [{ type: "response.output_item.added", output_index: block.index, item: callItem(block, "in_progress") }]
+}
+
+const deltaEvents = (block: Placed, delta: string): Array<JsonRecord> => {
+  if (!delta) {
+    return []
+  }
+
+  if (block.kind === "message") {
+    return [{ type: "response.output_text.delta", item_id: block.id, output_index: block.index, content_index: 0, delta }]
+  }
+
+  if (block.kind === "reasoning") {
+    return [{ type: "response.reasoning_summary_text.delta", item_id: block.id, output_index: block.index, summary_index: 0, delta }]
+  }
+
+  if (block.kind === "call" && block.target.kind === "function") {
+    return [{ type: "response.function_call_arguments.delta", item_id: block.id, output_index: block.index, delta }]
+  }
+
+  return []
+}
+
+const doneEvents = (block: Placed, item: JsonRecord): Array<JsonRecord> => {
+  const itemDone = { type: "response.output_item.done", output_index: block.index, item }
+  if (block.kind === "message") {
+    const part = { type: "output_text", text: block.text, annotations: [] }
+    return [
+      { type: "response.output_text.done", item_id: block.id, output_index: block.index, content_index: 0, text: block.text },
+      { type: "response.content_part.done", item_id: block.id, output_index: block.index, content_index: 0, part },
+      itemDone,
+    ]
+  }
+
+  if (block.kind === "reasoning") {
+    return [
+      { type: "response.reasoning_summary_text.done", item_id: block.id, output_index: block.index, summary_index: 0, text: block.thinking },
+      {
+        type: "response.reasoning_summary_part.done",
+        item_id: block.id,
+        output_index: block.index,
+        summary_index: 0,
+        part: { type: "summary_text", text: block.thinking },
+      },
+      itemDone,
+    ]
+  }
+
+  if (block.kind === "call" && block.target.kind === "function") {
+    return [
+      { type: "response.function_call_arguments.done", item_id: block.id, output_index: block.index, arguments: item.arguments },
+      itemDone,
+    ]
+  }
+
+  return [itemDone]
+}
+
 // Claude stop reasons that end a Responses turn as incomplete, with the reason Responses gives.
 const incompleteReasons: Record<string, string> = {
   max_tokens: "max_output_tokens",
   refusal: "content_filter",
 }
+
+// While blocks are held Codex would see nothing, and its SSE idle timeout (300 seconds in Codex
+// 0.164) would end a turn Claude is still writing. A response.in_progress event this often keeps it.
+const heldProgressMs = 30_000
 
 const count = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0
@@ -487,11 +692,12 @@ const responsesUsage = (usage: JsonRecord): JsonRecord => {
  *
  * Text becomes a message item, thinking a reasoning item whose summary is the thinking text and
  * whose encrypted_content carries the signed block back on the next turn, and tool_use a
- * function_call or custom_tool_call. Codex runs a call as soon as its item is done, so calls are
- * held until Claude stops with tool_use and dropped when it stops any other way, as when max_tokens
- * cuts one short. The stream ends with response.completed, or response.incomplete when Claude stopped
- * at max_tokens or refused. An upstream failure, or a stream that ends with a block still open, ends
- * it with response.failed, which Codex retries.
+ * function_call or custom_tool_call. Codex runs a call as soon as its item is done, so from the first
+ * tool_use on, blocks are held in order until Claude stops: released with their calls when it stops
+ * with tool_use, released without them when it stops any other way, as when max_tokens cuts a call
+ * short. The stream ends with response.completed, or response.incomplete when Claude stopped at
+ * max_tokens or refused. An upstream failure, or a stream that ends with a block still open, ends it
+ * with response.failed, which Codex retries.
  */
 export async function* toCodexEvents(
   events: AsyncIterable<NativeEvent>,
@@ -501,8 +707,10 @@ export async function* toCodexEvents(
   let responseId = "resp_relay"
   const createdAt = Math.floor(Date.now() / 1000)
   const output: Array<JsonRecord> = []
-  const open = new Map<number, OpenBlock>()
-  const calls: Array<CallBlock> = []
+  const open = new Map<number, OpenEntry>()
+  const held: Array<Block> = []
+  let holding = false
+  let lastProgress = 0
   let usage: JsonRecord = {}
   let stopReason: unknown
   let nextIndex = 0
@@ -518,8 +726,19 @@ export async function* toCodexEvents(
     ...extra,
   })
 
+  const place = (block: Block): Placed => {
+    const index = nextIndex
+    nextIndex++
+    return { ...block, id: `${responseId}_${index}`, index }
+  }
+
   try {
     for await (const event of events) {
+      if (holding && Date.now() - lastProgress >= heldProgressMs) {
+        lastProgress = Date.now()
+        yield { type: "response.in_progress", response: response("in_progress") }
+      }
+
       if (event.type === "message_start") {
         const message: JsonRecord = isRecord(event.message) ? event.message : {}
         if (typeof message.id === "string") {
@@ -530,125 +749,36 @@ export async function* toCodexEvents(
         yield { type: "response.created", response: response("in_progress") }
         yield { type: "response.in_progress", response: response("in_progress") }
       } else if (event.type === "content_block_start" && typeof event.index === "number" && isRecord(event.content_block)) {
-        const start = event.content_block
-        const index = nextIndex
-        const itemId = `${responseId}_${index}`
-        if (start.type === "text") {
-          nextIndex++
-          const block: OpenBlock = { kind: "message", id: itemId, index, text: "" }
-          open.set(event.index, block)
-          yield {
-            type: "response.output_item.added",
-            output_index: index,
-            item: { type: "message", id: itemId, role: "assistant", status: "in_progress", content: [] },
-          }
-          yield {
-            type: "response.content_part.added",
-            item_id: itemId,
-            output_index: index,
-            content_index: 0,
-            part: { type: "output_text", text: "", annotations: [] },
-          }
-          if (typeof start.text === "string" && start.text) {
-            block.text = start.text
-            yield { type: "response.output_text.delta", item_id: itemId, output_index: index, content_index: 0, delta: start.text }
-          }
-        } else if (start.type === "thinking") {
-          nextIndex++
-          open.set(event.index, { kind: "reasoning", id: itemId, index, thinking: "", signature: "" })
-          yield {
-            type: "response.output_item.added",
-            output_index: index,
-            item: { type: "reasoning", id: itemId, summary: [] },
-          }
-          yield {
-            type: "response.reasoning_summary_part.added",
-            item_id: itemId,
-            output_index: index,
-            summary_index: 0,
-            part: { type: "summary_text", text: "" },
-          }
-        } else if (start.type === "redacted_thinking") {
-          nextIndex++
-          open.set(event.index, { kind: "redacted", id: itemId, index, data: typeof start.data === "string" ? start.data : "" })
-          yield {
-            type: "response.output_item.added",
-            output_index: index,
-            item: { type: "reasoning", id: itemId, summary: [] },
-          }
-        } else if (start.type === "tool_use" && typeof start.name === "string") {
-          open.set(event.index, {
-            kind: "call",
-            callId: typeof start.id === "string" ? start.id : `${responseId}_call_${event.index}`,
-            target: names.target(start.name),
-            json: "",
-          })
+        const block = newBlock(event.content_block, names, `${responseId}_call_${event.index}`)
+        if (block?.kind === "call" && !holding) {
+          holding = true
+          lastProgress = Date.now()
+        }
+
+        if (block !== undefined && holding) {
+          held.push(block)
+          open.set(event.index, { block })
+        } else if (block !== undefined) {
+          const placed = place(block)
+          open.set(event.index, { block: placed, placed })
+          yield* startEvents(placed)
+          yield* deltaEvents(placed, streamed(placed))
         }
       } else if (event.type === "content_block_delta" && typeof event.index === "number" && isRecord(event.delta)) {
-        const block = open.get(event.index)
-        const delta = event.delta
-        if (block?.kind === "message" && delta.type === "text_delta" && typeof delta.text === "string") {
-          block.text += delta.text
-          yield { type: "response.output_text.delta", item_id: block.id, output_index: block.index, content_index: 0, delta: delta.text }
-        } else if (block?.kind === "reasoning" && delta.type === "thinking_delta" && typeof delta.thinking === "string") {
-          block.thinking += delta.thinking
-          yield {
-            type: "response.reasoning_summary_text.delta",
-            item_id: block.id,
-            output_index: block.index,
-            summary_index: 0,
-            delta: delta.thinking,
+        const entry = open.get(event.index)
+        if (entry !== undefined) {
+          const piece = applyDelta(entry.block, event.delta)
+          if (entry.placed !== undefined) {
+            yield* deltaEvents(entry.placed, piece)
           }
-        } else if (block?.kind === "reasoning" && delta.type === "signature_delta" && typeof delta.signature === "string") {
-          block.signature += delta.signature
-        } else if (block?.kind === "call" && delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
-          block.json += delta.partial_json
         }
       } else if (event.type === "content_block_stop" && typeof event.index === "number") {
-        const block = open.get(event.index)
+        const entry = open.get(event.index)
         open.delete(event.index)
-        if (block?.kind === "message") {
-          const part = { type: "output_text", text: block.text, annotations: [] }
-          const item = { type: "message", id: block.id, role: "assistant", status: "completed", content: [part] }
-          output[block.index] = item
-          yield { type: "response.output_text.done", item_id: block.id, output_index: block.index, content_index: 0, text: block.text }
-          yield { type: "response.content_part.done", item_id: block.id, output_index: block.index, content_index: 0, part }
-          yield { type: "response.output_item.done", output_index: block.index, item }
-        } else if (block?.kind === "reasoning") {
-          const summary = block.thinking ? [{ type: "summary_text", text: block.thinking }] : []
-          const item = {
-            type: "reasoning",
-            id: block.id,
-            summary,
-            encrypted_content: encodeThinking({ type: "thinking", thinking: block.thinking, signature: block.signature }),
-          }
-          output[block.index] = item
-          yield {
-            type: "response.reasoning_summary_text.done",
-            item_id: block.id,
-            output_index: block.index,
-            summary_index: 0,
-            text: block.thinking,
-          }
-          yield {
-            type: "response.reasoning_summary_part.done",
-            item_id: block.id,
-            output_index: block.index,
-            summary_index: 0,
-            part: { type: "summary_text", text: block.thinking },
-          }
-          yield { type: "response.output_item.done", output_index: block.index, item }
-        } else if (block?.kind === "redacted") {
-          const item = {
-            type: "reasoning",
-            id: block.id,
-            summary: [],
-            encrypted_content: encodeThinking({ type: "redacted_thinking", data: block.data }),
-          }
-          output[block.index] = item
-          yield { type: "response.output_item.done", output_index: block.index, item }
-        } else if (block?.kind === "call") {
-          calls.push(block)
+        if (entry?.placed !== undefined) {
+          const item = itemFor(entry.placed)
+          output[entry.placed.index] = item
+          yield* doneEvents(entry.placed, item)
         }
       } else if (event.type === "message_delta") {
         if (isRecord(event.delta) && typeof event.delta.stop_reason === "string") {
@@ -662,20 +792,17 @@ export async function* toCodexEvents(
           throw new Error("Claude stream stopped with a content block still open.")
         }
 
-        if (stopReason === "tool_use") {
-          for (const block of calls) {
-            const index = nextIndex
-            nextIndex++
-            const item = callItem({ ...block, id: `${responseId}_${index}` }, "completed")
-            output[index] = item
-            yield { type: "response.output_item.added", output_index: index, item: callItem({ ...block, id: item.id as string }, "in_progress") }
-            if (block.target.kind === "function") {
-              yield { type: "response.function_call_arguments.delta", item_id: item.id, output_index: index, delta: item.arguments }
-              yield { type: "response.function_call_arguments.done", item_id: item.id, output_index: index, arguments: item.arguments }
-            }
-
-            yield { type: "response.output_item.done", output_index: index, item }
+        for (const block of held) {
+          if (block.kind === "call" && stopReason !== "tool_use") {
+            continue
           }
+
+          const placed = place(block)
+          const item = itemFor(placed)
+          output[placed.index] = item
+          yield* startEvents(placed)
+          yield* deltaEvents(placed, streamed(placed))
+          yield* doneEvents(placed, item)
         }
 
         const incompleteReason = incompleteReasons[String(stopReason)]

@@ -297,3 +297,46 @@ test("toCodexEvents fails a stream that stops with a block still open", async ()
 
   assert.equal(unclosed.at(-1)!.type, "response.failed")
 })
+
+test("toCodexEvents keeps text between two tool calls in its place", async () => {
+  const stream: Array<NativeEvent> = [
+    nativeStream[0]!,
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_a", name: "exec_command", input: {} } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"cmd\":\"a\"}" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Then:" } },
+    { type: "content_block_stop", index: 1 },
+    { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "toolu_b", name: "exec_command", input: {} } },
+    { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"cmd\":\"b\"}" } },
+    { type: "content_block_stop", index: 2 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } },
+    { type: "message_stop" },
+  ]
+  const events = await collect(toCodexEvents(fromArray(stream), "claude-opus-5.5", new CodexToolNames()))
+
+  const done = events.filter((event) => event.type === "response.output_item.done")
+  assert.deepEqual(done.map((event) => [event.output_index, event.item.type]), [[0, "function_call"], [1, "message"], [2, "function_call"]])
+  assert.deepEqual(events.at(-1)!.response.output.map((item: JsonRecord) => item.call_id ?? item.content[0].text), ["toolu_a", "Then:", "toolu_b"])
+})
+
+test("toCodexEvents sends response.in_progress while a long tool call is held", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] })
+  async function* slowCall(): AsyncGenerator<NativeEvent> {
+    yield nativeStream[0]!
+    yield { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "exec_command", input: {} } }
+    for (const piece of ["{\"cmd\":", "\"sleep", " 1\"", "}"]) {
+      t.mock.timers.tick(31_000)
+      yield { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: piece } }
+    }
+
+    yield { type: "content_block_stop", index: 0 }
+    yield { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } }
+    yield { type: "message_stop" }
+  }
+
+  const events = await collect(toCodexEvents(slowCall(), "claude-opus-5.5", new CodexToolNames()))
+
+  assert.equal(events.filter((event) => event.type === "response.in_progress").length, 5)
+  assert.equal(events.at(-1)!.type, "response.completed")
+})
