@@ -219,6 +219,13 @@ interface CreateChunkOptions {
 // probe a model, as the Claude Code app does with max_tokens 1.
 const minResponsesOutputTokens = 16
 
+// A positive whole budget below the minimum is raised to it. Any other value is sent as it came, so
+// an invalid one is still refused.
+const responsesOutputTokens = (maxTokens: number | null | undefined): number | null | undefined =>
+  typeof maxTokens === "number" && Number.isInteger(maxTokens) && maxTokens > 0 && maxTokens < minResponsesOutputTokens ?
+      minResponsesOutputTokens
+    : maxTokens
+
 export function buildResponsesRequestPayload(
   payload: ChatCompletionsPayload,
   reasoningEffort: ResponsesReasoningEffort | undefined,
@@ -230,9 +237,7 @@ export function buildResponsesRequestPayload(
     model: payload.model,
     input: translateMessagesToResponsesInput(payload.messages),
     stream: payload.stream,
-    max_output_tokens: typeof payload.max_tokens === "number" ?
-        Math.max(payload.max_tokens, minResponsesOutputTokens)
-      : payload.max_tokens,
+    max_output_tokens: responsesOutputTokens(payload.max_tokens),
     temperature: payload.temperature,
     top_p: payload.top_p,
     user: sanitizeUserIdentifier(payload.user),
