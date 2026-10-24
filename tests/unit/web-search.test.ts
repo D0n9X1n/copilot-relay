@@ -869,3 +869,10 @@ test("a WebSearch tool's max_uses lowers the searches a turn runs", async () => 
   assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [false, true, true])
   assert.deepEqual(results.map((block: any) => block.content.error_code), ["unavailable", "max_uses_exceeded", "max_uses_exceeded"])
 })
+
+test("a search with sources but no text still lists them for the client's history", () => {
+  const response = createClaudeWebSearchResponse([{ ...searchExecution, text: "" }])
+  const text = response.content.find((block) => block.type === "text") as { text: string } | undefined
+
+  assert.match(text?.text ?? "", /Tokio - https:\/\/tokio\.rs/)
+})
