@@ -432,6 +432,13 @@ probed only when it is the sole advertised tier: the relay never sends it on its
 own, and `gpt-6.1-sol` advertises it yet rejects it with HTTP 400
 `invalid_request_body`. An explicit `--effort none` is still sent as asked.
 
+### Output budget
+
+Copilot `/responses` answers HTTP 400 to a `max_output_tokens` below 16. Clients
+send less to probe a model: the Claude Code app checks each one with
+`max_tokens: 1`. `buildResponsesRequestPayload` raises a smaller positive whole budget to 16; any
+other value is sent as it came, so an invalid one is still refused.
+
 ### Tool-schema compatibility
 
 `normalizeResponsesToolSchema` in `src/copilot/tool-schema.ts` adapts function

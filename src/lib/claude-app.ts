@@ -56,12 +56,39 @@ export interface ClaudeAppModel {
   tier: "opus" | "sonnet" | "haiku"
 }
 
+// For a gateway, the app keeps an inferenceModels entry only when its name looks like an Anthropic
+// model: it must name claude, a Claude family or anthropic, and must not contain a marker of another
+// vendor. These are the markers the app checks.
+const otherVendorMarker = /ark-code|astron|command-r|deepseek|doubao|gemini|gemma|glm|gpt|grok|hermes|hy3|kimi|lfm|\bling\b|llama|longcat|mimo|minimax|mistral|mixtral|moonshot|nemotron|openai|phi-|qianfan|qwen|tc-code|\bunic\b|yi-|stepfun|step-3|seed-|bytedance|hunyuan|granite|amazon\.nova|nova-|devstral|ministral|ernie|codex|arcee|trinity|abab|phi\d|\bk2\.|\bm2\.|jamba|arctic|solar|mercury|zamba|kat-coder|\bds-|dpsk/
+
+const looksAnthropic = (id: string): boolean => {
+  const lower = id.toLowerCase()
+  return !otherVendorMarker.test(lower) && ["claude", "anthropic", "opus", "sonnet", "haiku", "fable", "mythos"].some((word) => lower.includes(word))
+}
+
+// The relay sends a name with "opus" to opusModel and any other to gptModel (routeModelId).
+const routesToTier = (name: string, tier: ClaudeAppModel["tier"]): boolean =>
+  name.toLowerCase().includes("opus") === (tier === "opus")
+
+/**
+ * The name the app sends for a model: its own ID when the app accepts it and the relay routes that
+ * ID to the model's own slot, otherwise a Claude-style route for its tier, such as
+ * claude-sonnet-relay. Each tier therefore has its own name. The relay sends every model name without "opus"
+ * to gptModel and every one with it to opusModel, so the route reaches the same upstream model. The
+ * route names no real Claude model, so the app and its Claude Code take none of that model's
+ * built-in context window or tuning; supports1m on the entry says what the window is.
+ */
+export const appModelName = (model: Pick<ClaudeAppModel, "id" | "tier">): string =>
+  looksAnthropic(model.id) && routesToTier(model.id, model.tier) ? model.id : `claude-${model.tier}-relay`
+
 // An entry of the app's inferenceModels list for one Copilot model.
 export const inferenceModel = (model: ClaudeAppModel): JsonRecord => {
   const promptTokens = model.capabilities?.limits?.max_prompt_tokens ?? 0
-  const label = model.capabilities?.name?.trim()
+  const name = appModelName(model)
+  // A route name says nothing about the model behind it, so the label names that model.
+  const label = model.capabilities?.name?.trim() || (name === model.id ? undefined : model.id)
   return {
-    name: model.id,
+    name,
     ...(label ? { labelOverride: label } : {}),
     ...(promptTokens >= 1_000_000 ? { supports1m: true } : {}),
     anthropicFamilyTier: model.tier,
@@ -161,6 +188,10 @@ export const applyClaudeAppSetup = async (input: ClaudeAppSetupInput): Promise<C
     inferenceGatewayApiKey: input.apiKey || existingKey || "copilot-relay",
     inferenceCredentialKind: "static",
     inferenceModels: input.models.map(inferenceModel),
+    // The list names every model by its full ID, so the app needs no discovery. With it on, the app
+    // also asks the relay's /v1/models and flags a route name, such as claude-sonnet-relay, that the
+    // relay does not list.
+    modelDiscoveryEnabled: false,
   }
 
   const desktopSnapshot = await readFileSnapshot(path.join(dataDir, "claude_desktop_config.json"))

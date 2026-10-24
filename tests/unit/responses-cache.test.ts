@@ -175,3 +175,15 @@ test("Responses requests without tools do not add strictness or tools", () => {
   assert.equal("tools" in request, false)
   assert.equal("strict" in request, false)
 })
+
+test("a max_tokens below Copilot's minimum of 16 is raised to 16 on /responses", () => {
+  const base: ChatCompletionsPayload = { model: "gpt-6-astra", messages: [{ role: "user", content: "hi" }] }
+
+  assert.equal(buildResponsesRequestPayload({ ...base, max_tokens: 1 }, undefined).max_output_tokens, 16)
+  assert.equal(buildResponsesRequestPayload({ ...base, max_tokens: 4096 }, undefined).max_output_tokens, 4096)
+  assert.equal(buildResponsesRequestPayload(base, undefined).max_output_tokens, undefined)
+  // An invalid budget is not made valid; Copilot still refuses it.
+  for (const invalid of [0, -1, 1.5]) {
+    assert.equal(buildResponsesRequestPayload({ ...base, max_tokens: invalid }, undefined).max_output_tokens, invalid)
+  }
+})

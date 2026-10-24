@@ -366,6 +366,11 @@ provider 行为：
 relay 自身从不发送 `none`，而 `gpt-6.1-sol` 公布了它却以 HTTP 400
 `invalid_request_body` 拒绝。显式的 `--effort none` 仍按请求发送。
 
+### 输出预算
+
+Copilot `/responses` 对小于 16 的 `max_output_tokens` 返回 HTTP 400。客户端探测模型时会发送更小的值：
+Claude Code app 用 `max_tokens: 1` 检查每个模型。`buildResponsesRequestPayload` 把更小的正整数预算提高到 16；其他值原样发送，所以无效值仍会被拒绝。
+
 ### 工具 schema 兼容性
 
 `src/copilot/tool-schema.ts` 中的 `normalizeResponsesToolSchema` 在共用的
