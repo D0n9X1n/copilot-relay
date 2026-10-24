@@ -566,6 +566,26 @@ relay 在读取正文、执行任何路由之前返回 HTTP `401` 及 Anthropic 
   通配监听地址只接受 loopback 名称。见[架构](ZH-Architecture.md)。
 - relay 使用明文 HTTP。在不受信任的网络上，密钥和提示词可能在传输中被读取。
 
+### 仅限个人使用
+
+relay 只供运行 `copilot-relay auth` 的那个 GitHub 账号的所有者本人使用。它转发的一切
+都使用发给你账号的 Copilot token 认证，所以无论请求来自谁，这些用量都归到你的 Copilot
+席位，计入你账号的配额与费用。relay 无法分辨请求来自谁：它只检查 `apiKey`。
+
+这是本项目的规则，而不只是一个安全设置。Copilot
+[按用户授权](https://docs.github.com/en/billing/concepts/product-billing/github-copilot-licenses)，
+[GitHub 的条款](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+不允许共享登录。让别人使用你的 relay 可能违反这些条款，并让你的账号面临停用风险。具体来说：
+
+- 保持 `host: 127.0.0.1`，`apiKey` 只留给自己。它们用来挡住其他人，而不是用来共享
+  访问权限。
+- 不要通过 `0.0.0.0`、局域网地址、端口转发或 ngrok、Tailscale Funnel 之类的隧道暴露
+  relay，让其他人访问。绑定到 loopback 以外只用于从你自己的设备访问你自己的 relay。
+- 不要把别人的客户端指向你的 relay，包括那些本身不需要订阅的客户端：GitHub Copilot app
+  使用自定义模型提供方时只要求登录 GitHub，所以没有 Copilot 的人在其中登录并指向你的
+  relay，就会占用你的席位。
+- 每个想用 relay 的人都应自己安装，并用自己的 Copilot 账号运行 `copilot-relay auth`。
+
 ### 轮换密钥
 
 `apiKey` 支持热重载：relay 应用一次有效修改后，下一个请求就必须携带新密钥。未通过

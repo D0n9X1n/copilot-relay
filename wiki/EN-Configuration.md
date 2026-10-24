@@ -669,6 +669,32 @@ it, or with a different key, the relay answers HTTP `401` with an Anthropic-styl
 - The relay speaks plain HTTP. On a network you do not trust, the key and your
   prompts can be read in transit.
 
+### Personal use only
+
+The relay is for the GitHub account that ran `copilot-relay auth`, used by that
+account's owner. Everything it forwards is authenticated with the Copilot token
+issued to your account, so all of that usage is attributed to your Copilot seat
+and counts toward your account's limits and charges, whoever sent it. The relay
+cannot tell who is behind a request: it only checks `apiKey`.
+
+This is the project's rule, not only a security setting. Copilot is
+[licensed per user](https://docs.github.com/en/billing/concepts/product-billing/github-copilot-licenses),
+and [GitHub's terms](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+do not allow sharing a login. Letting someone else use your relay may break those
+terms and put your account at risk of suspension. In practice:
+
+- Keep `host: 127.0.0.1` and keep `apiKey` to yourself. They keep other people
+  out; they are not a way to share access.
+- Do not expose the relay with `0.0.0.0`, a LAN address, port forwarding or a
+  tunnel such as ngrok or Tailscale Funnel so that another person can reach it.
+  Binding beyond loopback is for reaching your own relay from your own devices.
+- Do not point another person's client at your relay. This includes clients
+  that need no subscription of their own: the GitHub Copilot app needs only a
+  GitHub sign-in when it uses a custom model provider, so a person without
+  Copilot signed in there and pointed at your relay would use your seat.
+- Each person who wants to use the relay installs it and runs
+  `copilot-relay auth` with their own Copilot account.
+
 ### Rotate the key
 
 `apiKey` hot-reloads: once the relay applies a valid edit, the next request must

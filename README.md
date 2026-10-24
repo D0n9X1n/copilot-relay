@@ -73,5 +73,7 @@ scripts. It asks GitHub with the stored token, so no relay needs to run.
 - Run at login: [macOS](wiki/EN-macOS-LaunchAgent.md) · [Windows](wiki/EN-Windows-Service.md) · [Linux](wiki/EN-Linux-systemd.md)
 - [Commands](wiki/EN-Commands.md) · [Prompt caching](wiki/EN-Prompt-Caching.md) · [Troubleshoot](wiki/EN-Logging-Troubleshooting.md) · [Understand the architecture](wiki/EN-Architecture.md) · [Contribute](wiki/EN-Development.md)
 
+**Personal use only.** All forwarded usage runs on your own Copilot seat and limits; never let another person use your relay
+([why](wiki/EN-Configuration.md#personal-use-only) · [中文](wiki/ZH-Configuration.md#仅限个人使用)).
 Unofficial research project; not affiliated with GitHub, Anthropic or OpenAI. Upstream services and
 compatibility can change; model and tool support are not guaranteed (see the Wiki). [MIT licensed](LICENSE).
