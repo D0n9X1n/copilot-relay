@@ -63,16 +63,23 @@ const otherVendorMarker = /ark-code|astron|command-r|deepseek|doubao|gemini|gemm
 
 const looksAnthropic = (id: string): boolean => {
   const lower = id.toLowerCase()
-  return !otherVendorMarker.test(lower) && ["claude", "anthropic", "opus", "sonnet", "haiku"].some((word) => lower.includes(word))
+  return !otherVendorMarker.test(lower) && ["claude", "anthropic", "opus", "sonnet", "haiku", "fable", "mythos"].some((word) => lower.includes(word))
 }
 
+// The relay sends a name with "opus" to opusModel and any other to gptModel (routeModelId).
+const routesToTier = (name: string, tier: ClaudeAppModel["tier"]): boolean =>
+  name.toLowerCase().includes("opus") === (tier === "opus")
+
 /**
- * The name the app sends for a model: its own ID when the app accepts it, otherwise a Claude-style
- * route for its tier, such as claude-sonnet-5. The relay sends every model name without "opus" to
- * gptModel and every one with it to opusModel, so the route reaches the same upstream model.
+ * The name the app sends for a model: its own ID when the app accepts it and the relay routes that
+ * ID to the model's own slot, otherwise a Claude-style route for its tier, such as
+ * claude-sonnet-relay. Each tier therefore has its own name. The relay sends every model name without "opus"
+ * to gptModel and every one with it to opusModel, so the route reaches the same upstream model. The
+ * route names no real Claude model, so the app and its Claude Code take none of that model's
+ * built-in context window or tuning; supports1m on the entry says what the window is.
  */
 export const appModelName = (model: Pick<ClaudeAppModel, "id" | "tier">): string =>
-  looksAnthropic(model.id) ? model.id : `claude-${model.tier}-5`
+  looksAnthropic(model.id) && routesToTier(model.id, model.tier) ? model.id : `claude-${model.tier}-relay`
 
 // An entry of the app's inferenceModels list for one Copilot model.
 export const inferenceModel = (model: ClaudeAppModel): JsonRecord => {
@@ -182,7 +189,7 @@ export const applyClaudeAppSetup = async (input: ClaudeAppSetupInput): Promise<C
     inferenceCredentialKind: "static",
     inferenceModels: input.models.map(inferenceModel),
     // The list names every model by its full ID, so the app needs no discovery. With it on, the app
-    // also asks the relay's /v1/models and flags a route name, such as claude-sonnet-5, that the
+    // also asks the relay's /v1/models and flags a route name, such as claude-sonnet-relay, that the
     // relay does not list.
     modelDiscoveryEnabled: false,
   }
