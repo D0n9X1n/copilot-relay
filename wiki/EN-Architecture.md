@@ -95,7 +95,8 @@ Claude Code's endpoints, and the Responses route Codex uses, are public:
 
 The relay calls Copilot `/chat/completions`, `/responses`, or native `/v1/messages`
 internally. The only public OpenAI-compatible route is `POST /v1/responses`, a
-passthrough to Copilot `/responses` for Codex; see [Codex](EN-Codex.md) and
+passthrough to Copilot `/responses` for Codex's GPT models and a translation to
+native Messages for its Claude models; see [Codex](EN-Codex.md) and
 [Internals](EN-Internals.md). Unknown routes that pass admission return `500` with
 bounded diagnostics for compatibility work.
 

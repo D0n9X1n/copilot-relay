@@ -34,8 +34,8 @@ npm run build
 根 package 与 lockfile 版本应保持一致。
 
 `npm test` 会把单元和集成两个套件一起跑。测试通过 `tsx` 使用 Node 内置 runner，先
-预载 `scripts/test-bootstrap.mjs`，在**任何源码 import 之前**隔离 `HOME`、`USERPROFILE`
-和临时路径。单独测试也须保留该预载，见[内部实现](ZH-Internals.md)。发布说明测试还需要 Git 和 Python 3.12 或更新版本（POSIX 使用 `python3`，Windows 使用
+预载 `scripts/test-bootstrap.mjs`，在**任何源码 import 之前**隔离 `HOME`、`USERPROFILE`、
+`CODEX_HOME` 和临时路径。单独测试也须保留该预载，见[内部实现](ZH-Internals.md)。发布说明测试还需要 Git 和 Python 3.12 或更新版本（POSIX 使用 `python3`，Windows 使用
 `python`，也可通过 `PYTHON` 指定可执行文件）。测试使用临时 Git 仓库和模拟的 GitHub
 元数据，不调用真实 GitHub API。CI 的六条腿都安装 Python 3.12。Python 只是开发和发布
 依赖，运行中继本身不需要 Python。

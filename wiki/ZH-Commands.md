@@ -52,6 +52,9 @@ copilot-relay start
    `copilot-relay listening on <url>`。
 6. `claudeSetup: true`（默认）时，用本地中继端点更新 `~/.claude/settings.json`。这一步失败
    只会记录日志，中继继续运行。
+7. `codexSetup: true`（默认）且 `$CODEX_HOME`（默认 `~/.codex`）存在时，写出
+   `~/.copilot-relay/codex-models.json`，并把 Codex 的 `config.toml` 指向中继；见
+   [Codex](ZH-Codex.md)。这一步失败只会记录日志，中继继续运行。
 
 运行期间，它会应用 `config.yaml` 的变更，但[配置说明](ZH-Configuration.md)中“热重载与重启”
 一节列为需要重启的键除外。设置了 `upstreamProxy` 时，它对 GitHub 和 Copilot 的请求都经过该

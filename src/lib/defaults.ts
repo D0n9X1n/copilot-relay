@@ -19,3 +19,8 @@ export const claudeConfigPath = path.join(
   ".claude",
   "settings.json",
 )
+
+// Codex reads $CODEX_HOME, or ~/.codex when it is unset. Resolved on each call so a test that
+// redirects the home directory or CODEX_HOME sees its own.
+export const getCodexHome = (): string =>
+  process.env.CODEX_HOME || path.join(os.homedir(), ".codex")

@@ -10,7 +10,7 @@
 [![Watch a one-minute video tour of copilot-relay](https://gitdiagram.com/video-badge.svg)](https://gitdiagram.com/d0n9x1n/copilot-relay/video)
 
 - **Claude Code, familiar workflow** — Messages API compatibility, streaming responses, and tool calls.
-- **Codex CLI and the Codex app** — an OpenAI Responses passthrough for Copilot's GPT models; [set it up](wiki/EN-Codex.md) · [中文](wiki/ZH-Codex.md).
+- **Codex CLI and the Codex app** — set up on start with no ChatGPT sign-in, offering the same GPT-6 Astra and Opus 5.5 as Claude Code; [details](wiki/EN-Codex.md) · [中文](wiki/ZH-Codex.md).
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
 - **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; existing selections survive upgrades.
 - **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.

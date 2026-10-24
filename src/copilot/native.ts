@@ -51,7 +51,7 @@ type NativeResponse = Omit<ClaudeResponse, "content"> & {
   stop_details?: unknown
 }
 
-type NativeEvent = Record<string, unknown> & {
+export type NativeEvent = Record<string, unknown> & {
   type: string
   index?: number
   content_block?: NativeBlock
@@ -66,6 +66,10 @@ interface NativeOptions {
   initiator?: "agent" | "user"
   signal?: AbortSignal
   headers?: Headers
+  // For the request log: the client that sent the request and the model it asked for, when a
+  // caller translated it from another API. Absent means Claude Code and payload.model.
+  client?: "claude" | "codex"
+  requestedModel?: string
 }
 
 // A plain JSON object: native messages, stream events and tool inputs must each be one.
@@ -276,7 +280,7 @@ export async function createNativeMessages(
   const initiator = options.initiator ?? "agent"
 
   log.info(sanitizeTerminalString(
-    `request_id=${options.requestId} Model request client=claude requested_model=${payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${effortLabel} initiator=${initiator}`,
+    `request_id=${options.requestId} Model request client=${options.client ?? "claude"} requested_model=${options.requestedModel ?? payload.model} upstream_model=${payload.model} upstream_api=messages effective_think_effort=${effortLabel} initiator=${initiator}`,
   ))
 
   const response = await fetchCopilot(
@@ -305,9 +309,16 @@ export async function createNativeMessages(
       throw promptTooLong
     }
 
+    // Retry-After still holds, and a client backs off by it.
+    const headers = new Headers({ "content-type": contentType })
+    const retryAfter = response.headers.get("retry-after")
+    if (retryAfter !== null) {
+      headers.set("retry-after", retryAfter)
+    }
+
     throw new HTTPError("Native upstream request failed", new Response(detail, {
       status: response.status,
-      headers: { "content-type": contentType },
+      headers,
     }))
   }
 
@@ -359,7 +370,7 @@ function* blockEvents(block: NativeBlock, index: number): Generator<NativeEvent>
   yield { type: "content_block_stop", index }
 }
 
-async function* nativeEvents(response: Response): AsyncGenerator<NativeEvent> {
+export async function* nativeEvents(response: Response): AsyncGenerator<NativeEvent> {
   // A JSON reply is replayed as the events a stream would have sent.
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
     const message: unknown = await response.json()

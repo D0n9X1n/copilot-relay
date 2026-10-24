@@ -64,6 +64,10 @@ Runs the relay's HTTP server in the foreground until it receives `SIGINT` or
    `copilot-relay listening on <url>`.
 6. With `claudeSetup: true`, the default, updates `~/.claude/settings.json` with
    the local relay endpoint. A failure here is logged; the relay keeps running.
+7. With `codexSetup: true`, the default, and `$CODEX_HOME` (default `~/.codex`)
+   present, writes `~/.copilot-relay/codex-models.json` and points Codex's
+   `config.toml` at the relay; see [Codex](EN-Codex.md). A failure here is logged;
+   the relay keeps running.
 
 While it runs, it applies changes to `config.yaml`, except for the keys listed as
 requiring a restart under "Hot reload vs restart" in

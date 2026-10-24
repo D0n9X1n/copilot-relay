@@ -131,13 +131,13 @@ A test file's stdout carries its runner's result frames, and plain text there ca
 
 A test that looks for an entry it logged reads with `readLogs()` from `tests/fixtures/logs.ts`, not `getLogPath()`: an entry logged just before local midnight stays in that day's file. A test of the log writer itself names today's file, so it pins the clock with `t.mock.timers`, mocking only `Date`.
 
-Set **both `HOME` and `USERPROFILE`**. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
+Set **both `HOME` and `USERPROFILE`**, and `CODEX_HOME` for anything that can run `codexSetup`. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
 
 Integration tests mock upstream Copilot. They must never call the real service.
 
 ## Public API
 
-Claude Code-compatible routes plus the Responses route Codex uses: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`, `GET|HEAD /api/hello`, and `POST /v1/responses` (Codex CLI and the Codex app; a passthrough to Copilot `/responses` that changes only the fields Copilot rejects, see `wiki/EN-Codex.md`). Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision. `/api/hello` is Claude Code's reachability probe, answered statically by `src/server.ts` — the client sends it, so it is part of the surface rather than scaffolding to remove.
+Claude Code-compatible routes plus the Responses route Codex uses: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /healthz`, `GET|HEAD /api/hello`, and `POST /v1/responses` (Codex CLI and the Codex app; a passthrough to Copilot `/responses` that changes only the fields Copilot rejects, or a translation to native Messages for Claude models, see `wiki/EN-Codex.md`). Unknown routes return 500 and log the payload for later compatibility work. Do not add routes outside this surface without a deliberate product decision. `/api/hello` is Claude Code's reachability probe, answered statically by `src/server.ts` — the client sends it, so it is part of the surface rather than scaffolding to remove.
 
 **`/healthz`, `/v1/models`, and `/api/hello` prove nothing about upstream.** The first and third are static handlers; the second maps config and never contacts Copilot. A relay whose token expired an hour ago passes all three. Only `POST /v1/messages` and `POST /v1/responses` exercise token refresh and a real Copilot call — that is why `copilot-relay status --deep` exists and why the cheap checks are not enough on their own.
 

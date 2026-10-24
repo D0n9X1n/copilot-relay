@@ -89,7 +89,8 @@ sequenceDiagram
 - `POST /v1/responses`（Codex）
 
 内部会调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`。唯一公开的
-OpenAI 兼容路由是 `POST /v1/responses`，它把 Codex 的请求转发给 Copilot `/responses`，见
+OpenAI 兼容路由是 `POST /v1/responses`，它把 Codex 的 GPT 请求转发给 Copilot `/responses`，
+把 Claude 请求翻译为原生 Messages，见
 [Codex](ZH-Codex.md) 和[内部实现](ZH-Internals.md)。通过接入检查的未知路由返回 `500`，并记录有界诊断供兼容性排查。
 
 `src/server.ts` 校验请求 authority/Host 是否为 loopback 或配置的主机名，以及是否匹配

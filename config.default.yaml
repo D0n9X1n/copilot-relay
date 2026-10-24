@@ -3,7 +3,7 @@
 # This file is copied to ~/.copilot-relay/config.yaml on first start.
 # Edit the user config file, not this template, for local changes.
 # Valid complete edits hot-reload without rewriting this file.
-# host, port, claudeSetup, and upstreamProxy require restart.
+# host, port, claudeSetup, codexSetup, and upstreamProxy require restart.
 #
 # Values here apply to a fresh install only. copilot-relay writes the resolved
 # config back to disk, so once a key exists in your config.yaml it is yours:
@@ -42,6 +42,14 @@ upstreamProxy:
 # Also seeds context/output budgets from model discovery, and
 # CLAUDE_CODE_AUTO_MODE_SERVER=0, when not already set.
 claudeSetup: true
+
+# When true, start sets up Codex CLI and the Codex app when Codex is installed
+# ($CODEX_HOME, default ~/.codex, exists). It writes ~/.copilot-relay/codex-models.json,
+# a model list holding only gptModel and opusModel, and points config.toml at this
+# relay: model_provider, model_catalog_json, model (kept when it is one of the two),
+# and the [model_providers.copilot-relay] table, with apiKey sent as x-api-key when
+# set. Codex then needs no ChatGPT sign-in. Other keys and tables are left as they are.
+codexSetup: true
 
 # Log verbosity:
 #   error - startup/preflight/request failures only

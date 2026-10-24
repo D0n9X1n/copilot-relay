@@ -334,20 +334,20 @@ test("a rejected model name is logged without terminal control characters", asyn
   }
 })
 
-test("a Claude model or a model without /responses is refused before any upstream call", async (t) => {
+test("a Claude model without Messages or a model without /responses is refused before any upstream call", async (t) => {
   const relay = await startRelay(t, replySse, {
     models: [
       ["gpt-6-astra", astra],
-      ["claude-opus-5.5", { supportedEndpoints: ["/v1/messages", "/chat/completions"], type: "chat" }],
+      ["claude-haiku-4.5", { supportedEndpoints: ["/chat/completions"], type: "chat" }],
       ["gpt-4o", { supportedEndpoints: ["/chat/completions"], type: "chat" }],
     ],
   })
 
-  const claude = await relay.send(codexBody({ model: "claude-opus-5.5" }))
+  const claude = await relay.send(codexBody({ model: "claude-haiku-4.5" }))
   const chatOnly = await relay.send(codexBody({ model: "gpt-4o" }))
 
   assert.equal(claude.status, 400)
-  assert.equal((await claude.json() as { error: { code: string } }).error.code, "relay_unsupported_model")
+  assert.equal((await claude.json() as { error: { code: string } }).error.code, "relay_unsupported_endpoint")
   assert.equal(chatOnly.status, 400)
   assert.equal((await chatOnly.json() as { error: { code: string } }).error.code, "relay_unsupported_endpoint")
   assert.deepEqual(relay.requests, [])
@@ -414,4 +414,109 @@ test("with an apiKey, Codex must send it as a bearer token or x-api-key", async 
   await header.text()
 
   assert.equal(responsesCalls(relay).length, 2)
+})
+
+// The SSE Copilot's native Messages API sends for a thinking block, some text and one tool call.
+const claudeEvents = [
+  { type: "message_start", message: { id: "msg_codex", type: "message", role: "assistant", model: "claude-opus-5.5", content: [], usage: { input_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, output_tokens: 1 } } },
+  { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+  { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Check files." } },
+  { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-opus" } },
+  { type: "content_block_stop", index: 0 },
+  { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+  { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Listing." } },
+  { type: "content_block_stop", index: 1 },
+  { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "toolu_codex", name: "exec_command", input: {} } },
+  { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"cmd\":\"ls\"}" } },
+  { type: "content_block_stop", index: 2 },
+  { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 30 } },
+  { type: "message_stop" },
+]
+
+const replyClaudeSse: Reply = (response) => {
+  response.writeHead(200, { "content-type": "text/event-stream" })
+  response.end(claudeEvents.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""))
+}
+
+const opusModel: [string, Record<string, unknown>] = ["claude-opus-5.5", {
+  supportedEndpoints: ["/v1/messages", "/chat/completions"],
+  type: "chat",
+  reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+  limits: { max_output_tokens: 64_000, max_prompt_tokens: 1_000_000, max_context_window_tokens: 1_000_000 },
+}]
+
+const execTool = { type: "function", name: "exec_command", description: "Run a command", strict: false, parameters: { type: "object", properties: { cmd: { type: "string" } } } }
+
+const readEvents = (text: string): Array<Record<string, any>> =>
+  text.split("\n").filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice("data: ".length)))
+
+test("a Claude model reaches Copilot's native Messages API and its stream comes back as Responses events", async (t) => {
+  const relay = await startRelay(t, replyClaudeSse, { models: [["gpt-6-astra", astra], opusModel] })
+  const response = await relay.send(codexBody({
+    model: "claude-opus-5.5",
+    instructions: "You are Codex.",
+    tools: [execTool],
+    reasoning: { effort: "ultra", summary: "auto" },
+  }))
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get("content-type"), "text/event-stream")
+  const events = readEvents(await response.text())
+
+  const [upstream] = relay.requests
+  assert.equal(upstream?.path, "/v1/messages")
+  assert.equal(upstream?.headers["x-initiator"], "user")
+  assert.equal(upstream?.body.model, "claude-opus-5.5")
+  assert.equal(upstream?.body.stream, true)
+  assert.deepEqual(upstream?.body.thinking, { type: "adaptive" })
+  assert.deepEqual(upstream?.body.output_config, { effort: "max" })
+  assert.equal(upstream?.body.system[0].text, "You are Codex.")
+  assert.deepEqual(upstream?.body.tools.map((tool: { name: string }) => tool.name), ["exec_command"])
+
+  assert.equal(events[0]?.type, "response.created")
+  const completed = events.at(-1)
+  assert.equal(completed?.type, "response.completed")
+  assert.deepEqual(completed?.response.output.map((item: { type: string }) => item.type), ["reasoning", "message", "function_call"])
+  assert.equal(completed?.response.output[2].arguments, "{\"cmd\":\"ls\"}")
+  assert.equal(completed?.response.usage.input_tokens_details.cached_tokens, 1000)
+})
+
+test("the next Codex turn sends Claude's signed thinking and the tool result back upstream", async (t) => {
+  const relay = await startRelay(t, replyClaudeSse, { models: [["gpt-6-astra", astra], opusModel] })
+  const first = readEvents(await (await relay.send(codexBody({ model: "claude-opus-5.5", tools: [execTool] }))).text())
+  const output = first.at(-1)?.response.output as Array<Record<string, unknown>>
+
+  // Codex sends back the items it received, then the tool's output.
+  await (await relay.send(codexBody({
+    model: "claude-opus-5.5",
+    tools: [execTool],
+    input: [userTurn("Reply with ok."), ...output, { type: "function_call_output", call_id: "toolu_codex", output: "a.txt" }],
+  }))).text()
+
+  const second = relay.requests[1]?.body
+  assert.equal(relay.requests[1]?.headers["x-initiator"], "agent")
+  const assistant = second?.messages[1]
+  assert.deepEqual(assistant.content[0], { type: "thinking", thinking: "Check files.", signature: "sig-opus" })
+  assert.equal(assistant.content[2].type, "tool_use")
+  assert.equal(second?.messages[2].content[0].type, "tool_result")
+  assert.equal(second?.messages[2].content[0].tool_use_id, "toolu_codex")
+})
+
+test("a non-streamed Claude request returns the final response as JSON", async (t) => {
+  const relay = await startRelay(t, replyClaudeSse, { models: [["gpt-6-astra", astra], opusModel] })
+  const response = await relay.send(codexBody({ model: "claude-opus-5.5", stream: false }))
+
+  assert.equal(response.status, 200)
+  const body = await response.json() as Record<string, any>
+  assert.equal(body.status, "completed")
+  assert.equal(body.output.length, 3)
+})
+
+test("a Claude model's upstream error keeps its status and retry-after", async (t) => {
+  const error = { type: "error", error: { type: "rate_limit_error", message: "Rate limit exceeded" } }
+  const relay = await startRelay(t, replyJson(429, error, { "retry-after": "37" }), { models: [["gpt-6-astra", astra], opusModel] })
+  const response = await relay.send(codexBody({ model: "claude-opus-5.5" }))
+
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get("retry-after"), "37")
 })

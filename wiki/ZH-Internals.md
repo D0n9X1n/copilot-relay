@@ -23,6 +23,10 @@ src/
 
   codex/
     request.ts                Codex 模型选择、Copilot 字段改写、x-initiator
+    messages.ts               Claude 模型的 Responses <-> Claude Messages 翻译
+    catalog.ts                Codex 读取的两个模型的目录（model_catalog_json）
+    setup.ts                  codexSetup：start 时写目录文件并修改 config.toml
+    thinking.ts               reasoning 项 encrypted_content 中携带的 Claude 思考
 
   claude/
     types.ts                  用到的那部分 Claude Messages 类型
@@ -563,7 +567,8 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 **模型。** 目录中没有所请求的 ID 时，`resolveCodexModel` 会刷新一次目录
 （`ensureCopilotModelCatalog`），固定它，然后：
 
-- `claude-*` ID 被拒绝：Copilot 只在 Messages 和 Chat Completions 上列出 Claude 模型；
+- Copilot 列出且带 `/v1/messages` 的 `claude-*` ID 翻译为 Messages（见下文 **Claude 模型**）；
+  未列出或没有 `/v1/messages` 的会被拒绝；
 - 目录中列出的 ID 原样发送，所以 Codex 自己的 ID（与 Copilot 的相同）会保留 Codex
   自带的元数据（`apply_patch` 工具、推理等级和上下文窗口）；
 - 目录中没有的 ID，例如 Codex 内部的 `codex-auto-review`，发往 `gptModel`；
@@ -602,8 +607,39 @@ Copilot 自身错误信息列出的等级，即 `none` 到 `max`。同样的探�
 handler。Codex 一读到 `response.completed` 就关闭流，比 Copilot 结束响应体略早，所以已完成
 的 Codex 请求常被记录为 `body=cancelled`，同时带有 `response_status=completed terminal=true`。
 
-`tests/unit/codex-request.test.ts` 固定纯逻辑的决策，`tests/integration/codex-responses.test.ts`
-用模拟的 Copilot 运行该路由。
+**Claude 模型。** `toClaudeRequest` 和 `toCodexEvents`（`src/codex/messages.ts`）把发给
+`claude-*` 模型的 Codex 请求翻译成原生 Messages 请求，经 `createNativeMessages` 发送，再把
+Claude 的流翻译回 Responses 事件。`instructions` 和开头的 developer 消息成为 `system`；之后的
+developer 消息在原位置成为用户文本，从而保持历史顺序和缓存前缀。函数和 namespace 工具保留
+schema，名称由 `CodexToolNames` 转成 Claude 可接受的形式并映射回去；`custom` 工具
+（`apply_patch`）只有一个字符串 `input`，语法写在描述中；托管工具被丢弃。reasoning 项的
+`encrypted_content` 以中继前缀携带带签名的 Claude 思考块（`decodeThinking`），所以下一轮
+Claude 会原样收到它；其他模型的 reasoning 被丢弃。effort 限制到 Claude 的等级内，以 adaptive
+thinking 发送。缓存断点放在系统提示、最后一个工具、对话末尾以及它之前的用户轮次：共四个，即
+Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `input_tokens`。Codex 在调用项
+完成时立即执行它，所以从第一个工具调用起，后续块按原顺序保留到 Claude 停止：以 `tool_use`
+停止时连同调用一起发出，否则不带调用发出。保留期间每 30 秒发送一次 `response.in_progress`，
+避免 Codex 300 秒的 SSE 空闲超时结束这一轮。
+`max_tokens` 和 `refusal` 变成 `response.incomplete`；中断的流，或停止时仍有未关闭块的流，变成
+`response.failed`。`json_schema` 类型的 `text.format`（`--output-schema`）作为系统指令发送，
+因为 Copilot 的 Messages 端点不接受 schema。反方向上，`prepareCodexPayload` 会从 GPT 请求中
+移除中继写入的 Claude 思考（`isRelayThinking`，`src/codex/thinking.ts`）。
+
+**Codex 配置。** 启用 `codexSetup` 时，如果 `$CODEX_HOME` 存在，`start` 会调用
+`applyCodexSetup`（`src/codex/setup.ts`）。它用 `buildCodexCatalog`（`src/codex/catalog.ts`）
+写出 `~/.copilot-relay/codex-models.json`：先 `gptModel` 后 `opusModel`；Codex 自带的模型保留
+随包复制的 `vendor/codex/models.json` 中 Codex 自己的条目，其他模型围绕
+`vendor/codex/prompt.md` 生成。Codex 0.164 把 `model_catalog_json` 文件当作完整列表
+（`StaticModelsManager`），所以它的选择器只显示这两个模型。随后 `editCodexConfig` 设置顶层的
+`model_provider`、`model_catalog_json`，并在 `model` 不是这两个模型之一时设置 `model`，再重写
+`[model_providers.copilot-relay]` 表。它逐行编辑，所以注释和排版保持不变：表头和键按带引号的
+部分读取，多行字符串内的行被跳过。用点分键或内联表定义的 provider，以及内联的
+`model_providers` 表，会被拒绝。之后它用 `smol-toml` 解析结果（超出 JavaScript 安全范围的整数解析为
+`BigInt`），并连同类型比较每个值；除非结果读出来与原文件只差这些值，否则拒绝修改。`applyCodexSetup` 基于发布时比对的同一个快照编辑，所以期间保存的修改会成为
+冲突而不会丢失；保存 apiKey 的文件即使内容未变，也会重新设为仅所有者可读。
+
+`tests/unit/codex-request.test.ts`、`codex-messages.test.ts` 和 `codex-setup.test.ts` 固定纯逻辑的
+决策，`tests/integration/codex-responses.test.ts` 用模拟的 Copilot 运行该路由（GPT 与 Claude）。
 
 ## 流式
 
@@ -1142,7 +1178,8 @@ npm run build
 ### 重定向 home 目录
 
 npm 测试脚本在 **`tsx` 及任何源码 import 之前**预载 `scripts/test-bootstrap.mjs`。
-它给每个测试进程分配私有 `HOME`、`USERPROFILE` 和临时根目录，退出时只清理自己拥有
+它给每个测试进程分配私有 `HOME`、`USERPROFILE`、`CODEX_HOME`（其中不存在的 `.codex`，所以
+`codexSetup` 会跳过）和临时根目录，退出时只清理自己拥有
 的目录。静态 import 也因此受保护；单独跑某个测试时同样使用该预载。
 
 需要独立日志/配置 fixture 的套件仍须在模块首次 import 前重定向，因为

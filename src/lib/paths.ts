@@ -35,6 +35,8 @@ const logFileBaseName = "copilot-relay"
 // still sweeps it, so upgrading installs drain themselves without manual steps.
 const legacyLogPath = path.join(logsDir, `${logFileBaseName}.log`)
 const pidPath = path.join(appDir, "copilot-relay.pid")
+// The model list copilot-relay start gives Codex (codexSetup).
+const codexCatalogPath = path.join(appDir, "codex-models.json")
 
 /**
  * Local-date stamp used in log file names.
@@ -59,6 +61,7 @@ export const getLogPath = (date: Date = new Date()): string =>
 
 export const paths = {
   appDir,
+  codexCatalogPath,
   configPath,
   copilotTokenPath,
   githubTokenPath,
