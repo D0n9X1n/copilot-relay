@@ -110,7 +110,7 @@ caused the historical refusal.
 
 Native bridge-managed WebSearch supports automatic selection only. With WebSearch
 advertised, `any` or an explicitly forced search returns HTTP 400 JSON before
-retrieval/SSE; only one search is allowed per turn. Its deterministic relay marker restores the original signed provider
+retrieval/SSE. A turn runs up to five searches in parallel; further calls get an error result. Each deterministic relay marker restores the original signed provider
 history on continuation. Old chat-bridge history and native-bridge history are
 not transparently interchangeable: keep an existing search conversation on its
 original route, or begin a new conversation after switching. See

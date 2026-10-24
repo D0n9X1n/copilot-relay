@@ -692,8 +692,9 @@ an invalid hot reload logs an error and leaves the previous runtime settings act
 Claude WebSearch is executed by the relay through Copilot `/responses` with
 `web_search_preview`, even when the conversation uses native Claude Messages.
 Native bridge search requires automatic selection; forced `any` or an explicitly
-forced search is rejected before retrieval. Multiple/repeated search calls are
-not supported. Old chat-bridge search history is not transparently accepted on
+forced search is rejected before retrieval. A turn runs up to five searches;
+further calls return an error result, and a search requested again after the
+results fails. Old chat-bridge search history is not transparently accepted on
 native; keep the original route or start a new conversation. See
 [Internals](EN-Internals.md) for signed-history reconstruction.
 

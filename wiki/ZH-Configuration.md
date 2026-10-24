@@ -96,7 +96,7 @@ Claude 的 `chat-completions` 固定使用 Chat；目录排除该接口时报告
 仍未证明历史拒答是推理内容扁平化导致的。
 
 原生 bridge-managed WebSearch 只支持自动选择。声明 WebSearch 时，`any` 或显式强制
-搜索在检索/SSE 之前返回 HTTP 400 JSON，每回合最多一次搜索。确定性的 relay 标记让续接时能够还原原始、带签名的上游历史。
+搜索在检索/SSE 之前返回 HTTP 400 JSON。每回合最多并行执行五次搜索，更多的调用得到错误结果。每个确定性的 relay 标记让续接时能够还原原始、带签名的上游历史。
 旧 chat bridge 历史与 native bridge 历史不能透明互换：已有搜索会话应继续使用原路由，
 切换后开始新会话。协议边界而不只是模型可用性，详见[内部实现](ZH-Internals.md)。
 

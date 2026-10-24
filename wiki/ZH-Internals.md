@@ -720,7 +720,11 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 `handleNativeMessages` 仍通过 Copilot Responses 检索，会话本身保持原生 Claude。
 原生 bridge 搜索只支持自动选择：`validateNativeMessages` 对声明 WebSearch 时强制
 `any`、显式强制搜索或无法识别的 bridge 历史，在上游操作/SSE 之前返回 HTTP 400 JSON，
-流式调用也一样。每回合最多执行一次搜索；多次或重复搜索调用直接失败，不循环。
+流式调用也一样。`runClaudeWebSearches` 并行执行一回合的搜索调用，最多
+`maxSearchesPerTurn`（5）次，因为每次都是一次 premium `/responses` 请求；之后的调用返回
+被跳过的 `web_search_tool_result` 错误。每个调用有自己的标记，结果 block 按调用顺序跟在决策
+之后，`normalizeNativeHistory` 把所有标记还原到同一个 `tool_result` 回合。拿到结果后再次请求
+搜索会直接失败，不循环。
 决策前 text/thinking 可以流出，工具 block 则暂存，直到 relay 判断是否需要执行服务端搜索。
 
 发往上游的续接保留决策中的签名 block 及原始 provider 工具 ID/名称。对客户端，仅把
