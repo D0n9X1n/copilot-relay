@@ -173,7 +173,7 @@ HTTP 200 in completion diagnostics.
 
 Advertising WebSearch does not disable streaming. Search decisions are intercepted
 before client tool execution; native bridge search allows automatic selection and
-one search per turn only. Continuation/history details are in
+up to five searches per turn, run in parallel. Continuation/history details are in
 [Internals](EN-Internals.md).
 
 ## Debug captures and offline replay

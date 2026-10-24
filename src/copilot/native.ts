@@ -10,11 +10,11 @@ import type {
 import { validateClaudeMessages } from "~/claude/translate"
 import { getClaudeTurnEffort } from "~/claude/utils"
 import {
-  createClaudeWebSearchExecution,
   createClaudeWebSearchResponse,
   hasClaudeWebSearch,
   isClaudeWebSearchTool,
   isClaudeWebSearchToolName,
+  runClaudeWebSearches,
 } from "~/claude/web-search"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
@@ -77,8 +77,9 @@ const valid = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 // Marks a server_tool_use id the relay minted. The rest is base64url JSON of the original
-// tool id and name, the result block index and the search block index, which
-// normalizeNativeHistory decodes to rebuild the turns upstream actually saw.
+// tool id and name, the index of its result block and of the search block itself, which
+// normalizeNativeHistory decodes to rebuild the turns upstream actually saw. A turn with several
+// searches has one marker each; their result blocks follow the decision in the same order.
 const bridgePrefix = "srvtoolu_relay_"
 
 const invalidRequest = (message: string): HTTPError => new HTTPError(
@@ -101,53 +102,72 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
     }
 
     const content = message.content as NativeBlock[]
-    const placeholderIndex = content.findIndex((block) => block.type === "server_tool_use" && block.name === "web_search")
-    if (placeholderIndex < 0) {
+    const placeholderIndexes = content.flatMap((block, index) =>
+      block.type === "server_tool_use" && block.name === "web_search" ? [index] : [])
+    if (placeholderIndexes.length === 0) {
       return [message]
     }
 
-    const placeholder = content[placeholderIndex]
-    if (!placeholder.id?.startsWith(bridgePrefix) || placeholder.id.length > 2048) {
-      throw invalidRequest("This native route cannot replay unrecognized bridge search history. Use its original chat route.")
+    const calls = placeholderIndexes.map((placeholderIndex) => {
+      const placeholder = content[placeholderIndex]!
+      if (!placeholder.id?.startsWith(bridgePrefix) || placeholder.id.length > 2048) {
+        throw invalidRequest("This native route cannot replay unrecognized bridge search history. Use its original chat route.")
+      }
+
+      let metadata: unknown
+      try {
+        metadata = JSON.parse(Buffer.from(placeholder.id.slice(bridgePrefix.length), "base64url").toString("utf8"))
+      } catch {
+        throw invalidRequest("Invalid bridge search history.")
+      }
+
+      if (!Array.isArray(metadata) || metadata.length !== 4) {
+        throw invalidRequest("Invalid bridge search history.")
+      }
+
+      const [id, name, resultIndex, searchPosition] = metadata
+      if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)
+        || typeof name !== "string" || !isClaudeWebSearchToolName(name)
+        || !Number.isSafeInteger(resultIndex) || resultIndex <= placeholderIndex || resultIndex > content.length
+        || searchPosition !== placeholderIndex || !valid(placeholder.input)) {
+        throw invalidRequest("Invalid bridge search history.")
+      }
+
+      const resultBlock = content[resultIndex]
+      if (!resultBlock || resultBlock.type !== "web_search_tool_result" || resultBlock.tool_use_id !== placeholder.id) {
+        throw invalidRequest("Incomplete bridge search history.")
+      }
+
+      return { placeholderIndex, id, name, resultIndex: resultIndex as number, resultBlock }
+    })
+
+    // The relay writes the decision, then one result block per search, in the searches' order.
+    const decisionLength = calls[0]!.resultIndex
+    if (calls.some((call, order) => call.resultIndex !== decisionLength + order || call.placeholderIndex >= decisionLength)) {
+      throw invalidRequest("Invalid bridge decision boundary.")
     }
 
-    let metadata: unknown
-    try {
-      metadata = JSON.parse(Buffer.from(placeholder.id.slice(bridgePrefix.length), "base64url").toString("utf8"))
-    } catch {
-      throw invalidRequest("Invalid bridge search history.")
-    }
-
-    if (!Array.isArray(metadata) || metadata.length !== 4) {
-      throw invalidRequest("Invalid bridge search history.")
-    }
-
-    const [id, name, resultIndex, searchPosition] = metadata
-    if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)
-      || typeof name !== "string" || !isClaudeWebSearchToolName(name)
-      || !Number.isSafeInteger(resultIndex) || resultIndex <= placeholderIndex || resultIndex > content.length
-      || searchPosition !== placeholderIndex || !valid(placeholder.input)) {
-      throw invalidRequest("Invalid bridge search history.")
-    }
-
-    const resultBlock = content[resultIndex]
-    if (!resultBlock || resultBlock.type !== "web_search_tool_result" || resultBlock.tool_use_id !== placeholder.id) {
-      throw invalidRequest("Incomplete bridge search history.")
-    }
-
+    const replacements = new Map(calls.map((call) => [call.placeholderIndex, call]))
     const decision = content
-      .slice(0, resultIndex)
-      .map((block, blockIndex) => blockIndex === placeholderIndex ? { ...block, type: "tool_use", id, name } : block)
+      .slice(0, decisionLength)
+      .map((block, blockIndex) => {
+        const call = replacements.get(blockIndex)
+        return call ? { ...block, type: "tool_use", id: call.id, name: call.name } : block
+      })
     if (decision.some((block) => block.type === "server_tool_use")) {
       throw invalidRequest("Invalid bridge decision boundary.")
     }
 
-    const resultTurn: ClaudeMessage = { role: "user", content: [toolResult(id, resultBlock.content)] }
+    const resultTurn: ClaudeMessage = {
+      role: "user",
+      content: calls.map((call) => toolResult(call.id, call.resultBlock.content)),
+    }
     generatedResults.add(resultTurn)
 
     const turns: ClaudeMessage[] = [{ ...message, content: decision } as ClaudeMessage, resultTurn]
-    if (content.length > resultIndex + 1) {
-      turns.push({ ...message, content: content.slice(resultIndex + 1) } as ClaudeMessage)
+    const after = decisionLength + calls.length
+    if (content.length > after) {
+      turns.push({ ...message, content: content.slice(after) } as ClaudeMessage)
     }
 
     return turns
@@ -572,10 +592,6 @@ export async function handleNativeMessages(
   const searches = canSearch && message.stop_reason === "tool_use"
     ? message.content.filter((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))
     : []
-  if (searches.length > 1) {
-    throw new Error("Multiple bridge-managed searches in one turn are unsupported.")
-  }
-
   if (searches.length === 0) {
     if (!write) {
       return message as ClaudeResponse
@@ -603,40 +619,46 @@ export async function handleNativeMessages(
     return
   }
 
-  const searchCall = searches[0]
-  if (
-    !searchCall.id
-    || !searchCall.name
-    || typeof searchCall.input?.query !== "string"
-    || !searchCall.input.query.trim()
-  ) {
-    throw new Error("Invalid native search call.")
+  for (const searchCall of searches) {
+    if (
+      !searchCall.id
+      || !searchCall.name
+      || typeof searchCall.input?.query !== "string"
+      || !searchCall.input.query.trim()
+    ) {
+      throw new Error("Invalid native search call.")
+    }
   }
 
-  const search = await createClaudeWebSearchExecution(
+  const executions = await runClaudeWebSearches(
     config,
     { ...payload, messages: normalizeNativeHistory(payload.messages) },
-    searchCall.input.query,
+    searches.map((searchCall) => String(searchCall.input!.query)),
     { ...options, signal },
   )
-  const searchMessage = createClaudeWebSearchResponse(search)
+  const searchMessage = createClaudeWebSearchResponse(executions)
+  const searchResults = searchMessage.content.filter((block) => block.type === "web_search_tool_result")
 
-  // The client sees the relay's search as a server tool call and its result. The marker id
-  // lets a later request restore the provider's original tool call (normalizeNativeHistory).
-  const searchPosition = message.content.indexOf(searchCall)
-  const marker = bridgePrefix + Buffer.from(JSON.stringify([searchCall.id, searchCall.name, message.content.length, searchPosition])).toString("base64url")
-  const displayDecision = message.content.map((block) => block === searchCall
-    ? { ...block, type: "server_tool_use", id: marker, name: "web_search" }
-    : block)
-  const resultBlock: NativeBlock = {
-    ...searchMessage.content[1],
+  // The client sees each of the relay's searches as a server tool call and its result. A marker
+  // id lets a later request restore the provider's original tool call (normalizeNativeHistory).
+  const markers = new Map(searches.map((searchCall, order) => {
+    const searchPosition = message.content.indexOf(searchCall)
+    const metadata = [searchCall.id, searchCall.name, message.content.length + order, searchPosition]
+    return [searchCall, bridgePrefix + Buffer.from(JSON.stringify(metadata)).toString("base64url")]
+  }))
+  const displayDecision = message.content.map((block) => {
+    const marker = markers.get(block)
+    return marker ? { ...block, type: "server_tool_use", id: marker, name: "web_search" } : block
+  })
+  const resultBlocks: NativeBlock[] = searches.map((searchCall, order) => ({
+    ...searchResults[order],
     type: "web_search_tool_result",
-    tool_use_id: marker,
-  }
-  const upstreamToolResult = toolResult(searchCall.id, resultBlock.content)
-  const hasSiblingTools = message.content.some((block) => block.type === "tool_use" && block !== searchCall)
+    tool_use_id: markers.get(searchCall),
+  }) as NativeBlock)
+  const upstreamToolResults = searches.map((searchCall, order) => toolResult(searchCall.id!, resultBlocks[order]!.content))
+  const hasSiblingTools = message.content.some((block) => block.type === "tool_use" && !markers.has(block))
   let usage = mergeUsage(message.usage, searchMessage.usage)
-  const combined = [...displayDecision, resultBlock]
+  const combined = [...displayDecision, ...resultBlocks]
 
   if (write) {
     for (const [index, block] of combined.entries()) {
@@ -650,7 +672,7 @@ export async function handleNativeMessages(
     }
   }
 
-  if (hasSiblingTools || search.results.length === 0) {
+  if (hasSiblingTools || executions.every((search) => search.results.length === 0)) {
     const complete = {
       ...message,
       content: combined,
@@ -673,7 +695,7 @@ export async function handleNativeMessages(
       messages: [
         ...request.messages,
         { role: "assistant", content: message.content } as ClaudeMessage,
-        { role: "user", content: [upstreamToolResult] },
+        { role: "user", content: upstreamToolResults },
       ],
     },
     // The follow-up after a search is the relay's own pass, whoever started the request.

@@ -604,7 +604,7 @@ grep -n "effective_think_effort" ~/.copilot-relay/logs/copilot-relay.*.log
 
 Claude WebSearch 由中继通过 Copilot `/responses` 加 `web_search_preview` 执行，即使
 会话使用原生 Claude Messages 也一样。原生 bridge 搜索要求自动选择；强制 `any` 或显式
-强制搜索在检索前拒绝，不支持多次/重复搜索调用。旧 chat bridge 搜索历史不会被原生
+强制搜索在检索前拒绝。每回合最多五次搜索，更多的调用返回错误结果，拿到结果后再次请求搜索会失败。旧 chat bridge 搜索历史不会被原生
 路径透明接受，应保留原路由或新建会话。签名历史重建见[内部实现](ZH-Internals.md)。
 
 如果搜索返回错误结果：
