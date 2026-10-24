@@ -672,13 +672,16 @@ it, or with a different key, the relay answers HTTP `401` with an Anthropic-styl
 ### Personal use only
 
 The relay is for the GitHub account that ran `copilot-relay auth`, used by that
-account's owner. Every request it forwards carries your GitHub token, so it runs
-on your Copilot seat and counts against your quota and premium requests, whoever
-sent it. The relay cannot tell who is behind a request: it only checks `apiKey`.
+account's owner. Everything it forwards is authenticated with the Copilot token
+issued to your account, so all of that usage is attributed to your Copilot seat
+and counts toward your account's limits and charges, whoever sent it. The relay
+cannot tell who is behind a request: it only checks `apiKey`.
 
-Copilot is licensed per user, and GitHub's terms do not allow sharing an
-account's access. Letting someone else use your relay can get your account
-flagged or suspended. In practice:
+This is the project's rule, not only a security setting. Copilot is
+[licensed per user](https://docs.github.com/en/billing/concepts/product-billing/github-copilot-licenses),
+and [GitHub's terms](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+do not allow sharing a login. Letting someone else use your relay may break those
+terms and put your account at risk of suspension. In practice:
 
 - Keep `host: 127.0.0.1` and keep `apiKey` to yourself. They keep other people
   out; they are not a way to share access.

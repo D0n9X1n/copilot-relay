@@ -607,12 +607,12 @@ test("README and both Configuration guides limit the relay to the account owner"
   const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8")
 
   assert.match(readme, /personal use/i, "README must say the relay is for personal use")
-  assert.match(readme, /EN-Configuration\.md#personal-use-only/, "README must link the English personal-use section")
-  assert.match(readme, /ZH-Configuration\.md#仅限个人使用/, "README must link the Chinese personal-use section")
+  assert(readme.includes("](wiki/EN-Configuration.md#personal-use-only)"), "README must link the English personal-use section")
+  assert(readme.includes("](wiki/ZH-Configuration.md#仅限个人使用)"), "README must link the Chinese personal-use section")
 
   const pages: [string, string, string[]][] = [
-    ["EN-Configuration.md", "### Personal use only", ["seat", "quota", "0.0.0.0", "tunnel", "GitHub Copilot app", "terms"]],
-    ["ZH-Configuration.md", "### 仅限个人使用", ["席位", "配额", "0.0.0.0", "隧道", "GitHub Copilot app", "条款"]],
+    ["EN-Configuration.md", "### Personal use only", ["seat", "limits", "0.0.0.0", "tunnel", "GitHub Copilot app", "github-terms-of-service"]],
+    ["ZH-Configuration.md", "### 仅限个人使用", ["席位", "配额", "0.0.0.0", "隧道", "GitHub Copilot app", "github-terms-of-service"]],
   ]
 
   for (const [page, heading, terms] of pages) {

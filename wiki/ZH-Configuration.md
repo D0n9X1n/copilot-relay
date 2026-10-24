@@ -568,12 +568,14 @@ relay 在读取正文、执行任何路由之前返回 HTTP `401` 及 Anthropic 
 
 ### 仅限个人使用
 
-relay 只供运行 `copilot-relay auth` 的那个 GitHub 账号的所有者本人使用。它转发的每个
-请求都带着你的 GitHub token，所以无论请求来自谁，都占用你的 Copilot 席位，计入你的
-配额和 premium requests。relay 无法分辨请求来自谁：它只检查 `apiKey`。
+relay 只供运行 `copilot-relay auth` 的那个 GitHub 账号的所有者本人使用。它转发的一切
+都使用发给你账号的 Copilot token 认证，所以无论请求来自谁，这些用量都归到你的 Copilot
+席位，计入你账号的配额与费用。relay 无法分辨请求来自谁：它只检查 `apiKey`。
 
-Copilot 按用户授权，GitHub 的条款不允许共享账号的访问权限。让别人使用你的 relay 可能
-导致账号被标记或停用。具体来说：
+这是本项目的规则，而不只是一个安全设置。Copilot
+[按用户授权](https://docs.github.com/en/billing/concepts/product-billing/github-copilot-licenses)，
+[GitHub 的条款](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)
+不允许共享登录。让别人使用你的 relay 可能违反这些条款，并让你的账号面临停用风险。具体来说：
 
 - 保持 `host: 127.0.0.1`，`apiKey` 只留给自己。它们用来挡住其他人，而不是用来共享
   访问权限。
