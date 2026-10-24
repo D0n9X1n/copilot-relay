@@ -7,8 +7,6 @@
 
 ## Features
 
-[![Watch a one-minute video tour of copilot-relay](https://gitdiagram.com/video-badge.svg)](https://gitdiagram.com/d0n9x1n/copilot-relay/video)
-
 - **Claude Code, familiar workflow** — Messages API compatibility, streaming responses, and tool calls.
 - **Codex CLI and the Codex app** — set up on start with no ChatGPT sign-in, offering the same GPT-6 Astra and Opus 5.5 as Claude Code; [details](wiki/EN-Codex.md) · [中文](wiki/ZH-Codex.md).
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
