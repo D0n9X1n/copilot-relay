@@ -237,7 +237,8 @@ copilot-relay replay /absolute/path/to/capture-directory
 ```
 
 两种形式统称 `copilot-relay replay <request-id|directory>`。ID 会搜索本地日期目录；
-显式目录可位于默认 home 之外。重放使用记录的有序上游/刷新传输，运行**当前真正的进程内
+显式目录可位于默认 home 之外。重放只接受 Messages 和 token 计数的捕获；Codex 的
+`/v1/responses` 捕获只供查看，重放会报告 `MALFORMED`。重放使用记录的有序上游/刷新传输，运行**当前真正的进程内
 handler**，不创建 socket、不做真实认证、不写 token/config 或新捕获。它比较实际出站
 请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出包含每次交换的状态、已知完成
 原因和 token/缓存数字，以及客户端 block 类型和工具调用数；不会打印工具参数或响应

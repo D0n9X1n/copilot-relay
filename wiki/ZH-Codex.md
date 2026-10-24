@@ -128,6 +128,8 @@ info request_id=… Model request client=codex requested_model=gpt-6-astra upstr
   自行压缩长对话。
 - `upstreamTimeoutSeconds` 限制每个请求的时长，包括较长的流式回答。
 - 不提供模型目录：使用 Codex 自带的模型列表。
+- 在 `logLevel: debug` 下，Codex 请求和其他请求一样会被捕获，但
+  `copilot-relay replay` 只接受 Messages 和 token 计数的捕获。
 - 中继已用 Codex CLI 0.164.0 及其 app server 验证。之后的 Codex 版本可能改变发送的内容。
 
 ## 问题排查
@@ -139,7 +141,7 @@ info request_id=… Model request client=codex requested_model=gpt-6-astra upstr
 | HTTP 400 `relay_unsupported_endpoint` | 该模型在 Copilot 上没有 `/responses`；请查看 `copilot-relay models`。 |
 | Copilot 返回 HTTP 400 `unsupported_value` | Codex 发送了一个 Copilot 拒绝、而中继尚未改写的字段。它前面的日志行标出了该请求。 |
 | HTTP 415 | 请求没有以 `application/json` 发送。 |
-| `/responses` 返回 HTTP 404 | `base_url` 缺少 `/v1`。 |
+| `/responses` 返回 HTTP 500 `Unsupported Claude API route` | `base_url` 缺少 `/v1`。 |
 | Codex 要求登录 | `requires_openai_auth` 缺失或为 `true`。 |
 | `Missing environment variable` | 设置了 `env_key`，而 app 看不到该变量。请改用 `http_headers`。 |
 | 没有 `apply_patch`，改由 shell 编辑文件 | 该模型 ID 不在 Codex 自带的列表中，见“选择模型”。 |

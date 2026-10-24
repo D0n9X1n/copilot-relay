@@ -187,6 +187,7 @@ or overload is explicitly incomplete.
 
 `copilot-relay replay <request-id|directory>` runs the current handler using only
 recorded transport and refresh results, without sockets, authentication, or token/
-config writes. A match means the local transformation still matches, not that
-Copilot will answer the same way now. See
+config writes. It replays Messages and count-tokens captures; Responses captures
+are recorded for inspection but not replayed. A match means the local
+transformation still matches, not that Copilot will answer the same way now. See
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for limits and exit codes.

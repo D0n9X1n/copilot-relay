@@ -171,6 +171,7 @@ opusModel: claude-opus-5.5
 捕获失败或过载会明确标为不完整。
 
 `copilot-relay replay <request-id|directory>` 仅使用记录的传输和刷新结果运行当前
-handler，不建 socket、不认证，也不写 token/config。匹配表示本地转换仍与记录一致，
+handler，不建 socket、不认证，也不写 token/config。它重放 Messages 和 token 计数的捕获；
+Responses 的捕获只供查看，不会重放。匹配表示本地转换仍与记录一致，
 不代表 Copilot 现在会给出相同答案。限制及退出码见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。

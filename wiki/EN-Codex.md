@@ -139,6 +139,8 @@ the answer arrived in full.
   long conversations itself with ordinary requests.
 - `upstreamTimeoutSeconds` caps each request, including a long streamed answer.
 - No model catalog: Codex's own model list is used.
+- With `logLevel: debug` a Codex request is captured like any other, but
+  `copilot-relay replay` accepts only Messages and count-tokens captures.
 - The relay was checked with Codex CLI 0.164.0 and its app server. Later Codex
   versions can change what they send.
 
@@ -151,7 +153,7 @@ the answer arrived in full.
 | HTTP 400 `relay_unsupported_endpoint` | The model has no `/responses` on Copilot; check `copilot-relay models`. |
 | HTTP 400 `unsupported_value` from Copilot | Codex sent a field Copilot rejects that the relay does not yet change. The log line before it names the request. |
 | HTTP 415 | The request was not sent as `application/json`. |
-| HTTP 404 on `/responses` | `base_url` lacks `/v1`. |
+| HTTP 500 `Unsupported Claude API route` on `/responses` | `base_url` lacks `/v1`. |
 | Codex asks you to sign in | `requires_openai_auth` is missing or `true`. |
 | `Missing environment variable` | An `env_key` is set; the app cannot see it. Use `http_headers`. |
 | No `apply_patch`; edits go through the shell | The model ID is not in Codex's own list; see "Choose a model". |

@@ -284,7 +284,8 @@ copilot-relay replay /absolute/path/to/capture-directory
 
 Both forms are `copilot-relay replay <request-id|directory>`. An ID searches the
 local date directories; an explicit directory can be outside the default home.
-Replay runs the **actual current in-process handler** using recorded ordered
+Replay accepts Messages and count-tokens captures; a Codex `/v1/responses` capture
+is recorded for inspection but reported `MALFORMED` by replay. Replay runs the **actual current in-process handler** using recorded ordered
 upstream/refresh transport, with no sockets, real authentication, token/config
 writes or new capture. It compares actual outgoing requests and final JSON/SSE,
 not just two saved files. Output includes each exchange's status, known completion
