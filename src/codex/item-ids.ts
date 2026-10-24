@@ -42,30 +42,46 @@ export class StableItemIds {
     return this.encoder.encode(rest)
   }
 
+  // An event's data is every data: line of the frame joined by newlines, as SSE defines it. When the
+  // event changes, its data is written back as one data: line in place of the first.
   private rewriteFrame(frame: string): string {
     const lines = frame.split(/(\r?\n)/)
-    let changed = false
+    const dataIndexes: Array<number> = []
     for (let index = 0; index < lines.length; index += 2) {
-      const line = lines[index]!
-      if (!line.startsWith("data:")) {
-        continue
-      }
-
-      const prefix = line.startsWith("data: ") ? "data: " : "data:"
-      let event: unknown
-      try {
-        event = JSON.parse(line.slice(prefix.length))
-      } catch {
-        continue
-      }
-
-      if (isRecord(event) && this.rewriteEvent(event)) {
-        lines[index] = prefix + JSON.stringify(event)
-        changed = true
+      if (lines[index]!.startsWith("data:")) {
+        dataIndexes.push(index)
       }
     }
 
-    return changed ? lines.join("") : frame
+    if (dataIndexes.length === 0) {
+      return frame
+    }
+
+    const data = dataIndexes
+      .map((index) => {
+        const line = lines[index]!
+        return line.startsWith("data: ") ? line.slice(6) : line.slice(5)
+      })
+      .join("\n")
+    let event: unknown
+    try {
+      event = JSON.parse(data)
+    } catch {
+      return frame
+    }
+
+    if (!isRecord(event) || !this.rewriteEvent(event)) {
+      return frame
+    }
+
+    const [first, ...rest] = dataIndexes
+    lines[first!] = `data: ${JSON.stringify(event)}`
+    // Drop the other data lines with the line break before each.
+    for (const index of rest.reverse()) {
+      lines.splice(index - 1, 2)
+    }
+
+    return lines.join("")
   }
 
   // Gives the event's item the id of that output index's added event; true when it changed anything.

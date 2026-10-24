@@ -67,3 +67,16 @@ test("items at different output indexes keep their own ids, and an unfinished fr
   assert.deepEqual(events(out.slice(0, -tail.length)).map((event) => event.item_id ?? event.item?.id), ["R", "FC", "FC", "R"])
   assert.ok(out.endsWith(tail))
 })
+
+test("an event whose data spans several data: lines is read whole", () => {
+  const event = { type: "response.output_text.delta", output_index: 0, item_id: "Z", delta: "x" }
+  const json = JSON.stringify(event, null, 1).split("\n")
+  const added = sse([{ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "A" } }])
+  const split = `event: ${event.type}\n${json.map((line) => `data: ${line}`).join("\n")}\n\n`
+  const out = rewrite(added + split, 4)
+
+  const frames = out.split("\n\n").filter(Boolean)
+  assert.equal(frames.length, 2)
+  assert.deepEqual(events(frames[1]!).map((parsed) => parsed.item_id), ["A"])
+  assert.match(frames[1]!, /^event: response\.output_text\.delta\ndata: /)
+})
