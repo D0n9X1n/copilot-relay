@@ -226,7 +226,11 @@ Codex one, as they do for those clients.
   configuration in `configLibrary/` gets `inferenceProvider: gateway`, the relay URL,
   the apiKey and an `inferenceModels` list of `opusModel` (the default, tier `opus`)
   and `gptModel` (tier `sonnet`), with Copilot's names and 1M context where Copilot
-  reports it. Without that list the app shows only Claude models.
+  reports it. Without that list the app shows only Claude models. The app also
+  drops a gateway model whose name is not Anthropic-looking, such as `gpt-6-astra`,
+  so such a model is listed as a Claude-style route for its tier, `claude-sonnet-5`,
+  labelled with its real name; the relay sends every model name without "opus" to
+  `gptModel`.
   `claude_desktop_config.json` gets `deploymentMode: "3p"`, so the app opens on
   the relay instead of the claude.ai sign-in. Quit the app before running setup and
   reopen it after: it reads these files at launch and rewrites them while it runs.
