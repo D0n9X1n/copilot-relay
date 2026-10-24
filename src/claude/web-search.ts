@@ -781,38 +781,51 @@ export const createClaudeWebSearchExecution = async (
 // only this many; the rest return an error result instead of a search.
 export const maxSearchesPerTurn = 5
 
-const createSkippedSearchExecution = (query: string, model: string): WebSearchExecutionResult => ({
+// The searches a turn may run: the advertised tool's max_uses when it sets a lower one.
+const searchLimit = (payload: ClaudeMessagesPayload): number => {
+  const tool = payload.tools?.find(isClaudeWebSearchTool) as (ClaudeTool & { max_uses?: unknown }) | undefined
+  const maxUses = tool?.max_uses
+  return typeof maxUses === "number" && Number.isSafeInteger(maxUses) && maxUses >= 0 ?
+      Math.min(maxUses, maxSearchesPerTurn)
+    : maxSearchesPerTurn
+}
+
+const createSkippedSearchExecution = (query: string, model: string, limit: number): WebSearchExecutionResult => ({
   id: `msg_${randomUUID().replaceAll("-", "")}`,
   inputTokens: 0,
   model,
   outputTokens: 0,
   query,
   results: [],
-  text: `Not searched: a turn runs at most ${maxSearchesPerTurn} web searches.`,
+  text: `Not searched: this turn allows at most ${limit} web searches.`,
   skipped: true,
 })
 
 /**
- * Runs the searches of one turn in parallel, in the order they were asked for. Searches past
- * maxSearchesPerTurn are not run and come back as skipped results with no sources.
+ * Runs the searches of one turn in parallel, in the order they were asked for. Searches past the
+ * turn's limit (maxSearchesPerTurn, or the tool's lower max_uses) are not run and come back as
+ * skipped results with no sources.
  */
 export const runClaudeWebSearches = async (
   config: ProxyConfig,
   payload: ClaudeMessagesPayload,
   queries: Array<string>,
   options: { requestId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<Array<WebSearchExecutionResult>> =>
-  await Promise.all(queries.map(async (query, index) => {
-    if (index >= maxSearchesPerTurn) {
-      return createSkippedSearchExecution(query, getWebSearchBackendModel(config))
+): Promise<Array<WebSearchExecutionResult>> => {
+  const limit = searchLimit(payload)
+  return await Promise.all(queries.map(async (query, index) => {
+    if (index >= limit) {
+      return createSkippedSearchExecution(query, getWebSearchBackendModel(config), limit)
     }
 
     return await createClaudeWebSearchExecution(config, payload, query, options)
   }))
+}
 
 const buildSearchResultBlock = (
   toolUseId: string,
   results: Array<WebSearchResult>,
+  skipped = false,
 ): ClaudeWebSearchResultBlock => ({
   type: "web_search_tool_result",
   tool_use_id: toolUseId,
@@ -827,14 +840,14 @@ const buildSearchResultBlock = (
       }))
     : {
         type: "web_search_tool_result_error",
-        error_code: "unavailable",
+        error_code: skipped ? "max_uses_exceeded" : "unavailable",
       },
 })
 
 /**
  * The Claude message for a turn's searches: a server_tool_use and web_search_tool_result pair per
- * search, in order. When no search found sources, their text follows, since no final pass will
- * answer. Usage adds up every search; web_search_requests counts those that ran.
+ * search, in order, then the searches' text. Usage adds up every search; web_search_requests counts
+ * those that ran.
  */
 export const createClaudeWebSearchResponse = (
   searches: Array<WebSearchExecutionResult>,
@@ -853,12 +866,14 @@ export const createClaudeWebSearchResponse = (
         name: "web_search",
         input: { query: search.query },
       },
-      buildSearchResultBlock(toolUseId, search.results),
+      buildSearchResultBlock(toolUseId, search.results, search.skipped),
     )
   }
 
-  const answered = searches.some((search) => search.results.length > 0)
-  const texts = answered ? [] : searches.map((search) => search.text).filter(Boolean)
+  // The client keeps this text in its history. A final pass replaces it with the answer
+  // (mergeWebSearchAndFinalResponse); without one, as when client tools ran beside the searches,
+  // it is how the next request still sees the sources.
+  const texts = searches.map((search) => search.text).filter(Boolean)
   if (texts.length > 0) {
     content.push({ type: "text", text: texts.join("\n\n") })
   }

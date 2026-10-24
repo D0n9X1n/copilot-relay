@@ -795,8 +795,10 @@ test("a turn with several searches returns a call and result for each, and count
   const response = createClaudeWebSearchResponse(twoSearches)
 
   assert.deepEqual(response.content.map((block) => block.type), [
-    "server_tool_use", "web_search_tool_result", "server_tool_use", "web_search_tool_result",
+    "server_tool_use", "web_search_tool_result", "server_tool_use", "web_search_tool_result", "text",
   ])
+  // The client keeps the sources in its history when no final pass replaces this text.
+  assert.match((response.content.at(-1) as { text: string }).text, /async\.rs|tokio/)
   assert.deepEqual(response.content.filter((block) => block.type === "server_tool_use").map((block: any) => block.input.query), ["tokio", "async-std"])
   assert.equal(response.usage.input_tokens, 8)
   assert.equal(response.usage.output_tokens, 10)
@@ -851,4 +853,19 @@ test("searches past the per-turn limit are reported, not run", async () => {
   assert.deepEqual(searches.map((search) => search.query), queries)
   assert.equal(searches.filter((search) => search.skipped).length, 2)
   assert.equal(createClaudeWebSearchResponse(searches).usage.server_tool_use?.web_search_requests, maxSearchesPerTurn)
+})
+
+test("a WebSearch tool's max_uses lowers the searches a turn runs", async () => {
+  const config = { ...createConfig("https://fixture.invalid"), modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([[getWebSearchBackendModel(createConfig("https://fixture.invalid")), { type: "embeddings" }]]) } }
+  const payload = {
+    model: "opus",
+    max_tokens: 1,
+    messages: [{ role: "user" as const, content: "hi" }],
+    tools: [{ name: "web_search", type: "web_search_20250305", max_uses: 1 } as never],
+  }
+  const searches = await runClaudeWebSearches(config as never, payload, ["a", "b", "c"])
+  const results = createClaudeWebSearchResponse(searches).content.filter((block) => block.type === "web_search_tool_result")
+
+  assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [false, true, true])
+  assert.deepEqual(results.map((block: any) => block.content.error_code), ["unavailable", "max_uses_exceeded", "max_uses_exceeded"])
 })
