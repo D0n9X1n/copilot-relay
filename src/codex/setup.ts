@@ -48,6 +48,9 @@ const isTable = (value: unknown): value is TomlTable =>
 
 const tomlString = (value: string): string => JSON.stringify(value)
 
+// Integers past JavaScript's safe range, such as a 64-bit byte limit, are valid TOML.
+const parseOptions = { integersAsBigInt: "asNeeded" } as const
+
 const providerPath = ["model_providers", codexProviderId]
 
 // The provider table as config.toml lines, and as the value TOML reads from those lines.
@@ -249,7 +252,7 @@ const parseLines = (lines: Array<string>): Array<ParsedLine> => {
 
 const parseToml = (text: string): TomlTable => {
   try {
-    return parse(text) as TomlTable
+    return parse(text, parseOptions) as TomlTable
   } catch (error) {
     if (error instanceof TomlError) {
       // The parser's message quotes the line, which can hold a credential, so only its number is kept.
@@ -260,25 +263,26 @@ const parseToml = (text: string): TomlTable => {
   }
 }
 
-// A parsed TOML value in a form two parses can be compared by: keys sorted, dates as text.
+// A parsed TOML value in a form two parses can be compared by: every value tagged with its type, so
+// a string never matches a number or a date, and table keys sorted.
 const canonical = (value: unknown): unknown => {
   if (value instanceof Date) {
-    return `date:${value.toISOString()}`
-  }
-
-  if (typeof value === "bigint" || (typeof value === "number" && !Number.isFinite(value))) {
-    return `number:${String(value)}`
+    return ["date", value.toISOString()]
   }
 
   if (Array.isArray(value)) {
-    return value.map(canonical)
+    return ["array", value.map(canonical)]
   }
 
   if (isTable(value)) {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))
+    return ["table", Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]))]
   }
 
-  return value
+  if (typeof value === "number" && Object.is(value, -0)) {
+    return ["number", "-0"]
+  }
+
+  return [typeof value, String(value)]
 }
 
 const sameToml = (left: TomlTable, right: TomlTable): boolean =>
@@ -286,7 +290,7 @@ const sameToml = (left: TomlTable, right: TomlTable): boolean =>
 
 const parsesTo = (text: string): TomlTable | undefined => {
   try {
-    return parse(text) as TomlTable
+    return parse(text, parseOptions) as TomlTable
   } catch {
     return undefined
   }

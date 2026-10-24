@@ -221,3 +221,17 @@ test("applyCodexSetup makes a config.toml holding the apiKey owner-only again", 
   assert.equal(again.changed, true)
   assert.equal((await fs.stat(configPath)).mode & 0o777, 0o600)
 })
+
+test("editCodexConfig compares values with their types, so a string never stands in for a number", () => {
+  const existing = "extras = { model = nan }\nmodel = \"number:NaN\"\n"
+
+  assert.match(editCodexConfig(existing, { ...input, models: ["number:NaN"] }), /extras = \{ model = nan \}/)
+  // A multi-line inline table hides its keys from the line scanner; the typed comparison catches the edit.
+  assert.throws(() => editCodexConfig("extras = {\n  model = nan\n}\nmodel = \"number:NaN\"\n", { ...input, models: ["number:NaN"] }), CodexConfigError)
+})
+
+test("editCodexConfig accepts an integer past JavaScript's safe range", () => {
+  const text = editCodexConfig("history.max_bytes = 9223372036854775807\n", input)
+
+  assert.match(text, /^history\.max_bytes = 9223372036854775807$/m)
+})
