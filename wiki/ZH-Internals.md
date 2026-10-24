@@ -26,6 +26,7 @@ src/
     messages.ts               Claude 模型的 Responses <-> Claude Messages 翻译
     catalog.ts                Codex 读取的两个模型的目录（model_catalog_json）
     setup.ts                  codexSetup：start 时写目录文件并修改 config.toml
+    thinking.ts               reasoning 项 encrypted_content 中携带的 Claude 思考
 
   claude/
     types.ts                  用到的那部分 Claude Messages 类型
@@ -615,8 +616,12 @@ schema，名称由 `CodexToolNames` 转成 Claude 可接受的形式并映射回
 `encrypted_content` 以中继前缀携带带签名的 Claude 思考块（`decodeThinking`），所以下一轮
 Claude 会原样收到它；其他模型的 reasoning 被丢弃。effort 限制到 Claude 的等级内，以 adaptive
 thinking 发送。缓存断点放在系统提示、最后一个工具、对话末尾以及它之前的用户轮次：共四个，即
-Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `input_tokens`，`max_tokens`
-变成 `response.incomplete`，中断的流变成 `response.failed`。
+Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `input_tokens`。Codex 在调用项
+完成时立即执行它，所以工具调用会保留到 Claude 以 `tool_use` 停止时才发出，否则丢弃。
+`max_tokens` 和 `refusal` 变成 `response.incomplete`；中断的流，或停止时仍有未关闭块的流，变成
+`response.failed`。`json_schema` 类型的 `text.format`（`--output-schema`）作为系统指令发送，
+因为 Copilot 的 Messages 端点不接受 schema。反方向上，`prepareCodexPayload` 会从 GPT 请求中
+移除中继写入的 Claude 思考（`isRelayThinking`，`src/codex/thinking.ts`）。
 
 **Codex 配置。** 启用 `codexSetup` 时，如果 `$CODEX_HOME` 存在，`start` 会调用
 `applyCodexSetup`（`src/codex/setup.ts`）。它用 `buildCodexCatalog`（`src/codex/catalog.ts`）
@@ -625,8 +630,11 @@ Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `
 `vendor/codex/prompt.md` 生成。Codex 0.164 把 `model_catalog_json` 文件当作完整列表
 （`StaticModelsManager`），所以它的选择器只显示这两个模型。随后 `editCodexConfig` 设置顶层的
 `model_provider`、`model_catalog_json`，并在 `model` 不是这两个模型之一时设置 `model`，再重写
-`[model_providers.copilot-relay]` 表；它逐行解析表头和键，跳过多行字符串，遇到用点分键或内联表
-定义的 provider 时拒绝修改，而不是留下两个定义。
+`[model_providers.copilot-relay]` 表。它逐行编辑，所以注释和排版保持不变：表头和键按带引号的
+部分读取，多行字符串内的行被跳过。用点分键或内联表定义的 provider，以及内联的
+`model_providers` 表，会被拒绝。之后它用 `smol-toml` 解析结果，除非结果读出来与原文件只差这些
+值，否则拒绝修改。`applyCodexSetup` 基于发布时比对的同一个快照编辑，所以期间保存的修改会成为
+冲突而不会丢失；保存 apiKey 的文件即使内容未变，也会重新设为仅所有者可读。
 
 `tests/unit/codex-request.test.ts`、`codex-messages.test.ts` 和 `codex-setup.test.ts` 固定纯逻辑的
 决策，`tests/integration/codex-responses.test.ts` 用模拟的 Copilot 运行该路由（GPT 与 Claude）。
@@ -1168,7 +1176,8 @@ npm run build
 ### 重定向 home 目录
 
 npm 测试脚本在 **`tsx` 及任何源码 import 之前**预载 `scripts/test-bootstrap.mjs`。
-它给每个测试进程分配私有 `HOME`、`USERPROFILE` 和临时根目录，退出时只清理自己拥有
+它给每个测试进程分配私有 `HOME`、`USERPROFILE`、`CODEX_HOME`（其中不存在的 `.codex`，所以
+`codexSetup` 会跳过）和临时根目录，退出时只清理自己拥有
 的目录。静态 import 也因此受保护；单独跑某个测试时同样使用该预载。
 
 需要独立日志/配置 fixture 的套件仍须在模块首次 import 前重定向，因为

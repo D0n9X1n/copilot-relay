@@ -131,7 +131,7 @@ A test file's stdout carries its runner's result frames, and plain text there ca
 
 A test that looks for an entry it logged reads with `readLogs()` from `tests/fixtures/logs.ts`, not `getLogPath()`: an entry logged just before local midnight stays in that day's file. A test of the log writer itself names today's file, so it pins the clock with `t.mock.timers`, mocking only `Date`.
 
-Set **both `HOME` and `USERPROFILE`**. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
+Set **both `HOME` and `USERPROFILE`**, and `CODEX_HOME` for anything that can run `codexSetup`. Node reads `USERPROFILE` on Windows, and CI runs `windows-latest`, so setting only `HOME` leaves the redirect silently ineffective there. Without this the suite writes into the developer's live `~/.copilot-relay/logs` on every run.
 
 Integration tests mock upstream Copilot. They must never call the real service.
 

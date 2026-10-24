@@ -50,7 +50,7 @@ supports_websockets = false
 | `http_headers` | 发送 `apiKey`。Codex app 启动时常常拿不到 shell 中的变量，所以用 `env_key` 会让那里的每一轮对话都失败。 |
 
 如果 `config.toml` 在自己的表之外，用点分键或内联表定义了 `model_providers.copilot-relay`，
-`start` 会拒绝修改并记录原因。项目内的 `.codex/config.toml` 不能设置 provider，Codex 会忽略。
+或修改后的文件读出来不只是这些值发生变化，`start` 会拒绝修改并记录原因。项目内的 `.codex/config.toml` 不能设置 provider，Codex 会忽略。
 
 ### 手动配置
 
@@ -140,6 +140,7 @@ GPT 请求常被记录为 `body=cancelled`，同时带有 `response_status=compl
 ## 限制
 
 - 通过 Codex 使用 Claude 模型时没有托管的网页搜索。
+- Claude 模型的 `--output-schema` 作为指令发给 Claude，不会强制执行；脚本依赖它时请检查回复。
 - 只支持 HTTP 和 SSE：没有 WebSocket，也没有 `/responses/compact`。Codex 会用普通请求
   自行压缩长对话。
 - `upstreamTimeoutSeconds` 限制每个请求的时长，包括较长的流式回答。
@@ -152,7 +153,7 @@ GPT 请求常被记录为 `body=cancelled`，同时带有 `response_status=compl
 | 现象 | 原因 |
 | --- | --- |
 | Codex 显示它自带的模型，或要求登录 | `codexSetup` 为 `false`、中继启动时 Codex 尚未安装，或 Codex 没有重启。请查看中继日志中的 `codex settings` 行。 |
-| `codex settings` 行显示拒绝修改 | `config.toml` 用点分键或内联表定义了 `copilot-relay`；请移到 `[model_providers.copilot-relay]` 中或删除。 |
+| `codex settings` 行显示拒绝修改 | `config.toml` 用点分键或内联表定义了 `copilot-relay` 或 `model_providers`、不是合法 TOML，或含有会被这次修改改变的内容；日志行会说明是哪一种。请修正，或手动配置 Codex。 |
 | HTTP 401 | 中继设置了 `apiKey` 而请求没有携带；重启中继让 `start` 写入它。 |
 | HTTP 400 `relay_unsupported_model` | Copilot 未列出的 `claude-*` 模型。 |
 | HTTP 400 `relay_unsupported_endpoint` | 该模型在 Copilot 上没有可用端点；请查看 `copilot-relay models`。 |

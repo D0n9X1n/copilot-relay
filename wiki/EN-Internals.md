@@ -29,6 +29,7 @@ src/
     messages.ts               Responses <-> Claude Messages translation for Claude models
     catalog.ts                the two-model catalog Codex reads (model_catalog_json)
     setup.ts                  codexSetup: catalog file and config.toml edits at start
+    thinking.ts               Claude thinking carried in a reasoning item's encrypted_content
 
   claude/
     types.ts                  the subset of Claude Messages types used
@@ -744,8 +745,14 @@ with its grammar in the description; hosted tools are dropped. A reasoning item'
 another model is dropped. Effort is clamped to Claude's levels and sent as adaptive
 thinking. Cache breakpoints go on the system prompt, the last tool, the end of the
 conversation and the user turn before it: four, Claude's limit. On the way back,
-usage folds Claude's cache read and creation into `input_tokens`, `max_tokens`
-becomes `response.incomplete`, and a broken stream becomes `response.failed`.
+usage folds Claude's cache read and creation into `input_tokens`. Codex runs a call
+as soon as its item is done, so tool calls are held until Claude stops with
+`tool_use` and dropped otherwise. `max_tokens` and `refusal` become
+`response.incomplete`; a broken stream, or one that stops with a block still open,
+becomes `response.failed`. A `json_schema` `text.format` (`--output-schema`) is
+sent as a system instruction, since Copilot's Messages endpoint takes no schema.
+Going the other way, `prepareCodexPayload` removes the relay's Claude thinking from
+a GPT request (`isRelayThinking`, `src/codex/thinking.ts`).
 
 **Codex setup.** With `codexSetup`, `start` calls `applyCodexSetup`
 (`src/codex/setup.ts`) when `$CODEX_HOME` exists. It writes
@@ -755,9 +762,14 @@ vendored `vendor/codex/models.json`, any other built around `vendor/codex/prompt
 Codex 0.164 treats a `model_catalog_json` file as its whole list
 (`StaticModelsManager`), so its picker shows exactly these. `editCodexConfig` then
 sets the top-level `model_provider`, `model_catalog_json` and, when it names neither
-model, `model`, and rewrites the `[model_providers.copilot-relay]` table; it parses
-headers and keys line by line, skips multi-line strings, and refuses a provider
-defined by dotted keys or an inline table rather than leave two definitions.
+model, `model`, and rewrites the `[model_providers.copilot-relay]` table. It edits
+line by line, so comments and layout stay: headers and keys are read with quoted
+parts, and lines inside multi-line strings are skipped. It refuses a provider defined
+by dotted keys or an inline table, and an inline `model_providers` table. Then it
+parses the result with `smol-toml` and refuses unless it reads as the original with
+only those values changed. `applyCodexSetup` edits from the same snapshot it
+publishes against, so an edit saved in between is a conflict, not lost, and a file
+holding the apiKey is made owner-only again even when its content is current.
 
 `tests/unit/codex-request.test.ts`, `codex-messages.test.ts` and `codex-setup.test.ts`
 pin the pure decisions, and `tests/integration/codex-responses.test.ts` runs the route,
@@ -1407,8 +1419,8 @@ npm run build
 ### Home directory redirection
 
 The npm test scripts preload `scripts/test-bootstrap.mjs` **before `tsx` and any
-source import**. It assigns each test process a private `HOME`, `USERPROFILE` and
-temporary root, and cleans up only its owned directory on exit. This protects
+source import**. It assigns each test process a private `HOME`, `USERPROFILE`,
+`CODEX_HOME` (a missing `.codex` there, so `codexSetup` skips) and temporary root, and cleans up only its owned directory on exit. This protects
 static imports too; use the same preload when running a focused test.
 
 A suite that needs its own log/config fixture must still redirect before that

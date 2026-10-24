@@ -54,7 +54,8 @@ file is published owner-only. Every other key, table and comment is left as it i
 
 `start` refuses to edit, and logs why, when `config.toml` defines
 `model_providers.copilot-relay` outside its own table, with dotted keys or an inline
-table. A project's `.codex/config.toml` cannot set a provider; Codex ignores it there.
+table, or when the edited file would not read back as the original with only these
+values changed. A project's `.codex/config.toml` cannot set a provider; Codex ignores it there.
 
 ### Set it up by hand
 
@@ -157,6 +158,8 @@ request is often logged with `body=cancelled` next to
 ## Limitations
 
 - No hosted web search for Claude models through Codex.
+- `--output-schema` with a Claude model is sent to Claude as an instruction, not
+  enforced; check the reply if a script depends on it.
 - HTTP and SSE only: no WebSockets, and no `/responses/compact`. Codex compacts
   long conversations itself with ordinary requests.
 - `upstreamTimeoutSeconds` caps each request, including a long streamed answer.
@@ -170,7 +173,7 @@ request is often logged with `body=cancelled` next to
 | Symptom | Cause |
 | --- | --- |
 | Codex shows its own models or asks you to sign in | `codexSetup` is `false`, Codex was not installed when the relay started, or Codex was not restarted. Check the `codex settings` line in the relay log. |
-| `codex settings` line says it refused | `config.toml` defines `copilot-relay` with dotted keys or an inline table; move it into `[model_providers.copilot-relay]` or remove it. |
+| `codex settings` line says it refused | `config.toml` defines `copilot-relay` or `model_providers` with dotted keys or an inline table, is not valid TOML, or holds something the edit would change; the line says which. Fix it, or set up Codex by hand. |
 | HTTP 401 | The relay has an `apiKey` and the request lacks it; restart the relay so `start` writes it. |
 | HTTP 400 `relay_unsupported_model` | A `claude-*` model Copilot does not list. |
 | HTTP 400 `relay_unsupported_endpoint` | The model has no usable endpoint on Copilot; check `copilot-relay models`. |
