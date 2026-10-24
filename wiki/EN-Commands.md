@@ -232,7 +232,9 @@ Codex one, as they do for those clients.
   labelled with its real name; the relay sends every model name without "opus" to
   `gptModel`. Setup also sets `modelDiscoveryEnabled: false`: the list already names
   every model, and discovery would flag the route name, which `/v1/models` does not
-  list.
+  list. The app sizes a session by the route name, so it plans for the 1M context of
+  `claude-sonnet-5` whatever `gptModel` is; with a `gptModel` whose window is
+  smaller, a long session reaches Copilot's limit first and is compacted then.
   `claude_desktop_config.json` gets `deploymentMode: "3p"`, so the app opens on
   the relay instead of the claude.ai sign-in. Quit the app before running setup and
   reopen it after: it reads these files at launch and rewrites them while it runs.

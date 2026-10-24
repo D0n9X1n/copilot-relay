@@ -436,7 +436,8 @@ own, and `gpt-6.1-sol` advertises it yet rejects it with HTTP 400
 
 Copilot `/responses` answers HTTP 400 to a `max_output_tokens` below 16. Clients
 send less to probe a model: the Claude Code app checks each one with
-`max_tokens: 1`. `buildResponsesRequestPayload` raises a smaller budget to 16.
+`max_tokens: 1`. `buildResponsesRequestPayload` raises a smaller positive whole budget to 16; any
+other value is sent as it came, so an invalid one is still refused.
 
 ### Tool-schema compatibility
 
