@@ -746,8 +746,10 @@ another model is dropped. Effort is clamped to Claude's levels and sent as adapt
 thinking. Cache breakpoints go on the system prompt, the last tool, the end of the
 conversation and the user turn before it: four, Claude's limit. On the way back,
 usage folds Claude's cache read and creation into `input_tokens`. Codex runs a call
-as soon as its item is done, so tool calls are held until Claude stops with
-`tool_use` and dropped otherwise. `max_tokens` and `refusal` become
+as soon as its item is done, so from the first tool call on, blocks are held in
+order until Claude stops: released with their calls when it stops with `tool_use`,
+without them otherwise. While blocks are held, a `response.in_progress` event every
+30 seconds keeps Codex's 300-second SSE idle timeout from ending the turn. `max_tokens` and `refusal` become
 `response.incomplete`; a broken stream, or one that stops with a block still open,
 becomes `response.failed`. A `json_schema` `text.format` (`--output-schema`) is
 sent as a system instruction, since Copilot's Messages endpoint takes no schema.
@@ -766,8 +768,9 @@ model, `model`, and rewrites the `[model_providers.copilot-relay]` table. It edi
 line by line, so comments and layout stay: headers and keys are read with quoted
 parts, and lines inside multi-line strings are skipped. It refuses a provider defined
 by dotted keys or an inline table, and an inline `model_providers` table. Then it
-parses the result with `smol-toml` and refuses unless it reads as the original with
-only those values changed. `applyCodexSetup` edits from the same snapshot it
+parses the result with `smol-toml`, integers past JavaScript's safe range as
+`BigInt`, and refuses unless it reads as the original with only those values
+changed, comparing every value with its type. `applyCodexSetup` edits from the same snapshot it
 publishes against, so an edit saved in between is a conflict, not lost, and a file
 holding the apiKey is made owner-only again even when its content is current.
 
