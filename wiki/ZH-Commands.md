@@ -191,9 +191,7 @@ copilot-relay setup codex-cli --force   # Codex 尚未在本机运行过也配�
 - `codex-cli` 和 `codex-app` 共用一个 `config.toml` 和模型列表，写法与 `start` 时 `codexSetup`
   相同（见 [Codex](ZH-Codex.md)）；同时指定两者只写一次。
 
-`apiKey` 为空时，setup 会先创建一个（`cr-` 加 32 个随机字符），写入 `config.yaml` 的 `apiKey`
-行（以仅所有者可读的方式发布），并给它配置的每个客户端使用；正在运行的中继会加载它。它从不打印
-这个密钥。已有的密钥保持不变。
+每个客户端得到中继的 `apiKey`。`apiKey` 为空时中继接受任何密钥，所以每个客户端得到一个占位值。
 
 从未在本机运行过的客户端，即其目录不存在时，会被跳过，除非指定 `--force`。setup 会读取
 Copilot 的模型目录以获取模型名称、上下文大小和推理等级，没有保存 token 时先登录 GitHub；失败时

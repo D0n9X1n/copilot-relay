@@ -234,10 +234,8 @@ Codex one, as they do for those clients.
   `codexSetup` writes them at `start` (see [Codex](EN-Codex.md)); naming both
   writes it once.
 
-When `apiKey` is empty, setup first creates one, `cr-` and 32 random characters,
-writes it into the `apiKey` line of `config.yaml` (published owner-only), and gives
-it to every client it sets up; a running relay picks it up. It never prints the
-key. An existing key is kept.
+Each client gets the relay's `apiKey`. With `apiKey` empty the relay accepts any
+key, so each client gets a placeholder instead.
 
 A client that has never run on the machine, meaning its directory does not exist,
 is skipped unless `--force` is given. Setup reads Copilot's model catalog for
