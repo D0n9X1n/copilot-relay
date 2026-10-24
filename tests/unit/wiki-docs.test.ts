@@ -91,6 +91,8 @@ test("the consolidated documentation pages exist in both languages", () => {
     "ZH-Commands.md",
     "EN-Prompt-Caching.md",
     "ZH-Prompt-Caching.md",
+    "EN-Codex.md",
+    "ZH-Codex.md",
     "README.md",
   ]) {
     assert.ok(pages.has(required), `wiki/${required} must exist`)
@@ -475,6 +477,7 @@ test("CLAUDE.md names every public API surface the server registers", () => {
     "GET /v1/models",
     "GET /healthz",
     "GET|HEAD /api/hello",
+    "POST /v1/responses",
   ]) {
     assert.ok(
       publicApiSection.includes(surface),

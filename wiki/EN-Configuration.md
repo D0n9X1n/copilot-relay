@@ -62,7 +62,7 @@ opusModel: claude-opus-5.5
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `claudeUpstreamApi` | Claude upstream protocol: `chat-completions` (default), `auto`, or `messages`. Does not change non-Claude routing. |
-| `gptModel` | Upstream model for non-Opus requests. |
+| `gptModel` | Upstream model for non-Opus requests, and for a Codex request whose model the catalog does not list. |
 | `opusModel` | Upstream model for requested models containing `opus`. |
 
 ## Choose Claude's upstream protocol

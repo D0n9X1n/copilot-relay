@@ -1,7 +1,8 @@
 # 架构
 
-`copilot-relay` 只是又一个让 Claude Code 使用 GitHub Copilot 订阅的中继。它在本地
-暴露 Claude 兼容接口，并把这些请求翻译成 GitHub Copilot 上游调用。
+`copilot-relay` 只是又一个让 Claude Code 和 Codex 使用 GitHub Copilot 订阅的中继。它在
+本地暴露 Claude 兼容接口，并把这些请求翻译成 GitHub Copilot 上游调用；Codex 的 OpenAI
+Responses 请求则直接转发给 Copilot。
 
 本页是一张地图：有哪些部件、一个请求如何穿过它们、边界在哪里。每个边界背后的
 精确机制 —— 模块名、不变量，以及固定它们的理由 —— 见
@@ -78,22 +79,24 @@ sequenceDiagram
 
 ## 公开 API
 
-只有面向 Claude Code 的接口是公开的：
+公开的是面向 Claude Code 的接口，以及 Codex 使用的 Responses 路由：
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses`（Codex）
 
-内部会调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`，但不公开
-OpenAI 兼容路由。通过接入检查的未知路由返回 `500`，并记录有界诊断供兼容性排查。
+内部会调用 Copilot `/chat/completions`、`/responses` 或原生 `/v1/messages`。唯一公开的
+OpenAI 兼容路由是 `POST /v1/responses`，它把 Codex 的请求转发给 Copilot `/responses`，见
+[Codex](ZH-Codex.md) 和[内部实现](ZH-Internals.md)。通过接入检查的未知路由返回 `500`，并记录有界诊断供兼容性排查。
 
 `src/server.ts` 校验请求 authority/Host 是否为 loopback 或配置的主机名，以及是否匹配
 实际监听端口。若携带 Origin，必须与该 origin 一致；不匹配返回 `403`。设置了 `apiKey`
 时，除 `GET /healthz` 和 `GET`/`HEAD /api/hello` 外，每个请求随后都必须以 `x-api-key`
 或 `Authorization: Bearer` 携带该密钥，否则在读取正文、执行任何路由之前返回 `401`。
-Messages/token 计数的非空 POST 正文必须使用 `application/json`，否则返回 `415`。没有
+Messages/token 计数/Responses的非空 POST 正文必须使用 `application/json`，否则返回 `415`。没有
 `apiKey` 时，这些是**本地接入控制，不是网络认证**：Claude 占位 token 不能保护 LAN
 监听器。请保持 loopback 绑定，或先设置 `apiKey`；见[配置](ZH-Configuration.md)。
 
@@ -316,7 +319,7 @@ Debug 捕获共用该窗口，在启动/重载及请求时节流清理，保留�
 中央日志器在写入两个 sink 前都通过 `scrubSensitiveUrls` 处理输出值，在 `debug`
 级别也会脱敏敏感 URL 尾部；这不是通用 payload 脱敏。普通 payload 渲染仍有界且单行。
 
-`logLevel: debug` 还会为通过接入检查的 Messages/token 计数 POST 自动捕获**完整的
+`logLevel: debug` 还会为通过接入检查的 Messages/token 计数/Responses POST 自动捕获**完整的
 已观察原始正文**，放在 `captures/<local-date>/<request-id>/`，POSIX 上目录权限 0700、
 文件权限 0600。元数据 header 使用允许列表，不包含认证 header。正文不经过日志渲染或
 脱敏：提示词、工具 payload 和上游回显本身都可能包含密钥。**绝不要整份分享捕获。**

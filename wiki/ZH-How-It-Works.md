@@ -1,7 +1,7 @@
 # 运行原理
 
 `copilot-relay` 是一个本地 Claude Messages API relay，后端使用 GitHub
-Copilot。
+Copilot。它也向 Codex 提供 OpenAI Responses API，见 [Codex](ZH-Codex.md)。
 
 Claude Code 访问：
 
@@ -81,13 +81,14 @@ Preflight 在 socket 绑定之前运行，所以一个连配置模型都够不�
 
 ## 公开 API
 
-只公开 Claude Code 需要的接口：
+公开 Claude Code 需要的接口，以及 Codex 使用的接口：
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses` —— 供 Codex CLI 和 Codex app 使用的 OpenAI Responses API
 
 `/api/hello` 是 Claude Code 在启动以及正常请求前后发送的连通性探测接口。它与
 `/healthz` 一样由本地直接返回，不会访问 Copilot，因此返回 `200` 只说明中继正在
@@ -98,7 +99,7 @@ Preflight 在 socket 绑定之前运行，所以一个连配置模型都够不�
 进程**的版本 —— 也就是运行中的中继本身，而不是发起询问的那个 CLI。正因如此，
 `copilot-relay status` 才能告诉你：新版本已经装上了，但进程还没有重启。
 
-OpenAI 兼容接口不会对外公开。
+其他 OpenAI 兼容接口（例如 Chat Completions）不会对外公开。
 
 ## 模型路由
 
@@ -163,13 +164,14 @@ opusModel: claude-opus-5.5
 
 ## Debug 捕获与离线重放
 
-开启 `logLevel: debug` 后，通过接入检查的 Messages/token 计数 POST 会自动将实际观察到的
+开启 `logLevel: debug` 后，通过接入检查的 Messages/token 计数/Responses POST 会自动将实际观察到的
 客户端/上游/下游原始正文捕获到
 `~/.copilot-relay/captures/<local-date>/<request-id>/`。认证 header 不会收录，但提示词
 及工具结果本身可能包含密钥：**绝不要整份分享这些捕获**。普通日志仍是有界单行条目，
 捕获失败或过载会明确标为不完整。
 
 `copilot-relay replay <request-id|directory>` 仅使用记录的传输和刷新结果运行当前
-handler，不建 socket、不认证，也不写 token/config。匹配表示本地转换仍与记录一致，
+handler，不建 socket、不认证，也不写 token/config。它重放 Messages 和 token 计数的捕获；
+Responses 的捕获只供查看，不会重放。匹配表示本地转换仍与记录一致，
 不代表 Copilot 现在会给出相同答案。限制及退出码见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)。

@@ -6,18 +6,19 @@ Setup, checks, and the workflow every change goes through. For the design map se
 
 ## Goal and scope
 
-`copilot-relay` is just another relay for Claude Code to use a GitHub Copilot
-subscription. The public API is Claude Code-compatible only:
+`copilot-relay` is just another relay for Claude Code and Codex to use a GitHub
+Copilot subscription. The public API serves Claude Code and Codex:
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses` (Codex CLI and the Codex app)
 
 The relay may call Copilot `/chat/completions`, `/responses` or native `/v1/messages`
-internally; this does not add public OpenAI routes. Do not expand the public surface
-without a product decision. Unknown admitted routes return `500` with bounded
+internally. `POST /v1/responses` is the one public OpenAI-compatible route, added for
+Codex; do not expand the public surface further without a product decision. Unknown admitted routes return `500` with bounded
 compatibility diagnostics. Host/Origin/JSON admission is not network authentication;
 keep real listeners on loopback. See [Architecture](EN-Architecture.md).
 

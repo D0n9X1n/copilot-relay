@@ -216,13 +216,13 @@ Only three levels are valid:
 | --- | --- |
 | `error` | Startup, preflight, request, token refresh, and upstream failures. |
 | `info` | Errors plus startup/preflight status, request IDs, model/effort summaries, upstream lifecycle, HTTP codes, and completion/refusal/cache metadata. |
-| `debug` | Info plus detailed timing/capture-path logs and automatic raw full-body capture for admitted Messages/count-token POSTs; no routine full-payload log dumps. |
+| `debug` | Info plus detailed timing/capture-path logs and automatic raw full-body capture for admitted Messages/count-token/Responses POSTs; no routine full-payload log dumps. |
 
 Invalid values such as `warn`, `trace`, or `silent` stop startup. File logs
 follow the same `logLevel` filter as console logs.
 
 Start with `info`. Enable `logLevel: debug` only for a short, intentional capture
-window, then restore `info`. It captures **all admitted Messages/count-token POSTs
+window, then restore `info`. It captures **all admitted Messages/count-token/Responses POSTs
 during that window**, not just the request you are investigating. It does not
 retroactively recover prior traffic. GET/static probes and requests rejected by
 Host/Origin/content-type admission are not full-body captures.
@@ -284,7 +284,8 @@ copilot-relay replay /absolute/path/to/capture-directory
 
 Both forms are `copilot-relay replay <request-id|directory>`. An ID searches the
 local date directories; an explicit directory can be outside the default home.
-Replay runs the **actual current in-process handler** using recorded ordered
+Replay accepts Messages and count-tokens captures; a Codex `/v1/responses` capture
+is recorded for inspection but reported `MALFORMED` by replay. Replay runs the **actual current in-process handler** using recorded ordered
 upstream/refresh transport, with no sockets, real authentication, token/config
 writes or new capture. It compares actual outgoing requests and final JSON/SSE,
 not just two saved files. Output includes each exchange's status, known completion
@@ -389,7 +390,7 @@ info Model request client=claude requested_model=opus upstream_model=claude-opus
 
 | Field | Meaning |
 | --- | --- |
-| `client` | `claude` for Claude Code traffic, `generic` for internal startup preflight |
+| `client` | `claude` for Claude Code traffic, `codex` for `POST /v1/responses`, `generic` for internal startup preflight |
 | `requested_model` | model name sent by Claude Code |
 | `upstream_model` | actual Copilot model used |
 | `requested_think_effort` | Claude Code's `output_config.effort`, legacy `reasoning_effort`, or `unset` when absent |
@@ -406,6 +407,9 @@ payload dump, and strips terminal controls to stay on one line.
 The native route has a narrower summary with `upstream_api=messages`, the routed
 model and effective effort. The full original model/control fields remain in a
 debug capture, not in a guarantee that both summary formats are identical.
+The Codex route logs `client=codex … upstream_api=responses` with the requested and
+effective effort and the initiator, plus `subagent=` for a Codex subagent and
+`removed=` naming fields dropped because Copilot rejects them; see [Codex](EN-Codex.md).
 
 ### Upstream Copilot calls
 

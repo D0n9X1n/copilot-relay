@@ -1,6 +1,7 @@
 # How copilot-relay works
 
-`copilot-relay` is a local Claude Messages API relay backed by GitHub Copilot.
+`copilot-relay` is a local Claude Messages API relay backed by GitHub Copilot. It
+also serves Codex the OpenAI Responses API; see [Codex](EN-Codex.md).
 
 Claude Code talks to:
 
@@ -87,13 +88,14 @@ The source and detection boundaries are mapped in [Architecture](EN-Architecture
 
 ## Public API surface
 
-Only Claude Code-compatible endpoints are public:
+Claude Code's endpoints, and the one Codex uses, are public:
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `GET /v1/models`
 - `GET /healthz`
 - `GET|HEAD /api/hello`
+- `POST /v1/responses` — the OpenAI Responses API for Codex CLI and the Codex app
 
 `/api/hello` is a reachability probe Claude Code sends on startup and around
 real traffic. Like `/healthz`, it is answered locally and never contacts
@@ -105,7 +107,7 @@ build of the process answering — the running relay, not whichever CLI asked.
 That is what lets `copilot-relay status` tell you an upgrade has been installed
 but not restarted.
 
-OpenAI-compatible routes are intentionally not public.
+Other OpenAI-compatible routes, such as Chat Completions, are intentionally not public.
 
 ## Model routing
 
@@ -176,7 +178,7 @@ one search per turn only. Continuation/history details are in
 
 ## Debug captures and offline replay
 
-With `logLevel: debug`, admitted Messages/count-token POSTs automatically capture
+With `logLevel: debug`, admitted Messages/count-token/Responses POSTs automatically capture
 raw observed client/upstream/downstream bodies in
 `~/.copilot-relay/captures/<local-date>/<request-id>/`. Auth headers are excluded,
 but prompts and tool results can themselves contain secrets: **never share these
@@ -185,6 +187,7 @@ or overload is explicitly incomplete.
 
 `copilot-relay replay <request-id|directory>` runs the current handler using only
 recorded transport and refresh results, without sockets, authentication, or token/
-config writes. A match means the local transformation still matches, not that
-Copilot will answer the same way now. See
+config writes. It replays Messages and count-tokens captures; Responses captures
+are recorded for inspection but not replayed. A match means the local
+transformation still matches, not that Copilot will answer the same way now. See
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for limits and exit codes.

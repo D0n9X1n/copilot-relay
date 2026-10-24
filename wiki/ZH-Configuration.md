@@ -57,7 +57,7 @@ opusModel: claude-opus-5.5
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `claudeUpstreamApi` | Claude 上游协议：`chat-completions`（默认）、`auto` 或 `messages`。不改变非 Claude 模型的路由。 |
-| `gptModel` | 非 Opus 请求使用的上游模型。 |
+| `gptModel` | 非 Opus 请求使用的上游模型；Codex 请求的模型不在目录中时也使用它。 |
 | `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
 
 ## 选择 Claude 的上游协议

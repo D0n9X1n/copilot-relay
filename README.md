@@ -1,6 +1,6 @@
 # copilot-relay
 
-**Use Claude Code with the models available through your GitHub Copilot subscription.**
+**Use Claude Code and Codex with the models available through your GitHub Copilot subscription.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/D0n9X1n/copilot-relay/ci.yml?branch=main&logo=githubactions&logoColor=white&label=CI)](https://github.com/D0n9X1n/copilot-relay/actions/workflows/ci.yml) [![npm version](https://img.shields.io/npm/v/copilot-relay?logo=npm)](https://www.npmjs.com/package/copilot-relay) [![npm downloads](https://img.shields.io/npm/dm/copilot-relay?logo=npm&label=downloads)](https://www.npmjs.com/package/copilot-relay) [![GitHub release](https://img.shields.io/github/v/release/D0n9X1n/copilot-relay?logo=github)](https://github.com/D0n9X1n/copilot-relay/releases/latest)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json) [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](wiki/README.md) [![License: MIT](https://img.shields.io/github/license/D0n9X1n/copilot-relay?color=blue)](LICENSE)
@@ -10,6 +10,7 @@
 [![Watch a one-minute video tour of copilot-relay](https://gitdiagram.com/video-badge.svg)](https://gitdiagram.com/d0n9x1n/copilot-relay/video)
 
 - **Claude Code, familiar workflow** — Messages API compatibility, streaming responses, and tool calls.
+- **Codex CLI and the Codex app** — an OpenAI Responses passthrough for Copilot's GPT models; [set it up](wiki/EN-Codex.md) · [中文](wiki/ZH-Codex.md).
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
 - **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; existing selections survive upgrades.
 - **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.
@@ -74,6 +75,5 @@ scripts. It asks GitHub with the stored token, so no relay needs to run.
 - Run at login: [macOS](wiki/EN-macOS-LaunchAgent.md) · [Windows](wiki/EN-Windows-Service.md) · [Linux](wiki/EN-Linux-systemd.md)
 - [Commands](wiki/EN-Commands.md) · [Prompt caching](wiki/EN-Prompt-Caching.md) · [Troubleshoot](wiki/EN-Logging-Troubleshooting.md) · [Understand the architecture](wiki/EN-Architecture.md) · [Contribute](wiki/EN-Development.md)
 
-Unofficial research project; not affiliated with GitHub or Anthropic. Upstream
-services and compatibility can change. Model and tool support are not guaranteed;
-see the Wiki for known limitations. [MIT licensed](LICENSE).
+Unofficial research project; not affiliated with GitHub, Anthropic or OpenAI. Upstream services and
+compatibility can change; model and tool support are not guaranteed (see the Wiki). [MIT licensed](LICENSE).
