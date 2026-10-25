@@ -430,7 +430,11 @@ test("fish parses the script and completes by the command word, skipping option 
   assert.deepEqual(complete("copilot-relay status --d"), ["--deep"])
   assert.deepEqual(complete("copilot-relay status --h"), ["--help"])
   assert.deepEqual(complete("copilot-relay models --model gp"), ["gpt-6-astra"])
-  assert.deepEqual(complete("copilot-relay cache --model status --d"), ["--daily"])
+  // "status" is the --model value here, so cache's options are offered and status's --deep is not.
+  // fish may add looser matches of its own for --d, so the test checks membership, not the list.
+  const afterValue = complete("copilot-relay cache --model status --d")
+  assert(afterValue.includes("--daily"), `cache --daily must be offered: ${afterValue.join(" ")}`)
+  assert(!afterValue.includes("--deep"), `status --deep must not be offered in cache: ${afterValue.join(" ")}`)
 })
 
 // TabExpansion2 is what PowerShell runs for Tab, so it returns the completions a user would see.
