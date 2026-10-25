@@ -62,8 +62,8 @@ copilot-relay cache --hourly         # or --daily; narrow with --since 6h or --m
 copilot-relay cache --json
 ```
 
-Check your Copilot plan and quota with `copilot-relay usage`; add `--json` for
-scripts. It asks GitHub with the stored token, so no relay needs to run.
+Check your Copilot plan and quota with `copilot-relay usage`; add `--json` for scripts. It asks GitHub
+with the stored token, so no relay needs to run. Tab completion: `eval "$(copilot-relay completion zsh)"` in `~/.zshrc`.
 
 ## Go further
 

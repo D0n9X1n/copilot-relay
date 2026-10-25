@@ -26,6 +26,7 @@
     "copilot-relay": "dist/main.js"
   },
   "files": [
+    "completions",
     "config.default.yaml",
     "dist",
     "vendor"

@@ -22,6 +22,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      # zsh and fish run the shell-completion tests on Linux; macOS has zsh and every runner has pwsh.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run test:unit
