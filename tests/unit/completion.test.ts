@@ -74,6 +74,8 @@ const stubRelayDirectory = (models: string[] = ["gpt-6-astra", "claude-opus-5.5"
 // fish single quotes: a backslash and a quote are the only characters that need a backslash.
 const singleQuoteForFish = (text: string): string => `'${text.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`
 
+const singleQuotePowerShellText = (text: string): string => `'${text.replaceAll("'", "''")}'`
+
 // A model name that runs a command if a shell evaluates it rather than offering it as text.
 const injectedModel = (marker: string): string => `$(touch ${marker})`
 
@@ -424,7 +426,7 @@ test("fish parses the script and completes by the command word, skipping option 
   }
 
   assert.deepEqual(complete("copilot-relay se"), ["setup"])
-  assert.deepEqual(complete("copilot-relay setup claude-code-c"), ["claude-code-app", "claude-code-cli"])
+  assert.deepEqual(complete("copilot-relay setup claude-code-"), ["claude-code-app", "claude-code-cli"])
   assert.deepEqual(complete("copilot-relay status --d"), ["--deep"])
   assert.deepEqual(complete("copilot-relay status --h"), ["--help"])
   assert.deepEqual(complete("copilot-relay models --model gp"), ["gpt-6-astra"])
@@ -437,6 +439,15 @@ test("PowerShell parses the script and completes commands and setup targets", { 
   const quoted = file.replaceAll("'", "''")
   const captures = fs.mkdtempSync(path.join(home, "pwsh-captures-"))
   fs.mkdirSync(path.join(captures, "cap tures"))
+  const probes = [
+    "copilot-relay se|",
+    "copilot-relay setup |",
+    "copilot-relay status --d|",
+    "copilot-relay cache --since=2|",
+    "copilot-relay models --model g| --deep",
+    "copilot-relay models --model inj|",
+    "copilot-relay replay ./cap|",
+  ]
   const check = [
     "$errors = $null",
     `[System.Management.Automation.Language.Parser]::ParseFile('${quoted}', [ref]$null, [ref]$errors) | Out-Null`,
@@ -445,18 +456,15 @@ test("PowerShell parses the script and completes commands and setup targets", { 
     // A function named copilot-relay answers the model lookup, ahead of any command on PATH.
     "function copilot-relay { 'gpt-6-astra'; 'claude-opus-5.5'; 'inj$(touch x)' }",
     `Set-Location -LiteralPath '${captures.replaceAll("'", "''")}'`,
+    // Each probe marks the cursor with |, which is removed before completing.
     "$probes = @(",
-    "  @('copilot-relay se', 16),",
-    "  @('copilot-relay setup ', 20),",
-    "  @('copilot-relay status --d', 24),",
-    "  @('copilot-relay cache --since=2', 29),",
-    "  @('copilot-relay models --model g --deep', 29),",
-    "  @('copilot-relay models --model inj', 33),",
-    "  @('copilot-relay replay ./cap', 26)",
+    ...probes.map((probe, index) => `  ${singleQuotePowerShellText(probe)}${index < probes.length - 1 ? "," : ""}`),
     ")",
     "foreach ($probe in $probes) {",
-    "  $found = (TabExpansion2 -inputScript $probe[0] -cursorColumn $probe[1]).CompletionMatches | ForEach-Object { $_.CompletionText } | Sort-Object",
-    "  Write-Output ('=== ' + $probe[0])",
+    "  $cursor = $probe.IndexOf('|')",
+    "  $line = $probe.Remove($cursor, 1)",
+    "  $found = (TabExpansion2 -inputScript $line -cursorColumn $cursor).CompletionMatches | ForEach-Object { $_.CompletionText } | Sort-Object",
+    "  Write-Output ('=== ' + $probe)",
     "  $found | ForEach-Object { Write-Output $_ }",
     "}",
   ].join("\n")
@@ -474,11 +482,11 @@ test("PowerShell parses the script and completes commands and setup targets", { 
     }
   }
 
-  assert.deepEqual(offered.get("copilot-relay se"), ["setup"])
-  assert.deepEqual(offered.get("copilot-relay setup "), ["claude-code-app", "claude-code-cli", "codex-app", "codex-cli"])
-  assert.deepEqual(offered.get("copilot-relay status --d"), ["--deep"])
-  assert.deepEqual(offered.get("copilot-relay cache --since=2"), ["--since=24h", "--since=2d"])
-  assert.deepEqual(offered.get("copilot-relay models --model g --deep"), ["gpt-6-astra"])
-  assert.deepEqual(offered.get("copilot-relay models --model inj"), ["'inj$(touch x)'"])
-  assert.deepEqual(offered.get("copilot-relay replay ./cap"), ["'./cap tures/'"])
+  assert.deepEqual(offered.get("copilot-relay se|"), ["setup"])
+  assert.deepEqual(offered.get("copilot-relay setup |"), ["claude-code-app", "claude-code-cli", "codex-app", "codex-cli"])
+  assert.deepEqual(offered.get("copilot-relay status --d|"), ["--deep"])
+  assert.deepEqual(offered.get("copilot-relay cache --since=2|"), ["--since=24h", "--since=2d"])
+  assert.deepEqual(offered.get("copilot-relay models --model g| --deep"), ["gpt-6-astra"])
+  assert.deepEqual(offered.get("copilot-relay models --model inj|"), ["'inj$(touch x)'"])
+  assert.deepEqual(offered.get("copilot-relay replay ./cap|"), ["'./cap tures/'"])
 })
