@@ -93,6 +93,8 @@ test("the consolidated documentation pages exist in both languages", () => {
     "ZH-Prompt-Caching.md",
     "EN-Codex.md",
     "ZH-Codex.md",
+    "EN-Copilot-App.md",
+    "ZH-Copilot-App.md",
     "README.md",
   ]) {
     assert.ok(pages.has(required), `wiki/${required} must exist`)
@@ -623,6 +625,37 @@ test("README and both Configuration guides limit the relay to the account owner"
     assert.notEqual(personalUse, "", `${page} must have ${heading} under the client-key section`)
     for (const term of terms) {
       assert(personalUse.includes(term), `${page} ${heading} must mention ${term}`)
+    }
+  }
+})
+
+// Why: the GitHub Copilot app and Copilot CLI default an OpenAI-compatible
+// provider to chat completions, a route the relay does not serve. Only the
+// Responses wire API on the /v1 base URL, or the Anthropic type on the bare
+// base URL, reaches a relay route, so both guides must give exactly those.
+test("both Copilot app guides give the provider settings that reach a relay route", () => {
+  for (const name of ["EN-Copilot-App.md", "ZH-Copilot-App.md"]) {
+    const page = readPage(name)
+
+    for (const text of [
+      "http://127.0.0.1:4142/v1",
+      "http://127.0.0.1:4142`",
+      "COPILOT_PROVIDER_BASE_URL",
+      "COPILOT_PROVIDER_TYPE=openai",
+      "COPILOT_PROVIDER_WIRE_API=responses",
+      "COPILOT_PROVIDER_API_KEY",
+      "$env:COPILOT_PROVIDER_WIRE_API",
+      "gpt-6-astra",
+      "claude-opus-5.5",
+      "GPT-6 Astra · Relay",
+      "Claude Opus 5.5 · Relay",
+      "Copilot Relay (local)",
+      "/v1/chat/completions",
+      "Unsupported Claude API route",
+      "copilot-relay cache",
+      "Configuration.md",
+    ]) {
+      assert(page.includes(text), `${name} must give ${text}`)
     }
   }
 })

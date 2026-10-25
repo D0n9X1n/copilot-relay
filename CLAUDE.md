@@ -57,6 +57,7 @@ Both audiences live there. High-level architecture *and* precise technical detai
 - `EN-Commands` / `ZH-Commands` — every CLI command: options, what it reads, writes and contacts, exit codes. `tests/unit/wiki-docs.test.ts` fails when a page misses a command `src/main.ts` registers, or one of its options.
 - `EN-Prompt-Caching` / `ZH-Prompt-Caching` — how prompt caching works: what Claude Code marks, what the relay sends on each route, how to measure the hit rate.
 - `EN-Codex` / `ZH-Codex` — Codex CLI and Codex app setup, model choice, what the relay changes, limits.
+- `EN-Copilot-App` / `ZH-Copilot-App` — GitHub Copilot app and Copilot CLI custom-provider setup, which wire API reaches a relay route, limits.
 - `EN-Logging-Troubleshooting` / `ZH-Logging-Troubleshooting` — log format and operational recipes.
 - Per-platform service pages.
 
