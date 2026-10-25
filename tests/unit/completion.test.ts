@@ -16,6 +16,7 @@ process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
 
 const { completionModels, completionShells, renderCompletion } = await import("../../src/lib/completion")
+type CompletionShell = import("../../src/lib/completion").CompletionShell
 const { buildCompletionSpec } = await import("../../src/completion")
 const { paths } = await import("../../src/lib/paths")
 
@@ -59,14 +60,19 @@ const writeScript = (name: string, body: string): string => {
 }
 
 // A stand-in copilot-relay on PATH, so a script's dynamic model lookup answers without a real
-// install. It prints the two configured models the way `completion --models` does.
-const stubRelayDirectory = (): string => {
+// install. It prints the given models, one per line, the way `completion --models` does.
+const stubRelayDirectory = (models: string[] = ["gpt-6-astra", "claude-opus-5.5"]): string => {
   const directory = fs.mkdtempSync(path.join(home, "bin-"))
+  const list = path.join(directory, "models.txt")
+  fs.writeFileSync(list, models.map((model) => `${model}\n`).join(""))
   const stub = path.join(directory, "copilot-relay")
-  fs.writeFileSync(stub, "#!/bin/sh\nprintf 'gpt-6-astra\\nclaude-opus-5.5\\n'\n")
+  fs.writeFileSync(stub, `#!/bin/sh\ncat '${list}'\n`)
   fs.chmodSync(stub, 0o755)
   return directory
 }
+
+// A model name that runs a command if a shell evaluates it rather than offering it as text.
+const injectedModel = (marker: string): string => `$(touch ${marker})`
 
 test("the completion spec lists every command src/main.ts registers", async () => {
   const spec = await buildCompletionSpec()
@@ -108,22 +114,66 @@ test("the completion spec carries each option, whether it takes a value, and the
   assert.equal(command("start").positional, undefined)
 })
 
-test("each shell's script names every command and every option", async () => {
+// Each pattern matches how one shell registers a command or an option, so a script that only
+// mentions a name, in a comment or a description, does not pass.
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+const registrations: Record<CompletionShell, {
+  command: (name: string) => RegExp
+  option: (command: string, option: string) => RegExp
+}> = {
+  zsh: {
+    command: (name) => new RegExp(`^ {4}'${escapeRegExp(name)}:`, "m"),
+    option: (command, option) => new RegExp(`\\(${escapeRegExp(command)}\\)\\n {6}_arguments(?:(?!\\n {6};;)[\\s\\S])*'--${escapeRegExp(option)}=?\\[`),
+  },
+  bash: {
+    command: (name) => new RegExp(`^ {4}${escapeRegExp(name)}\\)$`, "m"),
+    option: (command, option) => new RegExp(`^ {4}${escapeRegExp(command)}\\)\\n[\\s\\S]*?_copilot_relay_offer [^\\n]*'--${escapeRegExp(option)}'[^\\n]*\\n {6};;`, "m"),
+  },
+  fish: {
+    command: (name) => new RegExp(`^complete -c copilot-relay -n '__fish_use_subcommand' -a ${escapeRegExp(name)} -d `, "m"),
+    option: (command, option) => new RegExp(`^complete -c copilot-relay -n '__fish_seen_subcommand_from ${escapeRegExp(command)}' -l ${escapeRegExp(option)}( |$)`, "m"),
+  },
+  powershell: {
+    command: (name) => new RegExp(`^ {2}'${escapeRegExp(name)}' = @\\{$`, "m"),
+    option: (command, option) => new RegExp(`^ {2}'${escapeRegExp(command)}' = @\\{\\n(?: {4}.*\\n)*? {8}'--${escapeRegExp(option)}' = @\\{`, "m"),
+  },
+}
+
+test("each shell's script registers every command and every option", async () => {
   const spec = await buildCompletionSpec()
 
   for (const shell of completionShells) {
     const script = renderCompletion(shell, spec)
 
     for (const command of spec.commands) {
-      assert(script.includes(command.name), `${shell} script must name ${command.name}`)
+      assert.match(script, registrations[shell].command(command.name), `${shell} must register ${command.name}`)
       for (const option of command.options) {
-        assert(script.includes(`--${option.name}`), `${shell} script must name ${command.name} --${option.name}`)
+        assert.match(script, registrations[shell].option(command.name, option.name), `${shell} must register ${command.name} --${option.name}`)
       }
     }
 
     for (const word of ["claude-code-cli", "codex-app", "6h", "7d", "completion --models"]) {
       assert(script.includes(word), `${shell} script must include ${word}`)
     }
+  }
+})
+
+// Removing one command's registrations must fail the check above, or it could pass on mentions alone.
+test("the registration check fails when a command's completions are removed", async () => {
+  const spec = await buildCompletionSpec()
+
+  for (const shell of completionShells) {
+    const script = renderCompletion(shell, spec)
+    const stripped = script
+      .split("\n")
+      .filter((line) => !(shell === "fish" && line.includes("__fish_seen_subcommand_from status'")))
+      .join("\n")
+    const withoutStatus = shell === "fish"
+      ? stripped
+      : renderCompletion(shell, { commands: spec.commands.filter((command) => command.name !== "status") })
+
+    assert.doesNotMatch(withoutStatus, registrations[shell].option("status", "deep"), `${shell} check must notice status --deep is gone`)
   }
 })
 
@@ -174,19 +224,24 @@ test("completion models come from config.yaml, in gptModel then opusModel order,
 
 test("bash completes commands, options, setup targets and configured models", { skip: !hasShell("bash") || process.platform === "win32" }, async () => {
   const file = writeScript("copilot-relay.bash", renderCompletion("bash", await buildCompletionSpec()))
-  const complete = (words: string[]): string[] => {
+  const complete = (words: string[], options: { cwd?: string, models?: string[] } = {}): string[] => {
+    // Each word is passed through the environment, so the test's own quoting cannot change it.
+    const environment: Record<string, string> = {}
+    words.forEach((word, index) => {
+      environment[`WORD_${index}`] = word
+    })
     const script = [
       `source '${file}'`,
-      `COMP_WORDS=(${words.map((word) => `'${word}'`).join(" ")})`,
+      "COMP_WORDS=()",
+      ...words.map((_, index) => `COMP_WORDS[${index}]=$WORD_${index}`),
       `COMP_CWORD=${words.length - 1}`,
-      `COMP_LINE='${words.join(" ")}'`,
-      `COMP_POINT=\${#COMP_LINE}`,
       "_copilot_relay",
       `printf '%s\\n' "\${COMPREPLY[@]}"`,
     ].join("\n")
     const result = spawnSync("bash", ["-c", script], {
+      cwd: options.cwd,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${stubRelayDirectory()}${path.delimiter}${process.env.PATH ?? ""}` },
+      env: { ...process.env, ...environment, PATH: `${stubRelayDirectory(options.models)}${path.delimiter}${process.env.PATH ?? ""}` },
     })
     assert.equal(result.status, 0, result.stderr)
     return result.stdout.split("\n").filter((line) => line !== "").sort()
@@ -204,6 +259,21 @@ test("bash completes commands, options, setup targets and configured models", { 
   assert.deepEqual(complete(["copilot-relay", "models", "--model", ""]), ["claude-opus-5.5", "gpt-6-astra"])
   assert.deepEqual(complete(["copilot-relay", "cache", "--since", "2"]), ["24h", "2d"])
   assert.deepEqual(complete(["copilot-relay", "completion", "z"]), ["zsh"])
+
+  // bash splits --option=value at the =, so the value is completed after a separate "=" word.
+  assert.deepEqual(complete(["copilot-relay", "models", "--model", "=", "gp"]), ["gpt-6-astra"])
+  assert.deepEqual(complete(["copilot-relay", "cache", "--since", "=", "7"]), ["7d"])
+
+  // A configured model is offered as text, never evaluated.
+  const marker = path.join(home, "bash-injected")
+  const offered = complete(["copilot-relay", "models", "--model", ""], { models: [injectedModel(marker), "gpt-6-astra"] })
+  assert.equal(fs.existsSync(marker), false, "a model name must not run as a command")
+  assert(offered.includes(injectedModel(marker)), "the model name must be offered as it is")
+
+  // A directory with a space is one completion, escaped for the command line.
+  const captures = fs.mkdtempSync(path.join(home, "captures-"))
+  fs.mkdirSync(path.join(captures, "my capture"))
+  assert.deepEqual(complete(["copilot-relay", "replay", "my"], { cwd: captures }), ["my\\ capture/"])
 })
 
 test("zsh loads the script and the plugin and registers the completion function", { skip: !hasShell("zsh") || process.platform === "win32" }, async () => {
@@ -242,18 +312,24 @@ test("zsh loads the script and the plugin and registers the completion function"
 test("zsh offers commands, setup targets, configured models and option values on Tab", { skip: !hasShell("zsh") || process.platform === "win32", timeout: 120_000 }, async () => {
   const file = writeScript("_copilot-relay-tab.zsh", renderCompletion("zsh", await buildCompletionSpec()))
   const work = fs.mkdtempSync(path.join(home, "zsh-tab-"))
+  const marker = path.join(home, "zsh-injected")
   const lines = [
     "copilot-relay se",
     "copilot-relay setup ",
     "copilot-relay models --model ",
     "copilot-relay cache --since ",
+    "copilot-relay cache --since=2",
+    "copilot-relay models --model=gp",
     "copilot-relay status --d",
     "copilot-relay completion ",
   ]
   const result = spawnSync("zsh", ["-f", path.join(repoRoot, "tests", "fixtures", "zsh-complete.zsh"), file, work], {
     encoding: "utf8",
     input: `${lines.join("\n")}\n`,
-    env: { ...process.env, PATH: `${stubRelayDirectory()}${path.delimiter}${process.env.PATH ?? ""}` },
+    env: {
+      ...process.env,
+      PATH: `${stubRelayDirectory(["gpt-6-astra", "claude-opus-5.5", injectedModel(marker)])}${path.delimiter}${process.env.PATH ?? ""}`,
+    },
     timeout: 100_000,
   })
   assert.equal(result.status, 0, result.stderr)
@@ -271,8 +347,11 @@ test("zsh offers commands, setup targets, configured models and option values on
 
   assert.deepEqual(offered.get("copilot-relay se"), ["setup"])
   assert.deepEqual(offered.get("copilot-relay setup "), ["claude-code-app", "claude-code-cli", "codex-app", "codex-cli"])
-  assert.deepEqual(offered.get("copilot-relay models --model "), ["claude-opus-5.5", "gpt-6-astra"])
+  assert.deepEqual(offered.get("copilot-relay models --model "), [injectedModel(marker), "claude-opus-5.5", "gpt-6-astra"])
+  assert.equal(fs.existsSync(marker), false, "a model name must not run as a command")
   assert.deepEqual(offered.get("copilot-relay cache --since "), ["24h", "2d", "6h", "7d"])
+  assert.deepEqual(offered.get("copilot-relay cache --since=2"), ["24h", "2d"])
+  assert.deepEqual(offered.get("copilot-relay models --model=gp"), ["gpt-6-astra"])
   assert.deepEqual(offered.get("copilot-relay status --d"), ["--deep"])
   assert.deepEqual(offered.get("copilot-relay completion "), ["bash", "fish", "powershell", "zsh"])
 })

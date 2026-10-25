@@ -140,8 +140,12 @@ const renderZsh = (spec: CompletionSpec): string => {
 
   const commandCases = spec.commands.map((command) => {
     const specs = command.options.map((option) => {
-      const head = `--${option.name}[${zshDescription(option.description)}]`
-      return singleQuotePosix(option.takesValue ? head + zshValues(option.name, option.values) : head)
+      // "--since=" accepts both "--since 6h" and "--since=6h", as citty does.
+      if (option.takesValue) {
+        return singleQuotePosix(`--${option.name}=[${zshDescription(option.description)}]${zshValues(option.name, option.values)}`)
+      }
+
+      return singleQuotePosix(`--${option.name}[${zshDescription(option.description)}]`)
     })
     specs.push(singleQuotePosix("--help[Show help for this command]"))
     if (command.positional !== undefined) {
@@ -197,7 +201,8 @@ fi
 `
 }
 
-// bash: words only, which bash 3.2, the macOS default, supports.
+// bash: works with bash 3.2, the macOS default. Candidates are matched in bash itself rather than
+// with `compgen -W`, which expands the word list again and would run a `$(...)` in a model name.
 const renderBash = (spec: CompletionSpec): string => {
   // The lines that fill COMPREPLY for one kind of value, at the given indent. A free-form value
   // completes nothing, so the user types it.
@@ -207,26 +212,21 @@ const renderBash = (spec: CompletionSpec): string => {
     }
 
     if (values.kind === "words") {
-      return [`${indent}COMPREPLY=( $(compgen -W ${singleQuotePosix(values.words.join(" "))} -- "$cur") )`, `${indent}return 0`]
+      return [`${indent}_copilot_relay_offer ${values.words.map(singleQuotePosix).join(" ")}`, `${indent}return 0`]
     }
 
     if (values.kind === "models") {
-      return [`${indent}COMPREPLY=( $(compgen -W "$(_copilot_relay_models)" -- "$cur") )`, `${indent}return 0`]
+      return [`${indent}_copilot_relay_offer_lines < <(_copilot_relay_models)`, `${indent}return 0`]
     }
 
-    // One directory per line, so a name with a space stays one completion.
-    return [
-      `${indent}local IFS=$'\\n'`,
-      `${indent}COMPREPLY=( $(compgen -d -- "$cur") )`,
-      `${indent}return 0`,
-    ]
+    return [`${indent}_copilot_relay_offer_directories`, `${indent}return 0`]
   }
 
   const commandCases = spec.commands.map((command) => {
     const lines = [`    ${command.name})`]
     const valueOptionsOfCommand = command.options.filter((option) => option.takesValue)
     if (valueOptionsOfCommand.length > 0) {
-      lines.push("      case $prev in")
+      lines.push("      case $option in")
       for (const option of valueOptionsOfCommand) {
         lines.push(`        --${option.name})`, ...reply(option.values, "          "), "          ;;")
       }
@@ -238,19 +238,25 @@ const renderBash = (spec: CompletionSpec): string => {
       lines.push("      if [[ $cur != -* ]]; then", ...reply(command.positional, "        "), "      fi")
     }
 
-    const options = [...command.options.map((option) => `--${option.name}`), "--help"].join(" ")
-    lines.push(`      COMPREPLY=( $(compgen -W ${singleQuotePosix(options)} -- "$cur") )`, "      ;;")
+    const options = [...command.options.map((option) => `--${option.name}`), "--help"]
+    lines.push(`      _copilot_relay_offer ${options.map(singleQuotePosix).join(" ")}`, "      ;;")
     return lines.join("\n")
   })
 
-  const topLevel = [...spec.commands.map((command) => command.name), "--help", "--version"].join(" ")
+  const topLevel = [...spec.commands.map((command) => command.name), "--help", "--version"]
 
-  // An option's value is skipped, not taken for the command word. With no value-taking option,
-  // the case has no such branch: an empty pattern is a syntax error.
+  // An option's value is skipped, not taken for the command word: two words for "--since 6h",
+  // three for "--since=6h", which bash splits at the =. With no value-taking option, the case has
+  // no such branch: an empty pattern is a syntax error.
   const skipValue = valueOptions(spec).length === 0
     ? ""
     : `      ${valueOptions(spec).join("|")})
-        index=$(( index + 2 ))
+        if [[ \${COMP_WORDS[index+1]} == = ]]; then
+          index=$(( index + 3 ))
+        else
+          index=$(( index + 2 ))
+        fi
+
         continue
         ;;
 `
@@ -261,11 +267,57 @@ _copilot_relay_models() {
   ${modelsCommand} 2>/dev/null
 }
 
+# Offers each argument that starts with the word being completed. A case pattern compares the
+# quoted word as text, so neither the candidate nor the typed word is expanded.
+_copilot_relay_offer() {
+  local candidate
+  for candidate in "$@"; do
+    case $candidate in
+      "$cur"*)
+        COMPREPLY+=("$candidate")
+        ;;
+    esac
+  done
+}
+
+# Offers each line of standard input that starts with the word being completed.
+_copilot_relay_offer_lines() {
+  local candidate
+  while IFS= read -r candidate; do
+    if [[ -n $candidate ]]; then
+      _copilot_relay_offer "$candidate"
+    fi
+  done
+}
+
+# Offers directories, escaped for the command line and ending in /, so a name with a space stays
+# one argument and the next Tab goes inside it.
+_copilot_relay_offer_directories() {
+  local directory
+  while IFS= read -r directory; do
+    COMPREPLY+=("$(printf '%q' "$directory")/")
+  done < <(compgen -d -- "$cur")
+
+  if type compopt >/dev/null 2>&1; then
+    compopt -o nospace
+  fi
+}
+
 _copilot_relay() {
-  local cur prev command index word
+  local cur option command index word
   cur=\${COMP_WORDS[COMP_CWORD]}
-  prev=\${COMP_WORDS[COMP_CWORD-1]}
   COMPREPLY=()
+
+  # The option whose value is being completed: the word before, or the one before "=" when bash
+  # split "--since=6h" into "--since", "=" and "6h".
+  option=\${COMP_WORDS[COMP_CWORD-1]}
+  if [[ $option == = && COMP_CWORD -ge 2 ]]; then
+    option=\${COMP_WORDS[COMP_CWORD-2]}
+  fi
+
+  if [[ $cur == = ]]; then
+    cur=
+  fi
 
   # The command is the first word that is neither an option nor an option's value.
   command=
@@ -285,7 +337,7 @@ ${skipValue}      -*)
   done
 
   if [[ -z $command ]]; then
-    COMPREPLY=( $(compgen -W ${singleQuotePosix(topLevel)} -- "$cur") )
+    _copilot_relay_offer ${topLevel.map(singleQuotePosix).join(" ")}
     return 0
   fi
 
@@ -319,7 +371,6 @@ const renderFish = (spec: CompletionSpec): string => {
   const commandLines = spec.commands.map((command) => {
     const condition = `__fish_seen_subcommand_from ${command.name}`
     const lines = [
-      `# ${command.name}: ${command.options.map((option) => `--${option.name}`).join(" ")}`.trimEnd(),
       `complete -c copilot-relay -n '__fish_use_subcommand' -a ${command.name} -d ${singleQuoteFish(plainDescription(command.description))}`,
     ]
     for (const option of command.options) {
