@@ -93,6 +93,8 @@ test("the consolidated documentation pages exist in both languages", () => {
     "ZH-Prompt-Caching.md",
     "EN-Codex.md",
     "ZH-Codex.md",
+    "EN-Copilot-App.md",
+    "ZH-Copilot-App.md",
     "README.md",
   ]) {
     assert.ok(pages.has(required), `wiki/${required} must exist`)
@@ -623,6 +625,67 @@ test("README and both Configuration guides limit the relay to the account owner"
     assert.notEqual(personalUse, "", `${page} must have ${heading} under the client-key section`)
     for (const term of terms) {
       assert(personalUse.includes(term), `${page} ${heading} must mention ${term}`)
+    }
+  }
+})
+
+// Why: the GitHub Copilot app and Copilot CLI default an OpenAI-compatible
+// provider to chat completions, a route the relay does not serve. Only the
+// Responses wire API on the /v1 base URL, or the Anthropic type on the bare
+// base URL, reaches a relay route. Each runnable example is checked whole, so a
+// wrong value in one example cannot pass on a right value elsewhere on the page.
+test("both Copilot app guides give the provider settings that reach a relay route", () => {
+  const pages: [string, string, string][] = [
+    ["EN-Copilot-App.md", "| Base URL | `http://127.0.0.1:4142/v1` |", "| Wire API | Responses |"],
+    ["ZH-Copilot-App.md", "| Base URL | `http://127.0.0.1:4142/v1` |", "| Wire API | Responses |"],
+  ]
+
+  for (const [name, baseUrlRow, wireApiRow] of pages) {
+    const page = readPage(name)
+    const block = (language: string): string => {
+      const match = new RegExp(`\`\`\`${language}\\r?\\n([\\s\\S]*?)\`\`\``).exec(page)
+      assert(match?.[1], `${name} needs a ${language} example`)
+      return match[1]
+    }
+
+    assert(page.includes(baseUrlRow), `${name} app form must use the /v1 base URL`)
+    assert(page.includes(wireApiRow), `${name} app form must choose the Responses wire API`)
+
+    const posix = block("sh")
+    for (const line of [
+      "export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:4142/v1",
+      "export COPILOT_PROVIDER_TYPE=openai",
+      "export COPILOT_PROVIDER_WIRE_API=responses",
+      "export COPILOT_PROVIDER_API_KEY=",
+      "export COPILOT_MODEL=gpt-6-astra",
+    ]) {
+      assert(posix.includes(line), `${name} shell example must set ${line}`)
+    }
+
+    const powershell = block("powershell")
+    for (const line of [
+      '$env:COPILOT_PROVIDER_BASE_URL = "http://127.0.0.1:4142/v1"',
+      '$env:COPILOT_PROVIDER_TYPE = "openai"',
+      '$env:COPILOT_PROVIDER_WIRE_API = "responses"',
+      "$env:COPILOT_PROVIDER_API_KEY = ",
+      '$env:COPILOT_MODEL = "gpt-6-astra"',
+    ]) {
+      assert(powershell.includes(line), `${name} PowerShell example must set ${line}`)
+    }
+
+    for (const text of [
+      "COPILOT_PROVIDER_TYPE=anthropic",
+      "http://127.0.0.1:4142`",
+      "claude-opus-5.5",
+      "GPT-6 Astra · Relay",
+      "Claude Opus 5.5 · Relay",
+      "Copilot Relay (local)",
+      "/v1/chat/completions",
+      "Unsupported Claude API route",
+      "copilot-relay cache",
+      "Configuration.md",
+    ]) {
+      assert(page.includes(text), `${name} must give ${text}`)
     }
   }
 })
