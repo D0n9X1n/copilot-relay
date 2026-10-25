@@ -391,7 +391,6 @@ nothing else: load it from your shell's startup file.
 | Shell | Load it |
 | --- | --- |
 | zsh | Add `eval "$(copilot-relay completion zsh)"` to `~/.zshrc`, after `compinit` (oh-my-zsh runs `compinit` before your own lines). |
-| zsh plugin | The package ships `completions/copilot-relay.plugin.zsh`, which does the same. For oh-my-zsh, link its folder as a custom plugin and add `copilot-relay` to `plugins=(...)`: `ln -s "$(npm root -g)/copilot-relay/completions" "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/copilot-relay"`. zinit, antidote and sheldon can load that folder by path, after `compinit`. |
 | bash | Add `eval "$(copilot-relay completion bash)"` to `~/.bashrc`. It works with bash 3.2, the macOS default. |
 | fish | Run `copilot-relay completion fish > ~/.config/fish/completions/copilot-relay.fish` once, and again after an upgrade. |
 | PowerShell | Add `copilot-relay completion powershell \| Out-String \| Invoke-Expression` to `$PROFILE`. |

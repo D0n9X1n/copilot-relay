@@ -71,6 +71,9 @@ const stubRelayDirectory = (models: string[] = ["gpt-6-astra", "claude-opus-5.5"
   return directory
 }
 
+// fish single quotes: a backslash and a quote are the only characters that need a backslash.
+const singleQuoteForFish = (text: string): string => `'${text.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`
+
 // A model name that runs a command if a shell evaluates it rather than offering it as text.
 const injectedModel = (marker: string): string => `$(touch ${marker})`
 
@@ -114,29 +117,46 @@ test("the completion spec carries each option, whether it takes a value, and the
   assert.equal(command("start").positional, undefined)
 })
 
-// Each pattern matches how one shell registers a command or an option, so a script that only
-// mentions a name, in a comment or a description, does not pass.
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+// How each shell registers a command, and the part of the script that belongs to one command, so
+// an option is looked for only where that command's completions are. A script that only mentions
+// a name, in a comment, a description or another command's section, does not pass.
+const sectionEnd = (script: string, from: number, end: string): string => {
+  const stop = script.indexOf(end, from)
+  return script.slice(from, stop === -1 ? undefined : stop)
+}
 
 const registrations: Record<CompletionShell, {
-  command: (name: string) => RegExp
-  option: (command: string, option: string) => RegExp
+  command: (script: string, name: string) => boolean
+  option: (script: string, command: string, option: string) => boolean
 }> = {
   zsh: {
-    command: (name) => new RegExp(`^ {4}'${escapeRegExp(name)}:`, "m"),
-    option: (command, option) => new RegExp(`\\(${escapeRegExp(command)}\\)\\n {6}_arguments(?:(?!\\n {6};;)[\\s\\S])*'--${escapeRegExp(option)}=?\\[`),
+    command: (script, name) => script.includes(`\n    '${name}:`),
+    option: (script, command, option) => {
+      const from = script.indexOf(`\n    (${command})\n`)
+      const section = from === -1 ? "" : sectionEnd(script, from + 1, "\n      ;;")
+      return section.includes(`'--${option}[`) || section.includes(`'--${option}=[`)
+    },
   },
   bash: {
-    command: (name) => new RegExp(`^ {4}${escapeRegExp(name)}\\)$`, "m"),
-    option: (command, option) => new RegExp(`^ {4}${escapeRegExp(command)}\\)\\n[\\s\\S]*?_copilot_relay_offer [^\\n]*'--${escapeRegExp(option)}'[^\\n]*\\n {6};;`, "m"),
+    command: (script, name) => script.includes(`\n    ${name})\n`),
+    option: (script, command, option) => {
+      const from = script.indexOf(`\n    ${command})\n`)
+      const section = from === -1 ? "" : sectionEnd(script, from + 1, "\n      ;;")
+      return section.split("\n").some((line) => line.trimStart().startsWith("_copilot_relay_offer ") && line.includes(`'--${option}'`))
+    },
   },
   fish: {
-    command: (name) => new RegExp(`^complete -c copilot-relay -n '__fish_use_subcommand' -a ${escapeRegExp(name)} -d `, "m"),
-    option: (command, option) => new RegExp(`^complete -c copilot-relay -n '__fish_seen_subcommand_from ${escapeRegExp(command)}' -l ${escapeRegExp(option)}( |$)`, "m"),
+    command: (script, name) => script.includes(`\ncomplete -c copilot-relay -n '__copilot_relay_using' -a ${name} -d `),
+    option: (script, command, option) =>
+      new RegExp(`^complete -c copilot-relay -n '__copilot_relay_using ${command}' -l ${option}( |$)`, "m").test(script),
   },
   powershell: {
-    command: (name) => new RegExp(`^ {2}'${escapeRegExp(name)}' = @\\{$`, "m"),
-    option: (command, option) => new RegExp(`^ {2}'${escapeRegExp(command)}' = @\\{\\n(?: {4}.*\\n)*? {8}'--${escapeRegExp(option)}' = @\\{`, "m"),
+    command: (script, name) => script.includes(`\n  '${name}' = @{\n`),
+    option: (script, command, option) => {
+      const from = script.indexOf(`\n  '${command}' = @{\n`)
+      const section = from === -1 ? "" : sectionEnd(script, from + 1, "\n  }\n")
+      return section.includes(`\n        '--${option}' = @{`)
+    },
   },
 }
 
@@ -147,9 +167,9 @@ test("each shell's script registers every command and every option", async () =>
     const script = renderCompletion(shell, spec)
 
     for (const command of spec.commands) {
-      assert.match(script, registrations[shell].command(command.name), `${shell} must register ${command.name}`)
+      assert(registrations[shell].command(script, command.name), `${shell} must register ${command.name}`)
       for (const option of command.options) {
-        assert.match(script, registrations[shell].option(command.name, option.name), `${shell} must register ${command.name} --${option.name}`)
+        assert(registrations[shell].option(script, command.name, option.name), `${shell} must register ${command.name} --${option.name}`)
       }
     }
 
@@ -159,21 +179,21 @@ test("each shell's script registers every command and every option", async () =>
   }
 })
 
-// Removing one command's registrations must fail the check above, or it could pass on mentions alone.
-test("the registration check fails when a command's completions are removed", async () => {
+// cache and models both have --model. With it removed from cache alone, the check must still see
+// it missing there, or it could pass on the other command's registration.
+test("the registration check fails when one command loses one option", async () => {
   const spec = await buildCompletionSpec()
+  const withoutCacheModel = {
+    commands: spec.commands.map((command) => command.name === "cache"
+      ? { ...command, options: command.options.filter((option) => option.name !== "model") }
+      : command),
+  }
 
   for (const shell of completionShells) {
-    const script = renderCompletion(shell, spec)
-    const stripped = script
-      .split("\n")
-      .filter((line) => !(shell === "fish" && line.includes("__fish_seen_subcommand_from status'")))
-      .join("\n")
-    const withoutStatus = shell === "fish"
-      ? stripped
-      : renderCompletion(shell, { commands: spec.commands.filter((command) => command.name !== "status") })
+    const script = renderCompletion(shell, withoutCacheModel)
 
-    assert.doesNotMatch(withoutStatus, registrations[shell].option("status", "deep"), `${shell} check must notice status --deep is gone`)
+    assert.equal(registrations[shell].option(script, "cache", "model"), false, `${shell} check must notice cache --model is gone`)
+    assert.equal(registrations[shell].option(script, "models", "model"), true, `${shell} check must still find models --model`)
   }
 })
 
@@ -260,15 +280,20 @@ test("bash completes commands, options, setup targets and configured models", { 
   assert.deepEqual(complete(["copilot-relay", "cache", "--since", "2"]), ["24h", "2d"])
   assert.deepEqual(complete(["copilot-relay", "completion", "z"]), ["zsh"])
 
-  // bash splits --option=value at the =, so the value is completed after a separate "=" word.
+  // bash 3.2 keeps "--model=gp" as one word; later bash splits it at the = into "--model", "="
+  // and "gp". Either way the value alone is completed, as readline replaces the text after the =.
+  assert.deepEqual(complete(["copilot-relay", "models", "--model=gp"]), ["gpt-6-astra"])
+  assert.deepEqual(complete(["copilot-relay", "cache", "--since=7"]), ["7d"])
   assert.deepEqual(complete(["copilot-relay", "models", "--model", "=", "gp"]), ["gpt-6-astra"])
   assert.deepEqual(complete(["copilot-relay", "cache", "--since", "=", "7"]), ["7d"])
 
-  // A configured model is offered as text, never evaluated.
+  // A configured model is offered escaped, never evaluated: not when Tab is pressed, and not when
+  // the completed line is run.
   const marker = path.join(home, "bash-injected")
   const offered = complete(["copilot-relay", "models", "--model", ""], { models: [injectedModel(marker), "gpt-6-astra"] })
+  const escaped = spawnSync("bash", ["-c", 'printf "%q" "$MODEL"'], { encoding: "utf8", env: { ...process.env, MODEL: injectedModel(marker) } }).stdout
   assert.equal(fs.existsSync(marker), false, "a model name must not run as a command")
-  assert(offered.includes(injectedModel(marker)), "the model name must be offered as it is")
+  assert(offered.includes(escaped), "the model name must be offered escaped")
 
   // A directory with a space is one completion, escaped for the command line.
   const captures = fs.mkdtempSync(path.join(home, "captures-"))
@@ -276,35 +301,22 @@ test("bash completes commands, options, setup targets and configured models", { 
   assert.deepEqual(complete(["copilot-relay", "replay", "my"], { cwd: captures }), ["my\\ capture/"])
 })
 
-test("zsh loads the script and the plugin and registers the completion function", { skip: !hasShell("zsh") || process.platform === "win32" }, async () => {
+// Loaded with eval, as ~/.zshrc does, the script registers its function with compinit; autoloaded
+// from fpath as a _copilot-relay file, it runs as that function.
+test("zsh registers the completion function when the script is evaluated after compinit", { skip: !hasShell("zsh") || process.platform === "win32" }, async () => {
   const file = writeScript("_copilot-relay.zsh", renderCompletion("zsh", await buildCompletionSpec()))
   assert.equal(spawnSync("zsh", ["-n", file]).status, 0)
 
-  const plugin = path.join(repoRoot, "completions", "copilot-relay.plugin.zsh")
-  assert.equal(spawnSync("zsh", ["-n", plugin]).status, 0)
+  const script = [
+    "autoload -Uz compinit",
+    `compinit -u -d '${path.join(home, "zcompdump")}'`,
+    `eval "$(cat '${file}')"`,
+    "print -r -- \"${_comps[copilot-relay]}\"",
+  ].join("\n")
+  const result = spawnSync("zsh", ["-f", "-c", script], { encoding: "utf8" })
 
-  // The plugin asks the installed copilot-relay for its script, so a stub that prints this one
-  // stands in for the install.
-  const binDirectory = fs.mkdtempSync(path.join(home, "zsh-bin-"))
-  const stub = path.join(binDirectory, "copilot-relay")
-  fs.writeFileSync(stub, `#!/bin/sh\ncat '${file}'\n`)
-  fs.chmodSync(stub, 0o755)
-
-  for (const load of [`source '${file}'`, `source '${plugin}'`]) {
-    const script = [
-      "autoload -Uz compinit",
-      `compinit -u -d '${path.join(home, "zcompdump")}'`,
-      load,
-      "print -r -- \"${_comps[copilot-relay]}\"",
-    ].join("\n")
-    const result = spawnSync("zsh", ["-f", "-c", script], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ""}` },
-    })
-
-    assert.equal(result.status, 0, result.stderr)
-    assert.equal(result.stdout.trim(), "_copilot_relay", `${load} must register _copilot_relay`)
-  }
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.trim(), "_copilot_relay")
 })
 
 // zpty drives an interactive zsh through a pseudo-terminal, so this checks what a user gets when
@@ -356,25 +368,95 @@ test("zsh offers commands, setup targets, configured models and option values on
   assert.deepEqual(offered.get("copilot-relay completion "), ["bash", "fish", "powershell", "zsh"])
 })
 
-test("fish parses the script", { skip: !hasShell("fish") || process.platform === "win32" }, async () => {
-  const file = writeScript("copilot-relay.fish", renderCompletion("fish", await buildCompletionSpec()))
-  const result = spawnSync("fish", ["--no-execute", file], { encoding: "utf8" })
+// The completed line is printed rather than run, so this checks the text each shell inserts: the
+// joined --option=value form, and a model name with $( inserted so it stays literal text.
+test("bash and zsh insert completions that stay literal when the line is run", { skip: process.platform === "win32" || !hasShell("zsh"), timeout: 120_000 }, async () => {
+  const spec = await buildCompletionSpec()
+  const marker = path.join(home, "line-injected")
+  const bin = stubRelayDirectory(["gpt-6-astra", "claude-opus-5.5", `inj${injectedModel(marker)}`])
+  const lines = [
+    "copilot-relay cache --since=7",
+    "copilot-relay models --model=inj",
+    "copilot-relay models --model inj",
+    "copilot-relay setup claude-code-c",
+  ]
+  const shells: Array<[string, string, string, string[]]> = []
+  if (hasShell("bash")) {
+    const file = writeScript("line.bash", renderCompletion("bash", spec))
+    shells.push(["bash", `PS1='$ '; source '${file}'`, "echo LINE:", ["bash", "--norc", "--noprofile", "-i"]])
+  }
 
-  assert.equal(result.status, 0, result.stderr)
+  const zshFile = writeScript("line.zsh", renderCompletion("zsh", spec))
+  shells.push(["zsh", `PS1='$ '; bindkey -e; autoload -Uz compinit; compinit -u -d '${path.join(home, "line-zcompdump")}'; source '${zshFile}'`, "print -r -- LINE:", ["zsh", "-f", "-i"]])
+
+  for (const [name, setup, prefix, command] of shells) {
+    const result = spawnSync("zsh", ["-f", path.join(repoRoot, "tests", "fixtures", "shell-line.zsh"), setup, prefix, ...command], {
+      encoding: "utf8",
+      input: `${lines.join("\n")}\n`,
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+      timeout: 100_000,
+    })
+    assert.equal(result.status, 0, `${name}: ${result.stderr}`)
+
+    const printed = result.stdout.split("\n").filter((line) => line.startsWith("LINE:")).map((line) => line.trim())
+    assert.equal(printed.length, lines.length, `${name} printed ${printed.join(" | ")}`)
+    assert.equal(printed[0], "LINE: copilot-relay cache --since=7d", `${name} joined --since=`)
+    assert.equal(printed[1], `LINE: copilot-relay models --model=inj${injectedModel(marker)}`, `${name} joined --model=`)
+    assert.equal(printed[2], `LINE: copilot-relay models --model inj${injectedModel(marker)}`, `${name} --model value`)
+    assert.equal(printed[3], "LINE: copilot-relay setup claude-code-cli", `${name} setup target`)
+    assert.equal(fs.existsSync(marker), false, `${name} must not run a $( in a model name`)
+  }
+})
+
+// complete -C prints what fish offers for a command line, the same list Tab shows.
+test("fish parses the script and completes by the command word, skipping option values", { skip: !hasShell("fish") || process.platform === "win32" }, async () => {
+  const file = writeScript("copilot-relay.fish", renderCompletion("fish", await buildCompletionSpec()))
+  const parsed = spawnSync("fish", ["--no-execute", file], { encoding: "utf8" })
+  assert.equal(parsed.status, 0, parsed.stderr)
+
+  const complete = (line: string): string[] => {
+    const result = spawnSync("fish", ["--no-config", "-c", `source '${file}'; complete -C ${singleQuoteForFish(line)}`], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${stubRelayDirectory()}${path.delimiter}${process.env.PATH ?? ""}` },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.split("\n").map((entry) => entry.split("\t")[0]).filter((entry) => entry !== "").sort()
+  }
+
+  assert.deepEqual(complete("copilot-relay se"), ["setup"])
+  assert.deepEqual(complete("copilot-relay setup claude-code-c"), ["claude-code-app", "claude-code-cli"])
+  assert.deepEqual(complete("copilot-relay status --d"), ["--deep"])
+  assert.deepEqual(complete("copilot-relay status --h"), ["--help"])
+  assert.deepEqual(complete("copilot-relay models --model gp"), ["gpt-6-astra"])
+  assert.deepEqual(complete("copilot-relay cache --model status --d"), ["--daily"])
 })
 
 // TabExpansion2 is what PowerShell runs for Tab, so it returns the completions a user would see.
 test("PowerShell parses the script and completes commands and setup targets", { skip: !hasShell("pwsh") }, async () => {
   const file = writeScript("copilot-relay.ps1", renderCompletion("powershell", await buildCompletionSpec()))
   const quoted = file.replaceAll("'", "''")
+  const captures = fs.mkdtempSync(path.join(home, "pwsh-captures-"))
+  fs.mkdirSync(path.join(captures, "cap tures"))
   const check = [
     "$errors = $null",
     `[System.Management.Automation.Language.Parser]::ParseFile('${quoted}', [ref]$null, [ref]$errors) | Out-Null`,
     "if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }",
     `. '${quoted}'`,
-    "foreach ($line in @('copilot-relay se', 'copilot-relay setup ', 'copilot-relay status --d')) {",
-    "  $found = (TabExpansion2 -inputScript $line -cursorColumn $line.Length).CompletionMatches | ForEach-Object { $_.CompletionText } | Sort-Object",
-    "  Write-Output ('=== ' + $line)",
+    // A function named copilot-relay answers the model lookup, ahead of any command on PATH.
+    "function copilot-relay { 'gpt-6-astra'; 'claude-opus-5.5'; 'inj$(touch x)' }",
+    `Set-Location -LiteralPath '${captures.replaceAll("'", "''")}'`,
+    "$probes = @(",
+    "  @('copilot-relay se', 16),",
+    "  @('copilot-relay setup ', 20),",
+    "  @('copilot-relay status --d', 24),",
+    "  @('copilot-relay cache --since=2', 29),",
+    "  @('copilot-relay models --model g --deep', 29),",
+    "  @('copilot-relay models --model inj', 33),",
+    "  @('copilot-relay replay ./cap', 26)",
+    ")",
+    "foreach ($probe in $probes) {",
+    "  $found = (TabExpansion2 -inputScript $probe[0] -cursorColumn $probe[1]).CompletionMatches | ForEach-Object { $_.CompletionText } | Sort-Object",
+    "  Write-Output ('=== ' + $probe[0])",
     "  $found | ForEach-Object { Write-Output $_ }",
     "}",
   ].join("\n")
@@ -395,4 +477,8 @@ test("PowerShell parses the script and completes commands and setup targets", { 
   assert.deepEqual(offered.get("copilot-relay se"), ["setup"])
   assert.deepEqual(offered.get("copilot-relay setup "), ["claude-code-app", "claude-code-cli", "codex-app", "codex-cli"])
   assert.deepEqual(offered.get("copilot-relay status --d"), ["--deep"])
+  assert.deepEqual(offered.get("copilot-relay cache --since=2"), ["--since=24h", "--since=2d"])
+  assert.deepEqual(offered.get("copilot-relay models --model g --deep"), ["gpt-6-astra"])
+  assert.deepEqual(offered.get("copilot-relay models --model inj"), ["'inj$(touch x)'"])
+  assert.deepEqual(offered.get("copilot-relay replay ./cap"), ["'./cap tures/'"])
 })

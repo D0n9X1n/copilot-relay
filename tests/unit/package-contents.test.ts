@@ -9,8 +9,8 @@ const execute = promisify(execFile)
 const root = fileURLToPath(new URL("../../", import.meta.url))
 
 // npm always packs package.json, README and LICENSE; the `files` allowlist in
-// package.json adds completions/ (the zsh plugin), config.default.yaml, dist/ and vendor/ (files
-// copied from other projects, with their licenses). Nothing else, and no image or video file, may reach the published tarball.
+// package.json adds config.default.yaml, dist/ and vendor/ (files copied from other projects,
+// with their licenses). Nothing else, and no image or video file, may reach the published tarball.
 const allowedTopLevel = new Set(["package.json", "README.md", "LICENSE", "config.default.yaml"])
 
 test("npm package contains only the manifest, docs, default config, build output and vendored files", { timeout: 60_000 }, async () => {
@@ -23,10 +23,8 @@ test("npm package contains only the manifest, docs, default config, build output
   const packed = files.map(file => file.path.replaceAll("\\", "/"))
 
   assert(packed.includes("package.json"))
-  assert(packed.includes("completions/copilot-relay.plugin.zsh"), "the zsh plugin must be packed")
   for (const file of packed) {
-    const allowedDirectory = ["completions/", "dist/", "vendor/"].some((directory) => file.startsWith(directory))
-    assert(allowedTopLevel.has(file) || allowedDirectory, `unexpected file in the npm package: ${file}`)
+    assert(allowedTopLevel.has(file) || file.startsWith("dist/") || file.startsWith("vendor/"), `unexpected file in the npm package: ${file}`)
     assert.doesNotMatch(file, /\.(mp4|mov|webm|gif|png|jpe?g)$/i, `media file in the npm package: ${file}`)
   }
 })

@@ -324,7 +324,6 @@ shell 的启动文件中加载它。
 | Shell | 加载方式 |
 | --- | --- |
 | zsh | 在 `~/.zshrc` 中 `compinit` 之后加入 `eval "$(copilot-relay completion zsh)"`（oh-my-zsh 会在你自己的配置行之前运行 `compinit`）。 |
-| zsh 插件 | 软件包附带 `completions/copilot-relay.plugin.zsh`，作用相同。oh-my-zsh 用户把它所在目录链接为自定义插件，并把 `copilot-relay` 加入 `plugins=(...)`：`ln -s "$(npm root -g)/copilot-relay/completions" "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/copilot-relay"`。zinit、antidote 和 sheldon 可以在 `compinit` 之后按路径加载该目录。 |
 | bash | 在 `~/.bashrc` 中加入 `eval "$(copilot-relay completion bash)"`。支持 macOS 默认的 bash 3.2。 |
 | fish | 运行一次 `copilot-relay completion fish > ~/.config/fish/completions/copilot-relay.fish`，升级后再运行一次。 |
 | PowerShell | 在 `$PROFILE` 中加入 `copilot-relay completion powershell \| Out-String \| Invoke-Expression`。 |
