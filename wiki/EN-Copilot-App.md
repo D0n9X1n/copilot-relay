@@ -52,9 +52,8 @@ Then add the two models:
 | `gpt-6-astra` | `GPT-6 Astra · Relay` |
 | `claude-opus-5.5` | `Claude Opus 5.5 · Relay` |
 
-The display names keep Copilot's own model names, so they sort beside the
-built-in ones, and add `· Relay` so the picker does not show two entries with the
-same label. Use the model IDs from your `gptModel` and `opusModel`.
+The display names keep Copilot's own model names and add `· Relay`, so the
+picker does not show a relay model and a built-in one under the same label. Use the model IDs from your `gptModel` and `opusModel`.
 
 If the form offers no Responses choice, use the Anthropic type with base URL
 `http://127.0.0.1:4142` and the same key and models instead.
@@ -63,13 +62,15 @@ The API key is the `apiKey` value in `~/.copilot-relay/config.yaml`. The app
 stores it in the operating system's secure storage. With `apiKey` empty the relay
 accepts any key, so any placeholder works when the form insists on one.
 
-If the form asks for token limits, use 1,000,000 prompt and 128,000 output tokens
-for Claude Opus 5.5, and 1,050,000 and 128,000 for GPT-6 Astra. The relay logs the
-limits Copilot advertises at startup, on its `Model token limits` lines.
+If the form asks for token limits, use what Copilot advertises for each model.
+The relay logs them at startup, on its `Model token limits` lines, and
+"Use the model's full context and output budgets" in
+[Configuration](EN-Configuration.md) explains them and why output needs room
+within the total context.
 
 `copilot-relay setup` has no target for the app. The app keeps providers in its
-own database and keys in the operating system's secure storage, neither of which
-is a documented interface, so the relay does not write them.
+own local storage and keys in the operating system's secure storage, neither of
+which is a documented interface, so the relay does not write them.
 
 ## Set up Copilot CLI
 
@@ -111,9 +112,9 @@ URL `http://127.0.0.1:4142`, and leave `COPILOT_PROVIDER_WIRE_API` unset.
    with the Anthropic type. The relay labels Responses traffic `client=codex`,
    since it is the same route Codex uses.
 3. After a few turns, run `copilot-relay cache` to see the hit rate per model and
-   upstream route. The first request of a session writes the cache rather than
-   reading it, so a short session reads lower than a long one; see
-   [Prompt caching](EN-Prompt-Caching.md).
+   upstream route. A request whose prompt prefix is not cached yet, such as a
+   session's first, writes the cache rather than reading it, which can lower a
+   short session's measured hit rate; see [Prompt caching](EN-Prompt-Caching.md).
 
 ## Limitations
 

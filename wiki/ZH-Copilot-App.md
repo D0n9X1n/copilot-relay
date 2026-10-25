@@ -47,8 +47,8 @@ GPT-6 Astra 和 Claude Opus 5.5 上，一次普通回复和一次五步工具调
 | `gpt-6-astra` | `GPT-6 Astra · Relay` |
 | `claude-opus-5.5` | `Claude Opus 5.5 · Relay` |
 
-显示名称保留 Copilot 自己的模型名，所以会排在内置模型旁边；加上 `· Relay`，模型选择器就
-不会出现两个同名条目。模型 ID 请使用你的 `gptModel` 和 `opusModel`。
+显示名称保留 Copilot 自己的模型名并加上 `· Relay`，这样模型选择器里中继模型和内置模型
+不会显示为同一个名称。模型 ID 请使用你的 `gptModel` 和 `opusModel`。
 
 如果表单没有 Responses 选项，改用 Anthropic 类型，base URL 填 `http://127.0.0.1:4142`，
 密钥和模型不变。
@@ -56,12 +56,12 @@ GPT-6 Astra 和 Claude Opus 5.5 上，一次普通回复和一次五步工具调
 API key 是 `~/.copilot-relay/config.yaml` 中 `apiKey` 的值，app 会把它存进操作系统的安全
 存储。`apiKey` 为空时中继接受任何密钥，所以表单必须填写时随便填一个占位值即可。
 
-如果表单要求填写 token 上限：Claude Opus 5.5 填 1,000,000 prompt 和 128,000 输出 token，
-GPT-6 Astra 填 1,050,000 和 128,000。中继启动时会在 `Model token limits` 行记录 Copilot
-公布的上限。
+如果表单要求填写 token 上限，请使用 Copilot 为每个模型公布的值。中继启动时会在
+`Model token limits` 行记录它们；[配置说明](ZH-Configuration.md)中的“使用模型的完整 context
+和输出预算”解释了这些值，以及为什么输出需要在总 context 中留出空间。
 
-`copilot-relay setup` 没有针对 app 的目标。app 把提供方存在自己的数据库中，把密钥存在操作
-系统的安全存储中，两者都不是公开的接口，所以中继不会写入它们。
+`copilot-relay setup` 没有针对 app 的目标。app 把提供方存在自己的本地存储中，把密钥存在
+操作系统的安全存储中，两者都不是公开的接口，所以中继不会写入它们。
 
 ## 配置 Copilot CLI
 
@@ -101,9 +101,9 @@ Anthropic 类型时，设置 `COPILOT_PROVIDER_TYPE=anthropic`，base URL 用
    每条消息都会记录 `POST /v1/responses -> 200`；使用 Anthropic 类型时记录
    `POST /v1/messages -> 200`。中继把 Responses 流量标为 `client=codex`，因为它与 Codex
    使用同一个路由。
-3. 几轮对话后运行 `copilot-relay cache`，查看每个模型和上游路由的命中率。会话的第一个请求
-   写入缓存而不是读取缓存，所以短会话的命中率比长会话低；见
-   [Prompt 缓存](ZH-Prompt-Caching.md)。
+3. 几轮对话后运行 `copilot-relay cache`，查看每个模型和上游路由的命中率。prompt 前缀尚未
+   缓存的请求（例如会话的第一个请求）会写入缓存而不是读取缓存，这可能拉低短会话测得的
+   命中率；见 [Prompt 缓存](ZH-Prompt-Caching.md)。
 
 ## 限制
 
