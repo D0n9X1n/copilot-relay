@@ -31,12 +31,14 @@ or `unknown` for a relay that does not report one.
 | `usage` | Shows the Copilot plan and quota | GitHub |
 | `cache` | Reports prompt-cache hit rates from local logs | Nothing |
 | `replay` | Replays a debug capture offline | Nothing |
+| `completion` | Prints a shell completion script | Nothing |
 
 `start`, `restart`, `stop`, `status`, `auth`, `setup` and `models` load
 `config.yaml` the way the relay does: they create it when it is missing and add any missing key with
 its default, leaving existing keys as they are. A file that cannot be parsed, or
 that holds a value the relay rejects, is not rewritten. `usage` reads the file and
-never writes it. `cache` and `replay` do not read it.
+never writes it, and `completion --models` reads it the same way. `cache`,
+`replay` and `completion <SHELL>` do not read it.
 
 ## `start`
 
@@ -363,3 +365,41 @@ It exits `0` for `MATCH`, `2` for `DIFF` or `INCOMPLETE`, and `1` for `MISSING` 
 `MALFORMED`. What each verdict means, and why a capture must not be shared whole,
 are under "Debug captures and offline replay" in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+
+## `completion`
+
+```sh
+copilot-relay completion zsh
+copilot-relay completion bash
+copilot-relay completion fish
+copilot-relay completion powershell
+```
+
+| Argument or option | Description |
+| --- | --- |
+| `[SHELL]` | Shell to complete: `zsh`, `bash`, `fish`, `powershell`. |
+| `--models` | Print gptModel and opusModel from config.yaml, one per line, for a completion script. |
+
+Prints a completion script for the shell, so Tab completes the commands, each
+command's options, and the values the relay knows: `setup` targets, `completion`
+shells, `cache --since` examples (`6h`, `24h`, `2d`, `7d`), directories for
+`replay`, and your `gptModel` and `opusModel` for `models --model` and
+`cache --model`. The script is built from the same command definitions as
+`--help`, so it always matches the installed version. It prints and writes
+nothing else: load it from your shell's startup file.
+
+| Shell | Load it |
+| --- | --- |
+| zsh | Add `eval "$(copilot-relay completion zsh)"` to `~/.zshrc`, after `compinit` (oh-my-zsh runs `compinit` before your own lines). |
+| bash | Add `eval "$(copilot-relay completion bash)"` to `~/.bashrc`. It works with bash 3.2, the macOS default. |
+| fish | Run `copilot-relay completion fish > ~/.config/fish/completions/copilot-relay.fish` once, and again after an upgrade. |
+| PowerShell | Add `copilot-relay completion powershell \| Out-String \| Invoke-Expression` to `$PROFILE`. |
+
+The scripts complete model options by running `copilot-relay completion --models`
+when you press Tab, so a model change in `config.yaml` shows at once. That reads
+`config.yaml` without creating or changing it, contacts nothing, and prints
+nothing when the file is missing or cannot be read. A free-form value, such as a
+`models` search or `--timeout`, completes nothing.
+
+It exits `0` with the script, or with the models for `--models`, and `1` when
+the shell is missing or not one of the four.

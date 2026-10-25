@@ -28,10 +28,12 @@ copilot-relay models --help
 | `usage` | 显示 Copilot 套餐与配额 | GitHub |
 | `cache` | 从本地日志报告 prompt 缓存命中率 | 无 |
 | `replay` | 离线重放 debug 捕获 | 无 |
+| `completion` | 打印 shell 补全脚本 | 无 |
 
 `start`、`restart`、`stop`、`status`、`auth`、`setup` 和 `models` 像中继一样加载 `config.yaml`：文件
 不存在时创建它，缺少的键以默认值补上，已有的键保持原样。无法解析、或含有中继拒绝的值的文件不会
-被重写。`usage` 读取该文件，但从不写它。`cache` 和 `replay` 不读取它。
+被重写。`usage` 读取该文件，但从不写它，`completion --models` 也同样只读。`cache`、`replay` 和
+`completion <SHELL>` 不读取它。
 
 ## `start`
 
@@ -298,3 +300,38 @@ copilot-relay replay /absolute/path/to/capture-directory
 `MATCH` 以 `0` 退出，`DIFF` 或 `INCOMPLETE` 以 `2` 退出，`MISSING` 或 `MALFORMED` 以 `1` 退出。
 每种结论的含义，以及为什么不能整份分享捕获，见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)中的“Debug 捕获与离线重放”。
+
+## `completion`
+
+```sh
+copilot-relay completion zsh
+copilot-relay completion bash
+copilot-relay completion fish
+copilot-relay completion powershell
+```
+
+| 参数或选项 | 说明 |
+| --- | --- |
+| `[SHELL]` | 要补全的 shell：`zsh`、`bash`、`fish`、`powershell`。 |
+| `--models` | 从 config.yaml 打印 gptModel 和 opusModel，每行一个，供补全脚本使用。 |
+
+为该 shell 打印补全脚本，按 Tab 即可补全命令、每个命令的选项，以及中继已知的值：`setup`
+目标、`completion` 的 shell、`cache --since` 示例（`6h`、`24h`、`2d`、`7d`）、`replay` 的
+目录，以及 `models --model` 和 `cache --model` 的 `gptModel` 与 `opusModel`。脚本由与
+`--help` 相同的命令定义生成，所以总是与已安装的版本一致。它只打印，不写入任何文件：请在
+shell 的启动文件中加载它。
+
+| Shell | 加载方式 |
+| --- | --- |
+| zsh | 在 `~/.zshrc` 中 `compinit` 之后加入 `eval "$(copilot-relay completion zsh)"`（oh-my-zsh 会在你自己的配置行之前运行 `compinit`）。 |
+| bash | 在 `~/.bashrc` 中加入 `eval "$(copilot-relay completion bash)"`。支持 macOS 默认的 bash 3.2。 |
+| fish | 运行一次 `copilot-relay completion fish > ~/.config/fish/completions/copilot-relay.fish`，升级后再运行一次。 |
+| PowerShell | 在 `$PROFILE` 中加入 `copilot-relay completion powershell \| Out-String \| Invoke-Expression`。 |
+
+补全模型选项时，脚本会在你按 Tab 时运行 `copilot-relay completion --models`，所以修改
+`config.yaml` 中的模型后立即生效。它读取 `config.yaml` 但不创建也不修改它，不联系任何服务，
+文件不存在或无法读取时什么也不打印。自由填写的值，例如 `models` 的搜索词或 `--timeout`，
+不提供补全。
+
+输出脚本时以 `0` 退出，`--models` 输出模型时也以 `0` 退出；未指定 shell 或 shell 不是这四种
+之一时以 `1` 退出。

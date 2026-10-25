@@ -5,6 +5,7 @@ import { defineCommand, runMain } from "citty"
 
 import { auth } from "./auth"
 import { cache } from "./cache"
+import { completion } from "./completion"
 import { models } from "./models"
 import { replay } from "./replay"
 import { restart } from "./restart"
@@ -20,7 +21,7 @@ const main = defineCommand({
     description:
       "Yet, just another relay for Claude Code and Codex to use a GitHub Copilot subscription.",
   },
-  subCommands: { auth, cache, models, replay, restart, setup, start, status, stop, usage },
+  subCommands: { auth, cache, models, replay, restart, setup, start, status, stop, usage, completion },
 })
 
 await runMain(main)
