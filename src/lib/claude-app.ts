@@ -76,7 +76,7 @@ const routesToTier = (name: string, tier: ClaudeAppModel["tier"]): boolean =>
  * claude-sonnet-relay. Each tier therefore has its own name. The relay sends every model name without "opus"
  * to gptModel and every one with it to opusModel, so the route reaches the same upstream model. The
  * route names no real Claude model, so the app and its Claude Code take none of that model's
- * built-in context window or tuning; supports1m on the entry says what the window is.
+ * built-in context window or tuning; supports1m and prefer1m on the entry say what the window is.
  */
 export const appModelName = (model: Pick<ClaudeAppModel, "id" | "tier">): string =>
   looksAnthropic(model.id) && routesToTier(model.id, model.tier) ? model.id : `claude-${model.tier}-relay`
@@ -90,7 +90,8 @@ export const inferenceModel = (model: ClaudeAppModel): JsonRecord => {
   return {
     name,
     ...(label ? { labelOverride: label } : {}),
-    ...(promptTokens >= 1_000_000 ? { supports1m: true } : {}),
+    // supports1m alone offers a standard-window option beside the 1M one; prefer1m shows only the 1M one.
+    ...(promptTokens >= 1_000_000 ? { supports1m: true, prefer1m: true } : {}),
     anthropicFamilyTier: model.tier,
   }
 }

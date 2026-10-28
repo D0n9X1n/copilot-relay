@@ -64,10 +64,16 @@ supports_websockets = false
 修改其中任何一个后重启中继，列表就会随之改变。
 
 - Codex 自带的模型（例如 `gpt-6-astra`）保留 Codex 自己的条目：它调校过的指令、`apply_patch`
-  工具、推理等级和上下文窗口。
+  工具和推理等级。
 - 其他模型（例如 `claude-opus-5.5`）使用中继生成的条目：Codex 的 `apply_patch` 工具和 shell、
-  Copilot 列出的推理等级，以及 Codex 用于任何未知模型的指令。它的上下文窗口取 Copilot 的输入
-  上限，最多为 Codex 常用的 272k，所以 Codex 会在与自带模型相同的位置压缩对话。
+  Copilot 列出的推理等级，以及 Codex 用于任何未知模型的指令。
+
+每个模型的上下文窗口都取自 Copilot 的模型目录，所以 1M 上下文的模型按 1M 使用，而不是 Codex
+常用的 272k。`context_window` 是 Codex 工作所用、并在其 90% 处压缩对话的窗口，取 Copilot 接受的、
+仍能留出一次完整回复空间的最大输入：`min(输入上限, 总窗口 - 输出上限)`，例如 GPT-6 Astra 为
+922k，Claude Opus 5.5 为 872k；一次完整回复就能占满总窗口时，取整个输入上限。`max_context_window` 是 Copilot 的输入上限，只限制你在
+`config.toml` 中设置的 `model_context_window`。setup 读不到 Copilot 的模型目录时，Codex 自带的
+模型保留 Codex 自己的窗口，其他模型不带窗口。
 
 这两者都来自从 `openai/codex` 的 `rust-v0.164.0` 复制的文件，遵循其 Apache-2.0 许可证，
 位于包中的 `vendor/codex/`。

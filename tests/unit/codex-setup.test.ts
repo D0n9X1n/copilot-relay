@@ -119,9 +119,53 @@ test("buildCodexCatalog keeps Codex's own entry for a model it ships and builds 
   assert.equal(opus!.priority, 2)
   assert.equal(opus!.default_reasoning_level, "medium")
   assert.deepEqual(opus!.supported_reasoning_levels.map((level: { effort: string }) => level.effort), ["low", "medium", "high", "xhigh", "max"])
-  assert.equal(opus!.context_window, 272_000)
+  assert.equal(opus!.context_window, 936_000)
   assert.equal(opus!.max_context_window, 1_000_000)
   assert.equal(opus!.model_messages.instructions_template, vendor.prompt)
+})
+
+test("buildCodexCatalog gives every model the whole window Copilot allows, a bundled one included", async () => {
+  const vendor = await readCodexVendorFiles()
+  const catalog = buildCodexCatalog([
+    {
+      id: "gpt-6-astra",
+      capabilities: { limits: { max_prompt_tokens: 1_050_000, max_output_tokens: 128_000, max_context_window_tokens: 1_050_000 } },
+    },
+    {
+      id: "gpt-5.3-codex",
+      capabilities: { limits: { max_prompt_tokens: 272_000, max_output_tokens: 128_000, max_context_window_tokens: 400_000 } },
+    },
+  ], vendor) as { models: Array<Record<string, any>> }
+
+  const [astra, codex] = catalog.models
+  const bundled = vendor.bundled.get("gpt-6-astra")!
+  assert.equal(astra!.context_window, 922_000)
+  assert.equal(astra!.max_context_window, 1_050_000)
+  assert.deepEqual(astra!.model_messages, bundled.model_messages)
+  assert.equal(codex!.context_window, 272_000)
+  assert.equal(codex!.max_context_window, 272_000)
+})
+
+test("buildCodexCatalog keeps a window below Copilot's input limit and never publishes an empty one", async () => {
+  const vendor = await readCodexVendorFiles()
+  const catalog = buildCodexCatalog([
+    {
+      id: "input-limited",
+      capabilities: { limits: { max_prompt_tokens: 100_000, max_output_tokens: 128_000, max_context_window_tokens: 400_000 } },
+    },
+    {
+      id: "reply-fills-window",
+      capabilities: { limits: { max_prompt_tokens: 1_000_000, max_output_tokens: 1_000_000, max_context_window_tokens: 1_000_000 } },
+    },
+    { id: "unknown-limits" },
+  ], vendor) as { models: Array<Record<string, any>> }
+
+  const [inputLimited, replyFillsWindow, unknownLimits] = catalog.models
+  assert.equal(inputLimited!.context_window, 100_000)
+  assert.equal(replyFillsWindow!.context_window, 1_000_000)
+  assert.equal(replyFillsWindow!.max_context_window, 1_000_000)
+  assert.equal(Object.hasOwn(unknownLimits!, "context_window"), false)
+  assert.equal(Object.hasOwn(unknownLimits!, "max_context_window"), false)
 })
 
 test("applyCodexSetup skips a machine without Codex and writes both files when Codex is installed", async (t) => {

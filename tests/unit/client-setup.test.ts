@@ -24,10 +24,14 @@ test("the Claude app's third-party directory follows each OS", () => {
   assert.equal(claudeAppDataDir({ platform: "linux", env: { XDG_CONFIG_HOME: "/xdg" }, home: "/home/u" }), "/xdg/Claude-3p")
 })
 
-test("a model entry carries its Copilot name, 1M support and tier", () => {
+test("a model entry carries its Copilot name, tier, and only the 1M option when Copilot reports a 1M window", () => {
   assert.deepEqual(
     inferenceModel({ id: "gpt-6-astra", tier: "sonnet", capabilities: { name: "GPT-6 Astra", limits: { max_prompt_tokens: 1_000_000 } } as never }),
-    { name: "claude-sonnet-relay", labelOverride: "GPT-6 Astra", supports1m: true, anthropicFamilyTier: "sonnet" },
+    { name: "claude-sonnet-relay", labelOverride: "GPT-6 Astra", supports1m: true, prefer1m: true, anthropicFamilyTier: "sonnet" },
+  )
+  assert.deepEqual(
+    inferenceModel({ id: "claude-haiku-4.5", tier: "sonnet", capabilities: { limits: { max_prompt_tokens: 136_000 } } as never }),
+    { name: "claude-haiku-4.5", anthropicFamilyTier: "sonnet" },
   )
   assert.deepEqual(inferenceModel({ id: "claude-opus-5.5", tier: "opus" }), { name: "claude-opus-5.5", anthropicFamilyTier: "opus" })
 })

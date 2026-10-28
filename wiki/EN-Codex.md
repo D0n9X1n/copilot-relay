@@ -71,12 +71,20 @@ The list holds `gptModel` and `opusModel` from `config.yaml`, as Claude Code's
 picker does. Change either and restart the relay to change the list.
 
 - A model Codex ships itself, such as `gpt-6-astra`, keeps Codex's own entry: its
-  tuned instructions, `apply_patch` tool, reasoning levels and context window.
+  tuned instructions, `apply_patch` tool and reasoning levels.
 - Any other model, such as `claude-opus-5.5`, gets an entry the relay builds: Codex's
   `apply_patch` tool and shell, the reasoning levels Copilot lists, and the
-  instructions Codex uses for any model it does not know. Its context window is
-  Copilot's input limit, capped at Codex's usual 272k, so Codex compacts at the same
-  point it does for its own models.
+  instructions Codex uses for any model it does not know.
+
+Every model's context window comes from Copilot's catalog, so a 1M-context model is
+used as one rather than at Codex's usual 272k. `context_window`, the window Codex
+works in and compacts at 90% of, is the most input Copilot accepts that still leaves
+room for a full reply: `min(input limit, total window - output limit)`, for example
+922k for GPT-6 Astra and 872k for Claude Opus 5.5, or the whole input limit when a
+full reply may fill the total window. `max_context_window` is
+Copilot's input limit; it only bounds a `model_context_window` you set in
+`config.toml`. When setup cannot read Copilot's catalog, a model Codex ships keeps
+Codex's own window and any other model gets none.
 
 Both come from files copied from `openai/codex` at `rust-v0.164.0`, under its
 Apache-2.0 license, in the package's `vendor/codex/`.
