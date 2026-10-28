@@ -146,6 +146,28 @@ test("buildCodexCatalog gives every model the whole window Copilot allows, a bun
   assert.equal(codex!.max_context_window, 272_000)
 })
 
+test("buildCodexCatalog keeps a window below Copilot's input limit and never publishes an empty one", async () => {
+  const vendor = await readCodexVendorFiles()
+  const catalog = buildCodexCatalog([
+    {
+      id: "input-limited",
+      capabilities: { limits: { max_prompt_tokens: 100_000, max_output_tokens: 128_000, max_context_window_tokens: 400_000 } },
+    },
+    {
+      id: "reply-fills-window",
+      capabilities: { limits: { max_prompt_tokens: 1_000_000, max_output_tokens: 1_000_000, max_context_window_tokens: 1_000_000 } },
+    },
+    { id: "unknown-limits" },
+  ], vendor) as { models: Array<Record<string, any>> }
+
+  const [inputLimited, replyFillsWindow, unknownLimits] = catalog.models
+  assert.equal(inputLimited!.context_window, 100_000)
+  assert.equal(replyFillsWindow!.context_window, 1_000_000)
+  assert.equal(replyFillsWindow!.max_context_window, 1_000_000)
+  assert.equal(Object.hasOwn(unknownLimits!, "context_window"), false)
+  assert.equal(Object.hasOwn(unknownLimits!, "max_context_window"), false)
+})
+
 test("applyCodexSetup skips a machine without Codex and writes both files when Codex is installed", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "relay-codex-setup-"))
   t.after(() => fs.rm(root, { recursive: true, force: true }))

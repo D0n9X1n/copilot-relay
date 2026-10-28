@@ -694,8 +694,8 @@ requested ID (`ensureCopilotModelCatalog`), pins it, and then:
 - a `claude-*` ID Copilot lists with `/v1/messages` is translated to Messages (see
   **Claude models** below); an unlisted one, or one without `/v1/messages`, is refused;
 - a listed ID is sent as named, so Codex's own IDs, which match Copilot's, keep
-  Codex's bundled metadata (its `apply_patch` tool, reasoning levels and context
-  window);
+  Codex's bundled metadata (its `apply_patch` tool and reasoning levels; the context
+  window comes from Copilot's catalog, see [Codex](EN-Codex.md));
 - an unlisted ID, such as Codex's internal `codex-auto-review`, goes to `gptModel`;
 - a model whose entry is not `chat`, or lacks `/responses`, is refused before any
   upstream call.

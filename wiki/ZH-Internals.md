@@ -577,7 +577,8 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 - Copilot 列出且带 `/v1/messages` 的 `claude-*` ID 翻译为 Messages（见下文 **Claude 模型**）；
   未列出或没有 `/v1/messages` 的会被拒绝；
 - 目录中列出的 ID 原样发送，所以 Codex 自己的 ID（与 Copilot 的相同）会保留 Codex
-  自带的元数据（`apply_patch` 工具、推理等级和上下文窗口）；
+  自带的元数据（`apply_patch` 工具和推理等级；上下文窗口取自 Copilot 的模型目录，见
+  [Codex](ZH-Codex.md)）；
 - 目录中没有的 ID，例如 Codex 内部的 `codex-auto-review`，发往 `gptModel`；
 - 条目不是 `chat`、或没有 `/responses` 的模型，在任何上游调用之前就被拒绝。
 

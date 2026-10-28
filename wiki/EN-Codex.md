@@ -80,7 +80,8 @@ Every model's context window comes from Copilot's catalog, so a 1M-context model
 used as one rather than at Codex's usual 272k. `context_window`, the window Codex
 works in and compacts at 90% of, is the most input Copilot accepts that still leaves
 room for a full reply: `min(input limit, total window - output limit)`, for example
-922k for GPT-6 Astra and 872k for Claude Opus 5.5. `max_context_window` is
+922k for GPT-6 Astra and 872k for Claude Opus 5.5, or the whole input limit when a
+full reply may fill the total window. `max_context_window` is
 Copilot's input limit; it only bounds a `model_context_window` you set in
 `config.toml`. When setup cannot read Copilot's catalog, a model Codex ships keeps
 Codex's own window and any other model gets none.

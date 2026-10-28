@@ -26,16 +26,18 @@ const effortDescriptions: Record<string, string> = {
 }
 
 // The window Codex works in, and compacts at 90% of: the most input Copilot accepts that still leaves
-// room for a full reply. max_context_window, Copilot's input limit, only bounds a model_context_window
-// override in config.toml.
+// room for a full reply, or the whole input limit when a full reply may fill the total window. Codex
+// takes a window of 0 as already full. max_context_window, Copilot's input limit, only bounds a
+// model_context_window override in config.toml.
 const contextWindows = (model: CatalogModel): JsonRecord => {
   const limits = model.capabilities?.limits
   if (limits === undefined) {
     return {}
   }
 
+  const roomBesideReply = limits.max_context_window_tokens - limits.max_output_tokens
   return {
-    context_window: Math.min(limits.max_prompt_tokens, limits.max_context_window_tokens - limits.max_output_tokens),
+    context_window: roomBesideReply > 0 ? Math.min(limits.max_prompt_tokens, roomBesideReply) : limits.max_prompt_tokens,
     max_context_window: limits.max_prompt_tokens,
   }
 }

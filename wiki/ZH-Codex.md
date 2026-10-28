@@ -71,7 +71,7 @@ supports_websockets = false
 每个模型的上下文窗口都取自 Copilot 的模型目录，所以 1M 上下文的模型按 1M 使用，而不是 Codex
 常用的 272k。`context_window` 是 Codex 工作所用、并在其 90% 处压缩对话的窗口，取 Copilot 接受的、
 仍能留出一次完整回复空间的最大输入：`min(输入上限, 总窗口 - 输出上限)`，例如 GPT-6 Astra 为
-922k，Claude Opus 5.5 为 872k。`max_context_window` 是 Copilot 的输入上限，只限制你在
+922k，Claude Opus 5.5 为 872k；一次完整回复就能占满总窗口时，取整个输入上限。`max_context_window` 是 Copilot 的输入上限，只限制你在
 `config.toml` 中设置的 `model_context_window`。setup 读不到 Copilot 的模型目录时，Codex 自带的
 模型保留 Codex 自己的窗口，其他模型不带窗口。
 
