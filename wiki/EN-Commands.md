@@ -227,15 +227,16 @@ Codex one, as they do for those clients.
 - `claude-code-app` sets the Claude app's third-party mode: the applied
   configuration in `configLibrary/` gets `inferenceProvider: gateway`, the relay URL,
   the apiKey and an `inferenceModels` list of `opusModel` (the default, tier `opus`)
-  and `gptModel` (tier `sonnet`), with Copilot's names and 1M context where Copilot
-  reports it. Without that list the app shows only Claude models. The app also
+  and `gptModel` (tier `sonnet`), with Copilot's names. A model Copilot reports
+  with a 1M input limit gets `supports1m` and `prefer1m`, so the picker shows only
+  its 1M-context option instead of a standard-window option beside it. Without that list the app shows only Claude models. The app also
   drops a gateway model whose name is not Anthropic-looking, such as `gpt-6-astra`,
   so such a model, or one the relay would send to the other slot, is listed as a
   Claude-style route for its tier, `claude-sonnet-relay`, labelled with its real name; the relay sends every model name without "opus" to
   `gptModel`. Setup also sets `modelDiscoveryEnabled: false`: the list already names
   every model, and discovery would flag the route name, which `/v1/models` does not
   list. The route names no real Claude model, so the app takes the context
-  window from `supports1m`, which setup sets from Copilot's catalog.
+  window from `supports1m` and `prefer1m`, which setup sets from Copilot's catalog.
   `claude_desktop_config.json` gets `deploymentMode: "3p"`, so the app opens on
   the relay instead of the claude.ai sign-in. Quit the app before running setup and
   reopen it after: it reads these files at launch and rewrites them while it runs.

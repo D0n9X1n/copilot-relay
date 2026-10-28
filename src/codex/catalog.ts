@@ -25,8 +25,20 @@ const effortDescriptions: Record<string, string> = {
   max: "Maximum reasoning depth for the hardest problems",
 }
 
-// Codex's own default window for the models it ships; it compacts at 90% of it.
-const codexContextWindow = 272_000
+// The window Codex works in, and compacts at 90% of: the most input Copilot accepts that still leaves
+// room for a full reply. max_context_window, Copilot's input limit, only bounds a model_context_window
+// override in config.toml.
+const contextWindows = (model: CatalogModel): JsonRecord => {
+  const limits = model.capabilities?.limits
+  if (limits === undefined) {
+    return {}
+  }
+
+  return {
+    context_window: Math.min(limits.max_prompt_tokens, limits.max_context_window_tokens - limits.max_output_tokens),
+    max_context_window: limits.max_prompt_tokens,
+  }
+}
 
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -86,7 +98,6 @@ const generatedEntry = (model: CatalogModel, priority: number, prompt: string): 
     .filter((effort) => Object.hasOwn(effortDescriptions, effort))
     .map((effort) => ({ effort, description: effortDescriptions[effort] }))
   const defaultLevel = levels.find((level) => level.effort === "medium") ?? levels[0]
-  const maxPrompt = model.capabilities?.limits?.max_prompt_tokens
 
   return {
     slug: model.id,
@@ -104,10 +115,7 @@ const generatedEntry = (model: CatalogModel, priority: number, prompt: string): 
     apply_patch_tool_type: "freeform",
     supports_parallel_tool_calls: true,
     input_modalities: ["text", "image"],
-    ...(maxPrompt !== undefined && {
-      context_window: Math.min(codexContextWindow, maxPrompt),
-      max_context_window: maxPrompt,
-    }),
+    ...contextWindows(model),
     model_messages: { instructions_template: prompt },
   }
 }
@@ -116,8 +124,8 @@ const generatedEntry = (model: CatalogModel, priority: number, prompt: string): 
  * The catalog for these models, in order: the first is Codex's default.
  *
  * A model Codex ships keeps Codex's own entry, so its tuned instructions and settings are unchanged;
- * only its position and visibility change. Any other model, such as a Claude model, gets a generated
- * entry.
+ * only its position, visibility and context window change, the window to the one Copilot allows. Any
+ * other model, such as a Claude model, gets a generated entry.
  */
 export const buildCodexCatalog = (models: Array<CatalogModel>, vendor: CodexVendorFiles): JsonRecord => {
   const seen = new Set<string>()
@@ -130,7 +138,7 @@ export const buildCodexCatalog = (models: Array<CatalogModel>, vendor: CodexVend
     seen.add(model.id)
     const priority = entries.length + 1
     const bundled = vendor.bundled.get(model.id)
-    entries.push(bundled ? { ...bundled, visibility: "list", priority } : generatedEntry(model, priority, vendor.prompt))
+    entries.push(bundled ? { ...bundled, visibility: "list", priority, ...contextWindows(model) } : generatedEntry(model, priority, vendor.prompt))
   }
 
   return { models: entries }
