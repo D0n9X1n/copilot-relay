@@ -40,6 +40,13 @@ export const pinCopilotModelCatalog = (config: ProxyConfig): void => {
   pinnedCatalogs.set(config, config.modelCatalog)
 }
 
+// When each discovered catalog was fetched. A catalog this recent that does not list a model is
+// trusted to mean the model is not listed, so a name Copilot never lists, such as Codex's
+// codex-auto-review, does not cost every request a /models round trip. A catalog built any other
+// way has no entry and is rediscovered as before.
+const catalogFetchedAt = new WeakMap<CopilotModelCatalog, number>()
+const missingModelRecheckMs = 60_000
+
 // Concurrent callers for the same config and base URL share one in-flight /models request.
 const pendingCatalogs = new WeakMap<
   ProxyConfig,
@@ -208,6 +215,7 @@ export async function loadCopilotModelCatalog(
     }
 
     const catalog = { baseUrl: provider.baseUrl, models }
+    catalogFetchedAt.set(catalog, Date.now())
     publishCopilotModelCatalog(config, catalog)
 
     // Update the request's runtime view and the process-wide one, each only for its own base URL.
@@ -247,14 +255,21 @@ export async function ensureCopilotModelCatalog(
     return
   }
 
-  if (
-    config.modelCatalog.baseUrl !== config.copilotBaseUrl
-    || !config.modelCatalog.models.has(model)
-  ) {
-    await loadCopilotModelCatalog(config)
-    if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
-      throw new Error("Copilot base URL changed during model discovery; retry the request.")
+  const catalog = config.modelCatalog
+  if (catalog.baseUrl === config.copilotBaseUrl) {
+    if (catalog.models.has(model)) {
+      return
     }
+
+    const fetchedAt = catalogFetchedAt.get(catalog)
+    if (fetchedAt !== undefined && Date.now() - fetchedAt < missingModelRecheckMs) {
+      return
+    }
+  }
+
+  await loadCopilotModelCatalog(config)
+  if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
+    throw new Error("Copilot base URL changed during model discovery; retry the request.")
   }
 }
 

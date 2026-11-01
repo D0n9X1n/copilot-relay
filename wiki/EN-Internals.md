@@ -195,6 +195,14 @@ for all passes, even if the target was absent from discovery. Output bounding
 cannot rediscover and change capabilities after SSE starts; token counting remains
 local and never pins or refreshes the inference catalog.
 
+A model the catalog does not list triggers discovery, so a model Copilot added
+since startup is found. `ensureCopilotModelCatalog` does not repeat that for a
+catalog the relay fetched less than 60 seconds ago: such a catalog that still
+omits the model is taken as current. Codex sends its internal `codex-auto-review`,
+which Copilot never lists, so without this every such request would wait for a
+`/models` round trip before it is routed to `gptModel`. A catalog for another
+base URL is rediscovered at once.
+
 ### Claude Code's billing line
 
 Claude Code puts a billing attribution line first in the top-level system prompt:

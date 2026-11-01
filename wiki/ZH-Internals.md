@@ -169,6 +169,12 @@ base URL、超时、协议模式、搜索后端、effort 和目录视图。后�
 结果中没有目标模型也一样。输出预算处理不能在 SSE 开始后重新发现并改变能力；
 token 计数仍完全本地，不会固定或刷新推理目录。
 
+目录未列出的模型会触发重新发现，这样启动后 Copilot 新增的模型也能被找到。对于中继
+在 60 秒内取回的目录，`ensureCopilotModelCatalog` 不再重复发现：这样的目录仍未列出
+该模型，就视为最新结果。Codex 会发送 Copilot 从不列出的内部模型 `codex-auto-review`，
+没有这条规则，每个这样的请求都要先等一次 `/models` 往返，才能被路由到 `gptModel`。
+属于其他 base URL 的目录会立即重新发现。
+
 ### Claude Code 的计费行
 
 Claude Code 把一条计费归属行放在顶层 system prompt 的最前面：
