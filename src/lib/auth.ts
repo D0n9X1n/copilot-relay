@@ -49,6 +49,8 @@ interface GitHubUserResponse {
 interface AuthOptions {
   force?: boolean
   onDeviceCode?: (url: string, code: string) => void
+  // Cancels the background GitHub user lookup, so a stalled one cannot keep the process alive.
+  loginSignal?: AbortSignal
 }
 
 export interface ProxyAuthSession {
@@ -249,9 +251,11 @@ const pollAccessToken = async (
 const getGitHubUser = async (
   githubToken: string,
   vsCodeVersion: string,
+  signal?: AbortSignal,
 ): Promise<GitHubUserResponse> => {
   const response = await fetchUpstream(`${githubApiBaseUrl}/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
+    signal,
   })
 
   if (!response.ok) {
@@ -330,12 +334,17 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
 const loadGitHubLogin = async (
   githubToken: string,
   vsCodeVersion: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> => {
   try {
-    const user = await getGitHubUser(githubToken, vsCodeVersion)
+    const user = await getGitHubUser(githubToken, vsCodeVersion, signal)
     return user.login
   } catch (error) {
-    log.error("Could not load GitHub user:", error)
+    // Cancelled on shutdown; nothing is waiting for the login any more.
+    if (!signal?.aborted) {
+      log.error("Could not load GitHub user:", error)
+    }
+
     return undefined
   }
 }
@@ -461,7 +470,7 @@ export const setupProxyAuth = async (
   }
 
   return {
-    githubLogin: loadGitHubLogin(githubToken, config.vsCodeVersion),
+    githubLogin: loadGitHubLogin(githubToken, config.vsCodeVersion, options.loginSignal),
     source: "github-token",
   }
 }

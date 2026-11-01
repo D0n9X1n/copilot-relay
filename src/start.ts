@@ -177,7 +177,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     log.error(configWarning)
   }
 
-  const authSession = await setupProxyAuth(config)
+  // Aborted on shutdown, so a stalled GitHub user lookup cannot keep the process alive.
+  const loginLookup = new AbortController()
+  const authSession = await setupProxyAuth(config, { loginSignal: loginLookup.signal })
 
   try {
     await validateUpstream(config, appConfig.thinkEffort)
@@ -303,6 +305,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
 
   const shutdown = (signal: NodeJS.Signals) => {
     log.info(`Received ${signal}; shutting down copilot-relay`)
+    loginLookup.abort()
     server.close((error) => {
       if (error) {
         log.error("Error while shutting down copilot-relay:", error)
