@@ -222,7 +222,9 @@ Source: `src/start.ts` (`startRelay`) orders `readAppConfig`,
 `watchAppConfig`. `src/lib/preflight.ts` (`validateUpstream`) checks the model
 catalog and makes a small real request for each configured model. `startServer`
 resolves only once the listener is ready; managed-settings failures are logged
-without stopping the server.
+without stopping the server. The GitHub user lookup that `setupProxyAuth` starts
+runs alongside preflight; only the `GitHub user:` log line after listening waits
+for it.
 
 Preflight runs *before* the socket binds. A relay that cannot reach its
 configured models fails to start rather than accepting traffic it cannot serve.

@@ -202,8 +202,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   await writeRelayPidFile(config)
 
   log.info(`copilot-relay version: ${appVersion}`)
-  if (authSession.githubLogin) {
-    log.info(`GitHub user: ${authSession.githubLogin}`)
+  const githubLogin = await authSession.githubLogin
+  if (githubLogin) {
+    log.info(`GitHub user: ${githubLogin}`)
   } else {
     log.error("GitHub user: unavailable")
   }

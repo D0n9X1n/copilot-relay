@@ -52,7 +52,9 @@ interface AuthOptions {
 }
 
 export interface ProxyAuthSession {
-  githubLogin?: string
+  // Looked up in the background, so startup's upstream checks need not wait for GitHub. Resolves
+  // to undefined when the lookup fails; it never rejects.
+  githubLogin: Promise<string | undefined>
   source: "github-token"
 }
 
@@ -459,7 +461,7 @@ export const setupProxyAuth = async (
   }
 
   return {
-    githubLogin: await loadGitHubLogin(githubToken, config.vsCodeVersion),
+    githubLogin: loadGitHubLogin(githubToken, config.vsCodeVersion),
     source: "github-token",
   }
 }

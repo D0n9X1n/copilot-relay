@@ -171,7 +171,7 @@ test("GitHub sign-in uses the shared upstream dispatcher", async (t) => {
   }
   const session = await setupProxyAuth(config, { force: true, onDeviceCode: () => {} })
 
-  assert.equal(session.githubLogin, "fixture-user")
+  assert.equal(await session.githubLogin, "fixture-user")
   assert.equal(config.copilotToken, "copilot-token-fixture")
 
   const sent = redirect.calls.map((call) => `${call.method} ${call.url}`)
@@ -186,6 +186,58 @@ test("GitHub sign-in uses the shared upstream dispatcher", async (t) => {
   }
 
   assert.deepEqual(github.requests, sent)
+})
+
+// Why: the login is only printed once the relay listens, so startup's upstream checks must not
+// wait for GitHub's user lookup.
+test("sign-in returns before the GitHub user lookup answers", async (t) => {
+  configureUpstreamDispatcher(undefined)
+  const userRequested = Promise.withResolvers<void>()
+  const releaseUser = Promise.withResolvers<void>()
+  const github = await startFakeGitHub(async (url, _request, response) => {
+    if (url.href === "https://github.com/login/device/code") {
+      replyJson(response, {
+        device_code: "DEVICE_FIXTURE",
+        expires_in: 600,
+        interval: 0,
+        user_code: "USER-FIXTURE",
+        verification_uri: "https://github.com/login/device",
+      })
+    } else if (url.href === "https://github.com/login/oauth/access_token") {
+      replyJson(response, { access_token: "github-token-fixture" })
+    } else if (url.href === "https://api.github.com/copilot_internal/v2/token") {
+      replyJson(response, { token: "copilot-token-fixture", refresh_in: 3600 })
+    } else if (url.href === "https://api.github.com/user") {
+      userRequested.resolve()
+      await releaseUser.promise
+      replyJson(response, { login: "fixture-user" })
+    } else {
+      replyJson(response, {}, 404)
+    }
+  })
+  const redirect = redirectGitHubTo(github.origin)
+  const restoreConnections = refuseExternalConnections()
+  t.after(async () => {
+    releaseUser.resolve()
+    restoreConnections()
+    redirect.restore()
+    await github.close()
+  })
+
+  const config: ProxyConfig = {
+    copilotBaseUrl: "http://127.0.0.1:1",
+    copilotToken: undefined,
+    host: "127.0.0.1",
+    port: 0,
+    upstreamTimeoutMs: 5000,
+    vsCodeVersion: "1.99.3",
+  }
+  const session = await setupProxyAuth(config, { force: true, onDeviceCode: () => {} })
+
+  assert.equal(config.copilotToken, "copilot-token-fixture")
+  await userRequested.promise
+  releaseUser.resolve()
+  assert.equal(await session.githubLogin, "fixture-user")
 })
 
 // What `promise` rejects with. A promise that resolves fails the test.
