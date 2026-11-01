@@ -260,7 +260,9 @@ export async function ensureCopilotModelCatalog(
       return
     }
 
-    if (catalog.fetchedAt !== undefined && Date.now() - catalog.fetchedAt < missingModelRecheckMs) {
+    // A catalog fetched during this request counts as fresh.
+    const now = config.admittedAt ?? Date.now()
+    if (catalog.fetchedAt !== undefined && now - catalog.fetchedAt < missingModelRecheckMs) {
       return
     }
   }

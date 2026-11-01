@@ -159,3 +159,38 @@ test("a freshly discovered catalog that lacks a model is trusted for a minute be
     assert.equal(discoveries, 2)
   }))
 })
+
+// Why: one request judges catalog freshness once, at admission. Judging it whenever a later pass
+// asks would let a capture and its faster offline replay disagree on whether to rediscover.
+test("catalog freshness is judged when the request was admitted, not when a later pass asks", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 5_000_000 })
+  const baseUrl = "https://catalog-admitted.invalid"
+  const root: ProxyConfig = {
+    host: "127.0.0.1", port: 0, copilotBaseUrl: baseUrl, copilotToken: "fixture-admitted-token",
+    upstreamTimeoutMs: 1000, vsCodeVersion: "test",
+    modelCatalog: { baseUrl, models: new Map(), fetchedAt: 5_000_000 - 59_999 },
+  }
+  let discoveries = 0
+
+  await withRuntimeState({ upstreamBaseUrl: baseUrl }, () => withRecordedTransport({
+    fetch: async () => {
+      discoveries++
+      return Response.json({ data: [] })
+    },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
+  }, async () => {
+    const admitted = snapshotProxyConfig(root)
+    assert.equal(admitted.admittedAt, 5_000_000)
+
+    // The catalog turns a minute old while the request is in flight; the request still trusts it.
+    t.mock.timers.tick(10)
+    await ensureCopilotModelCatalog(admitted, "unlisted-model")
+    assert.equal(discoveries, 0)
+
+    // A request admitted now finds it too old and looks again.
+    await ensureCopilotModelCatalog(snapshotProxyConfig(root), "unlisted-model")
+    assert.equal(discoveries, 1)
+  }))
+})

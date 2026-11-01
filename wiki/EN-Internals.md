@@ -201,7 +201,11 @@ catalog the relay fetched less than 60 seconds ago: such a catalog that still
 omits the model is taken as current. Codex sends its internal `codex-auto-review`,
 which Copilot never lists, so without this every such request would wait for a
 `/models` round trip before it is routed to `gptModel`. A catalog for another
-base URL is rediscovered at once.
+base URL is rediscovered at once. Freshness is judged at the request's
+`admittedAt`, set by `snapshotProxyConfig`, so every pass of one request decides
+it the same way. Debug captures record the catalog's age at admission as
+`catalogAgeMs`, and replay pins `admittedAt` and backdates the catalog by that
+age, so a replay rediscovers exactly when the capture did.
 
 ### Claude Code's billing line
 

@@ -173,7 +173,10 @@ token 计数仍完全本地，不会固定或刷新推理目录。
 在 60 秒内取回的目录，`ensureCopilotModelCatalog` 不再重复发现：这样的目录仍未列出
 该模型，就视为最新结果。Codex 会发送 Copilot 从不列出的内部模型 `codex-auto-review`，
 没有这条规则，每个这样的请求都要先等一次 `/models` 往返，才能被路由到 `gptModel`。
-属于其他 base URL 的目录会立即重新发现。
+属于其他 base URL 的目录会立即重新发现。新鲜度按请求的 `admittedAt`（由
+`snapshotProxyConfig` 设置）判断，因此同一请求的每个阶段都得出相同结论。调试捕获把
+接入时的目录年龄记为 `catalogAgeMs`，重放时固定 `admittedAt` 并按该年龄回拨目录时间，
+因此重放与捕获在同样的条件下重新发现。
 
 ### Claude Code 的计费行
 

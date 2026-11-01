@@ -782,12 +782,16 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
       files.set(body.file, bytes)
     }
 
+    // Catalog freshness is judged at admission, so pinning admission and backdating the catalog by
+    // its recorded age makes the replay decide discovery exactly as the capture did.
+    const admittedAt = Date.now()
+
     // The relay treats a catalog as current only while its baseUrl matches the
     // upstream one; these URLs reproduce whether it matched at capture time.
     const catalog = manifest.runtime.models === undefined ? undefined : {
       baseUrl: manifest.runtime.catalogCurrent ? "https://replay.invalid" : "https://old.invalid",
       models: new Map(manifest.runtime.models as Array<[string, CopilotModel]>),
-      ...(typeof manifest.runtime.catalogAgeMs === "number" && { fetchedAt: Date.now() - manifest.runtime.catalogAgeMs }),
+      ...(typeof manifest.runtime.catalogAgeMs === "number" && { fetchedAt: admittedAt - manifest.runtime.catalogAgeMs }),
     }
 
     const config: ProxyConfig = {
@@ -797,6 +801,7 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
       // bypassed the recorded transport would fail rather than reach Copilot.
       copilotBaseUrl: "https://replay.invalid",
       copilotToken: "offline-replay-token",
+      admittedAt,
       upstreamTimeoutMs: manifest.config.upstreamTimeoutMs,
       vsCodeVersion: manifest.config.vsCodeVersion,
       webSearchBackend: manifest.config.webSearchBackend,

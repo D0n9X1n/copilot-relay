@@ -645,7 +645,9 @@ export class RequestTrace {
         ...policy,
         models: catalog ? [...catalog.models.entries()] : undefined,
         catalogCurrent: catalog?.baseUrl === config.copilotBaseUrl,
-        ...(catalog?.fetchedAt !== undefined && { catalogAgeMs: Math.max(0, Date.now() - catalog.fetchedAt) }),
+        ...(catalog?.fetchedAt !== undefined && {
+          catalogAgeMs: Math.max(0, (config.admittedAt ?? Date.now()) - catalog.fetchedAt),
+        }),
       },
     }
 
