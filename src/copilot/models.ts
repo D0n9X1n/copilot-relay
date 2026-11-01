@@ -28,6 +28,9 @@ export interface CopilotModel {
 export interface CopilotModelCatalog {
   baseUrl: string
   models: Map<string, CopilotModel>
+  // When the relay fetched this catalog, in epoch milliseconds; absent for a catalog built any other
+  // way. A catalog this recent that does not list a model is trusted to mean it is not listed.
+  fetchedAt?: number
 }
 
 // Keyed by each admitted request's config snapshot, created per POST in server.ts.
@@ -39,6 +42,10 @@ const pinnedCatalogs = new WeakMap<ProxyConfig, CopilotModelCatalog | undefined>
 export const pinCopilotModelCatalog = (config: ProxyConfig): void => {
   pinnedCatalogs.set(config, config.modelCatalog)
 }
+
+// How long a fetched catalog that does not list a model is trusted, so a name Copilot never lists,
+// such as Codex's codex-auto-review, does not cost every request a /models round trip.
+const missingModelRecheckMs = 60_000
 
 // Concurrent callers for the same config and base URL share one in-flight /models request.
 const pendingCatalogs = new WeakMap<
@@ -207,7 +214,7 @@ export async function loadCopilotModelCatalog(
       })
     }
 
-    const catalog = { baseUrl: provider.baseUrl, models }
+    const catalog = { baseUrl: provider.baseUrl, models, fetchedAt: Date.now() }
     publishCopilotModelCatalog(config, catalog)
 
     // Update the request's runtime view and the process-wide one, each only for its own base URL.
@@ -247,14 +254,22 @@ export async function ensureCopilotModelCatalog(
     return
   }
 
-  if (
-    config.modelCatalog.baseUrl !== config.copilotBaseUrl
-    || !config.modelCatalog.models.has(model)
-  ) {
-    await loadCopilotModelCatalog(config)
-    if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
-      throw new Error("Copilot base URL changed during model discovery; retry the request.")
+  const catalog = config.modelCatalog
+  if (catalog.baseUrl === config.copilotBaseUrl) {
+    if (catalog.models.has(model)) {
+      return
     }
+
+    // A catalog fetched during this request counts as fresh.
+    const now = config.admittedAt ?? Date.now()
+    if (catalog.fetchedAt !== undefined && now - catalog.fetchedAt < missingModelRecheckMs) {
+      return
+    }
+  }
+
+  await loadCopilotModelCatalog(config)
+  if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
+    throw new Error("Copilot base URL changed during model discovery; retry the request.")
   }
 }
 

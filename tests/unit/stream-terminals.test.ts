@@ -336,3 +336,55 @@ for (const stream of [false, true]) {
     }
   })
 }
+
+// Why: consumers in the relay read the parsed chunk instead of parsing data again, so each event's
+// chunk and data must describe the same chunk, and data must still be the serialized form.
+test("normalized chat events carry the parsed chunk beside the data it serializes to", async () => {
+  const content = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }] }
+  const finish = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }
+  const usage = { id: "c", created: 1, model: "m", choices: [], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } }
+
+  const out = []
+  for await (const event of normalizeChatCompletionStream(events(content, finish, usage, "[DONE]"))) {
+    out.push(event)
+  }
+
+  assert.equal(out.length, 3)
+  assert.deepEqual(out[0].chunk, content)
+  assert.deepEqual(out[1].chunk, { ...finish, usage: usage.usage })
+  for (const event of out.slice(0, 2)) {
+    assert.deepEqual(JSON.parse(event.data), event.chunk)
+  }
+
+  assert.equal(out[2].chunk, undefined)
+  assert.equal(out[2].data, "[DONE]")
+})
+
+// Why: the WebSearch classifier normalizes a stream that is already normalized; reading data there
+// would serialize every chunk only to parse it again.
+test("normalizing a normalized chat stream reuses its chunks without serializing them", async () => {
+  const content = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }] }
+  const finish = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }
+
+  async function* carried() {
+    for (const chunk of [content, finish] as Array<ChatCompletionChunk>) {
+      yield {
+        chunk,
+        get data(): string {
+          throw new Error("data must not be read")
+        },
+      }
+    }
+
+    yield { data: "[DONE]" }
+  }
+
+  const out = []
+  for await (const event of normalizeChatCompletionStream(carried())) {
+    out.push(event)
+  }
+
+  assert.equal(out[0].chunk, content)
+  assert.deepEqual(out[1].chunk, finish)
+  assert.equal(out[2].data, "[DONE]")
+})

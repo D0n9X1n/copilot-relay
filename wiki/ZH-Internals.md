@@ -169,6 +169,15 @@ base URL、超时、协议模式、搜索后端、effort 和目录视图。后�
 结果中没有目标模型也一样。输出预算处理不能在 SSE 开始后重新发现并改变能力；
 token 计数仍完全本地，不会固定或刷新推理目录。
 
+目录未列出的模型会触发重新发现，这样启动后 Copilot 新增的模型也能被找到。对于中继
+在 60 秒内取回的目录，`ensureCopilotModelCatalog` 不再重复发现：这样的目录仍未列出
+该模型，就视为最新结果。Codex 会发送 Copilot 从不列出的内部模型 `codex-auto-review`，
+没有这条规则，每个这样的请求都要先等一次 `/models` 往返，才能被路由到 `gptModel`。
+属于其他 base URL 的目录会立即重新发现。新鲜度按请求的 `admittedAt`（由
+`snapshotProxyConfig` 设置）判断，因此同一请求的每个阶段都得出相同结论。调试捕获把
+接入时的目录年龄记为 `catalogAgeMs`，重放时固定 `admittedAt` 并按该年龄回拨目录时间，
+因此重放与捕获在同样的条件下重新发现。
+
 ### Claude Code 的计费行
 
 Claude Code 把一条计费归属行放在顶层 system prompt 的最前面：
@@ -521,6 +530,12 @@ type 和消息；路由追加 ` (request_id=<id>)`，计数模式不会读取它
 dispatcher。设置 `NODE_USE_ENV_PROXY=1` 时，Node 自己的 `fetch` 连发往 localhost 的请求
 也会经过 `HTTP_PROXY`，除非 `NO_PROXY` 豁免它；经过一个拒绝连接的代理时，`status` 会把
 健康的 relay 报告为不可用。
+
+两者都通过 `src/lib/undici.ts` 的 `loadUndici` 在首次调用时加载 undici，而不是在导入
+时加载；默认的直连 dispatcher 也在首次使用时才构建。`stop`、`cache`、`setup`、`--help`
+以及 shell 补全在按 TAB 时调用的 `completion --models` 等不发 HTTP 请求的命令从不加载
+undici，而它占 CLI 启动时间的相当一部分。`tests/unit/cli-startup.test.ts` 加载所有命令
+模块，若 undici 被加载则失败。
 
 `usage` 不写任何文件，所以 `src/lib/usage.ts` 的 `loadCopilotUsage` 用
 `readExistingAppConfig` 读取配置，而不是会创建或补全 `config.yaml` 的 `readAppConfig`。

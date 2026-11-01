@@ -26,8 +26,9 @@ export const auth = defineCommand({
       force: true,
     })
 
-    if (authSession.githubLogin) {
-      log.info(`Logged in as ${authSession.githubLogin}`)
+    const githubLogin = await authSession.githubLogin
+    if (githubLogin) {
+      log.info(`Logged in as ${githubLogin}`)
     }
 
     log.info("copilot-relay auth completed")

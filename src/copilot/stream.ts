@@ -93,9 +93,45 @@ const incompleteStreamError = (): HTTPError => {
   }), { status: 502, headers: { "content-type": "application/json" } }), message)
 }
 
+/**
+ * One event of a normalized chat stream. `chunk` is the parsed chunk, so a consumer in this process
+ * reads it without parsing `data` again; `data` is serialized only if something reads it. Consumers
+ * read chunks and never modify them.
+ */
+export interface NormalizedChatEvent {
+  readonly data: string
+  readonly chunk?: ChatCompletionChunk
+}
+
+const chunkEvent = (chunk: ChatCompletionChunk): NormalizedChatEvent => {
+  let data: string | undefined
+  return {
+    chunk,
+    get data() {
+      data ??= JSON.stringify(chunk)
+      return data
+    },
+  }
+}
+
+/** An event of a chat stream, normalized or not. */
+export type ChatStreamEvent = { data?: string; chunk?: ChatCompletionChunk }
+
+/** True for the [DONE] marker. A chunk event answers without serializing its chunk. */
+export const isChatStreamDone = (event: ChatStreamEvent): boolean =>
+  !event.chunk && event.data === "[DONE]"
+
+/** True for an event with neither a chunk nor data, such as a comment or keep-alive. */
+export const isEmptyChatStreamEvent = (event: ChatStreamEvent): boolean =>
+  !event.chunk && !event.data
+
+/** The chunk an event carries, parsed from its data when it came from elsewhere. */
+export const readChatChunk = (event: ChatStreamEvent): ChatCompletionChunk =>
+  event.chunk ?? JSON.parse(event.data!) as ChatCompletionChunk
+
 export async function* normalizeChatCompletionStream(
-  stream: AsyncIterable<{ data?: string; event?: string }>,
-): AsyncGenerator<{ data: string }> {
+  stream: AsyncIterable<ChatStreamEvent & { event?: string }>,
+): AsyncGenerator<NormalizedChatEvent> {
   // Hold the terminal until EOF so trailing usage and observed-body recording can finish.
   let terminal: ChatCompletionChunk | undefined
   let refusal = false
@@ -105,17 +141,14 @@ export async function* normalizeChatCompletionStream(
       throw incompleteStreamError()
     }
 
-    if (!event.data) {
+    if (isEmptyChatStreamEvent(event) || isChatStreamDone(event)) {
       continue
     }
 
-    if (event.data === "[DONE]") {
-      continue
-    }
-
+    // A stream normalized once already carries its chunks; reading data would serialize each again.
     let chunk: ChatCompletionChunk
     try {
-      chunk = JSON.parse(event.data) as ChatCompletionChunk
+      chunk = readChatChunk(event)
     } catch {
       throw incompleteStreamError()
     }
@@ -150,10 +183,10 @@ export async function* normalizeChatCompletionStream(
 
       // The terminal chunk's own content goes out now; only its finish_reason waits for EOF.
       if (Object.keys(choice.delta).length > 0) {
-        yield { data: JSON.stringify({ ...chunk, choices: [{ ...choice, finish_reason: null }] }) }
+        yield chunkEvent({ ...chunk, choices: [{ ...choice, finish_reason: null }] })
       }
     } else {
-      yield { data: JSON.stringify(chunk) }
+      yield chunkEvent(chunk)
     }
   }
 
@@ -161,27 +194,27 @@ export async function* normalizeChatCompletionStream(
     throw incompleteStreamError()
   }
 
-  yield { data: JSON.stringify({ ...terminal, ...(usage && { usage }) }) }
+  yield chunkEvent({ ...terminal, ...(usage && { usage }) })
   yield { data: "[DONE]" }
 }
 
 export async function collectChatCompletionStream(
-  stream: AsyncIterable<{ data?: string }>,
+  stream: AsyncIterable<ChatStreamEvent>,
   signal?: AbortSignal,
   timeoutMs?: number,
 ): Promise<ChatCompletionResponse> {
   const chunks: Array<ChatCompletionChunk> = []
   try {
     for await (const event of stream) {
-      if (event.data === "[DONE]") {
+      if (isChatStreamDone(event)) {
         break
       }
 
-      if (!event.data) {
+      if (isEmptyChatStreamEvent(event)) {
         continue
       }
 
-      const chunk = JSON.parse(event.data) as ChatCompletionChunk
+      const chunk = readChatChunk(event)
       if (!chunk || !Array.isArray(chunk.choices)) {
         throw incompleteStreamError()
       }

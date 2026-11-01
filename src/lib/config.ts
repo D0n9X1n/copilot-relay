@@ -20,6 +20,10 @@ export interface ProxyConfig {
   // The inbound key clients must present; empty or absent disables the check. Admission reads it
   // from the live config on every request, so a hot reload applies to the next one.
   apiKey?: string
+  // When a request snapshot was admitted, in epoch milliseconds. Catalog freshness is judged at
+  // this instant rather than whenever a later pass asks, so one request decides it once, and a
+  // replay that sets it reproduces the decision.
+  admittedAt?: number
 }
 
 export interface ProxyEnv {
@@ -43,6 +47,7 @@ const snapshotRoots = new WeakMap<ProxyConfig, ProxyConfig>()
 export const snapshotProxyConfig = (config: ProxyConfig): ProxyConfig => {
   const snapshot = {
     ...config,
+    admittedAt: config.admittedAt ?? Date.now(),
     get copilotToken() {
       return config.copilotToken
     },

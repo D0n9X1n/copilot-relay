@@ -121,3 +121,76 @@ test("catalog assurance preserves optional discovery and refreshes before native
     }
   }))
 })
+
+test("a freshly discovered catalog that lacks a model is trusted for a minute before rediscovery", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 })
+  const baseUrl = "https://catalog-unlisted.invalid"
+  const config: ProxyConfig = {
+    host: "127.0.0.1", port: 0, copilotBaseUrl: baseUrl, copilotToken: "fixture-unlisted-token",
+    upstreamTimeoutMs: 1000, vsCodeVersion: "test",
+    modelCatalog: { baseUrl, models: new Map() },
+  }
+  let discoveries = 0
+
+  await withRuntimeState({ upstreamBaseUrl: baseUrl }, () => withRecordedTransport({
+    fetch: async () => {
+      discoveries++
+      return Response.json({ data: [{ id: "listed-model" }] })
+    },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
+  }, async () => {
+    // A catalog the relay did not fetch itself carries no fetch time, so it is rediscovered.
+    await ensureCopilotModelCatalog(config, "unlisted-model")
+    assert.equal(discoveries, 1)
+
+    // The catalog just fetched does not list the model either: no second round trip.
+    await ensureCopilotModelCatalog(snapshotProxyConfig(config), "unlisted-model")
+    assert.equal(discoveries, 1)
+
+    t.mock.timers.tick(59_999)
+    await ensureCopilotModelCatalog(config, "unlisted-model")
+    assert.equal(discoveries, 1)
+
+    // Once it is a minute old, a missing model is looked for again, so a newly added one is found.
+    t.mock.timers.tick(1)
+    await ensureCopilotModelCatalog(config, "unlisted-model")
+    assert.equal(discoveries, 2)
+  }))
+})
+
+// Why: one request judges catalog freshness once, at admission. Judging it whenever a later pass
+// asks would let a capture and its faster offline replay disagree on whether to rediscover.
+test("catalog freshness is judged when the request was admitted, not when a later pass asks", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 5_000_000 })
+  const baseUrl = "https://catalog-admitted.invalid"
+  const root: ProxyConfig = {
+    host: "127.0.0.1", port: 0, copilotBaseUrl: baseUrl, copilotToken: "fixture-admitted-token",
+    upstreamTimeoutMs: 1000, vsCodeVersion: "test",
+    modelCatalog: { baseUrl, models: new Map(), fetchedAt: 5_000_000 - 59_999 },
+  }
+  let discoveries = 0
+
+  await withRuntimeState({ upstreamBaseUrl: baseUrl }, () => withRecordedTransport({
+    fetch: async () => {
+      discoveries++
+      return Response.json({ data: [] })
+    },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
+  }, async () => {
+    const admitted = snapshotProxyConfig(root)
+    assert.equal(admitted.admittedAt, 5_000_000)
+
+    // The catalog turns a minute old while the request is in flight; the request still trusts it.
+    t.mock.timers.tick(10)
+    await ensureCopilotModelCatalog(admitted, "unlisted-model")
+    assert.equal(discoveries, 0)
+
+    // A request admitted now finds it too old and looks again.
+    await ensureCopilotModelCatalog(snapshotProxyConfig(root), "unlisted-model")
+    assert.equal(discoveries, 1)
+  }))
+})

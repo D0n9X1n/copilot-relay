@@ -37,9 +37,14 @@ const restoreConnections = refuseExternalConnections()
 // GitHub auth for every child, answered here. A request for anything else is recorded and its
 // connection dropped.
 const unexpectedGitHub: Array<string> = []
+// While set, the user lookup gets no answer, as when GitHub stalls.
+let stallUserLookup = false
 const github = await startFakeGitHub((url, _request, response) => {
   if (url.href === "https://api.github.com/user") {
-    replyJson(response, { login: "fixture-user" })
+    if (!stallUserLookup) {
+      replyJson(response, { login: "fixture-user" })
+    }
+
     return
   }
 
@@ -415,5 +420,49 @@ test("startup warns about a listener beyond loopback without an apiKey and never
   assert.ok(!(await readLogs(home.appDir)).includes(firstKey), "startup logged the key")
 
   assert.doesNotMatch(await start("127.0.0.1", ""), /not a loopback address/)
+  assert.deepEqual(unexpectedGitHub.splice(0), [])
+})
+
+// Why: the relay does not wait for the GitHub user lookup, so a lookup that never answers must not
+// keep the process alive after SIGTERM, or stop would have to escalate to SIGKILL. Windows has no
+// graceful SIGTERM to test.
+test("a relay whose GitHub user lookup stalls still exits on SIGTERM", {
+  timeout: 240_000,
+  skip: process.platform === "win32",
+}, async (t) => {
+  const upstream = await fakeCopilot(t)
+  const port = await freePort()
+  const home = await relayHome({ tokens: true })
+  t.after(() => removeHome(home.home))
+  await fs.writeFile(home.configPath, [
+    "host: 127.0.0.1",
+    `port: ${port}`,
+    `copilotBaseUrl: ${upstream.baseUrl}`,
+    "claudeSetup: false",
+    "gptModel: gpt-fixture-chat",
+    "opusModel: claude-opus-5.5",
+    "",
+  ].join("\n"))
+
+  stallUserLookup = true
+  t.after(() => {
+    stallUserLookup = false
+  })
+  const relay = spawnRelay(home)
+  t.after(() => stopRelay(relay))
+  await waitFor(relay, async () => relay.output().includes("copilot-relay listening"))
+  assert.doesNotMatch(relay.output(), /GitHub user:/)
+
+  // stop escalates to SIGKILL after 5 s, so the relay must be gone well before that.
+  const exited = new Promise<number | null | "running">((resolve) => {
+    const timer = setTimeout(() => resolve("running"), 4_000)
+    relay.child.once("exit", (code) => {
+      clearTimeout(timer)
+      resolve(code)
+    })
+  })
+  relay.child.kill("SIGTERM")
+
+  assert.equal(await exited, 0, relay.output())
   assert.deepEqual(unexpectedGitHub.splice(0), [])
 })

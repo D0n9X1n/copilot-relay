@@ -177,7 +177,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     log.error(configWarning)
   }
 
-  const authSession = await setupProxyAuth(config)
+  // Aborted on shutdown, so a stalled GitHub user lookup cannot keep the process alive.
+  const loginLookup = new AbortController()
+  const authSession = await setupProxyAuth(config, { loginSignal: loginLookup.signal })
 
   try {
     await validateUpstream(config, appConfig.thinkEffort)
@@ -202,11 +204,15 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   await writeRelayPidFile(config)
 
   log.info(`copilot-relay version: ${appVersion}`)
-  if (authSession.githubLogin) {
-    log.info(`GitHub user: ${authSession.githubLogin}`)
-  } else {
-    log.error("GitHub user: unavailable")
-  }
+  // Logged whenever the lookup answers. Waiting for it here would hold back config watching and the
+  // shutdown handlers below while the relay already accepts requests.
+  void authSession.githubLogin.then((githubLogin) => {
+    if (githubLogin) {
+      log.info(`GitHub user: ${githubLogin}`)
+    } else {
+      log.error("GitHub user: unavailable")
+    }
+  })
 
   const baseUrl = getRelayBaseUrl(config.host, config.port)
   log.info(`copilot-relay listening on ${baseUrl}`)
@@ -299,6 +305,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
 
   const shutdown = (signal: NodeJS.Signals) => {
     log.info(`Received ${signal}; shutting down copilot-relay`)
+    loginLookup.abort()
     server.close((error) => {
       if (error) {
         log.error("Error while shutting down copilot-relay:", error)

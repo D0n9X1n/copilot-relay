@@ -126,6 +126,9 @@ export interface CaptureManifest {
   runtime: Omit<RuntimeState, "modelCatalog" | "upstreamBaseUrl"> & {
     models?: Array<[string, unknown]>
     catalogCurrent?: boolean
+    // How old the catalog was when the request arrived, for one the relay fetched; replay rebuilds
+    // it that old, so a missing model is rediscovered, or trusted, as it was at capture time.
+    catalogAgeMs?: number
   }
   outcome?: Record<string, unknown>
 }
@@ -240,7 +243,12 @@ class OutcomeObserver {
       return
     }
 
-    for (const part of text.split(/(?<=\n)/)) {
+    // Each part runs through one line break, kept on the part, or to the end of the chunk.
+    for (let start = 0; start < text.length;) {
+      const lineEnd = text.indexOf("\n", start)
+      const end = lineEnd === -1 ? text.length : lineEnd + 1
+      const part = text.slice(start, end)
+      start = end
       if (this.pending.length + part.length <= 2 * 1024 * 1024 && !this.overflow) {
         this.pending += part
       } else {
@@ -637,6 +645,9 @@ export class RequestTrace {
         ...policy,
         models: catalog ? [...catalog.models.entries()] : undefined,
         catalogCurrent: catalog?.baseUrl === config.copilotBaseUrl,
+        ...(catalog?.fetchedAt !== undefined && {
+          catalogAgeMs: Math.max(0, (config.admittedAt ?? Date.now()) - catalog.fetchedAt),
+        }),
       },
     }
 

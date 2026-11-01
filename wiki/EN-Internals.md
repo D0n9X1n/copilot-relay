@@ -195,6 +195,18 @@ for all passes, even if the target was absent from discovery. Output bounding
 cannot rediscover and change capabilities after SSE starts; token counting remains
 local and never pins or refreshes the inference catalog.
 
+A model the catalog does not list triggers discovery, so a model Copilot added
+since startup is found. `ensureCopilotModelCatalog` does not repeat that for a
+catalog the relay fetched less than 60 seconds ago: such a catalog that still
+omits the model is taken as current. Codex sends its internal `codex-auto-review`,
+which Copilot never lists, so without this every such request would wait for a
+`/models` round trip before it is routed to `gptModel`. A catalog for another
+base URL is rediscovered at once. Freshness is judged at the request's
+`admittedAt`, set by `snapshotProxyConfig`, so every pass of one request decides
+it the same way. Debug captures record the catalog's age at admission as
+`catalogAgeMs`, and replay pins `admittedAt` and backdates the catalog by that
+age, so a replay rediscovers exactly when the capture did.
+
 ### Claude Code's billing line
 
 Claude Code puts a billing attribution line first in the top-level system prompt:
@@ -622,6 +634,14 @@ of their own, neither this dispatcher nor the global one. With
 `NODE_USE_ENV_PROXY=1`, Node's own `fetch` sends even a request to localhost
 through `HTTP_PROXY` unless `NO_PROXY` exempts it, and through a proxy that
 refuses, `status` would report a healthy relay as unusable.
+
+Both load undici through `loadUndici` in `src/lib/undici.ts`, on the first call
+rather than at import, and the default direct dispatcher is built on first use.
+Commands that make no HTTP call, such as `stop`, `cache`, `setup`, `--help` and
+the `completion --models` call shell completion makes on TAB, never evaluate
+undici, which is a sizeable share of CLI startup.
+`tests/unit/cli-startup.test.ts` loads every command module and fails if undici
+is loaded.
 
 `usage` writes no file, so `loadCopilotUsage` in `src/lib/usage.ts` reads the
 config with `readExistingAppConfig` rather than `readAppConfig`, which creates or

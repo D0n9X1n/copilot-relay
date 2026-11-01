@@ -45,6 +45,7 @@ import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
 import { createCopilotRequestSignal } from "~/copilot/client"
+import { isChatStreamDone, isEmptyChatStreamEvent, readChatChunk, type ChatStreamEvent } from "~/copilot/stream"
 import {
   ensureCopilotModelCatalog,
   getCachedCopilotModel,
@@ -326,7 +327,7 @@ const handleClaudeMessageRequest = async (
   // path below exactly as the non-streaming route would have.
   let decidedResponse: ChatCompletionResponse | undefined
   let bufferedChunks: Array<ChatCompletionChunk> = []
-  let remainingStream: AsyncIterable<{ data?: string }> | undefined
+  let remainingStream: AsyncIterable<ChatStreamEvent> | undefined
   // Shared with the streaming tail so block indices stay monotonic across a
   // decision pass that streamed some content before a search was detected.
   const streamState: ClaudeStreamState = {
@@ -532,15 +533,15 @@ const handleClaudeMessageRequest = async (
   const upstreamStream = remainingStream ?? effectiveResponse
 
   for await (const rawEvent of upstreamStream) {
-    if (rawEvent.data === "[DONE]") {
+    if (isChatStreamDone(rawEvent)) {
       break
     }
 
-    if (!rawEvent.data) {
+    if (isEmptyChatStreamEvent(rawEvent)) {
       continue
     }
 
-    const chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
+    const chunk = readChatChunk(rawEvent)
 
     await writeClaudeStreamEvents(
       translateChunkToClaudeEvents(
