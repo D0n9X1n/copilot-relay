@@ -528,6 +528,12 @@ dispatcher。设置 `NODE_USE_ENV_PROXY=1` 时，Node 自己的 `fetch` 连发�
 也会经过 `HTTP_PROXY`，除非 `NO_PROXY` 豁免它；经过一个拒绝连接的代理时，`status` 会把
 健康的 relay 报告为不可用。
 
+两者都通过 `src/lib/undici.ts` 的 `loadUndici` 在首次调用时加载 undici，而不是在导入
+时加载；默认的直连 dispatcher 也在首次使用时才构建。`stop`、`cache`、`setup`、`--help`
+以及 shell 补全在按 TAB 时调用的 `completion --models` 等不发 HTTP 请求的命令从不加载
+undici，而它占 CLI 启动时间的相当一部分。`tests/unit/cli-startup.test.ts` 加载所有命令
+模块，若 undici 被加载则失败。
+
 `usage` 不写任何文件，所以 `src/lib/usage.ts` 的 `loadCopilotUsage` 用
 `readExistingAppConfig` 读取配置，而不是会创建或补全 `config.yaml` 的 `readAppConfig`。
 它解析已有文件但不改写；没有文件时返回空，请求随后直连。整个命令在 `withoutLogging`

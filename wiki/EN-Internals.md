@@ -631,6 +631,14 @@ of their own, neither this dispatcher nor the global one. With
 through `HTTP_PROXY` unless `NO_PROXY` exempts it, and through a proxy that
 refuses, `status` would report a healthy relay as unusable.
 
+Both load undici through `loadUndici` in `src/lib/undici.ts`, on the first call
+rather than at import, and the default direct dispatcher is built on first use.
+Commands that make no HTTP call, such as `stop`, `cache`, `setup`, `--help` and
+the `completion --models` call shell completion makes on TAB, never evaluate
+undici, which is a sizeable share of CLI startup.
+`tests/unit/cli-startup.test.ts` loads every command module and fails if undici
+is loaded.
+
 `usage` writes no file, so `loadCopilotUsage` in `src/lib/usage.ts` reads the
 config with `readExistingAppConfig` rather than `readAppConfig`, which creates or
 completes `config.yaml`. It resolves an existing file without rewriting it and

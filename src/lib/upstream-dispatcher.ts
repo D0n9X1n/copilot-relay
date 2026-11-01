@@ -1,10 +1,11 @@
 // The one undici dispatcher every upstream call goes through: the Copilot API and GitHub.
 // Calls to the relay's own listener, such as the status probes, use a direct dispatcher of their
 // own, relayListener in src/status.ts.
-import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici"
+import type { Agent, Dispatcher } from "undici"
 
 import { isLoggingSuppressed, log, registerLogSecret } from "~/lib/log"
 import { paths } from "~/lib/paths"
+import { loadUndici } from "~/lib/undici"
 
 // Copilot sends no Keep-Alive hint, so undici would close an idle upstream connection after its 4 s
 // default and the next request would pay for a new TCP and TLS handshake. Copilot reused a
@@ -37,6 +38,7 @@ export class InvalidProxyEnvironmentError extends Error {
  * normalizeUpstreamProxy has already validated.
  */
 export const buildUpstreamDispatcher = (upstreamProxy: string | undefined): Dispatcher => {
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndici()
   if (upstreamProxy === undefined) {
     return new Agent(connectionOptions)
   }
@@ -52,7 +54,8 @@ export const buildUpstreamDispatcher = (upstreamProxy: string | undefined): Disp
   return new ProxyAgent({ ...connectionOptions, uri: upstreamProxy })
 }
 
-let upstreamDispatcher: Dispatcher = buildUpstreamDispatcher(undefined)
+// Built on first use, so a command that never calls upstream never loads undici.
+let upstreamDispatcher: Dispatcher | undefined
 let configuredUpstreamProxy: string | undefined
 
 /**
@@ -165,10 +168,13 @@ export const configureUpstreamDispatcher = (upstreamProxy: string | undefined): 
     : new RegExp(forms.map((form) => escapeRegExp(form)).join("|"), "g")
 
   // Requests already sent through the previous dispatcher finish before it closes.
-  void previous.close().catch(() => undefined)
+  void previous?.close().catch(() => undefined)
 }
 
-export const getUpstreamDispatcher = (): Dispatcher => upstreamDispatcher
+export const getUpstreamDispatcher = (): Dispatcher => {
+  upstreamDispatcher ??= buildUpstreamDispatcher(undefined)
+  return upstreamDispatcher
+}
 
 const proxyVariables = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
 let proxyHintLogged = false
@@ -293,7 +299,7 @@ const sanitizeTransportError = (error: unknown, seen = new Set<unknown>()): void
  * uses.
  */
 export const fetchUpstream = async (url: string, init: UpstreamRequestInit): Promise<Response> => {
-  const response = await undiciFetch(url, { ...init, dispatcher: upstreamDispatcher }).catch((error: unknown) => {
+  const response = await loadUndici().fetch(url, { ...init, dispatcher: getUpstreamDispatcher() }).catch((error: unknown) => {
     sanitizeTransportError(error)
     noteConnectionFailure(init.signal)
     throw error

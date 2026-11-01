@@ -1,6 +1,6 @@
 // `copilot-relay status`: report whether a relay is running, and whether it works.
 import { defineCommand } from "citty"
-import { Agent, fetch as undiciFetch, type RequestInit } from "undici"
+import type { Agent, RequestInit } from "undici"
 
 import type { AppConfig } from "~/lib/app-config"
 
@@ -18,6 +18,7 @@ import {
   sanitizeTerminalString,
   scrubSensitiveUrls,
 } from "~/lib/redact"
+import { loadUndici } from "~/lib/undici"
 import { appVersion } from "~/lib/version"
 import { colorEnabled, colorText, withoutHiddenCharacters } from "~/lib/terminal"
 
@@ -364,8 +365,9 @@ let relayAgent: Agent | undefined
  */
 export const relayListener = {
   fetch: (url: string, init: RequestInit) => {
-    relayAgent ??= new Agent()
-    return undiciFetch(url, { ...init, dispatcher: relayAgent })
+    const undici = loadUndici()
+    relayAgent ??= new undici.Agent()
+    return undici.fetch(url, { ...init, dispatcher: relayAgent })
   },
 }
 
