@@ -8,7 +8,10 @@ const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 // SSE frames end with a blank line; CRLF and LF both occur.
-const frameEnd = /\r?\n\r?\n/
+const frameEnd = /\r?\n\r?\n/g
+// The longest frame end, less one: how far back a search must restart to find one that a chunk
+// boundary split.
+const frameEndOverlap = 3
 
 /**
  * Rewrites SSE frames as they stream so that every event about one output item names it by the same
@@ -21,19 +24,26 @@ export class StableItemIds {
   private readonly encoder = new TextEncoder()
   private readonly ids = new Map<number, string>()
   private pending = ""
+  // How much of pending is known to hold no frame end, so a large frame that arrives over many
+  // chunks is searched once rather than from its start on every chunk.
+  private searched = 0
 
   /** The bytes of every frame this chunk completes; a partial frame waits for the next chunk. */
   push(chunk: Uint8Array): Uint8Array {
     this.pending += this.decoder.decode(chunk, { stream: true })
     let output = ""
+    let frameStart = 0
+    frameEnd.lastIndex = Math.max(0, this.searched - frameEndOverlap)
     let match = frameEnd.exec(this.pending)
     while (match) {
       const end = match.index + match[0].length
-      output += this.rewriteFrame(this.pending.slice(0, end))
-      this.pending = this.pending.slice(end)
+      output += this.rewriteFrame(this.pending.slice(frameStart, end))
+      frameStart = end
       match = frameEnd.exec(this.pending)
     }
 
+    this.pending = this.pending.slice(frameStart)
+    this.searched = this.pending.length
     return this.encoder.encode(output)
   }
 
@@ -41,6 +51,7 @@ export class StableItemIds {
   flush(): Uint8Array {
     const rest = this.pending + this.decoder.decode()
     this.pending = ""
+    this.searched = 0
     return this.encoder.encode(rest)
   }
 

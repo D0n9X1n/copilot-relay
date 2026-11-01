@@ -13,7 +13,7 @@ import {
 import { boundModelOutputTokens, getCachedCopilotModel, resolveModelReasoningEffort } from "~/copilot/models"
 import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { markDiscardedResponse } from "~/lib/request-trace"
-import { collectChatCompletionStream, normalizeChatCompletionStream } from "~/copilot/stream"
+import { collectChatCompletionStream, normalizeChatCompletionStream, type ChatStreamEvent } from "~/copilot/stream"
 import {
   createCopilotRequestSignal,
   fetchCopilot,
@@ -273,7 +273,7 @@ export const createChatCompletions = async (
     && nonStreamingLimit !== undefined
     && maxTokens > nonStreamingLimit
   const completeResponse = (
-    response: ChatCompletionResponse | AsyncIterable<{ data?: string }>,
+    response: ChatCompletionResponse | AsyncIterable<ChatStreamEvent>,
   ) => bufferResponse && !("choices" in response) ?
       collectChatCompletionStream(response, signal, options.timeoutMs)
     : response

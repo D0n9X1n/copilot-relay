@@ -4,7 +4,14 @@ import type {
   ChatCompletionResponse,
 } from "~/copilot/types"
 import type { ClaudeToolNameMapper } from "~/claude/tool-names"
-import { accumulateChunks, normalizeChatCompletionStream } from "~/copilot/stream"
+import {
+  accumulateChunks,
+  isChatStreamDone,
+  isEmptyChatStreamEvent,
+  normalizeChatCompletionStream,
+  readChatChunk,
+  type ChatStreamEvent,
+} from "~/copilot/stream"
 
 export { accumulateChunks } from "~/copilot/stream"
 
@@ -48,13 +55,13 @@ const chunkHasWebSearchCall = (
 // one. The resulting order is text -> server_tool_use -> web_search_tool_result
 // -> text, which is Anthropic's documented native shape for a search turn.
 export const resolveWebSearchStreamDecision = async (
-  stream: AsyncIterable<{ data?: string }>,
+  stream: AsyncIterable<ChatStreamEvent>,
   toolNameMapper: ClaudeToolNameMapper,
   isWebSearchToolName: (name: string) => boolean,
   onChunk?: (chunk: ChatCompletionChunk) => Promise<void>,
 ): Promise<{
   decision: WebSearchStreamDecision
-  rest: AsyncIterable<{ data?: string }>
+  rest: AsyncIterable<ChatStreamEvent>
   alreadyStreamed: boolean
   streamedText: string
   streamedThinking: string
@@ -76,16 +83,16 @@ export const resolveWebSearchStreamDecision = async (
     }
 
     const raw = next.value
-    if (raw.data === "[DONE]") {
+    if (isChatStreamDone(raw)) {
       done = true
       break
     }
 
-    if (!raw.data) {
+    if (isEmptyChatStreamEvent(raw)) {
       continue
     }
 
-    const chunk = JSON.parse(raw.data) as ChatCompletionChunk
+    const chunk = readChatChunk(raw)
     if (!chunk || !Array.isArray(chunk.choices)) {
       throw new Error("Invalid upstream chat stream chunk.")
     }
@@ -114,7 +121,7 @@ export const resolveWebSearchStreamDecision = async (
   }
 
   // The remainder of the upstream stream, if the decision was reached early.
-  const rest: AsyncIterable<{ data?: string }> = {
+  const rest: AsyncIterable<ChatStreamEvent> = {
     async *[Symbol.asyncIterator]() {
       if (done) {
         return
@@ -146,15 +153,15 @@ export const resolveWebSearchStreamDecision = async (
 
   // A web-search turn needs the whole response, so drain what is left.
   for await (const raw of rest) {
-    if (raw.data === "[DONE]") {
+    if (isChatStreamDone(raw)) {
       break
     }
 
-    if (!raw.data) {
+    if (isEmptyChatStreamEvent(raw)) {
       continue
     }
 
-    const chunk = JSON.parse(raw.data) as ChatCompletionChunk
+    const chunk = readChatChunk(raw)
     if (!chunk || !Array.isArray(chunk.choices)) {
       throw new Error("Invalid upstream chat stream chunk.")
     }
