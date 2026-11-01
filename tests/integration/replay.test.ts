@@ -977,6 +977,27 @@ for (const stream of [false, true]) {
   })
 }
 
+// Why: a catalog the relay fetched moments ago is trusted not to list the model, so the live request
+// skips discovery; replay must rebuild that catalog as recent, or it would consume a /models
+// exchange the capture never made.
+test("real debug capture replays a fresh catalog that omits the model without rediscovery", { timeout: 25_000 }, async (t) => {
+  const capture = await captureWithHttpCopilot({
+    configure: (config, runtime) => {
+      config.modelCatalog = { baseUrl: config.copilotBaseUrl, models: new Map(), fetchedAt: Date.now() }
+      runtime.modelCatalog = config.modelCatalog
+    },
+    respond: (_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(JSON.stringify(chatResponse()))
+    },
+  })
+
+  assert.deepEqual(capture.requests.map((request) => [request.method, request.path]), [["POST", "/chat/completions"]])
+  assert.equal(typeof capture.manifest.runtime.catalogAgeMs, "number")
+
+  await assertRealCaptureReplaysOffline(t, capture)
+})
+
 test("real debug capture replays lazy catalog discovery before the bounded chat request", { timeout: 25_000 }, async (t) => {
   const limits = { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 }
   const capture = await captureWithHttpCopilot({

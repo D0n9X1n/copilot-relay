@@ -126,6 +126,9 @@ export interface CaptureManifest {
   runtime: Omit<RuntimeState, "modelCatalog" | "upstreamBaseUrl"> & {
     models?: Array<[string, unknown]>
     catalogCurrent?: boolean
+    // How old the catalog was when the request arrived, for one the relay fetched; replay rebuilds
+    // it that old, so a missing model is rediscovered, or trusted, as it was at capture time.
+    catalogAgeMs?: number
   }
   outcome?: Record<string, unknown>
 }
@@ -642,6 +645,7 @@ export class RequestTrace {
         ...policy,
         models: catalog ? [...catalog.models.entries()] : undefined,
         catalogCurrent: catalog?.baseUrl === config.copilotBaseUrl,
+        ...(catalog?.fetchedAt !== undefined && { catalogAgeMs: Math.max(0, Date.now() - catalog.fetchedAt) }),
       },
     }
 

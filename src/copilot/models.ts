@@ -28,6 +28,9 @@ export interface CopilotModel {
 export interface CopilotModelCatalog {
   baseUrl: string
   models: Map<string, CopilotModel>
+  // When the relay fetched this catalog, in epoch milliseconds; absent for a catalog built any other
+  // way. A catalog this recent that does not list a model is trusted to mean it is not listed.
+  fetchedAt?: number
 }
 
 // Keyed by each admitted request's config snapshot, created per POST in server.ts.
@@ -40,11 +43,8 @@ export const pinCopilotModelCatalog = (config: ProxyConfig): void => {
   pinnedCatalogs.set(config, config.modelCatalog)
 }
 
-// When each discovered catalog was fetched. A catalog this recent that does not list a model is
-// trusted to mean the model is not listed, so a name Copilot never lists, such as Codex's
-// codex-auto-review, does not cost every request a /models round trip. A catalog built any other
-// way has no entry and is rediscovered as before.
-const catalogFetchedAt = new WeakMap<CopilotModelCatalog, number>()
+// How long a fetched catalog that does not list a model is trusted, so a name Copilot never lists,
+// such as Codex's codex-auto-review, does not cost every request a /models round trip.
 const missingModelRecheckMs = 60_000
 
 // Concurrent callers for the same config and base URL share one in-flight /models request.
@@ -214,8 +214,7 @@ export async function loadCopilotModelCatalog(
       })
     }
 
-    const catalog = { baseUrl: provider.baseUrl, models }
-    catalogFetchedAt.set(catalog, Date.now())
+    const catalog = { baseUrl: provider.baseUrl, models, fetchedAt: Date.now() }
     publishCopilotModelCatalog(config, catalog)
 
     // Update the request's runtime view and the process-wide one, each only for its own base URL.
@@ -261,8 +260,7 @@ export async function ensureCopilotModelCatalog(
       return
     }
 
-    const fetchedAt = catalogFetchedAt.get(catalog)
-    if (fetchedAt !== undefined && Date.now() - fetchedAt < missingModelRecheckMs) {
+    if (catalog.fetchedAt !== undefined && Date.now() - catalog.fetchedAt < missingModelRecheckMs) {
       return
     }
   }

@@ -266,6 +266,10 @@ const validateManifest = (value: unknown): CaptureManifest => {
   }
 
   requireValid(runtime.catalogCurrent === undefined || typeof runtime.catalogCurrent === "boolean")
+  requireValid(
+    runtime.catalogAgeMs === undefined
+    || typeof runtime.catalogAgeMs === "number" && Number.isSafeInteger(runtime.catalogAgeMs) && runtime.catalogAgeMs >= 0,
+  )
   if (runtime.models !== undefined) {
     requireValid(Array.isArray(runtime.models) && runtime.models.length <= 10_000)
     const ids = new Set<string>()
@@ -783,6 +787,7 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
     const catalog = manifest.runtime.models === undefined ? undefined : {
       baseUrl: manifest.runtime.catalogCurrent ? "https://replay.invalid" : "https://old.invalid",
       models: new Map(manifest.runtime.models as Array<[string, CopilotModel]>),
+      ...(typeof manifest.runtime.catalogAgeMs === "number" && { fetchedAt: Date.now() - manifest.runtime.catalogAgeMs }),
     }
 
     const config: ProxyConfig = {
