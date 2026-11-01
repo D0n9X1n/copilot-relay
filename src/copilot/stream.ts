@@ -130,7 +130,7 @@ export const readChatChunk = (event: ChatStreamEvent): ChatCompletionChunk =>
   event.chunk ?? JSON.parse(event.data!) as ChatCompletionChunk
 
 export async function* normalizeChatCompletionStream(
-  stream: AsyncIterable<{ data?: string; event?: string }>,
+  stream: AsyncIterable<ChatStreamEvent & { event?: string }>,
 ): AsyncGenerator<NormalizedChatEvent> {
   // Hold the terminal until EOF so trailing usage and observed-body recording can finish.
   let terminal: ChatCompletionChunk | undefined
@@ -141,17 +141,14 @@ export async function* normalizeChatCompletionStream(
       throw incompleteStreamError()
     }
 
-    if (!event.data) {
+    if (isEmptyChatStreamEvent(event) || isChatStreamDone(event)) {
       continue
     }
 
-    if (event.data === "[DONE]") {
-      continue
-    }
-
+    // A stream normalized once already carries its chunks; reading data would serialize each again.
     let chunk: ChatCompletionChunk
     try {
-      chunk = JSON.parse(event.data) as ChatCompletionChunk
+      chunk = readChatChunk(event)
     } catch {
       throw incompleteStreamError()
     }

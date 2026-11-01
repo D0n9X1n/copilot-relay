@@ -359,3 +359,32 @@ test("normalized chat events carry the parsed chunk beside the data it serialize
   assert.equal(out[2].chunk, undefined)
   assert.equal(out[2].data, "[DONE]")
 })
+
+// Why: the WebSearch classifier normalizes a stream that is already normalized; reading data there
+// would serialize every chunk only to parse it again.
+test("normalizing a normalized chat stream reuses its chunks without serializing them", async () => {
+  const content = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }] }
+  const finish = { id: "c", created: 1, model: "m", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }
+
+  async function* carried() {
+    for (const chunk of [content, finish] as Array<ChatCompletionChunk>) {
+      yield {
+        chunk,
+        get data(): string {
+          throw new Error("data must not be read")
+        },
+      }
+    }
+
+    yield { data: "[DONE]" }
+  }
+
+  const out = []
+  for await (const event of normalizeChatCompletionStream(carried())) {
+    out.push(event)
+  }
+
+  assert.equal(out[0].chunk, content)
+  assert.deepEqual(out[1].chunk, finish)
+  assert.equal(out[2].data, "[DONE]")
+})
