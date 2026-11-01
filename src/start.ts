@@ -202,12 +202,15 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   await writeRelayPidFile(config)
 
   log.info(`copilot-relay version: ${appVersion}`)
-  const githubLogin = await authSession.githubLogin
-  if (githubLogin) {
-    log.info(`GitHub user: ${githubLogin}`)
-  } else {
-    log.error("GitHub user: unavailable")
-  }
+  // Logged whenever the lookup answers. Waiting for it here would hold back config watching and the
+  // shutdown handlers below while the relay already accepts requests.
+  void authSession.githubLogin.then((githubLogin) => {
+    if (githubLogin) {
+      log.info(`GitHub user: ${githubLogin}`)
+    } else {
+      log.error("GitHub user: unavailable")
+    }
+  })
 
   const baseUrl = getRelayBaseUrl(config.host, config.port)
   log.info(`copilot-relay listening on ${baseUrl}`)

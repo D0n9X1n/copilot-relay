@@ -204,7 +204,7 @@ flowchart TD
 `watchAppConfig`。`src/lib/preflight.ts`（`validateUpstream`）检查模型目录，并对每个
 配置模型发出一次小型真实请求。`startServer` 只在监听器就绪后才完成；自动管理设置失败
 会记录日志，不会让服务停止。`setupProxyAuth` 发起的 GitHub 用户查询与 preflight 并行
-进行；只有监听后的 `GitHub user:` 日志行会等待它。
+进行，且没有任何步骤等待它：`GitHub user:` 日志行在查询返回时记录，可能出现在监听日志行之后。
 
 Preflight 在 socket 绑定**之前**运行。一个连配置模型都够不着的中继会直接启动失败，
 而不是先接下它根本处理不了的流量。此时解析后的配置已经写入磁盘，因此可以直接修改
