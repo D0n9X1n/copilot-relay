@@ -23,6 +23,10 @@ export interface CopilotModel {
   reasoningEfforts?: string[]
   // The catalog's display name. Only `copilot-relay models` prints it; routing never reads it.
   name?: string
+  // Read only by the auto model selection.
+  vendor?: string
+  pickerEnabled?: boolean
+  pickerCategory?: string
 }
 
 export interface CopilotModelCatalog {
@@ -211,6 +215,9 @@ export async function loadCopilotModelCatalog(
         ...(typeof capabilities?.type === "string" && { type: capabilities.type }),
         ...(reasoningEfforts !== undefined && { reasoningEfforts }),
         ...(typeof model.name === "string" && model.name !== "" && { name: model.name }),
+        ...(typeof model.vendor === "string" && { vendor: model.vendor }),
+        ...(typeof model.model_picker_enabled === "boolean" && { pickerEnabled: model.model_picker_enabled }),
+        ...(typeof model.model_picker_category === "string" && { pickerCategory: model.model_picker_category }),
       })
     }
 
