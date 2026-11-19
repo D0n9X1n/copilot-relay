@@ -87,40 +87,36 @@ export const resolveReasoningEffort = (
 ): ReasoningEffort =>
   requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
-const oneMillionContextModelPattern = /^(gpt-5\.6-sol|gpt-6-astra)(?:\[1m\])*$/i
-
-const normalizeOneMillionContextModel = (model: string): string | undefined => {
-  const match = oneMillionContextModelPattern.exec(model)
-  return match?.[1]?.toLowerCase()
+// A catalog fetched before a reload switched upstreams does not describe this one's models.
+const currentCatalog = (): Map<string, CopilotModel> | undefined => {
+  const state = getRuntimeState()
+  return state.modelCatalog?.baseUrl === state.upstreamBaseUrl ? state.modelCatalog?.models : undefined
 }
 
-export const normalizeClaudeModelId = (
-  model: string,
-  contextWindowTokens?: number,
-): string => {
-  const normalized = normalizeOneMillionContextModel(model)
-  if (!normalized) {
+// The ID Copilot receives: every [1m] stripped, in the current catalog's casing.
+export const normalizeCopilotModelId = (model: string): string => canonicalModelId(model, currentCatalog())
+
+export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
+
+/**
+ * The ID Claude Code sees. [1m] overrides Claude's numeric context setting, so a non-Claude ID gets
+ * it only when its own known window is at least 1M; a smaller known window shows the plain ID, and
+ * an unknown window leaves the ID as given. Claude IDs are left as given.
+ */
+export const normalizeClaudeModelId = (model: string, contextWindowTokens?: number): string => {
+  const catalog = currentCatalog()
+  const canonical = canonicalModelId(model, catalog)
+  if (isClaudeModelId(canonical)) {
     return model
   }
 
-  // A catalog fetched before a reload switched upstreams does not describe this one's models.
-  const catalog = getRuntimeState().modelCatalog
-  contextWindowTokens ??=
-    catalog?.baseUrl === getRuntimeState().upstreamBaseUrl ?
-      catalog?.models.get(normalized)?.limits?.max_context_window_tokens
-    : undefined
+  const contextWindow = contextWindowTokens ?? catalog?.get(canonical)?.limits?.max_context_window_tokens
+  if (contextWindow === undefined) {
+    return model
+  }
 
-  // [1m] overrides Claude's numeric context setting. Use the plain ID when
-  // discovery reports another window, so that setting can represent it exactly.
-  return contextWindowTokens !== undefined && contextWindowTokens !== 1_000_000 ?
-      normalized
-    : `${normalized}[1m]`
+  return contextWindow >= 1_000_000 ? `${canonical}[1m]` : canonical
 }
-
-export const normalizeCopilotModelId = (model: string): string =>
-  normalizeOneMillionContextModel(model) ?? model
-
-export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
 
 const getConfiguredModelRouting = (): ModelRoutingConfig =>
   getRuntimeState().modelRouting ?? defaultModelRouting
@@ -128,30 +124,42 @@ const getConfiguredModelRouting = (): ModelRoutingConfig =>
 export const getModelRouting = (): ModelRoutingConfig => {
   const routing = getConfiguredModelRouting()
   return {
+    ...routing,
     gptModel: normalizeCopilotModelId(routing.gptModel),
     opusModel: normalizeCopilotModelId(routing.opusModel),
   }
 }
 
+export const getExposedUpstreamModelIds = (): Array<string> =>
+  resolveExposedModels(getConfiguredModelRouting(), currentCatalog())
+
+// A slot keeps its configured spelling here, so a configured [1m] survives while the window is unknown.
 export const getExposedModelIds = (): Array<string> => {
   const routing = getConfiguredModelRouting()
-  return [normalizeClaudeModelId(routing.gptModel), routing.opusModel]
+  const slots = [routing.gptModel, routing.opusModel]
+  return getExposedUpstreamModelIds().map((id) => {
+    const slot = slots.find((configured) => normalizeCopilotModelId(configured).toLowerCase() === id.toLowerCase())
+    return normalizeClaudeModelId(slot ?? id)
+  })
 }
 
+// Preflight and the tokenizer preload cover only the two slots; extra models load on first use.
 export const getUpstreamModelIds = (): Array<string> => {
   const routing = getModelRouting()
   return [routing.gptModel, routing.opusModel]
 }
 
+// An exposed ID goes to itself. Any other name with "opus" goes to opusModel and the rest to
+// gptModel, so Claude Code's picker aliases keep a predictable route.
 export const routeModelId = (model: string): string => {
-  const routing = getModelRouting()
+  const requested = normalizeCopilotModelId(model.trim()).toLowerCase()
+  const exposed = getExposedUpstreamModelIds().find((id) => id.toLowerCase() === requested)
+  if (exposed !== undefined) {
+    return exposed
+  }
 
-  // Keep routing intentionally predictable for Claude Code: any alias that
-  // mentions Opus gets the configured Opus upstream, all other model names use
-  // the configured GPT upstream.
-  return model.trim().toLowerCase().includes("opus") ?
-      routing.opusModel
-    : routing.gptModel
+  const routing = getModelRouting()
+  return requested.includes("opus") ? routing.opusModel : routing.gptModel
 }
 
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/

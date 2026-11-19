@@ -1,12 +1,30 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import test, { type TestContext } from "node:test"
 
 import { translateChunkToClaudeEvents } from "../../src/claude/stream"
 import type { ClaudeStreamState } from "../../src/claude/types"
+import { runtimeState } from "../../src/lib/state"
+
+// The [1m] identity comes from each model's catalog window, so these runs record one.
+const useWindows = (t: TestContext, windows: Record<string, number>): void => {
+  runtimeState.upstreamBaseUrl = "https://fixture.invalid"
+  runtimeState.modelCatalog = {
+    baseUrl: "https://fixture.invalid",
+    models: new Map(Object.entries(windows).map(([id, window]) => [
+      id,
+      { limits: { max_context_window_tokens: window, max_prompt_tokens: 1000, max_output_tokens: 1000 } },
+    ])),
+  }
+  t.after(() => {
+    delete runtimeState.modelCatalog
+    delete runtimeState.upstreamBaseUrl
+  })
+}
 
 // Why: Copilot stream chunks carry the canonical upstream ID, but Claude Code
 // must see the context-selector identity in its message_start metadata.
-test("exposes the 1M GPT identity in Claude stream metadata", () => {
+test("exposes the 1M GPT identity in Claude stream metadata", (t) => {
+  useWindows(t, { "gpt-6-astra": 1_000_000 })
   const state: ClaudeStreamState = {
     messageStartSent: false,
     contentBlockIndex: 0,

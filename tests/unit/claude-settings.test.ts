@@ -36,7 +36,7 @@ const readSettings = async (
 test("seeds actual context and maximum output budgets from model discovery", async () => {
   for (const [gptModel, gptLimits, expectedModel] of [
     ["gpt-6-astra", astraLimits, "gpt-6-astra[1m]"],
-    ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol"],
+    ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol[1m]"],
   ] as const) {
     await withTemporarySettings(async (configPath) => {
       const input = {
@@ -125,6 +125,7 @@ test("creates Claude settings with Astra's 1M identity", async () => {
       baseUrl: "http://127.0.0.1:4142",
       configPath,
       gptModel: "GPT-6-ASTRA[1M][1m]",
+      gptLimits: astraLimits,
     })
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
@@ -186,6 +187,7 @@ test("normalizes known GPT overrides and preserves unrelated settings", async ()
       baseUrl: "http://127.0.0.1:5151",
       configPath,
       gptModel: "gpt-5.6-sol",
+      gptLimits: solLimits,
     })
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
@@ -227,7 +229,7 @@ test("seeds the GPT default when existing settings have no primary override", as
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
 
-    assert.equal(settings.model, "gpt-5.6-sol[1m]")
+    assert.equal(settings.model, "gpt-5.6-sol")
     assert.equal(env.ANTHROPIC_MODEL, undefined)
     assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined)
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined)
@@ -312,7 +314,7 @@ test("preserves availableModels while seeding the managed default", async () => 
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
 
-    assert.equal(settings.model, "gpt-5.6-sol[1m]")
+    assert.equal(settings.model, "gpt-5.6-sol")
     assert.deepEqual(settings.availableModels, availableModels)
     assert.deepEqual(settings.permissions, { allow: ["Read"] })
     assert.equal(env.ANTHROPIC_MODEL, undefined)

@@ -129,7 +129,7 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
       limits: astraLimits, tokenizer: "o200k_base",
     })
     assert.equal(normalizeClaudeModelId("gpt-6-astra"), "gpt-6-astra[1m]")
-    assert.equal(normalizeClaudeModelId("gpt-5.6-sol[1m]"), "gpt-5.6-sol")
+    assert.equal(normalizeClaudeModelId("gpt-5.6-sol[1m]"), "gpt-5.6-sol[1m]")
     assert.deepEqual(
       getCachedCopilotModel(config, "claude-opus-5.5"),
       { limits: opus55Limits, tokenizer: "o200k_base" }
