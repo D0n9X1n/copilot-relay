@@ -1,4 +1,5 @@
 // Config-driven model routing and think-effort validation.
+import type { CopilotModel } from "~/copilot/models"
 import { getRuntimeState } from "~/lib/state"
 import { HTTPError } from "~/lib/error"
 
@@ -6,9 +7,13 @@ export const configurableReasoningEfforts = ["low", "medium", "high", "xhigh", "
 export type ConfiguredReasoningEffort = typeof configurableReasoningEfforts[number]
 export type ReasoningEffort = "none" | ConfiguredReasoningEffort
 
+export type ModelSelection = "auto" | Array<string>
+
 export interface ModelRoutingConfig {
   gptModel: string
   opusModel: string
+  // Extra exposed models; absent means none.
+  models?: ModelSelection
 }
 
 export interface ModelTokenLimits {
@@ -147,4 +152,127 @@ export const routeModelId = (model: string): string => {
   return model.trim().toLowerCase().includes("opus") ?
       routing.opusModel
     : routing.gptModel
+}
+
+const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const invalidModelsMessage = "Invalid models: expected auto, empty, or comma-separated Copilot model IDs"
+
+// The message never repeats the value: it is logged at startup and on reload.
+export const parseModelSelection = (value: string): ModelSelection => {
+  const trimmed = value.trim()
+  if (trimmed.toLowerCase() === "auto") {
+    return "auto"
+  }
+
+  if (trimmed === "") {
+    return []
+  }
+
+  const ids = trimmed.split(",").map((id) => id.trim())
+  if (ids.some((id) => !modelIdPattern.test(id) || id.toLowerCase() === "auto")) {
+    throw new Error(invalidModelsMessage)
+  }
+
+  return ids
+}
+
+// Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
+// IDs are lowercase, so an ID the catalog does not list is lowercased.
+export const canonicalModelId = (id: string, catalog: Map<string, CopilotModel> | undefined): string => {
+  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
+  for (const key of catalog?.keys() ?? []) {
+    if (key.toLowerCase() === lower) {
+      return key
+    }
+  }
+
+  return lower
+}
+
+interface Candidate {
+  id: string
+  model: CopilotModel
+  version: Array<number>
+}
+
+const pickerCategories = ["powerful", "versatile", "lightweight"]
+
+const categoryRank = (model: CopilotModel): number => {
+  const rank = pickerCategories.indexOf(model.pickerCategory ?? "")
+  return rank === -1 ? pickerCategories.length : rank
+}
+
+// Positive when left is newer: versions compare as number tuples, so 10 > 9 and 6.2 > 6.
+const compareVersions = (left: Array<number>, right: Array<number>): number => {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0)
+    if (difference !== 0) {
+      return difference
+    }
+  }
+
+  return 0
+}
+
+const isBetterPick = (left: Candidate, right: Candidate): boolean => {
+  const byVersion = compareVersions(left.version, right.version)
+  if (byVersion !== 0) {
+    return byVersion > 0
+  }
+
+  const byCategory = categoryRank(right.model) - categoryRank(left.model)
+  if (byCategory !== 0) {
+    return byCategory > 0
+  }
+
+  return left.id < right.id
+}
+
+/** The newest picker-enabled chat model of each vendor except Experimental, in catalog order. */
+export const selectNewestPerVendor = (catalog: Map<string, CopilotModel>): Array<string> => {
+  const best = new Map<string, Candidate>()
+  for (const [id, model] of catalog) {
+    const vendor = model.vendor
+    const version = /\d+(?:\.\d+)*/.exec(id)?.[0].split(".").map(Number)
+    const eligible = model.pickerEnabled === true && model.type === "chat" && vendor !== "Experimental"
+    if (!eligible || vendor === undefined || version === undefined) {
+      continue
+    }
+
+    const candidate = { id, model, version }
+    const current = best.get(vendor)
+    if (current === undefined || isBetterPick(candidate, current)) {
+      best.set(vendor, candidate)
+    }
+  }
+
+  const winners = new Set([...best.values()].map((candidate) => candidate.id))
+  return [...catalog.keys()].filter((id) => winners.has(id))
+}
+
+/**
+ * The upstream IDs clients are offered: gptModel, opusModel, then the selection, deduplicated
+ * case-insensitively in catalog casing. A listed ID the catalog lacks is skipped; without a
+ * catalog, auto adds nothing and every listed ID is kept, lowercased.
+ */
+export const resolveExposedModels = (routing: ModelRoutingConfig, catalog: Map<string, CopilotModel> | undefined): Array<string> => {
+  const selected = routing.models === "auto" ? selectNewestPerVendor(catalog ?? new Map()) : routing.models ?? []
+  const present = selected.filter((id) => catalog === undefined || catalog.has(canonicalModelId(id, catalog)))
+  const exposed: Array<string> = []
+  for (const id of [routing.gptModel, routing.opusModel, ...present]) {
+    const canonical = canonicalModelId(id, catalog)
+    if (!exposed.some((known) => known.toLowerCase() === canonical.toLowerCase())) {
+      exposed.push(canonical)
+    }
+  }
+
+  return exposed
+}
+
+export const findMissingModels = (routing: ModelRoutingConfig, catalog: Map<string, CopilotModel>): Array<string> => {
+  if (!Array.isArray(routing.models)) {
+    return []
+  }
+
+  return routing.models.filter((id) => !catalog.has(canonicalModelId(id, catalog)))
 }
