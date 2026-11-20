@@ -116,3 +116,43 @@ test("without Unicode the count of differences not listed ends in ASCII dots", (
 
   assert.equal(lines.at(-1), "  ... and 15 more")
 })
+
+test("a refusal with its category and token counts fits 80 columns, the category kept", () => {
+  for (const unicode of [true, false]) {
+    const lines = renderReplay({
+      ...matched,
+      summary: {
+        ...matched.summary!,
+        outcome: "refusal",
+        exchanges: [
+          { order: 1, path: "/chat/completions", status: 200, outcome: "refusal", usage: { input_tokens: 1200, output_tokens: 30, cache_read_input_tokens: 1024 }, refusalCategory: "reasoning_extraction" },
+        ],
+      },
+    }, false, unicode)
+
+    assert.ok(lines.some((line) => line.includes("reasoning_extraction")), lines.join("\n"))
+    for (const line of lines) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+    }
+  }
+})
+
+test("twelve tool_use blocks wrap under the blocks label within 80 columns", () => {
+  const lines = renderReplay({
+    ...matched,
+    summary: { ...matched.summary!, contentBlocks: ["text", ...Array.from({ length: 12 }, () => "tool_use")], toolCalls: 12 },
+  }, false, true)
+  const start = lines.findIndex((line) => line.startsWith("    blocks"))
+
+  assert.ok(lines[start + 1].startsWith(`${" ".repeat(16)}tool_use`), lines.join("\n"))
+  assert.equal(lines.join(" ").match(/tool_use/g)?.length, 12)
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
+test("with color on, the verdict keeps its color", () => {
+  const lines = renderReplay(matched, true, true)
+
+  assert.equal(lines[2], "  \u001b[32m✓ MATCH\u001b[0m       the relay reproduces the recording")
+})

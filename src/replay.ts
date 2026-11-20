@@ -5,8 +5,9 @@ import { defineCommand } from "citty"
 
 import type { ProxyConfig } from "./lib/config"
 import { sameOpenedFile } from "./lib/file-identity"
-import { withoutLogging } from "./lib/log"
+import { scrubLogSecrets, withoutLogging } from "./lib/log"
 import { paths } from "./lib/paths"
+import { scrubSensitiveUrls } from "./lib/redact"
 import { isConfiguredReasoningEffort } from "./lib/models"
 import { parseModelTokenLimits, type CopilotModel } from "./copilot/models"
 import { withRecordedTransport, type CaptureManifest, type CapturedBody } from "./lib/request-trace"
@@ -15,6 +16,7 @@ import { createServer } from "./server"
 import {
   colorEnabled,
   colorText,
+  columnWidths,
   displayWidth,
   formatCount,
   heading,
@@ -22,6 +24,7 @@ import {
   printableCell,
   renderTable,
   unicodeEnabled,
+  withoutHiddenCharacters,
   type MarkState,
   type TableColumn,
   type TerminalTone,
@@ -1016,7 +1019,41 @@ const tokens = (exchange: ReplayExchange, key: string): string => {
   return value === undefined ? "–" : formatCount(value)
 }
 
-const exchangeColumns = (exchanges: Array<ReplayExchange>): Array<TableColumn<ReplayExchange>> => {
+const tableWidth = (columns: Array<TableColumn<ReplayExchange>>, exchanges: Array<ReplayExchange>): number =>
+  indent + gutter * (columns.length - 1) + columnWidths(columns, exchanges).reduce((sum, width) => sum + width, 0)
+
+// A column the table keeps only while it fits 80 columns, and the label it takes on the line under
+// its row when it does not.
+interface OptionalColumn {
+  column: TableColumn<ReplayExchange>
+  label: string
+  value: (exchange: ReplayExchange) => string | undefined
+}
+
+const count = (exchange: ReplayExchange, key: string): string | undefined => {
+  const value = exchange.usage[key]
+  return value === undefined ? undefined : formatCount(value)
+}
+
+const optionalColumns = (exchanges: Array<ReplayExchange>): Array<OptionalColumn> => {
+  const optional: Array<OptionalColumn> = [
+    { column: { header: "CACHED", align: "right", cell: (exchange) => tokens(exchange, "cache_read_input_tokens") }, label: "cached", value: (exchange) => count(exchange, "cache_read_input_tokens") },
+    { column: { header: "WRITTEN", align: "right", cell: (exchange) => tokens(exchange, "cache_creation_input_tokens") }, label: "written", value: (exchange) => count(exchange, "cache_creation_input_tokens") },
+  ]
+
+  if (exchanges.some((exchange) => exchange.refusalCategory !== undefined)) {
+    optional.push({ column: { header: "REFUSAL", align: "left", cell: (exchange) => exchange.refusalCategory ?? "" }, label: "refusal", value: (exchange) => exchange.refusalCategory })
+  }
+
+  return optional
+}
+
+/**
+ * The exchanges as a table. The order, route, status, outcome and token counts always show; cache
+ * counts and a refusal category join the table only while it fits 80 columns. Those that do not
+ * fit print on a line under their row, with only the values that row has.
+ */
+const renderExchanges = (exchanges: Array<ReplayExchange>, color: boolean): string[] => {
   const columns: Array<TableColumn<ReplayExchange>> = [
     { header: "#", align: "right", cell: (exchange) => String(exchange.order) },
     { header: "UPSTREAM", align: "left", cell: (exchange) => exchange.path },
@@ -1024,25 +1061,72 @@ const exchangeColumns = (exchanges: Array<ReplayExchange>): Array<TableColumn<Re
     { header: "OUTCOME", align: "left", cell: (exchange) => exchange.outcome },
     { header: "IN", align: "right", cell: (exchange) => tokens(exchange, "input_tokens") },
     { header: "OUT", align: "right", cell: (exchange) => tokens(exchange, "output_tokens") },
-    { header: "CACHED", align: "right", cell: (exchange) => tokens(exchange, "cache_read_input_tokens") },
-    { header: "WRITTEN", align: "right", cell: (exchange) => tokens(exchange, "cache_creation_input_tokens") },
   ]
-
-  if (exchanges.some((exchange) => exchange.refusalCategory !== undefined)) {
-    columns.push({ header: "REFUSAL", align: "left", cell: (exchange) => exchange.refusalCategory ?? "" })
+  const optional = optionalColumns(exchanges)
+  let kept = 0
+  while (kept < optional.length && tableWidth([...columns, ...optional.slice(0, kept + 1).map((entry) => entry.column)], exchanges) <= lineWidth) {
+    kept++
   }
 
-  return columns
+  columns.push(...optional.slice(0, kept).map((entry) => entry.column))
+  const moved = optional.slice(kept)
+  // The line under a row starts under UPSTREAM.
+  const under = " ".repeat(indent + columnWidths(columns.slice(0, 1), exchanges)[0] + gutter)
+  const [header, ...rows] = renderTable(columns, exchanges, color)
+  const lines = [header]
+
+  for (const [index, row] of rows.entries()) {
+    const exchange = exchanges[index]
+    const details = moved.flatMap((entry) => {
+      const value = entry.value(exchange)
+      return value === undefined ? [] : [`${entry.label} ${printableCell(value)}`]
+    })
+    lines.push(row)
+
+    if (details.length > 0) {
+      lines.push(under + details.join(" · "))
+    }
+  }
+
+  return lines
 }
 
-const describeRequest = (summary: NonNullable<ReplayResult["summary"]>): string => {
-  const parts = [`status ${summary.status ?? "unknown"}`, `outcome ${summary.outcome}`]
+// A labelled list, wrapped to 80 columns with each continuation line under the first item. An item
+// is never split; separator is the text between items, kept at the end of a wrapped line.
+const labelledList = (label: string, items: Array<string>, separator: string): string[] => {
+  const prefix = `    ${label.padEnd(labelWidth - 2)}`
+  const continuation = " ".repeat(prefix.length)
+  const words = items.map((item, index) => index < items.length - 1 ? item + separator.trimEnd() : item)
+  const lines: string[] = []
+  let current = prefix
+  let empty = true
+
+  for (const word of words) {
+    const candidate = empty ? current + word : `${current} ${word}`
+
+    if (!empty && displayWidth(candidate) > lineWidth) {
+      lines.push(current)
+      current = continuation + word
+    } else {
+      current = candidate
+    }
+
+    empty = false
+  }
+
+  lines.push(current)
+
+  return lines
+}
+
+const describeRequest = (summary: NonNullable<ReplayResult["summary"]>): string[] => {
+  const parts = [`status ${summary.status ?? "unknown"}`, `outcome ${printableCell(summary.outcome)}`]
 
   if (summary.toolCalls !== undefined) {
     parts.push(summary.toolCalls === 1 ? "1 tool call" : `${formatCount(summary.toolCalls)} tool calls`)
   }
 
-  return parts.join(" · ")
+  return parts
 }
 
 /**
@@ -1085,21 +1169,24 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
   const view = verdictViews[result.verdict]
   const summary = result.summary
   const verdict = `${mark(view.state, unicode)} ${result.verdict}`
+  // The recorded method and path are made printable here, so the pass at the end can keep the
+  // verdict's color.
   const lines = [
-    heading("Replay", summary === undefined ? undefined : `${summary.method} ${summary.path}`),
+    heading("Replay", summary === undefined ? undefined : `${printableCell(summary.method)} ${printableCell(summary.path)}`),
     "",
     `  ${colorText(verdict, view.tone, color)}${" ".repeat(labelWidth - verdict.length)}${view.meaning}`,
   ]
 
   if (summary !== undefined) {
-    lines.push(`    ${"request".padEnd(labelWidth - 2)}${describeRequest(summary)}`)
+    lines.push(...labelledList("request", describeRequest(summary), " · "))
 
     if (summary.contentBlocks !== undefined) {
-      lines.push(`    ${"blocks".padEnd(labelWidth - 2)}${summary.contentBlocks.join(", ") || "none"}`)
+      const blocks = summary.contentBlocks.map(printableCell)
+      lines.push(...labelledList("blocks", blocks.length > 0 ? blocks : ["none"], ", "))
     }
 
     if (summary.exchanges.length > 0) {
-      lines.push("", ...renderTable(exchangeColumns(summary.exchanges), summary.exchanges, color))
+      lines.push("", ...renderExchanges(summary.exchanges, color))
     }
   }
 
@@ -1107,7 +1194,9 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
     lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "", ...renderDifferences(result.differences, unicode))
   }
 
-  return lines.map((line) => printableCell(line).trimEnd())
+  // Every untrusted part was made printable before it was placed. As a backstop each line is
+  // scrubbed again; hidden characters are removed, but the color the view added stays.
+  return lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(line))).trimEnd())
 }
 
 export const replay = defineCommand({
