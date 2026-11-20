@@ -211,6 +211,7 @@ try {
     assert.match(help.stdout, /copilot-relay/)
 
     const requests = []
+    const inferenceModels = []
     upstream = createServer(async (request, response) => {
       let body = ""
       for await (const chunk of request) {
@@ -219,12 +220,21 @@ try {
 
       const payload = body ? JSON.parse(body) : {}
       requests.push(`${request.method} ${request.url}`)
+      if (typeof payload.model === "string") {
+        inferenceModels.push(`${request.url} ${payload.model}`)
+      }
+
       response.setHeader("content-type", "application/json")
       if (request.url === "/models") {
         response.end(JSON.stringify({
-          data: ["gpt-6-astra", "claude-opus-5.5"].map((id) => ({
+          // The live catalog's endpoint shapes: the default GPT model on Responses only, Opus on Chat
+          // Completions, so the packed relay picks each route from the catalog, not a name rule.
+          data: [
+            { id: "gpt-6.2-astra", endpoints: ["/responses", "ws:/responses"] },
+            { id: "claude-opus-5.5", endpoints: ["/v1/messages", "/chat/completions"] },
+          ].map(({ id, endpoints }) => ({
             id,
-            supported_endpoints: ["/responses", "/chat/completions"],
+            supported_endpoints: endpoints,
             capabilities: {
               type: "chat",
               tokenizer: "o200k_base",
@@ -293,7 +303,7 @@ try {
       "thinkEffort: high",
       "upstreamTimeoutSeconds: 5",
       "webSearchBackend: ",
-      "gptModel: gpt-6-astra",
+      // gptModel is left out, so the packed template's default fills it in.
       "opusModel: claude-opus-5.5",
       "",
     ].join("\n"))
@@ -353,7 +363,7 @@ try {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "gpt-6-astra",
+        model: "gpt-6.2-astra",
         messages: [{ role: "user", content: "Count the tokens in this offline packaged smoke request." }],
       }),
     })
@@ -361,7 +371,7 @@ try {
     assert.ok((await counted.json()).input_tokens > 1, "real dynamic tokenizer must not fall back to 1")
     assert.equal(requests.length, beforeTokens, "token counting must remain local")
 
-    for (const model of ["gpt-6-astra", "claude-opus-5.5"]) {
+    for (const model of ["sonnet", "claude-opus-5.5"]) {
       const response = await request("/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -375,8 +385,9 @@ try {
       assert.match(JSON.stringify(await response.json()), /offline smoke/)
     }
 
-    assert.ok(requests.includes("POST /responses"))
-    assert.ok(requests.includes("POST /chat/completions"))
+    // A non-Opus name reaches the default gptModel on Responses; Opus stays on Chat Completions.
+    assert.ok(inferenceModels.includes("/responses gpt-6.2-astra"), inferenceModels.join(", "))
+    assert.ok(inferenceModels.includes("/chat/completions claude-opus-5.5"), inferenceModels.join(", "))
     // The guard answers the GitHub user lookup only at the undici dispatcher, so this request
     // shows that the packed relay sends GitHub calls through it.
     assert.ok(requests.includes("GET /github/user"))
