@@ -11,8 +11,8 @@ import { readProxyConfig } from "~/lib/config"
 import { flushLogs, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
 import { homeRelative } from "~/lib/paths"
 import { registerSensitiveOrigin } from "~/lib/redact"
-import { colorEnabled, heading, mark, renderTable, terminalText, unicodeEnabled } from "~/lib/terminal"
-import type { MarkState, TerminalTone } from "~/lib/terminal"
+import { colorEnabled, columnWidths, displayWidth, heading, mark, renderTable, terminalText, unicodeEnabled } from "~/lib/terminal"
+import type { MarkState, TableColumn, TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
@@ -52,6 +52,11 @@ const setupRow = (outcome: SetupOutcome): SetupRow => {
 
 const resultTones: Record<MarkState, TerminalTone> = { ok: "good", fail: "bad", warn: "warning", off: "muted" }
 
+// A table line's budget: a two-space indent and a two-space gutter between columns.
+const lineWidth = 80
+const indent = 2
+const gutter = 2
+
 /** The outcome of each client as a heading and a table. Kept free of IO, so it is tested directly. */
 export const renderSetupOutcomes = (
   outcomes: Array<SetupOutcome>,
@@ -60,14 +65,20 @@ export const renderSetupOutcomes = (
   unicode = unicodeEnabled(),
 ): Array<string> => {
   const rows = outcomes.map(setupRow)
+  const leading: Array<TableColumn<SetupRow>> = [
+    { header: "CLIENT", align: "left", cell: (row) => row.client },
+    { header: "RESULT", align: "left", cell: (row) => `${mark(row.state, unicode)} ${row.result}`, tone: (row) => resultTones[row.state] },
+  ]
+  // DETAIL gets what CLIENT and RESULT leave on an 80-column line, past the indent and the gutters.
+  const used = columnWidths(leading, rows).reduce((sum, width) => sum + width, 0)
+  const detailWidth = Math.max(lineWidth - indent - gutter * leading.length - used, displayWidth("DETAIL"))
 
   return [
     heading("Client setup", baseUrl),
     "",
     ...renderTable([
-      { header: "CLIENT", align: "left", cell: (row: SetupRow) => row.client },
-      { header: "RESULT", align: "left", cell: (row) => `${mark(row.state, unicode)} ${row.result}`, tone: (row) => resultTones[row.state] },
-      { header: "DETAIL", align: "left", cell: (row) => row.detail, maxWidth: 48 },
+      ...leading,
+      { header: "DETAIL", align: "left", cell: (row) => row.detail, maxWidth: detailWidth },
     ], rows, color),
   ]
 }

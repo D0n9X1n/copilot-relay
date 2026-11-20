@@ -63,3 +63,17 @@ test("a failed client is marked without relying on color, and a long detail is c
   assert.deepEqual(colored.map((line) => stripVTControlCharacters(line)), lines)
   assert.match(colored[3], /\u001b\[31mx failed\u001b\[0m/)
 })
+
+test("a failure reason gets the room the other columns leave, so its ASCII row fits 80 columns", () => {
+  const mixed = [
+    { target: "claude-code-cli", path: "/home/u/.claude/settings.json", status: "already up to date" },
+    { target: "codex-cli", path: "", status: `failed: ${"y".repeat(80)}` },
+  ]
+  const lines = renderSetupOutcomes(mixed, "http://127.0.0.1:4142", false, false)
+
+  assert.equal(lines[3], "  claude-code-cli  ok up to date  /home/u/.claude/settings.json")
+  assert.match(lines[4], /^ {2}codex-cli {8}x failed {7}y+…$/)
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
