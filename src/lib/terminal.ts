@@ -41,14 +41,54 @@ export interface TableColumn<Row> {
   align: "left" | "right"
   cell: (row: Row) => string
   tone?: (row: Row) => TerminalTone | undefined
-  // A longer cell is cut to this many characters, the last one an ellipsis.
+  // A longer cell is cut to this many terminal columns, the last one an ellipsis.
   maxWidth?: number
   // Leave the cell blank when it repeats the row above, as an hour or a day does in a trend.
   repeatBlank?: boolean
 }
 
-const cutCell = (text: string, maxWidth: number | undefined): string =>
-  maxWidth !== undefined && text.length > maxWidth ? `${text.slice(0, maxWidth - 1)}…` : text
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" })
+
+// East Asian wide and fullwidth ranges and emoji, which a terminal draws two columns wide.
+const wideCharacter = /^[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]|\p{Extended_Pictographic}/u
+
+// Terminal columns of one user-perceived character: a combining mark joins the character before it.
+const graphemeWidth = (grapheme: string): number => wideCharacter.test(grapheme) ? 2 : 1
+
+export const displayWidth = (text: string): number => {
+  let width = 0
+  for (const { segment } of graphemes.segment(text)) {
+    width += graphemeWidth(segment)
+  }
+
+  return width
+}
+
+// Cuts at character boundaries only, so a surrogate pair or a combining sequence is never split.
+const cutCell = (text: string, maxWidth: number | undefined): string => {
+  if (maxWidth === undefined || displayWidth(text) <= maxWidth) {
+    return text
+  }
+
+  let kept = ""
+  let width = 0
+  for (const { segment } of graphemes.segment(text)) {
+    const next = width + graphemeWidth(segment)
+    if (next > maxWidth - 1) {
+      break
+    }
+
+    kept += segment
+    width = next
+  }
+
+  return `${kept}…`
+}
+
+const pad = (text: string, width: number, align: "left" | "right"): string => {
+  const spaces = " ".repeat(Math.max(0, width - displayWidth(text)))
+  return align === "right" ? spaces + text : text + spaces
+}
 
 /**
  * Lines of a table: a two-space indent and gutter, headers as given, every column as wide as its
@@ -64,11 +104,11 @@ export const renderTable = <Row>(columns: Array<TableColumn<Row>>, rows: Array<R
     }))
 
   const widths = columns.map((column, index) =>
-    Math.max(column.header.length, ...shown.map((rowCells) => rowCells[index].length)))
+    Math.max(displayWidth(column.header), ...shown.map((rowCells) => displayWidth(rowCells[index]))))
 
   const line = (texts: Array<string>, tones: Array<TerminalTone | undefined>): string => {
     const padded = texts.map((text, index) => {
-      const cell = columns[index].align === "right" ? text.padStart(widths[index]) : text.padEnd(widths[index])
+      const cell = pad(text, widths[index], columns[index].align)
       const tone = tones[index]
       return tone === undefined ? cell : colorText(cell, tone, color)
     })

@@ -109,6 +109,29 @@ test("renderTable measures width without escape sequences or hidden characters i
   assert.deepEqual(lines, ["  ID     N", "  red    1", "  plain  1"])
 })
 
+test("renderTable pads by terminal columns: a wide character takes two, a combining mark none", () => {
+  const lines = renderTable(
+    [
+      { header: "ID", align: "left", cell: (row: { id: string }) => row.id },
+      { header: "N", align: "right", cell: () => "1" },
+    ],
+    [{ id: "模型" }, { id: "ab" }, { id: "é" }, { id: "😀" }],
+    false,
+  )
+
+  assert.deepEqual(lines, ["  ID    N", "  模型  1", "  ab    1", "  e\u0301     1", "  😀    1"])
+})
+
+test("renderTable cuts by terminal columns and never inside a character", () => {
+  const cut = (id: string, maxWidth: number): string =>
+    renderTable([{ header: "ID", align: "left", cell: () => id, maxWidth }], [{}], false)[1].trim()
+
+  assert.equal(cut("模型图", 3), "模…")
+  assert.equal(cut("😀x", 2), "…")
+  assert.equal(cut("ééé", 2), "é…")
+  assert.equal(cut("模型", 4), "模型")
+})
+
 test("printableCell removes controls, then registered secrets and sensitive URLs", () => {
   registerLogSecret("terminal-fixture-key-0001")
   registerSensitiveOrigin("https://gateway.terminal.example/tenant/secret-path")
