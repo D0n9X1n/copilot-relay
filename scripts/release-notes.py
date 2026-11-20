@@ -109,6 +109,13 @@ def render(tag, assetdir="release", *, api=None, cwd=None, environ=None):
         issues.require(re.fullmatch(r"[0-9a-f]{4,40}", short_sha), "invalid Git log commit identifier")
         changes.append(f"- {markdown_line(subject)} ({short_sha})")
 
+    # A release may add hand-written sections in release-notes/<tag>.md. They are read from the tagged
+    # commit, never the checkout, so every rerun of the workflow reproduces the same body.
+    supplement_path = f"{head}:release-notes/{tag}.md"
+    supplement = ""
+    if git("cat-file", "-e", supplement_path, allow_failure=True) is not None:
+        supplement = git("show", supplement_path)
+
     download =f"https://github.com/{repo}/releases/download/{tag}"
     previous_label = previous if TAG.fullmatch(previous) else markdown_line(previous)
     heading = f"## Changes since {previous_label}" if previous else "## Changes"
@@ -128,6 +135,7 @@ def render(tag, assetdir="release", *, api=None, cwd=None, environ=None):
         "- Separate pull-request CI runs on Linux, macOS, and Windows.\n"
         "- Release notes validate the tag against its committed package version and verify "
         "the npm tarball against its SHA-256 checksum in `SHA256SUMS`.\n"
+        + (f"\n{supplement}\n" if supplement else "")
     )
 
 
