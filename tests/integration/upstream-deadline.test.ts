@@ -729,3 +729,35 @@ test("preflight disposes its deadline when a model check fails", async () => {
   assert.equal(after.created - before.created, 1)
   assert.equal(after.disposed - before.disposed, 1)
 })
+
+test("a request whose rejected token triggers the shared refresh leaves its trace unreachable", async () => {
+  const { execFile } = await import("node:child_process")
+  const fixture = path.join(import.meta.dirname, "..", "fixtures", "refresh-trace-heap.ts")
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(process.execPath, ["--expose-gc", "--import", "tsx", fixture], {
+      cwd: path.join(import.meta.dirname, "..", ".."),
+      timeout: 60_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }, (error, out) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve(out)
+    })
+  })
+  const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
+    exchanges: number
+    ordinaryReachable: boolean
+    refreshedReachable: boolean
+    deadlines: { created: number; disposed: number }
+  }
+
+  // The second request's 401 ran the real token exchange once and was retried with the new token.
+  assert.equal(result.exchanges, 1)
+  assert.deepEqual(result.deadlines, { created: 2, disposed: 2 })
+  assert.equal(result.ordinaryReachable, false, "an ordinary finished trace is collected")
+  // The exchange reschedules the periodic refresh timer; that timer must not hold the request.
+  assert.equal(result.refreshedReachable, false, "the refreshed request's finished trace is collected")
+})

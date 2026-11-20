@@ -1,4 +1,5 @@
 // GitHub device auth plus file-backed Copilot token cache and refresh scheduling.
+import { AsyncResource } from "node:async_hooks"
 import fs from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 
@@ -141,6 +142,11 @@ export interface ProxyAuthSession {
 }
 
 let copilotTokenRefreshTimer: ReturnType<typeof setTimeout> | undefined
+
+// Bound when this module loads, outside any request. A timer created through it carries no
+// request's async context, so the periodic refresh, which a rejected request's exchange can
+// reschedule, never keeps that request's trace alive for the hours until it fires.
+const inProcessContext = AsyncResource.bind(<T>(run: () => T): T => run())
 
 const standardHeaders = () => ({
   accept: "application/json",
@@ -534,7 +540,7 @@ export const setupProxyAuth = async (
       `Next Copilot token refresh in ${Math.round(refreshMs / 1000)}s`,
     )
 
-    copilotTokenRefreshTimer = setTimeout(async () => {
+    copilotTokenRefreshTimer = inProcessContext(() => setTimeout(async () => {
       try {
         await applyCopilotToken()
         log.info("Refreshed Copilot token")
@@ -544,7 +550,7 @@ export const setupProxyAuth = async (
         // continue until the bearer token actually expires.
         scheduleCopilotTokenRefresh(60)
       }
-    }, refreshMs)
+    }, refreshMs))
 
     // Unref'd, so a pending refresh alone does not keep the process running.
     if (typeof copilotTokenRefreshTimer.unref === "function") {
