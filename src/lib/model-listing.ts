@@ -1,6 +1,6 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
-import { columnWidths, displayWidth, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import { colorText, columnWidths, displayWidth, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
 import { redactedMarker } from "./redact"
 
 export interface ListedModel {
@@ -60,13 +60,14 @@ export interface ModelSearch {
 export const normalizeModelSearch = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9]/g, "")
 
-// IDs and names arrive with secrets and sensitive URLs already replaced by the redaction marker.
-// A search drops the marker, so neither the hidden text nor the word "redacted" can match it.
-const searchable = (text: string): string => normalizeModelSearch(text.replaceAll(redactedMarker, " "))
+// IDs and names arrive whole, with secrets and sensitive URLs already replaced by the redaction
+// marker. The text on each side of a marker is searched on its own, so neither the hidden text, the
+// word "redacted", nor the two sides joined together can match.
+const segments = (text: string): string[] =>
+  text.split(redactedMarker).map(normalizeModelSearch).filter((segment) => segment !== "")
 
 const contains = (model: ListedModel, fragment: string): boolean =>
-  searchable(model.id).includes(fragment)
-  || searchable(model.name ?? "").includes(fragment)
+  [...segments(model.id), ...segments(model.name ?? "")].some((segment) => segment.includes(fragment))
 
 // Shorter fragments, such as "gpt", match most of a catalog and narrow nothing down.
 const minimumFragment = 4
@@ -109,7 +110,7 @@ export const searchModels = (models: ListedModel[], search: string): ModelSearch
 
   const usable = matches.filter((model) => model.unusable === undefined)
   // An exact ID wins over the longer IDs that contain it.
-  const exact = usable.find((model) => searchable(model.id) === wanted)
+  const exact = usable.find((model) => !model.id.includes(redactedMarker) && normalizeModelSearch(model.id) === wanted)
   const chosen = exact ?? (usable.length === 1 ? usable[0] : undefined)
 
   return { found: true, models: matches, chosen }
@@ -150,32 +151,22 @@ const noteOf = (model: ListedModel, unicode: boolean): string => {
   return parts.join("  ")
 }
 
-// A note that does not fit the room left: a configured model keeps its slot and mark whole and
-// drops the reason, which the config guide's warning under the table states; any other reason is
-// cut by the table.
-const fittedNoteOf = (model: ListedModel, unicode: boolean, room: number): string => {
-  const note = noteOf(model, unicode)
-
-  if (displayWidth(note) <= room || model.slot === undefined || model.unusable === undefined) {
-    return note
-  }
-
-  return `${slotOf(model.slot, unicode)}  ${mark("warn", unicode)}`
-}
-
 const widthOf = (columns: Array<TableColumn<ListedModel>>, models: ListedModel[]): number => {
   const widths = columnWidths(columns, models)
   return indent + gutter * (columns.length - 1) + widths.reduce((sum, width) => sum + width, 0)
 }
 
+// A note under its row starts two columns in from the row, so it reads as part of that row.
+const noteIndent = "    "
+
 /**
  * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
  * it can be copied. COST and CONTEXT are numbers, right-aligned. The last column shares one place
- * for the slot an ID fills and the mark on an ID that cannot be gptModel or opusModel; it gets the
- * room the other columns leave on an 80-column line, so a listing with both fits. NAME is shown
- * only when every name then fits whole as well: a cut name such as "Claude Op…" loses what tells
- * two models apart, and MODEL already names each one. Without Unicode every mark is ASCII; no mark
- * relies on color.
+ * for the slot an ID fills and the mark on an ID that cannot be gptModel or opusModel. A note wider
+ * than the room MODEL, COST and CONTEXT leave on an 80-column line is never cut: it prints whole on
+ * its own line under its row, so the slot and the mark always show. NAME is shown only when every
+ * name then fits whole as well: a cut name such as "Claude Op…" loses what tells two models apart,
+ * and MODEL already names each one. Without Unicode every mark is ASCII; no mark relies on color.
  */
 export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
   const fixed: Array<TableColumn<ListedModel>> = [
@@ -183,28 +174,41 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
     { header: "COST", align: "right", cell: (model) => costOf(model, unicode) },
     { header: "CONTEXT", align: "right", cell: (model) => contextOf(model, unicode) },
   ]
-  const columns = [...fixed]
   const anyUnusable = models.some((model) => model.unusable !== undefined)
+  const room = lineWidth - widthOf(fixed, models) - gutter
+  const inline = (model: ListedModel): boolean => displayWidth(noteOf(model, unicode)) <= room
+  const columns = [...fixed]
 
-  // SLOT when the column holds only slots; NOTE once it also explains a mark.
-  if (anyUnusable || models.some((model) => model.slot !== undefined)) {
-    const room = Math.max(lineWidth - widthOf(fixed, models) - gutter, displayWidth("NOTE"))
+  // SLOT when the column holds only slots; NOTE once it also explains a mark. It is left out when
+  // every note prints under its row.
+  if (models.some((model) => noteOf(model, unicode) !== "" && inline(model))) {
     columns.push({
       header: anyUnusable ? "NOTE" : "SLOT",
       align: "left",
-      cell: (model) => fittedNoteOf(model, unicode, room),
+      cell: (model) => inline(model) ? noteOf(model, unicode) : "",
       tone: (model) => model.unusable === undefined ? undefined : "warning",
-      maxWidth: room,
     })
   }
 
-  // NAME stays only when every name fits whole beside the others; an ID is never cut, so a long
-  // one can still push a row past 80.
+  // NAME stays only when some model has a name and every name fits whole beside the others; an ID
+  // is never cut, so a long one can still push a row past 80.
   const withName = [columns[0], { header: "NAME", align: "left" as const, cell: (model: ListedModel) => model.name ?? "" }, ...columns.slice(1)]
-  const shown = widthOf(withName, models) <= lineWidth ? withName : columns
+  const named = models.some((model) => model.name !== undefined)
+  const shown = named && widthOf(withName, models) <= lineWidth ? withName : columns
 
-  const lines = renderTable(shown, models, color)
-  // NOTE keeps the reason short so the row fits; this line says what the mark means.
+  const [header, ...rows] = renderTable(shown, models, color)
+  const lines = [header]
+  for (const [index, row] of rows.entries()) {
+    const model = models[index]
+    const note = noteOf(model, unicode)
+    lines.push(row)
+
+    if (note !== "" && !inline(model)) {
+      lines.push(noteIndent + (model.unusable === undefined ? note : colorText(note, "warning", color)))
+    }
+  }
+
+  // A note keeps the reason short; this line says what the mark means.
   if (anyUnusable) {
     lines.push("", `${mark("warn", unicode)} marks a model that cannot be gptModel or opusModel.`)
   }

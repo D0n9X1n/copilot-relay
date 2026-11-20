@@ -183,34 +183,45 @@ test("with Unicode the same listing marks slots, multipliers and missing values 
   assert.equal(lines[5], "  text-embedding-ada-002          –        –  ◀ gptModel  ! not a chat model")
 })
 
-test("a configured model that cannot be used keeps its slot and mark within 80 columns, its ID whole", () => {
+test("a note too wide for its row prints whole on its own line under the row, its ID whole", () => {
   for (const unicode of [true, false]) {
     const lines = renderModelRows([
       { id: "claude-opus-5.5-1m", name: "Claude Opus 5.5 (1M)", chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict", slot: "opusModel" },
       { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 400_000, price: { input: 1.25, output: 10 }, slot: "gptModel" },
       { id: "text-embedding-ada-002", name: "Embedding V2 Ada", chat: false, unusable: "Not a chat model" },
     ], false, unicode)
+    const slot = unicode ? "◀" : "<"
+    const dash = unicode ? "–" : "-"
 
     for (const line of lines) {
       assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
     }
 
-    // The reason no longer fits beside the slot; the config guide's warning under the table names it.
-    const slot = unicode ? "◀" : "<"
-    assert.equal(lines[1], `  claude-opus-5.5-1m      $10/$37.5  1M [1m]  ${slot} opusModel  !`)
-    assert.equal(lines[3], "  text-embedding-ada-002          " + (unicode ? "–" : "-") + "        " + (unicode ? "–" : "-") + "  ! not a chat model")
+    assert.deepEqual(lines.slice(0, 5), [
+      "  MODEL                        COST  CONTEXT  NOTE",
+      "  claude-opus-5.5-1m      $10/$37.5  1M [1m]",
+      `    ${slot} opusModel  ! protocol policy conflict`,
+      `  gpt-6.2-astra           $1.25/$10     400K  ${slot} gptModel`,
+      `  text-embedding-ada-002          ${dash}        ${dash}  ! not a chat model`,
+    ])
   }
 })
 
-test("beside a long ID, a reason is cut to fit 80 columns and the ID is not", () => {
-  const longId = `model-${"y".repeat(40)}`
+test("beside a 52-column ID, a configured model keeps its whole slot and mark, and ASCII has no ellipsis", () => {
+  const longId = `claude-opus-${"z".repeat(40)}`
   const lines = renderModelRows([
-    { id: longId, chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict" },
+    { id: longId, chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict", slot: "opusModel" },
+    { id: "text-embedding-ada-002", chat: false, unusable: "Not a chat model" },
   ], false, false)
 
-  assert.ok(lines[1].startsWith(`  ${longId}  `), lines[1])
-  assert.ok(displayWidth(lines[1]) <= 80, `${displayWidth(lines[1])} columns: ${lines[1]}`)
-  assert.match(lines[1], / {2}! prot\S*…$/)
+  assert.equal(longId.length, 52)
+  assert.ok(lines.includes(`  ${longId}  $10/$37.5  1M [1m]`), lines.join("\n"))
+  assert.ok(lines.includes("    < opusModel  ! protocol policy conflict"), lines.join("\n"))
+  assert.ok(lines.includes("    ! not a chat model"), lines.join("\n"))
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+    assert.match(line, /^[\x20-\x7e]*$/, line)
+  }
 })
 
 test("the config guide shows the current routes and warns about values the startup check rejects", () => {
