@@ -194,8 +194,8 @@ matching the dates in the log file names, shown once for the rows that share it.
 `HOUR` gives the month and day with the first hour of each day, such as
 `10-03 12:00`, and the time alone after it; `--json` keeps the full date.
 They leave out `ROUTE`, which the summary shows; a model that used more than one
-route in the window gets the route after its name, such as
-`claude-opus-5.5 (/v1/messages)`.
+route in the window gets a short route name after its name: `chat`, `messages`
+or `responses`, such as `claude-opus-5.5 (messages)`.
 
 ```text
 Prompt-cache hit rate by hour · last 24 h · goal 95%
@@ -207,8 +207,9 @@ Prompt-cache hit rate by hour · last 24 h · goal 95%
 ```
 
 When clocks go back, a local hour that happens twice gets one row per real hour,
-each ending in its UTC offset, such as
-`2026-11-01 01:00 UTC-04:00` and `2026-11-01 01:00 UTC-05:00`. Without `--since`,
+each with a short UTC offset in the table, such as `01:00-04` and `01:00-05`;
+`--json` keeps the full buckets, `2026-11-01 01:00 UTC-04:00` and
+`2026-11-01 01:00 UTC-05:00`. Without `--since`,
 the summary and the hourly trend cover the last 24 hours and the daily trend
 covers every retained day. A duration counts back from now; a date, or a time
 without `Z` or an offset, is local.

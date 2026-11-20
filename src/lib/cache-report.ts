@@ -700,6 +700,14 @@ const hitRateTone = (row: CacheRow): TerminalTone => {
   return row.belowGoal ? "bad" : "good"
 }
 
+// A trend names a route in a few letters so a model on two routes still fits 80 columns; the summary's
+// ROUTE column keeps the full path.
+const shortRoutes: Record<CompletionRoute, string> = {
+  "/chat/completions": "chat",
+  "/v1/messages": "messages",
+  "/responses": "responses",
+}
+
 // Models that used more than one route in these rows. A trend names the route only for them, so it
 // stays within five columns.
 const modelsOnSeveralRoutes = (rows: Array<CacheRow>): Set<string> => {
@@ -714,15 +722,26 @@ const modelsOnSeveralRoutes = (rows: Array<CacheRow>): Set<string> => {
   return new Set([...routes].filter(([, seen]) => seen.size > 1).map(([model]) => model))
 }
 
+// " UTC-04:00" becomes "-04" and " UTC+05:45" becomes "+0545": enough to tell a repeated hour apart.
+const shortOffset = (suffix: string): string => {
+  const match = /^UTC([+-])(\d{2}):(\d{2})$/.exec(suffix)
+  if (match === null) {
+    return suffix === "" ? "" : ` ${suffix}`
+  }
+
+  return `${match[1]}${match[2]}${match[3] === "00" ? "" : match[3]}`
+}
+
 // An hour's label in the trend: "MM-DD HH:00" for the first hour of each day and "HH:00" after it, so
-// the column stays narrow. A repeated hour keeps its UTC offset. The bucket itself is unchanged in JSON.
+// the column stays narrow. A repeated hour keeps a short UTC offset, such as "01:00-04". The bucket
+// itself, with its full offset, is unchanged in JSON.
 const hourLabels = (rows: Array<CacheRow>): Map<CacheRow, string> => {
   const labels = new Map<CacheRow, string>()
   let day = ""
   let bucket = ""
   for (const row of rows) {
-    const [date = "", ...rest] = (row.bucket ?? "").split(" ")
-    const time = rest.join(" ")
+    const [date = "", hour = "", ...offset] = (row.bucket ?? "").split(" ")
+    const time = `${hour}${shortOffset(offset.join(" "))}`
     if (row.bucket === bucket) {
       labels.set(row, "")
     } else if (date === day) {
@@ -735,10 +754,14 @@ const hourLabels = (rows: Array<CacheRow>): Map<CacheRow, string> => {
     bucket = row.bucket ?? ""
   }
 
-  // A later hour lines up under the time of the first, so labels are right-aligned to the widest one.
-  const width = Math.max(0, ...[...labels.values()].map((label) => label.length))
+  // A later hour lines up under the time of the first: the date part is right-aligned, the time and
+  // any offset left-aligned after it.
+  const dateWidth = Math.max(0, ...[...labels.values()].map((label) => label.indexOf(" ") + 1))
   for (const [row, label] of labels) {
-    labels.set(row, label === "" ? "" : label.padStart(width))
+    const space = label.indexOf(" ")
+    const datePart = space === -1 ? "" : label.slice(0, space + 1)
+    const timePart = space === -1 ? label : label.slice(space + 1)
+    labels.set(row, label === "" ? "" : `${datePart.padStart(dateWidth)}${timePart}`)
   }
 
   return labels
@@ -753,7 +776,7 @@ const tableColumns = (rows: Array<CacheRow>, view: CacheView, unicode: boolean):
   const model: TableColumn<CacheRow> =
     view === "summary" ?
       { header: "MODEL", align: "left", cell: (row) => row.model }
-    : { header: "MODEL", align: "left", cell: (row) => several.has(row.model) ? `${row.model} (${row.route})` : row.model }
+    : { header: "MODEL", align: "left", cell: (row) => several.has(row.model) ? `${row.model} (${shortRoutes[row.route]})` : row.model }
 
   const leads: Record<CacheView, Array<TableColumn<CacheRow>>> = {
     summary: [model, { header: "ROUTE", align: "left", cell: (row) => row.route }],

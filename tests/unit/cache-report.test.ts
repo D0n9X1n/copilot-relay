@@ -429,11 +429,11 @@ test("an hourly trend shows each hour once, and names the route only for a model
   assert.deepEqual(renderCacheReport(rows, options, false, true), [
     "Prompt-cache hit rate by hour · last 24 h · goal 95%",
     "",
-    "  HOUR         MODEL                                REQUESTS  TOKENS  HIT RATE",
-    "  10-03 12:00  claude-opus-5.5 (/chat/completions)         1      1K  ✓ 99.00%",
-    "               claude-opus-5.5 (/v1/messages)              1      1K  ✓ 99.00%",
-    "               gpt-6.2-astra                               1      2K  ✗ 50.00%",
-    "        13:00  gpt-6.2-astra                               1      4M  ✓ 97.50%",
+    "  HOUR         MODEL                       REQUESTS  TOKENS  HIT RATE",
+    "  10-03 12:00  claude-opus-5.5 (chat)             1      1K  ✓ 99.00%",
+    "               claude-opus-5.5 (messages)         1      1K  ✓ 99.00%",
+    "               gpt-6.2-astra                      1      2K  ✗ 50.00%",
+    "        13:00  gpt-6.2-astra                      1      4M  ✓ 97.50%",
     "",
     "1 of 4 rows with a known rate is below the goal.",
   ])
@@ -478,6 +478,35 @@ test("an hour that repeats when clocks go back keeps one row per real hour", asy
       ["2026-11-01 01:00 UTC-05:00", 1, 0],
       ["2026-11-01 02:00", 1, 50],
     ])
+
+    // The table shows a repeated hour with a short offset, and the day once.
+    assert.deepEqual(renderCacheReport(rows, { view: "hourly", since: new Date("2026-11-01T00:00:00.000Z"), goal: 95 }, false, true).slice(2, 7), [
+      "  HOUR            MODEL            REQUESTS  TOKENS   HIT RATE",
+      "  11-01 00:00     claude-opus-5.5         1     100   ✗ 90.00%",
+      "        01:00-04  claude-opus-5.5         1     100  ✓ 100.00%",
+      "        01:00-05  claude-opus-5.5         1     100    ✗ 0.00%",
+      "        02:00     claude-opus-5.5         1     100   ✗ 50.00%",
+    ])
+  })
+})
+
+test("a repeated hour on a model with two routes still fits 80 columns, even as the first hour shown", async () => {
+  await inTimeZone("America/New_York", async () => {
+    await writeLogs({
+      [dated("2026-11-01")]: entries(
+        chatCall("2026-11-01T05:30:00.000Z", "input_tokens=100 cache_read_input_tokens=100"),
+        completion("2026-11-01T05:31:00.000Z", "path=/v1/messages http_status=200 body=complete model=claude-opus-5.5 terminal=true input_tokens=10 cache_read_input_tokens=90"),
+        chatCall("2026-11-01T06:30:00.000Z", "input_tokens=100 cache_read_input_tokens=0"),
+        completion("2026-11-01T06:31:00.000Z", "path=/v1/messages http_status=200 body=complete model=claude-opus-5.5 terminal=true input_tokens=10 cache_read_input_tokens=90"),
+      ),
+    })
+
+    const options: CacheReportOptions = { view: "hourly", since: new Date("2026-11-01T05:00:00.000Z"), sinceGiven: true, goal: 95 }
+    const lines = renderCacheReport(await buildCacheReport(options), options, false, true)
+
+    for (const line of lines) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+    }
   })
 })
 
