@@ -330,11 +330,11 @@ embeddings, are left out and counted under the table; `--all` lists them too, ma
 `!` in that same column, headed NOTE once it holds a mark, and a line under the
 table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
 one column keeps the table within 80 columns: the column gets the room the others
-leave, a longer reason is cut with `…`, and a configured model that cannot be used
-keeps its slot and `!` and drops the reason, which the config guide's warning under
-the table states. COST and CONTEXT are right-aligned. Without Unicode the marks are
-ASCII: `<` for `◀`, `x` for `×` and `-` for `–`. The listing does not verify that a
-model works. The token-cache notices go to stderr, so stdout holds only the answer.
+leave, and a note wider than that is never cut but printed whole on its own
+indented line under its row, so a slot and its `!` always show. NAME is left out
+when no model has a name, and NOTE when every note is under its row. COST and
+CONTEXT are right-aligned. Without Unicode the marks are ASCII: `<` for `◀`, `x` for
+`×` and `-` for `–`. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the answer.
 
 ```text
 Copilot chat models · 4 of 6

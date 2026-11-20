@@ -252,7 +252,7 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   const result = await harness.run()
 
   assert.equal(result.code, 0)
-  assert.match(result.stdout, /^Copilot chat models · 4 of 4\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}a-embedding +– +–\n {2}b-no-limits +– +–\n {2}gpt-example +– +–\n {2}z-chat +– +–\n/m)
+  assert.match(result.stdout, /^Copilot chat models · 4 of 4\n\n {2}MODEL +COST +CONTEXT\n {2}a-embedding +– +–\n {2}b-no-limits +– +–\n {2}gpt-example +– +–\n {2}z-chat +– +–\n/m)
   assert.match(result.stdout, /not verified/i)
 
   // Configured IDs appear only in the config guide after the list, flagged when not advertised.
@@ -267,7 +267,7 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   const fresh = await harness.run()
 
   assert.equal(fresh.code, 0)
-  assert.match(fresh.stdout, /^Copilot chat models · 1 of 1\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}newly-advertised +– +–\n/m)
+  assert.match(fresh.stdout, /^Copilot chat models · 1 of 1\n\n {2}MODEL +COST +CONTEXT\n {2}newly-advertised +– +–\n/m)
   assert.doesNotMatch(fresh.stdout, /a-embedding|z-chat/)
   assert.equal(harness.requests.length, 2)
 })
