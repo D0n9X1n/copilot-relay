@@ -160,7 +160,7 @@ const formatLeft = (snapshot: QuotaSnapshot, unicode: boolean): string => {
     return "unlimited"
   }
 
-  const left = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)} (${formatNumber(snapshot.percent_remaining)}%)`
+  const left = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)}`
   const state = lowState(snapshot)
 
   return state === undefined ? left : `${mark(state, unicode)} ${left}`
@@ -185,7 +185,14 @@ const formatOverage = (snapshot: QuotaSnapshot): string => {
 interface QuotaRow {
   id: string
   snapshot: QuotaSnapshot | null
+  // The line under a limited quota, holding GitHub's percent left, so the row itself stays narrow.
+  continuation?: boolean
 }
+
+// GitHub's percent_remaining, on its own line under the quota it belongs to.
+const formatPercentLeft = (snapshot: QuotaSnapshot): string => `${formatNumber(snapshot.percent_remaining)}% left`
+
+const hasPercentLine = (snapshot: QuotaSnapshot | null): boolean => snapshot !== null && snapshot.unlimited !== true
 
 /** The report as text lines. Kept free of IO, so it is tested without a terminal. */
 export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode = unicodeEnabled()): Array<string> => {
@@ -194,14 +201,24 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
   // The known ids first, in their fixed order, whatever order the object holds its keys in.
   const known: Array<string> = [...knownQuotaIds]
   const ids = [...known, ...Object.keys(usage.quota_snapshots).filter((id) => !known.includes(id))]
-  const rows: Array<QuotaRow> = ids.map((id) => ({ id, snapshot: usage.quota_snapshots[id] ?? null }))
+  const rows: Array<QuotaRow> = ids.flatMap((id) => {
+    const snapshot = usage.quota_snapshots[id] ?? null
+    const row: QuotaRow = { id, snapshot }
+    return hasPercentLine(snapshot) ? [row, { id, snapshot, continuation: true }] : [row]
+  })
 
   const columns: Array<TableColumn<QuotaRow>> = [
-    { header: "QUOTA", align: "left", cell: (row) => row.id },
+    { header: "QUOTA", align: "left", cell: (row) => row.continuation === true ? "" : row.id },
     {
       header: "LEFT",
       align: "left",
-      cell: (row) => row.snapshot === null ? notReported : formatLeft(row.snapshot, unicode),
+      cell: (row) => {
+        if (row.snapshot === null) {
+          return notReported
+        }
+
+        return row.continuation === true ? formatPercentLeft(row.snapshot) : formatLeft(row.snapshot, unicode)
+      },
       tone: (row) => {
         if (row.snapshot === null) {
           return "muted"
@@ -211,12 +228,16 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
         return state === undefined ? undefined : lowTones[state]
       },
     },
-    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null ? "" : formatOverage(row.snapshot) },
+    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null || row.continuation === true ? "" : formatOverage(row.snapshot) },
   ]
 
   // Only a token-billed quota reports credits, so the column appears only when one does.
   if (rows.some((row) => row.snapshot?.credits_used !== null && row.snapshot?.credits_used !== undefined)) {
-    columns.push({ header: "CREDITS", align: "right", cell: (row) => row.snapshot?.credits_used == null ? "" : formatNumber(row.snapshot.credits_used) })
+    columns.push({
+      header: "CREDITS",
+      align: "right",
+      cell: (row) => row.continuation === true || row.snapshot?.credits_used == null ? "" : formatNumber(row.snapshot.credits_used),
+    })
   }
 
   const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`)]

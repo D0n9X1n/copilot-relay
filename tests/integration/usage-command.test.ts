@@ -186,7 +186,7 @@ const storeToken = async (): Promise<void> => {
   await fs.writeFile(paths.githubTokenPath, `${token}\n`)
 }
 
-test("usage prints the plan, the SKU, the reset date and one line per quota", async () => {
+test("usage prints the plan, the SKU, the reset date and a row per quota, its percent left below", async () => {
   await storeToken()
 
   const result = await run(["usage"], "quota")
@@ -196,10 +196,11 @@ test("usage prints the plan, the SKU, the reset date and one line per quota", as
     "Copilot plan · fixture-plan · resets 2026-11-01",
     "SKU fixture-sku",
     "",
-    "  QUOTA                 LEFT              OVERAGE        CREDITS",
-    "  chat                  unlimited         not permitted",
-    "  completions           unlimited         not permitted",
-    "  premium_interactions  150 of 300 (50%)  permitted         12.5",
+    "  QUOTA                 LEFT        OVERAGE        CREDITS",
+    "  chat                  unlimited   not permitted",
+    "  completions           unlimited   not permitted",
+    "  premium_interactions  150 of 300  permitted         12.5",
+    "                        50% left",
     "",
   ].join("\n"))
   // One request, the usage request: no Copilot token exchange and no /user lookup.

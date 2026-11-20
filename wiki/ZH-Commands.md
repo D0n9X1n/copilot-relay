@@ -264,13 +264,14 @@ copilot-relay usage --json
 Copilot plan · enterprise · resets 2026-12-01
 SKU copilot_enterprise_seat
 
-  QUOTA                 LEFT                              OVERAGE
-  chat                  unlimited                         not permitted
-  completions           unlimited                         not permitted
-  premium_interactions  919,253 of 1,000,000 (91.92531%)  permitted
+  QUOTA                 LEFT                  OVERAGE
+  chat                  unlimited             not permitted
+  completions           unlimited             not permitted
+  premium_interactions  919,253 of 1,000,000  permitted
+                        91.92531% left
 ```
 
-剩余不足 20% 的配额标记为 `!`，不足 5% 标记为 `✗`（终端无法显示 `✗` 时为 `x`）；颜色只是额外强调。
+有上限的配额显示其额度中剩余的部分，下一行是 GitHub 给出的剩余百分比。剩余不足 20% 的配额标记为 `!`，不足 5% 标记为 `✗`（终端无法显示 `✗` 时为 `x`）；颜色只是额外强调。
 数字带千位分隔符，并保留 GitHub 发来的每一位小数；`--json` 按 GitHub 发来的原样打印。
 
 ## `cache`

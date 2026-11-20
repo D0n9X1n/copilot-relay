@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http"
 import os from "node:os"
 import path from "node:path"
 import test, { type TestContext } from "node:test"
+import { stripVTControlCharacters } from "node:util"
 
 import {
   redirectGitHubTo,
@@ -21,6 +22,7 @@ process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
 
 const { CopilotUsageError, loadCopilotUsage, parseCopilotUsage, renderCopilotUsage } = await import("../../src/lib/usage")
+const { displayWidth } = await import("../../src/lib/terminal")
 const { setupProxyAuth } = await import("../../src/lib/auth")
 const { vscodeVersion } = await import("../../src/lib/config")
 const { flushLogs } = await import("../../src/lib/log")
@@ -111,34 +113,58 @@ test("the report heads with the plan and reset date, then a table of quotas", ()
     "Copilot plan · fixture-plan · resets 2026-11-01",
     "SKU fixture-sku",
     "",
-    "  QUOTA                 LEFT              OVERAGE",
-    "  chat                  unlimited         not permitted",
-    "  completions           unlimited         not permitted",
-    "  premium_interactions  150 of 300 (50%)  permitted",
+    "  QUOTA                 LEFT        OVERAGE",
+    "  chat                  unlimited   not permitted",
+    "  completions           unlimited   not permitted",
+    "  premium_interactions  150 of 300  permitted",
+    "                        50% left",
   ])
 })
 
 test("numbers get thousands separators and keep every decimal GitHub sent", () => {
   const text = report(premiumOnly({ unlimited: false, entitlement: 1000000, remaining: 919253, percent_remaining: 91.92531, overage_permitted: true, overage_count: 1234 }))
 
-  assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 \(91\.92531%\) {2}permitted, 1,234 used$/m)
+  assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 {2}permitted, 1,234 used$/m)
+  assert.match(text, /^ {24}91\.92531% left$/m)
 })
 
 test("a tiny nonzero number prints as GitHub sent it, never rounded to zero", () => {
   const text = report(premiumOnly({ unlimited: false, entitlement: 1, remaining: 1e-7, percent_remaining: 0.000001, overage_permitted: false, overage_count: 0 }))
 
-  assert.match(text, /1e-7 of 1 \(0\.000001%\)/)
+  assert.match(text, /1e-7 of 1 /)
+  assert.match(text, /^ {24}0\.000001% left$/m)
+})
+
+test("a quota with credits and an overage count fits 80 columns, its percent on the line below", () => {
+  const usage = parseCopilotUsage({
+    copilot_plan: "fixture-plan",
+    quota_reset_date: "2026-11-01",
+    quota_snapshots: {
+      chat: { unlimited: true, overage_permitted: false, overage_count: 0 },
+      premium_interactions: { unlimited: false, remaining: 919253, entitlement: 1000000, percent_remaining: 91.92531, overage_permitted: true, overage_count: 1234, credits_used: 12345.6789 },
+    },
+  })
+
+  const lines = renderCopilotUsage(usage, false, true)
+
+  for (const line of [...lines, ...renderCopilotUsage(usage, true, true).map((colored) => stripVTControlCharacters(colored))]) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+
+  assert.ok(lines.includes("  premium_interactions  919,253 of 1,000,000  permitted, 1,234 used  12,345.6789"))
+  assert.ok(lines.includes("                        91.92531% left"))
 })
 
 test("a quota running low is marked, and the mark does not rely on color", () => {
   const low = parseCopilotUsage(premiumOnly({ unlimited: false, entitlement: 300, remaining: 45, percent_remaining: 15, overage_permitted: false, overage_count: 0 }))
   const nearlyOut = parseCopilotUsage(premiumOnly({ unlimited: false, entitlement: 300, remaining: 6, percent_remaining: 2, overage_permitted: false, overage_count: 0 }))
 
-  assert.match(renderCopilotUsage(low, false, true).join("\n"), /^ {2}premium_interactions {2}! 45 of 300 \(15%\) {2}not permitted$/m)
-  assert.match(renderCopilotUsage(nearlyOut, false, true).join("\n"), /^ {2}premium_interactions {2}✗ 6 of 300 \(2%\) {2}not permitted$/m)
-  assert.match(renderCopilotUsage(nearlyOut, false, false).join("\n"), /^ {2}premium_interactions {2}x 6 of 300 \(2%\) {2}not permitted$/m)
-  assert.match(renderCopilotUsage(low, true, true).join("\n"), /\u001b\[33m! 45 of 300 \(15%\)\u001b\[0m/)
-  assert.match(renderCopilotUsage(nearlyOut, true, true).join("\n"), /\u001b\[31m✗ 6 of 300 \(2%\)\u001b\[0m/)
+  assert.match(renderCopilotUsage(low, false, true).join("\n"), /^ {2}premium_interactions {2}! 45 of 300 {2,}not permitted$/m)
+  assert.match(renderCopilotUsage(low, false, true).join("\n"), /^ {24}15% left$/m)
+  assert.match(renderCopilotUsage(nearlyOut, false, true).join("\n"), /^ {2}premium_interactions {2}✗ 6 of 300 {2,}not permitted$/m)
+  assert.match(renderCopilotUsage(nearlyOut, false, false).join("\n"), /^ {2}premium_interactions {2}x 6 of 300 {2,}not permitted$/m)
+  assert.match(renderCopilotUsage(low, true, true).join("\n"), /\u001b\[33m! 45 of 300\u001b\[0m/)
+  assert.match(renderCopilotUsage(nearlyOut, true, true).join("\n"), /\u001b\[31m✗ 6 of 300\u001b\[0m/)
 })
 
 test("an unlimited quota prints unlimited and its overage state", () => {
@@ -150,7 +176,8 @@ test("an unlimited quota prints unlimited and its overage state", () => {
 test("a limited quota prints remaining of entitlement, GitHub's percent and the overage state", () => {
   const text = report(premiumOnly({ unlimited: false, entitlement: 300, remaining: 0, percent_remaining: 0, overage_permitted: true, overage_count: 25 }))
 
-  assert.match(text, /^ {2}premium_interactions {2}✗ 0 of 300 \(0%\) {2,}permitted, 25 used$/m)
+  assert.match(text, /^ {2}premium_interactions {2}✗ 0 of 300 {2,}permitted, 25 used$/m)
+  assert.match(text, /^ {24}0% left$/m)
 })
 
 test("a token-billed quota adds credits_used", () => {
@@ -166,7 +193,8 @@ test("a token-billed quota adds credits_used", () => {
   }))
 
   assert.match(text, /^ {2}QUOTA +LEFT +OVERAGE +CREDITS$/m)
-  assert.match(text, /^ {2}premium_interactions {2}150 of 300 \(50%\) {2,}not permitted {2,}12\.5$/m)
+  assert.match(text, /^ {2}premium_interactions {2}150 of 300 {2,}not permitted {2,}12\.5$/m)
+  assert.match(text, /^ {24}50% left$/m)
 })
 
 test("numbers print exactly as GitHub sent them, with nothing rounded or derived", () => {
@@ -174,7 +202,8 @@ test("numbers print exactly as GitHub sent them, with nothing rounded or derived
   // GitHub's percent, not one it worked out.
   const text = report(premiumOnly({ unlimited: false, entitlement: 100, remaining: 10, percent_remaining: 12.345, overage_permitted: false, overage_count: 0 }))
 
-  assert.match(text, /^ {2}premium_interactions {2}! 10 of 100 \(12\.345%\) {2,}not permitted$/m)
+  assert.match(text, /^ {2}premium_interactions {2}! 10 of 100 {2,}not permitted$/m)
+  assert.match(text, /^ {24}12\.345% left$/m)
 })
 
 test("an answer without quota_snapshots reports every known quota as not reported", () => {
@@ -190,7 +219,8 @@ test("a missing snapshot, field or heading is marked rather than guessed", () =>
 
   assert.match(text, /^Copilot plan · not reported · resets not reported$/m)
   assert.doesNotMatch(text, /^SKU/m)
-  assert.match(text, /^ {2}chat {18}\? of \? \(\?%\) {2,}\?$/m)
+  assert.match(text, /^ {2}chat {18}\? of \? {2,}\?$/m)
+  assert.match(text, /^ {24}\?% left$/m)
   assert.match(text, /^ {2}completions {11}not reported$/m)
 })
 
@@ -204,7 +234,7 @@ test("a quota id the command does not know is shown after the known ones", () =>
   })
 
   assert.deepEqual(Object.keys(usage.quota_snapshots), ["chat", "completions", "premium_interactions", "future_quota"])
-  assert.equal(renderCopilotUsage(usage, false, true).at(-1), "  future_quota          5 of 20 (25%)     not permitted")
+  assert.deepEqual(renderCopilotUsage(usage, false, true).slice(-2), ["  future_quota          5 of 20     not permitted", "                        25% left"])
 })
 
 test("every string from the answer is made terminal-safe", () => {

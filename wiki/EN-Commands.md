@@ -323,14 +323,16 @@ in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 Copilot plan · enterprise · resets 2026-12-01
 SKU copilot_enterprise_seat
 
-  QUOTA                 LEFT                              OVERAGE
-  chat                  unlimited                         not permitted
-  completions           unlimited                         not permitted
-  premium_interactions  919,253 of 1,000,000 (91.92531%)  permitted
+  QUOTA                 LEFT                  OVERAGE
+  chat                  unlimited             not permitted
+  completions           unlimited             not permitted
+  premium_interactions  919,253 of 1,000,000  permitted
+                        91.92531% left
 ```
 
-A quota below 20% left is marked `!`, and below 5% `✗` (`x` where the terminal
-cannot show `✗`); color only adds emphasis. Numbers get thousands separators and
+A limited quota shows what is left of its entitlement, with GitHub's percent left
+on the line below. A quota below 20% left is marked `!`, and below 5% `✗` (`x`
+where the terminal cannot show `✗`); color only adds emphasis. Numbers get thousands separators and
 keep every decimal GitHub sent; `--json` prints them as GitHub sent them.
 
 ## `cache`
