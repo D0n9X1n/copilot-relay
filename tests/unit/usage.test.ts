@@ -124,6 +124,12 @@ test("numbers get thousands separators and keep every decimal GitHub sent", () =
   assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 \(91\.92531%\) {2}permitted, 1,234 used$/m)
 })
 
+test("a tiny nonzero number prints as GitHub sent it, never rounded to zero", () => {
+  const text = report(premiumOnly({ unlimited: false, entitlement: 1, remaining: 1e-7, percent_remaining: 0.000001, overage_permitted: false, overage_count: 0 }))
+
+  assert.match(text, /1e-7 of 1 \(0\.000001%\)/)
+})
+
 test("a quota running low is marked, and the mark does not rely on color", () => {
   const low = parseCopilotUsage(premiumOnly({ unlimited: false, entitlement: 300, remaining: 45, percent_remaining: 15, overage_permitted: false, overage_count: 0 }))
   const nearlyOut = parseCopilotUsage(premiumOnly({ unlimited: false, entitlement: 300, remaining: 6, percent_remaining: 2, overage_permitted: false, overage_count: 0 }))

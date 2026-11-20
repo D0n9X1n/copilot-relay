@@ -128,7 +128,13 @@ const formatNumber = (value: number | null): string => {
     return "?"
   }
 
-  const [whole, fraction] = String(value).split(".")
+  const text = String(value)
+  // An exponent form such as 1e-7 is printed as is: grouping its digits would round it.
+  if (text.includes("e")) {
+    return text
+  }
+
+  const [whole, fraction] = text.split(".")
   const grouped = Number(whole).toLocaleString("en-US")
 
   return fraction === undefined ? grouped : `${grouped}.${fraction}`

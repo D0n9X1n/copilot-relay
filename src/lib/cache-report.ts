@@ -83,6 +83,8 @@ export interface CacheReportOptions {
   view: CacheView
   /** Only entries at or after this instant; every retained entry when absent. */
   since?: Date
+  /** True when --since set the start; otherwise a start is the default last 24 hours. */
+  sinceGiven?: boolean
   /** Only models whose name contains this text, ignoring case. */
   model?: string
   /** The hit-rate goal, in percent, with at most two decimals; buildCacheReport refuses others. */
@@ -671,6 +673,7 @@ export const resolveCacheOptions = (args: CacheArguments, now: Date): CacheRepor
     view,
     goal: goalText === undefined ? defaultGoal : parseGoal(goalText),
     ...(since !== undefined && { since }),
+    ...(sinceText !== undefined && { sinceGiven: true }),
     ...(model !== undefined && { model }),
   }
 }
@@ -743,9 +746,16 @@ const viewTitles: Record<CacheView, string> = {
 const formatLocalTime = (date: Date): string =>
   `${formatLogDate(date)} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`
 
-// The window in local time, and the model filter, which is the user's own text echoed back.
-const describeScope = (options: CacheReportOptions): string => {
-  const span = options.since === undefined ? "all retained logs" : `since ${formatLocalTime(options.since)}`
+// The window in local time, and the model filter, which is the user's own text echoed back. In a
+// sentence the window reads "in the last 24 h" or "in all retained logs"; in a title it stands alone.
+const describeScope = (options: CacheReportOptions, inSentence = false): string => {
+  let span = inSentence ? "in all retained logs" : "all retained logs"
+  if (options.since !== undefined && options.sinceGiven === true) {
+    span = `since ${formatLocalTime(options.since)}`
+  } else if (options.since !== undefined) {
+    span = inSentence ? "in the last 24 h" : "last 24 h"
+  }
+
   const model = options.model === undefined ? "" : `, models matching "${terminalText(options.model)}"`
 
   return `${span}${model}`
@@ -784,9 +794,8 @@ export const renderCacheReport = (
 ): Array<string> => {
   if (rows.length === 0) {
     return [
-      `No prompt-cache data ${describeScope(options)}.`,
-      `The report reads the upstream completion entries in ${paths.logsDir}.`,
-      "They are written at logLevel info or debug, not error, and kept for logRetentionDays.",
+      `No prompt-cache data ${describeScope(options, true)}.`,
+      `The report reads upstream completion entries in ${paths.logsDir}, written at logLevel info or debug and kept for logRetentionDays.`,
     ]
   }
 

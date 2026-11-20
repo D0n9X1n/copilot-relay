@@ -327,7 +327,7 @@ test("a call that logged no cache read is unknown, not a zero read", async () =>
   // A row whose calls all have unknown caching has no rate: a dash, gray on a color terminal, never
   // a rate of 0.
   assert.deepEqual(renderCacheReport(rows, options, false, true), [
-    "Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%",
+    "Prompt-cache hit rate · last 24 h · goal 95%",
     "",
     "  MODEL            ROUTE              REQUESTS  TOKENS  HIT RATE",
     "  claude-opus-5-5  /v1/messages              1       0         –",
@@ -426,7 +426,7 @@ test("an hourly trend shows each hour once, and names the route only for a model
   const rows = await buildCacheReport(options)
 
   assert.deepEqual(renderCacheReport(rows, options, false, true), [
-    "Prompt-cache hit rate by hour · since 2026-10-02 17:30 · goal 95%",
+    "Prompt-cache hit rate by hour · last 24 h · goal 95%",
     "",
     "  HOUR              MODEL                                REQUESTS  TOKENS  HIT RATE",
     "  2026-10-03 12:00  claude-opus-5.5 (/chat/completions)         1      1K  ✓ 99.00%",
@@ -635,7 +635,7 @@ test("the flags resolve to a view, a window and a goal", () => {
   assert.deepEqual(resolveCacheOptions({ goal: "95", daily: true }, now), { view: "daily", goal: 95 })
   assert.deepEqual(
     resolveCacheOptions({ goal: "97.5", daily: true, since: "2d", model: " opus " }, now),
-    { view: "daily", goal: 97.5, since: new Date("2026-10-01T12:00:00.000Z"), model: "opus" },
+    { view: "daily", goal: 97.5, since: new Date("2026-10-01T12:00:00.000Z"), sinceGiven: true, model: "opus" },
   )
 
   // citty passes "" for a string flag given without a value, and an array for a repeated one.
@@ -697,7 +697,7 @@ test("the table shows requests, tokens and a marked hit rate per model and route
   const rows = await buildCacheReport(options)
 
   assert.deepEqual(renderCacheReport(rows, options, false, true), [
-    "Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%",
+    "Prompt-cache hit rate · last 24 h · goal 95%",
     "",
     "  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE",
     "  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%",
@@ -776,10 +776,32 @@ test("an empty window says there is no data and where the data would come from",
 
   assert.deepEqual(rows, [])
   assert.deepEqual(renderCacheReport(rows, options), [
-    "No prompt-cache data since 2026-10-02 17:30, models matching \"opus\".",
-    `The report reads the upstream completion entries in ${paths.logsDir}.`,
-    "They are written at logLevel info or debug, not error, and kept for logRetentionDays.",
+    "No prompt-cache data in the last 24 h, models matching \"opus\".",
+    `The report reads upstream completion entries in ${paths.logsDir}, written at logLevel info or debug and kept for logRetentionDays.`,
   ])
+})
+
+test("without --since the summary title says last 24 h, and with it the actual start", () => {
+  const now = new Date(2026, 9, 3, 17, 30)
+  const implicit = resolveCacheOptions({}, now)
+  const explicit = resolveCacheOptions({ since: "6h" }, now)
+  const rows: Array<CacheRow> = [{
+    bucket: null,
+    model: "gpt-6.2-astra",
+    route: "/responses",
+    requests: 1,
+    unknownCacheRequests: 0,
+    zeroCacheReadRequests: 0,
+    totalInputTokens: 100,
+    cacheReadTokens: 99,
+    uncachedInputTokens: 1,
+    cacheWriteTokens: null,
+    hitRate: 99,
+    belowGoal: false,
+  }]
+
+  assert.equal(renderCacheReport(rows, implicit, false, true)[0], "Prompt-cache hit rate · last 24 h · goal 95%")
+  assert.equal(renderCacheReport(rows, explicit, false, true)[0], "Prompt-cache hit rate · since 2026-10-03 11:30 · goal 95%")
 })
 
 test("model names from the log are made safe for the terminal", () => {

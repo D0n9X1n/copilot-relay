@@ -123,7 +123,7 @@ copilot-relay cache --json               # 行数组，供脚本使用
 ```
 
 ```text
-Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%
+Prompt-cache hit rate · last 24 h · goal 95%
 
   MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
   claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
@@ -156,7 +156,7 @@ HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 会在名称后加上路由，例如 `claude-opus-5.5 (/v1/messages)`。
 
 ```text
-Prompt-cache hit rate by hour · since 2026-10-02 17:30 · goal 95%
+Prompt-cache hit rate by hour · last 24 h · goal 95%
 
   HOUR              MODEL               REQUESTS  TOKENS  HIT RATE
   2026-10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
