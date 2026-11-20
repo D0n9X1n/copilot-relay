@@ -497,8 +497,10 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
     const quiet = consoleSuppressed.getStore() === true
     const writesToConsole = !quiet && methodLevel <= consola.level
 
+    // The console sink runs outside the caller's request too: consola throttles repeated entries
+    // with a timer it keeps on the shared logger, which would otherwise hold that request.
     if (!writesToFile && !writesToConsole) {
-      return quiet ? undefined : fn(...args)
+      return quiet ? undefined : outsideRequests(() => fn(...args))
     }
 
     // Redact before escaping or bounding: raw separators delimit URLs, and a
@@ -530,7 +532,7 @@ const wrapFileLog = <T extends (...args: Array<unknown>) => unknown>(
       })
     }
 
-    return quiet ? undefined : fn(...rendered)
+    return quiet ? undefined : outsideRequests(() => fn(...rendered))
   }) as T
 
 consola.error = wrapFileLog("error", consola.error.bind(consola))

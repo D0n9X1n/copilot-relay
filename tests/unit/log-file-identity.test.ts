@@ -46,3 +46,30 @@ test("a log entry written inside a request leaves that request's context unreach
 
   assert.equal(result.storeReachable, false, "the idle-close timer does not hold the request's context")
 })
+
+test("a console entry logged inside a request starts no timer in that request's context", async () => {
+  const { AsyncLocalStorage, createHook } = await import("node:async_hooks")
+  const { setLogLevel } = await import("../../src/lib/log")
+  const storage = new AsyncLocalStorage<object>()
+  let timersInRequest = 0
+  const hook = createHook({
+    init(_id, type) {
+      if (type === "Timeout" && storage.getStore() !== undefined) {
+        timersInRequest++
+      }
+    },
+  })
+
+  // Consola throttles a burst of the same entry with a timer; the burst must not arm it here.
+  setLogLevel("info")
+  hook.enable()
+  storage.run({}, () => {
+    for (let index = 0; index < 7; index++) {
+      log.info("same request message")
+    }
+  })
+  hook.disable()
+  await flushLogs()
+
+  assert.equal(timersInRequest, 0)
+})

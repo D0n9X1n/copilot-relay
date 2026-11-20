@@ -2,7 +2,7 @@
 // the write finish and the idle-close timer start, then prints whether that context's store is still
 // reachable while the timer is pending.
 import fs from "node:fs/promises"
-import { AsyncLocalStorage } from "node:async_hooks"
+import { AsyncLocalStorage, createHook } from "node:async_hooks"
 import os from "node:os"
 import path from "node:path"
 
@@ -29,10 +29,20 @@ const logInside = async (): Promise<WeakRef<object>> => {
   return new WeakRef(store)
 }
 
+// The drain writes the entry, then arms the one-second idle close. Sample once that timer exists and
+// well inside its second, so the test covers the timer it is about.
+const armed = Promise.withResolvers<void>()
+const hook = createHook({
+  init(_id, type, _trigger, resource) {
+    if (type === "Timeout" && (resource as { _idleTimeout?: number })._idleTimeout === 1000) {
+      armed.resolve()
+    }
+  },
+})
+hook.enable()
 const reference = await logInside()
-
-// The drain writes the entry, then arms the one-second idle close; sample well inside that second.
-await new Promise((resolve) => setTimeout(resolve, 200))
+await armed.promise
+hook.disable()
 for (let round = 0; round < 10; round++) {
   await new Promise((resolve) => setTimeout(resolve, 10))
   gc()
