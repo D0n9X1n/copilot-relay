@@ -22,8 +22,8 @@ The relay serves two of the wire formats these clients speak. Pick one row:
 
 | Provider type | Base URL | Relay route | Result |
 | --- | --- | --- | --- |
-| OpenAI-compatible, wire API **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | Works for the exposed models. Recommended. |
-| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | Works for the exposed models. Copilot CLI warns that it knows no token multiplier for an Anthropic `gpt-6-astra`, so its token estimates for that model are approximate. |
+| OpenAI-compatible, wire API **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | Works for an exposed model that Copilot serves on the endpoint the relay needs: `/v1/messages` for a Claude model, `/responses` for any other. Another model gets HTTP 400 `relay_unsupported_endpoint`. Recommended. |
+| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | Works for an exposed model that Copilot serves on an endpoint the relay can use for it: `/chat/completions` or `/responses` for most models, and for a Claude model the one `claudeUpstreamApi` selects. Copilot CLI warns that it knows no token multiplier for an Anthropic `gpt-6-astra`, so its token estimates for that model are approximate. |
 | OpenAI-compatible, wire API **Chat completions** (the default) | `http://127.0.0.1:4142/v1` | `POST /v1/chat/completions` | Fails. The relay does not serve this route and answers `500 Unsupported Claude API route`. |
 
 Use the port from your `config.yaml` if it is not `4142`. The Responses base URL

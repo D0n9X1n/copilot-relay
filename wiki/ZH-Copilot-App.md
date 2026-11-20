@@ -17,8 +17,8 @@ GPT-6 Astra 和 Claude Opus 5.5 上，一次普通回复和一次五步工具调
 
 | 提供方类型 | Base URL | 中继路由 | 结果 |
 | --- | --- | --- | --- |
-| OpenAI-compatible，wire API 选 **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | 暴露的模型都可用。推荐。 |
-| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | 暴露的模型都可用。Copilot CLI 会提示它不知道 Anthropic 类型下 `gpt-6-astra` 的 token 倍率，所以该模型的 token 估算只是近似值。 |
+| OpenAI-compatible，wire API 选 **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | 适用于 Copilot 在中继所需端点上提供的暴露模型：Claude 模型需要 `/v1/messages`，其他模型需要 `/responses`。其他模型会得到 HTTP 400 `relay_unsupported_endpoint`。推荐。 |
+| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | 适用于 Copilot 在中继可用端点上提供的暴露模型：大多数模型为 `/chat/completions` 或 `/responses`，Claude 模型为 `claudeUpstreamApi` 所选的端点。Copilot CLI 会提示它不知道 Anthropic 类型下 `gpt-6-astra` 的 token 倍率，所以该模型的 token 估算只是近似值。 |
 | OpenAI-compatible，wire API 选 **Chat completions**（默认） | `http://127.0.0.1:4142/v1` | `POST /v1/chat/completions` | 不可用。中继不提供这个路由，会返回 `500 Unsupported Claude API route`。 |
 
 如果 `config.yaml` 中的端口不是 `4142`，请改用你的端口。Responses 的 base URL 以 `/v1`
