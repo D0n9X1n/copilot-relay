@@ -494,3 +494,41 @@ test("preflight reads a failed catalog body inside its deadline and times out a 
   assert.equal(after.created - before.created, 1)
   assert.equal(after.disposed - before.disposed, 1)
 })
+
+const { withTraceObserver } = await import("../../src/lib/request-trace")
+
+// A catalog that predates the request and lacks its model, so admission refreshes it.
+const staleCatalogConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
+  ...configFor(upstreamTimeoutMs),
+  modelCatalog: { baseUrl: provider, models: new Map([["claude-opus-5.5", { type: "chat" }]]), fetchedAt: 0 },
+})
+
+for (const route of ["/v1/messages", "/v1/responses"] as const) {
+  test(`${route} answers a discovery error body that stalls past the deadline with its timeout`, async () => {
+    runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
+    runtimeState.upstreamBaseUrl = provider
+    const app = createServer(staleCatalogConfig(80))
+    const observed = { cancelled: false }
+    const traces: Array<{ signal: AbortSignal }> = []
+
+    const response = await withRecordedTransport({
+      fetch: async (request) => {
+        assert.equal(request.path, "/models", "only discovery is sent")
+        return stalledError(request.signal, observed)
+      },
+      refresh: noRefresh,
+    }, () => withTraceObserver((trace) => traces.push(trace), async () => app.fetch(new Request(`http://127.0.0.1${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(route === "/v1/messages"
+        ? { model, max_tokens: 64, messages: [{ role: "user", content: "hello" }] }
+        : { model, input: "hello" }),
+    }))))
+
+    const body = await response.text()
+    assert.equal(response.status, 504, body)
+    assert.match(body, /upstream_timeout/)
+    assert.equal(traces.length, 1)
+    assert.equal(traces[0]?.signal.aborted, false, "the client trace is not aborted")
+  })
+}
