@@ -101,8 +101,7 @@ src/
 热重载 —— 对改动之后开始的工作生效：
 
 `logLevel`、`logRetentionDays`、`thinkEffort`、`upstreamTimeoutSeconds`、
-`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、`gptModel`、`opusModel`、
-`models`
+`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、`gptModel`、`opusModel`
 
 需要重启：
 
@@ -309,45 +308,46 @@ WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直�
 
 ## 模型路由
 
-`src/lib/models.ts` 决定客户端能看到哪些 Copilot 模型，以及 Claude 请求发往哪里。
-`parseModelSelection` 把 `models` 键解析为 `"auto"`、空列表或 ID 列表；`readAppConfig` 保留
-原文，`start` 在启动和每次重载时把解析结果连同 `gptModel`、`opusModel` 存入运行时路由状态。
+`src/lib/models.ts` 决定客户端能看到哪些 Copilot 模型，以及 Claude 请求发往哪里。只有两个
+槽位：`gptModel` 和 `opusModel`；`start` 在启动和每次重载时把它们存入运行时路由状态。没有模型
+列表，也没有其他路由：每个 Claude 请求都落到这两个槽位之一。
 
-- `selectNewestPerVendor(catalog)` 实现 `auto`：在带有 `model_picker_enabled`、类型为
-  `chat`、厂商不是 `Experimental`、ID 中有数字（第一段 `\d+(\.\d+)*`）的目录模型中，每个
-  厂商保留一个：版本按数字元组取最高，其次选择器类别 `powerful` > `versatile` >
-  `lightweight`，再次 ID 较小者。结果按目录顺序返回。
-- `resolveExposedModels(routing, catalog)` 依次返回 `gptModel`、`opusModel` 和选出的模型，
-  每个都经过 `canonicalModelId`（去掉所有 `[1m]`，使用目录中的大小写），并不区分大小写地去重。
-  目录中没有的列出 ID 会被跳过；没有目录时 `auto` 不添加任何模型，列出的 ID 保留。
-  `findMissingModels` 给出被跳过的 ID。守护进程（`getExposedUpstreamModelIds`）和独立运行的
-  `setup` 调用同一个函数。
-- 守护进程把上一次算出的暴露列表保存在 `exposedCache` 中：上游 ID
-  （`getExposedUpstreamModelIds`）、Claude Code 看到的 ID（`getExposedModelIds`），以及
-  `routeModelId` 用来匹配的小写到 ID 的映射。缓存键是当前目录的 `models` Map 本身（按对象
-  身份比较），或"无目录"，再加上 `gptModel`、`opusModel` 和 `models` 的值（`"auto"` 或
-  逐项比较的列表）。路由对象本身不作为键，因为 `snapshotRuntimeState` 为每个请求复制它。
-  `currentCatalog()` 仍在每次调用时比较目录的 `baseUrl` 与 `upstreamBaseUrl`，所以重载到另一个
-  上游、目录刷新、修改选择，或模型探测临时设置的 `{ gptModel: id, opusModel: id }` 都不会命中
-  缓存而是重新计算；恢复保存的路由后会再次得到原来的列表。两个 getter 都返回副本，调用方无法
-  修改缓存中的列表。
-- `canonicalModelId` 在每个目录的索引中查找 ID（`catalogIndexes`，一个从目录 Map 到其小写键
-  的 `WeakMap`），索引在首次使用时建立。两个键只有大小写不同时，取目录顺序中的第一个。两个
-  缓存都依赖已发布的目录不会被原地修改：`src/copilot/models.ts` 中的
-  `CopilotModelCatalog.models` 类型为 `ReadonlyMap`，原地修改无法通过类型检查；发现新模型时
-  发布的是一个新目录。
-- `routeModelId`（由 `src/claude/translate.ts` 的 `translateModelName` 调用）把与某个暴露 ID
-  匹配的名称（不区分大小写，带任意 `[1m]`）发往该 ID；其他包含 `opus` 的名称发往
-  `opusModel`；其余发往 `gptModel`。未暴露的目录 ID 在 Claude 路由上不会被透传。Codex 路由
-  单独解析模型（`resolveCodexModel`，见下文）。
+- `routeModelSlot(model)` 对每个请求只做一次决定。它去掉所有 `[1m]` 并不区分大小写地比较：
+  先匹配 `opusModel` 的 ID，再匹配 `gptModel` 的 ID；其他包含 `opus` 的名称发往
+  `opusModel`，其余发往 `gptModel`，因此 Claude Code 选择器的别名（`opus`、`sonnet`、
+  `haiku`）始终有可预期的路由。`src/routes/claude.ts` 中的 `handleClaudeMessageRequest` 在目录发现之前
+  选定槽位一次，发现之后再用 `slotModelId(slot)` 读取同一槽位的 ID：刷新后的目录可能改变槽位的
+  写法，但不会改变路由。`src/claude/translate.ts` 的 `translateModelName` 调用的
+  `routeModelId` 就是这两步的组合。Codex 路由单独解析模型（`resolveCodexModel`，见下文）。
+- `getSlotModelIds()` 给出提供给客户端的 ID：先是 `gptModel`，再是 `opusModel`（两者相同时
+  只出现一次），每个都经过 `normalizeClaudeModelId`。`GET /v1/models` 和启动时的
+  `Models: <gpt> (gptModel), <opus> (opusModel)` 行使用它。`getUpstreamModelIds()` 给出两个
+  槽位的上游 ID，供预检和 tokenizer 预加载使用。
+- 槽位按"路由代次 + 目录"准备一次，而不是每个请求一次。`src/lib/state.ts` 中的
+  `snapshotRuntimeState` 为每个请求复制路由，所以副本不能作为缓存键；`routingGeneration`
+  在路由对象旁边的 `WeakMap` 中保存一个身份，已发布的路由和它的所有副本共享这个身份，重载时
+  发布新的身份。`preparedSlots` 先按代次、再按目录的 `models` Map 映射到准备好的槽位：两个
+  上游 ID、它们的小写形式，以及槽位配置写法、上游写法和 `[1m]` 形式的固定映射（pin）。两层键
+  都是弱引用，因此退役代次的 pin 随它的最后一个请求一起释放。`slotPreparations()` 和
+  `modelNormalizations()` 是固定这一行为的测试钩子。
+- `canonicalModelId(id, catalog)` 去掉所有 `[1m]`，取不区分大小写匹配的目录键，否则取小写 ID。
+  槽位的写法从 pin 中读取；其他名称每次都通过每个目录的索引计算（`catalogIndexes`，一个从目录
+  Map 到其小写键的 `WeakMap`，首次使用时建立；两个键只有大小写不同时，取目录顺序中的第一个）。
+  没有任何缓存以客户端提供的名称为键，所以这样的名称不会比它的请求活得更久。索引和 pin 都依赖
+  已发布的目录不会被原地修改：`src/copilot/models.ts` 中的 `CopilotModelCatalog.models` 类型为
+  `ReadonlyMap`，原地修改无法通过类型检查；发现新模型时发布的是一个新目录。
 - `normalizeClaudeModelId(model, contextWindowTokens?)` 给出 Claude Code 看到的 ID：任何 ID
   （无论是否为 Claude）自己的目录窗口至少为 1,000,000 时加 `[1m]`（即该模型的 1M 版本，目录中
-  没有单独的 `-1m` ID）；已知窗口更小时为不带后缀的 ID；窗口未知时保留传入的 ID。`getExposedModelIds` 为 `GET /v1/models` 和启动时的
-  `Exposed models:` 行使用它；`src/lib/claude-settings.ts` 中的 `applyClaudeConfig` 用每个已保存
-  模型自己的窗口（`contextWindowOf`）对它使用。因此没有目录时（例如独立 setup 取不到目录），
-  ID 保持配置中的写法。
-- 预检和 tokenizer 预加载只覆盖 `gptModel` 和 `opusModel`（`getUpstreamModelIds`）；额外
-  模型的 tokenizer 在首次使用时加载。
+  没有单独的 `-1m` ID）；已知窗口更小时为不带后缀的 ID；窗口未知时保留传入的 ID。
+  `src/lib/claude-settings.ts` 中的 `applyClaudeConfig` 用每个已保存模型自己的窗口
+  （`contextWindowOf`）对它使用。因此没有目录时（例如独立 setup 取不到目录），ID 保持配置中的
+  写法。
+- `loadCopilotModelCatalog` 只在 `/models` 请求上发送 `x-github-api-version: 2026-06-01`
+  （`catalogApiVersion`），因为这个版本会报告 `billing.token_prices`；推理请求仍使用客户端的
+  默认版本。`parseBilling` 把以"每 `batch_size` 个 token 的百分之一美元"为单位的价格换算成
+  每百万 token 的美元价格。`batch_size` 为 0 且所有价格都为 0 的模型是免费的；其他格式错误、
+  缺失或非有限的价格退回到高级请求的 `multiplier`，两者都没有时成本未知，绝不显示为免费。
+  `copilot-relay models` 在 COST 列中显示结果。
 
 `src/copilot/models.ts` 中的 `clampReasoningEffort(requested, advertised)` 对公布的等级和中继
 不认识的等级按原样发送，其他等级改为不高于它的最高公布等级，没有更低等级时改为最低的公布
