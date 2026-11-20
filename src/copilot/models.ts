@@ -23,10 +23,16 @@ export interface CopilotModel {
   reasoningEfforts?: string[]
   // The catalog's display name. Only `copilot-relay models` prints it; routing never reads it.
   name?: string
-  // Read only by the auto model selection.
-  vendor?: string
-  pickerEnabled?: boolean
-  pickerCategory?: string
+  // What a call costs, in USD per million tokens, when the catalog reports token prices.
+  price?: ModelPrice
+  // Premium requests per call, when the catalog reports only a multiplier.
+  multiplier?: number
+}
+
+export interface ModelPrice {
+  input: number
+  output: number
+  cache?: number
 }
 
 export interface CopilotModelCatalog {
@@ -63,6 +69,33 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0
+
+const isPrice = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
+
+// Copilot reports token prices in hundredths of a USD per batch_size tokens, and a multiplier as
+// premium requests per call. A value that is missing or not a finite non-negative number is left out,
+// so an unknown cost is never shown as free.
+const parseBilling = (billing: unknown): { price?: ModelPrice; multiplier?: number } => {
+  if (!isRecord(billing)) {
+    return {}
+  }
+
+  const tokenPrices = isRecord(billing.token_prices) ? billing.token_prices : undefined
+  const prices = isRecord(tokenPrices?.default) ? tokenPrices.default : undefined
+  const batchSize = tokenPrices?.batch_size
+  if (prices && isPositiveInteger(batchSize) && isPrice(prices.input_price) && isPrice(prices.output_price)) {
+    const perMillion = (hundredths: number) => hundredths / 100 * (1_000_000 / batchSize)
+    return {
+      price: {
+        input: perMillion(prices.input_price),
+        output: perMillion(prices.output_price),
+        ...(isPrice(prices.cache_price) && { cache: perMillion(prices.cache_price) }),
+      },
+    }
+  }
+
+  return isPrice(billing.multiplier) ? { multiplier: billing.multiplier } : {}
+}
 
 export function parseModelTokenLimits(value: unknown): ModelTokenLimits | undefined {
   if (!isRecord(value)) {
@@ -258,9 +291,7 @@ export async function loadCopilotModelCatalog(
         ...(typeof capabilities?.type === "string" && { type: capabilities.type }),
         ...(reasoningEfforts !== undefined && { reasoningEfforts }),
         ...(typeof model.name === "string" && model.name !== "" && { name: model.name }),
-        ...(typeof model.vendor === "string" && { vendor: model.vendor }),
-        ...(typeof model.model_picker_enabled === "boolean" && { pickerEnabled: model.model_picker_enabled }),
-        ...(typeof model.model_picker_category === "string" && { pickerCategory: model.model_picker_category }),
+        ...parseBilling(model.billing),
       })
     }
 
