@@ -209,7 +209,8 @@ Copilot 的模型目录以获取模型名称、上下文大小和推理等级，
 ## `models`
 
 ```sh
-copilot-relay models                                   # 列出
+copilot-relay models                                   # 列出聊天模型
+copilot-relay models --all                             # 列出全部模型
 copilot-relay models opus                              # 按 ID 或显示名称搜索
 copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 ```
@@ -224,8 +225,26 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 | `--max-tokens` | 每次探测的输出预算（默认 4096；受目录限制约束）。 |
 | `--timeout` | 每次探测的超时秒数，须为正数（默认 30；受配置的超时约束）。 |
 | `--total-timeout` | 所有探测的总超时秒数，须为正数（默认 300）。 |
+| `--all` | 列出每个公布的模型，包括不是聊天模型的那些。 |
 
-列出 Copilot 模型目录公布的模型 ID，并标出中继无法使用的那些；列表不验证模型能否工作。不加引号的
+以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称和上下文窗口。窗口不小于 1M 的标为
+`[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。不是聊天模型的（例如 embeddings）不列出，只在表格下
+计数；`--all` 也会列出它们，并注明它们不能用作 `gptModel` 或 `opusModel`。列表不验证模型能否工作。
+令牌缓存提示输出到 stderr，因此 stdout 只有结果。
+
+```text
+Copilot chat models · 4 of 6
+
+  MODEL              NAME                 CONTEXT
+  claude-opus-5.5    Claude Opus 5.5      1M [1m]
+  claude-sonnet-5.5  Claude Sonnet 5.5       200K
+  gpt-6.2-astra      GPT-6.2 Astra      1.1M [1m]
+  grok-4.7           Grok 4.7                256K
+
+2 models that are not chat models are hidden: copilot-relay models --all
+```
+
+过长的显示名称以 `…` 截断；ID 从不截断，便于复制。不加引号的
 多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。`--deep` 检查
 `--model` 给出的 ID，或目录中的每个条目。它只向能够探测、且在总超时之前轮到的条目发送真实请求；
 其他条目只得到一个状态，不发送请求。这些请求经过在命令自身进程内构建的中继管线，而不是正在运行的

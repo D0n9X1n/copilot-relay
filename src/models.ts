@@ -6,8 +6,10 @@ import { readAppConfig, type AppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
+import { consola } from "consola"
+
 import { flushLogs, log, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
-import { terminalText } from "~/lib/terminal"
+import { colorEnabled, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
 import {
@@ -56,6 +58,10 @@ const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog): Listed
       id: printable(id),
       ...(name !== undefined && { name }),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
+      chat: selection.endpoint !== undefined || selection.reason !== "unsupported-model-type",
+      ...(catalog.models.get(id)?.limits?.max_context_window_tokens !== undefined && {
+        contextWindow: catalog.models.get(id)?.limits?.max_context_window_tokens,
+      }),
     }
   })
 
@@ -77,13 +83,13 @@ const configuredModels = (
     }
   })
 
-const listingHeading = (search: string, result: ModelSearch): string => {
+const listingHeading = (search: string, result: ModelSearch, total: number, all: boolean): string => {
   if (search === "") {
-    if (result.models.length === 0) {
+    if (total === 0) {
       return "No models advertised by upstream."
     }
 
-    return `Upstream-advertised models (${result.models.length}):`
+    return all ? heading("Copilot models", String(total)) : heading("Copilot chat models", `${result.models.length} of ${total}`)
   }
 
   const label = printable(search)
@@ -137,6 +143,10 @@ export const models = defineCommand({
     "total-timeout": {
       type: "string",
       description: "Positive timeout in seconds for all probes (default 300).",
+    },
+    all: {
+      type: "boolean",
+      description: "List every advertised model, including those that are not chat models.",
     },
   },
   async run({ args }) {
@@ -224,7 +234,13 @@ export const models = defineCommand({
         return { appConfig, config, catalog }
       }
 
-      const { appConfig, config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
+      // Token-cache notices are diagnostics: they go to stderr, so stdout holds only the answer.
+      const stdout = consola.options.stdout
+      consola.options.stdout = process.stderr
+      const { appConfig, config, catalog } = await (args.deep ? withoutConsoleLogging(prepare) : prepare())
+        .finally(() => {
+          consola.options.stdout = stdout
+        })
 
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
@@ -249,8 +265,22 @@ export const models = defineCommand({
       }
 
       const listed = listedModels(config, catalog)
-      const result: ModelSearch = search === "" ? { found: true, models: listed } : searchModels(listed, search)
-      const lines = [listingHeading(search, result), ...renderModelRows(result.models)]
+      // The plain listing shows chat models; --all and a search show every match.
+      const shown = search === "" && !args.all ? listed.filter((model) => model.chat !== false) : listed
+      const result: ModelSearch = search === "" ? { found: true, models: shown } : searchModels(listed, search)
+      const color = colorEnabled()
+      const lines = [listingHeading(search, result, listed.length, Boolean(args.all))]
+
+      if (result.models.length > 0) {
+        lines.push("", ...renderModelRows(result.models, color), "")
+      }
+
+      const hidden = listed.length - shown.length
+      if (search === "" && hidden > 0) {
+        lines.push(hidden === 1
+          ? "1 model that is not a chat model is hidden: copilot-relay models --all"
+          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`)
+      }
 
       if (result.models.length > 0) {
         lines.push(
@@ -259,10 +289,11 @@ export const models = defineCommand({
         )
       }
 
-      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen))
-      // Each printed line is normalized and scrubbed again, as a backstop for any string that
-      // skipped printable.
-      console.log(lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(terminalText(line)))).join("\n"))
+      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
+      // Table cells were made printable and scrubbed by the table before any cut, and every other
+      // line holding user, catalog or config text was built from printable strings. Each line is
+      // scrubbed once more as a backstop; hidden characters are removed but the table's color stays.
+      console.log(lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(line)))).join("\n"))
 
       if (!result.found) {
         process.exitCode = 1

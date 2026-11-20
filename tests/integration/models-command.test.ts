@@ -160,7 +160,7 @@ async function fixture(
         ${options.controlledProbeTimeout ? 'AbortSignal.timeout = timeout;' : ''}
       }
     `
-    const result = await new Promise<{ code: number; rawStdout: string; stdout: string; output: string }>((resolve, reject) => {
+    const result = await new Promise<{ code: number; rawStdout: string; stdout: string; stderr: string; output: string }>((resolve, reject) => {
       const child = execFile(process.execPath, [
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
@@ -173,7 +173,7 @@ async function fixture(
           return
         }
 
-        resolve({ code, rawStdout: stdout, stdout: stripVTControlCharacters(stdout), output: stripVTControlCharacters(stdout + stderr) })
+        resolve({ code, rawStdout: stdout, stdout: stripVTControlCharacters(stdout), stderr: stripVTControlCharacters(stderr), output: stripVTControlCharacters(stdout + stderr) })
       })
       if (options.interrupt || options.controlledProbeTimeout) {
         notifyFirstProbe = () => child.stdin!.end("probe-started\n")
@@ -251,7 +251,7 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   const result = await harness.run()
 
   assert.equal(result.code, 0)
-  assert.match(result.stdout, /Upstream-advertised models \(4\):\na-embedding\nb-no-limits\ngpt-example\nz-chat\n/)
+  assert.match(result.stdout, /^Copilot chat models · 4 of 4\n\n {2}MODEL +NAME +CONTEXT\n {2}a-embedding +–\n {2}b-no-limits +–\n {2}gpt-example +–\n {2}z-chat +–\n/m)
   assert.match(result.stdout, /not verified/i)
 
   // Configured IDs appear only in the config guide after the list, flagged when not advertised.
@@ -266,7 +266,7 @@ test("models lists the fresh full catalog with sorted exact IDs, independent of 
   const fresh = await harness.run()
 
   assert.equal(fresh.code, 0)
-  assert.match(fresh.stdout, /Upstream-advertised models \(1\):\nnewly-advertised\n/)
+  assert.match(fresh.stdout, /^Copilot chat models · 1 of 1\n\n {2}MODEL +NAME +CONTEXT\n {2}newly-advertised +–\n/m)
   assert.doesNotMatch(fresh.stdout, /a-embedding|z-chat/)
   assert.equal(harness.requests.length, 2)
 })
@@ -281,10 +281,10 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   const result = await harness.run()
 
   assert.equal(result.code, 0)
-  const listing = result.rawStdout.slice(result.rawStdout.indexOf("Upstream-advertised models"))
+  const listing = result.rawStdout.slice(result.rawStdout.indexOf("Copilot chat models"))
   assert.doesNotMatch(listing, /\u001b|\r/)
-  assert.match(listing, /a-exampleforged-row\n/)
-  assert.match(listing, /\nb-named {2}EvilName\n/)
+  assert.match(listing, /^ {2}a-exampleforged-row +–$/m)
+  assert.match(listing, /^ {2}b-named +EvilName +–$/m)
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
 })
 
@@ -316,7 +316,8 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
   const advertised = await harness.run()
 
   assert.equal(advertised.code, 0, advertised.output)
-  assert.match(advertised.stdout, /Upstream-advertised models \(3\):\nlong-named-model {2}x{60}\[redacted\]\nnamed-model {7}Leaked \[redacted\] name\n\[redacted\]\n/)
+  // The key is replaced before the long name is cut, so no part of it survives the cut.
+  assert.match(advertised.stdout, /^ {2}long-named-model {2}x{17}… +–\n {2}named-model +Leaked \[redacted\]… +–\n {2}\[redacted\] +–$/m)
   assert.doesNotMatch(advertised.output, /relay-fixture/)
 
   // A search for the key itself.
@@ -342,7 +343,7 @@ for (const [name, mark] of [["U+200B", "\u200b"], ["U+0085", "\u0085"]] as const
     const listed = await harness.run()
 
     assert.equal(listed.code, 0, listed.output)
-    assert.match(listed.stdout, /\nnamed-model {2}Leaked \[redacted\] name\n/)
+    assert.match(listed.stdout, /^ {2}named-model {2}Leaked \[redacted\]… +–$/m)
     assert.match(listed.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
 
     // In a search.
@@ -363,7 +364,7 @@ test("models shows display names, marks IDs that cannot be configured, and expla
   const result = await harness.run()
 
   assert.equal(result.code, 0, result.output)
-  assert.match(result.stdout, /Upstream-advertised models \(3\):\ngpt-6-astra {13}GPT-6 Astra\ntext-embedding-ada-002 {2}Embedding V2 Ada · cannot be gptModel or opusModel: not a chat model\nunnamed-chat\n/)
+  assert.match(result.stdout, /^Copilot chat models · 2 of 3\n\n {2}MODEL +NAME +CONTEXT\n {2}gpt-6-astra +GPT-6 Astra +–\n {2}unnamed-chat +–\n\n1 model that is not a chat model is hidden: copilot-relay models --all$/m)
   assert.ok(result.stdout.includes(`Config file: ${path.join(harness.home, ".copilot-relay", "config.yaml")}`))
   assert.match(result.stdout, /^ {2}gptModel: missing-gpt-model {4}# requests without "opus" in the model name$/m)
   assert.match(result.stdout, /^ {2}opusModel: missing-opus-model {2}# requests with "opus" in the model name$/m)
@@ -372,6 +373,58 @@ test("models shows display names, marks IDs that cannot be configured, and expla
   assert.match(result.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
   assert.match(result.stdout, /A running relay applies the change to new requests; restarting reruns the startup check\./)
   assert.equal(harness.requests.length, 1)
+})
+
+test("models hides non-chat models from the plain listing, shows them with --all, and keeps stdout for the answer", async (t) => {
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [
+    { id: "gpt-6-astra", name: "GPT-6 Astra", supported_endpoints: ["/responses"], capabilities: { type: "chat", limits: { max_context_window_tokens: 1050000, max_prompt_tokens: 1050000, max_output_tokens: 128000 } } },
+    { id: "text-embedding-ada-002", name: "Embedding V2 Ada", capabilities: { type: "embeddings" } },
+  ] }))
+
+  const plain = await harness.run()
+
+  assert.equal(plain.code, 0, plain.output)
+  assert.match(plain.stdout, /^Copilot chat models · 1 of 2$/m)
+  assert.match(plain.stdout, /^ {2}MODEL +NAME +CONTEXT$/m)
+  assert.match(plain.stdout, /^ {2}gpt-6-astra {2}GPT-6 Astra {2}1\.1M \[1m\]$/m)
+  assert.doesNotMatch(plain.stdout, /text-embedding-ada-002/)
+  assert.match(plain.stdout, /^1 model that is not a chat model is hidden: copilot-relay models --all$/m)
+  // Token-cache notices are diagnostics, so stdout holds only the answer.
+  assert.doesNotMatch(plain.stdout, /Using cached|Next Copilot token refresh/)
+  assert.match(plain.stderr, /Using cached Copilot token/)
+
+  const all = await harness.run(["models", "--all"])
+
+  assert.equal(all.code, 0, all.output)
+  assert.match(all.stdout, /^Copilot models · 2$/m)
+  assert.match(all.stdout, /^ {2}text-embedding-ada-002 +Embedding V2 Ada +– {2}! cannot be gptModel or opusModel: not a chat model$/m)
+  assert.doesNotMatch(all.stdout, /hidden/)
+
+  // An explicit search still finds a non-chat model and explains why it cannot be configured.
+  const searched = await harness.run(["models", "ada"])
+
+  assert.equal(searched.code, 0, searched.output)
+  assert.match(searched.stdout, /^Upstream models matching "ada" \(1\):$/m)
+  assert.match(searched.stdout, /text-embedding-ada-002 .*cannot be gptModel or opusModel: not a chat model/)
+
+  // Forced color reaches stdout, NO_COLOR removes it.
+  const colored = await harness.run(["models", "--all"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
+  assert.match(colored.rawStdout, /\u001b\[33m/)
+  assert.doesNotMatch(all.rawStdout, /\u001b/)
+})
+
+test("a search term and its hint never print a registered sensitive URL", async (t) => {
+  let origin = ""
+  const harness = await fixture(t, (request, response) => {
+    origin = `http://${request.headers.host}`
+    respond(response, { data: [{ id: "gpt-6-astra" }] })
+  })
+  await harness.run()
+
+  // The search term holds a URL on the configured Copilot origin: the heading echoes it scrubbed.
+  const result = await harness.run(["models", `${origin}${secretPath}/x`])
+
+  assert.match(result.stdout, /No upstream model matches "http:\/\/127\.0\.0\.1:\d+\[redacted\]"/)
 })
 
 test("models search prints the config line for one match and suggests the closest IDs for none", async (t) => {
@@ -386,7 +439,7 @@ test("models search prints the config line for one match and suggests the closes
   const single = await harness.run(["models", "sol", "fast"])
 
   assert.equal(single.code, 0, single.output)
-  assert.match(single.stdout, /Upstream models matching "sol fast" \(1\):\ngpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\)\n/)
+  assert.match(single.stdout, /^Upstream models matching "sol fast" \(1\):\n\n {2}MODEL +NAME +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast … +–$/m)
   assert.match(single.stdout, /To use gpt-5\.6-sol-fast, set this line in the config file:\n {2}gptModel: gpt-5\.6-sol-fast\n/)
   assert.match(single.stdout, /copilot-relay models --deep --model gpt-5\.6-sol-fast/)
 
@@ -399,7 +452,7 @@ test("models search prints the config line for one match and suggests the closes
   const none = await harness.run(["models", "gpt6-fast"])
 
   assert.equal(none.code, 1)
-  assert.match(none.stdout, /No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\ngpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\)\ngpt-6-astra {7}GPT-6 Astra\ngpt-6\.1-sol {7}GPT-6\.1 Sol\n/)
+  assert.match(none.stdout, /^No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\n\n {2}MODEL +NAME +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast … +–\n {2}gpt-6-astra +GPT-6 Astra +–\n {2}gpt-6\.1-sol +GPT-6\.1 Sol +–$/m)
   assert.match(none.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
   assert.equal(harness.requests.length, 3)
 })
@@ -442,7 +495,7 @@ for (const payload of [{ models: [] }, { data: null }, { data: "payload-private-
 
     assert.equal(result.code, 1)
     assert.match(result.output, /Could not fetch upstream model catalog/)
-    assert.doesNotMatch(result.stdout, /Upstream-advertised models|No models advertised/)
+    assert.doesNotMatch(result.stdout, /Copilot chat models|No models advertised/)
   })
 }
 

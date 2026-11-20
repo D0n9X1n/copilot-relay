@@ -262,7 +262,8 @@ target or a `config.yaml` it cannot read, `2` when any target fails, and `0` oth
 ## `models`
 
 ```sh
-copilot-relay models                                   # list
+copilot-relay models                                   # list chat models
+copilot-relay models --all                             # list every model
 copilot-relay models opus                              # search by ID or display name
 copilot-relay models --deep --model claude-opus-5.5    # test one model
 ```
@@ -277,9 +278,29 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 | `--max-tokens` | Output budget per probe (default 4096; bounded by catalog limits). |
 | `--timeout` | Positive per-probe timeout in seconds (default 30; bounded by configured timeout). |
 | `--total-timeout` | Positive timeout in seconds for all probes (default 300). |
+| `--all` | List every advertised model, including those that are not chat models. |
 
-Lists the model IDs Copilot's catalog advertises, marking the ones the relay cannot
-use; the listing does not verify that a model works. Unquoted words form one search,
+Lists the chat models Copilot's catalog advertises as a table of exact IDs, display
+names and context windows. A window of at least 1M is marked `[1m]`, the ID suffix
+Claude Code reads as a 1M model. Models that are not chat models, such as
+embeddings, are left out and counted under the table; `--all` lists them too, with
+a note that they cannot be `gptModel` or `opusModel`. The listing does not verify
+that a model works. The token-cache notices go to stderr, so stdout holds only the
+answer.
+
+```text
+Copilot chat models · 4 of 6
+
+  MODEL              NAME                 CONTEXT
+  claude-opus-5.5    Claude Opus 5.5      1M [1m]
+  claude-sonnet-5.5  Claude Sonnet 5.5       200K
+  gpt-6.2-astra      GPT-6.2 Astra      1.1M [1m]
+  grok-4.7           Grok 4.7                256K
+
+2 models that are not chat models are hidden: copilot-relay models --all
+```
+
+A long display name is cut with `…`; an ID never is, so it can be copied. Unquoted words form one search,
 and a search prints the matching models and the `config.yaml` line that selects one.
 `--deep` checks the `--model` ID, or every entry in the catalog. It sends a real
 request only to an entry it can probe before the total timeout; the other entries
