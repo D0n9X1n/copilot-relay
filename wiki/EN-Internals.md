@@ -380,8 +380,25 @@ and on every reload.
   casing), deduplicated case-insensitively. A listed ID the catalog lacks is skipped;
   without a catalog `auto` adds nothing and a listed ID is kept. `findMissingModels`
   names the skipped IDs. The daemon (`getExposedUpstreamModelIds`) and standalone
-  `setup` call the same function, and it runs on every call rather than being stored,
-  so a catalog refresh or reload is seen at once.
+  `setup` call the same function.
+- The daemon keeps its last exposed lists in `exposedCache`: the upstream IDs
+  (`getExposedUpstreamModelIds`), the IDs Claude Code sees (`getExposedModelIds`),
+  and a lowercase-to-ID map that `routeModelId` matches against. The key is the
+  current catalog's `models` Map by identity, or no catalog, plus the values of
+  `gptModel`, `opusModel` and `models` (`"auto"` or the list, compared element by
+  element). The routing object itself is not the key, because
+  `snapshotRuntimeState` copies it for every request. `currentCatalog()` still
+  compares the catalog's `baseUrl` with `upstreamBaseUrl` on every call, so a reload
+  to another upstream, a catalog refresh, a changed selection, or a model probe's
+  temporary `{ gptModel: id, opusModel: id }` misses the cache and recomputes, and
+  restoring the saved routing gives the earlier lists again. Both getters return a
+  copy, so a caller cannot change the cached lists.
+- `canonicalModelId` looks an ID up in a per-catalog index (`catalogIndexes`, a
+  `WeakMap` from the catalog's Map to its keys by lowercase form), built on first use.
+  When two keys differ only in case, the first in catalog order wins. Both caches rely
+  on a published catalog never changing in place: `CopilotModelCatalog.models` in
+  `src/copilot/models.ts` is a `ReadonlyMap`, so such a change fails typecheck, and
+  discovery publishes a new catalog instead.
 - `routeModelId`, which `translateModelName` in `src/claude/translate.ts` calls, sends
   a name matching an exposed ID, in any case and with any `[1m]`, to that ID; any other
   name containing `opus` to `opusModel`; and the rest to `gptModel`. A catalog ID that
@@ -1346,6 +1363,12 @@ and `recordedRefresh` retain ordered attempts, discarded retry responses and
 refresh outcomes. The manifest records the request's policy/catalog snapshot,
 chunk lengths, observed byte counts, body state and handler settlement; final
 metadata replaces `meta.json` atomically after queued body writes settle.
+Only a capturing trace holds a copy of the catalog: `RequestTrace.create` fills
+`manifest.runtime.models` from the catalog the request started with
+(`runtime.modelCatalog`, else `config.modelCatalog`) after it decides to capture and
+before its first filesystem write. A request that is not captured leaves `models`
+unset and never copies the catalog; `catalogCurrent` and `catalogAgeMs` are recorded
+either way.
 Private file handles retain append targets; directory/file identity and single-link
 checks reject observed path substitution. This is not protection against every
 possible same-user filesystem race. A transport/body failure is not the same as
