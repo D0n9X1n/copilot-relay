@@ -229,6 +229,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
         configPath: claudeConfigPath,
         gptModel: appConfig.gptModel,
         gptLimits,
+        contextWindowOf: (model) => getCachedCopilotModel(config, model)?.limits?.max_context_window_tokens,
         maxOutputTokens: gptLimits && opusLimits ?
             Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
           : undefined,

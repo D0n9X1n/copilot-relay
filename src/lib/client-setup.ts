@@ -51,6 +51,7 @@ export const setupClaudeCodeCli = async (context: SetupContext): Promise<SetupOu
     configPath,
     gptModel: appConfig.gptModel,
     gptLimits,
+    contextWindowOf: (model) => capabilities(context, model)?.limits?.max_context_window_tokens,
     maxOutputTokens: gptLimits && opusLimits ?
         Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
       : undefined,
