@@ -48,6 +48,8 @@ test("native request preserves signed blocks, cache markers and in-place operato
       assert.equal(request.path, "/v1/messages")
       sent = JSON.parse(request.body!)
       assert.equal(new Headers(request.headers).get("anthropic-version"), "2023-06-01")
+      // Only the model catalog asks for a newer API version; native Messages keeps the default.
+      assert.equal(new Headers(request.headers).get("x-github-api-version"), "2025-04-01")
       return Response.json({
         id: "msg_native",
         type: "message",
