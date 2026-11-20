@@ -502,7 +502,10 @@ test("models search prints the config line for one match and suggests the closes
   const nothing = await harness.run(["models", "unrelated-word"])
 
   assert.equal(nothing.code, 1)
-  assert.match(nothing.stdout, /^No upstream model matches "unrelated-word"\. List them all with copilot-relay models --all\.$/m)
+  assert.match(nothing.stdout, /^No upstream model matches "unrelated-word"\.\nList them all with copilot-relay models --all\.$/m)
+  for (const line of nothing.stdout.split("\n")) {
+    assert.ok(line.length <= 80, `${line.length} columns: ${line}`)
+  }
   assert.equal(harness.requests.length, 4)
 })
 
