@@ -497,3 +497,29 @@ test("capture metadata never records the relay apiKey, whichever header carried 
     assert.ok(!JSON.stringify(meta).includes(relayKey), JSON.stringify(headers))
   }
 })
+
+const traceCatalog = {
+  baseUrl: config.copilotBaseUrl,
+  models: new Map([
+    ["claude-test", { limits: { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 }, vendor: "Anthropic" }],
+    ["gpt-test", { type: "chat", supportedEndpoints: ["/responses"] }],
+  ]),
+}
+
+test("a trace that does not capture holds no copy of the model catalog", async () => {
+  const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000111", new Request("http://localhost/v1/messages"), config, { modelCatalog: traceCatalog }, false)
+  trace.handlerSettled()
+  await trace.captureResponse(Response.json({ stop_reason: "end_turn" })).text()
+  await trace.finished
+
+  assert.equal(trace.manifest.runtime.models, undefined)
+  assert.equal(trace.manifest.runtime.catalogCurrent, true)
+})
+
+test("a capturing trace writes the model catalog it started with to its metadata", async () => {
+  const trace = await RequestTrace.create("10000000-0000-4000-8000-000000000112", new Request("http://localhost/v1/messages"), config, { modelCatalog: traceCatalog }, true)
+  const meta = await finishTrace(trace)
+
+  assert.deepEqual(meta.runtime.models, [...traceCatalog.models.entries()])
+  assert.equal(meta.runtime.catalogCurrent, true)
+})

@@ -643,7 +643,6 @@ export class RequestTrace {
       },
       runtime: {
         ...policy,
-        models: catalog ? [...catalog.models.entries()] : undefined,
         catalogCurrent: catalog?.baseUrl === config.copilotBaseUrl,
         ...(catalog?.fetchedAt !== undefined && {
           catalogAgeMs: Math.max(0, (config.admittedAt ?? Date.now()) - catalog.fetchedAt),
@@ -691,6 +690,11 @@ export class RequestTrace {
     if (!capture) {
       return trace
     }
+
+    // Only a capture reads the catalog copy, so a request that records nothing skips it. It is
+    // taken before the first await, while the catalog is still the one the constructor saw.
+    const catalog = runtime.modelCatalog ?? config.modelCatalog
+    trace.manifest.runtime.models = catalog ? [...catalog.models.entries()] : undefined
 
     try {
       if (!uuidPattern.test(id)) {
