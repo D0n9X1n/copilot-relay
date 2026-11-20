@@ -127,8 +127,30 @@ copilot-relay status --deep --json
 `/healthz`，通过后再请求 `/v1/models`；加 `--deep` 时还会发送一个简短的 `POST /v1/messages`，
 经中继到达 Copilot。`/healthz` 和 `/v1/models` 从不联系 Copilot。
 
-第一行显示运行 `status` 的 CLI 的版本。对正在运行的中继，`version` 一行显示该中继报告的版本；
-中继不报告版本时显示 `unknown`；与已安装版本不一致时，显示不一致，并给出重启它的命令。
+标题显示运行 `status` 的 CLI 的版本，中继在运行时还显示它的地址。其下每一行回答一个问题，并以不依赖
+颜色的标记开头：`✓` 是，`✗` 失败，`!` 需要注意，`–` 未检查或未运行（终端无法显示时为 `ok`、`x`、
+`!` 和 `-`）。对正在运行的中继，`version` 一行显示该中继报告的版本；中继不报告版本时显示 `unknown`；
+与已安装版本不一致时，显示不一致，并给出重启它的命令。日志和配置路径列在 `Files` 下，解析后的每个配置
+键列在 `Config` 下。
+
+```text
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 65686, up 2d 21h)
+  ✓ health    ok (3ms)
+  – upstream  not checked (use --deep)
+  ✓ version   0.8.0
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
+    host                    127.0.0.1
+    port                    4142
+    …
+```
 
 | 退出码 | 含义 |
 | --- | --- |
@@ -205,6 +227,19 @@ copilot-relay setup codex-cli --force   # Codex 尚未在本机运行过也配�
 Copilot 的模型目录以获取模型名称、上下文大小和推理等级，没有保存 token 时先登录 GitHub（设备码打印到 stderr）；失败时
 它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。不是合法 JSON 或含有类型错误设置的 Claude Code 设置文件，以及不是 JSON 对象的 Claude app 文件，会保持不变，并报告为失败。未知目标或无法读取 `config.yaml` 时以 `1` 退出，任一目标失败
 以 `2` 退出，否则以 `0` 退出。
+
+结果是一张表格，每个客户端一行并带标记：setup 做了什么，以及写入的文件，或跳过、失败的原因。过长的原因
+以 `…` 截断。
+
+```text
+Client setup · http://127.0.0.1:4142
+
+  CLIENT           RESULT        DETAIL
+  claude-code-cli  ✓ updated     ~/.claude/settings.json
+  claude-code-app  – skipped     the app has not run here
+  codex-cli        ✓ up to date  ~/.codex/config.toml
+  codex-app        ✓ up to date  shares the Codex config above
+```
 
 ## `models`
 

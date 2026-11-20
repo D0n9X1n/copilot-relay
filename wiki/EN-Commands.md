@@ -157,10 +157,33 @@ relay it requests `/healthz` and, when that passes, `/v1/models`; with `--deep` 
 also sends a short `POST /v1/messages`, which goes through the relay to Copilot.
 `/healthz` and `/v1/models` never contact Copilot.
 
-The first line shows the version of the CLI that ran `status`. For a running relay,
+The heading names the CLI that ran `status` and, when a relay runs, its address.
+Each row under it answers one question and starts with a mark that does not need
+color: `✓` yes, `✗` failed, `!` needs attention, `–` not checked or not running
+(`ok`, `x`, `!` and `-` where the terminal cannot show them). For a running relay
 the `version` row shows the version the relay reports, `unknown` for a relay that
 does not report one, or a mismatch with the installed version together with the
-command to restart it.
+command to restart it. The log and config paths follow under `Files`, and every
+resolved key under `Config`.
+
+```text
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 65686, up 2d 21h)
+  ✓ health    ok (3ms)
+  – upstream  not checked (use --deep)
+  ✓ version   0.8.0
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
+    host                    127.0.0.1
+    port                    4142
+    …
+```
 
 | Exit | Meaning |
 | --- | --- |
@@ -258,6 +281,19 @@ starts no relay, and it never prints the apiKey. A Claude Code settings file tha
 type, or a Claude app file that is not a JSON object, is left unchanged and
 reported as a failure. It exits `1` for an unknown
 target or a `config.yaml` it cannot read, `2` when any target fails, and `0` otherwise.
+
+The result is a table with one marked row per client: what setup did, and the file
+it wrote or the reason it skipped or failed. A long reason is cut with `…`.
+
+```text
+Client setup · http://127.0.0.1:4142
+
+  CLIENT           RESULT        DETAIL
+  claude-code-cli  ✓ updated     ~/.claude/settings.json
+  claude-code-app  – skipped     the app has not run here
+  codex-cli        ✓ up to date  ~/.codex/config.toml
+  codex-app        ✓ up to date  shares the Codex config above
+```
 
 ## `models`
 
