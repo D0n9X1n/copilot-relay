@@ -422,7 +422,7 @@ test("models reads the catalog through upstreamProxy", async (t) => {
   const result = await runRelay(childHome, ["models"])
 
   assert.equal(result.code, 0, result.output)
-  assert.match(result.output, /^Copilot chat models · 1 of 1\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}proxied-model +– +–$/m)
+  assert.match(result.output, /^Copilot chat models · 1 of 1\n\n {2}MODEL +COST +CONTEXT\n {2}proxied-model +– +–$/m)
   assert.deepEqual(
     proxy.records.map((record) => `${record.method} ${record.target}`),
     ["CONNECT api.github.com:443", `CONNECT ${copilot.host}`],
