@@ -65,10 +65,10 @@ test("the listing is a table of exact IDs, names, costs, context windows and not
     { id: "text-embedding-ada-002", chat: false, unusable: "Not a chat model" },
   ], false, true), [
     "  MODEL                   NAME               COST    CONTEXT  NOTE",
-    "  bare-model                                 –             –",
-    "  gpt-6-astra             GPT-6 Astra        –     1.1M [1m]",
-    "  claude-sonnet-5.5       Claude Sonnet 5.5  –          200K",
-    "  text-embedding-ada-002                     –             –  ! not a chat model",
+    "  bare-model                                    –          –",
+    "  gpt-6-astra             GPT-6 Astra           –  1.1M [1m]",
+    "  claude-sonnet-5.5       Claude Sonnet 5.5     –       200K",
+    "  text-embedding-ada-002                        –          –  ! not a chat model",
     "",
     "! marks a model that cannot be gptModel or opusModel.",
   ])
@@ -82,12 +82,12 @@ test("the listing shows each model's cost and which slot uses it", () => {
     { id: "grok-4.7", name: "Grok 4.7", chat: true, multiplier: 0.33 },
     { id: "bare-model", chat: true },
   ], false, true), [
-    "  MODEL            NAME             COST      CONTEXT  SLOT",
+    "  MODEL            NAME               COST    CONTEXT  SLOT",
     "  claude-opus-5.5  Claude Opus 5.5  $4/$20    1M [1m]  ◀ opusModel",
     "  gpt-6.2-astra    GPT-6.2 Astra    $8/$40  1.1M [1m]  ◀ gptModel",
-    "  gpt-4.1          GPT-4.1          $0/$0        128K",
-    "  grok-4.7         Grok 4.7         0.33×           –",
-    "  bare-model                        –               –",
+    "  gpt-4.1          GPT-4.1           $0/$0       128K",
+    "  grok-4.7         Grok 4.7          0.33×          –",
+    "  bare-model                             –          –",
   ])
 })
 
@@ -122,7 +122,7 @@ test("NAME is left out when Opus names would lose what tells them apart", () => 
     assert.ok(!line.includes("…"), `cut cell: ${line}`)
   }
 
-  assert.equal(lines[0], "  MODEL               COST       CONTEXT  NOTE")
+  assert.equal(lines[0], "  MODEL                    COST  CONTEXT  NOTE")
   assert.equal(lines[2], "  claude-opus-5.5-1m  $10/$37.5  1M [1m]  ! protocol policy conflict")
 })
 
@@ -138,11 +138,79 @@ test("slots and marks share the last column, so a listing with both fits 80 colu
   }
 
   // Whole, the names would need 82 columns here, so NAME is left out rather than cut.
-  assert.equal(lines[0], "  MODEL                   COST      CONTEXT  NOTE")
+  assert.equal(lines[0], "  MODEL                     COST    CONTEXT  NOTE")
   assert.equal(lines[1], "  claude-opus-5.5         $4/$20    1M [1m]  ◀ opusModel")
-  assert.equal(lines[3], "  text-embedding-ada-002  –               –  ! not a chat model")
+  assert.equal(lines[3], "  text-embedding-ada-002       –          –  ! not a chat model")
   // A configured ID that cannot be used shows its slot and its mark.
   assert.match(renderModelRows([{ id: "ada", chat: false, unusable: "Not a chat model", slot: "gptModel" }], false, true)[1], /◀ gptModel {2}! not a chat model$/)
+})
+
+// Costs of every width, a multiplier, missing values, and a configured model that cannot be used.
+const mixedListing: ListedModel[] = [
+  { id: "claude-opus-5.5", name: "Claude Opus 5.5", chat: true, contextWindow: 200_000, price: { input: 5, output: 25 }, slot: "opusModel" },
+  { id: "claude-opus-5.5-1m", name: "Claude Opus 5.5 (1M)", chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict" },
+  { id: "gpt-5-mini", name: "GPT-5 mini", chat: true, multiplier: 0.33 },
+  { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 400_000, price: { input: 1.25, output: 10 } },
+  { id: "text-embedding-ada-002", name: "Embedding V2 Ada", chat: false, unusable: "Not a chat model", slot: "gptModel" },
+  { id: "bare-model", chat: true },
+]
+
+test("without Unicode the listing prints only ASCII, with COST right-aligned like the other numbers", () => {
+  const lines = renderModelRows(mixedListing, false, false)
+
+  assert.deepEqual(lines, [
+    "  MODEL                        COST  CONTEXT  NOTE",
+    "  claude-opus-5.5            $5/$25     200K  < opusModel",
+    "  claude-opus-5.5-1m      $10/$37.5  1M [1m]  ! protocol policy conflict",
+    "  gpt-5-mini                  0.33x        -",
+    "  gpt-6.2-astra           $1.25/$10     400K",
+    "  text-embedding-ada-002          -        -  < gptModel  ! not a chat model",
+    "  bare-model                      -        -",
+    "",
+    "! marks a model that cannot be gptModel or opusModel.",
+  ])
+
+  for (const line of lines) {
+    assert.match(line, /^[\x20-\x7e]*$/, line)
+  }
+})
+
+test("with Unicode the same listing marks slots, multipliers and missing values with symbols", () => {
+  const lines = renderModelRows(mixedListing, false, true)
+
+  assert.equal(lines[1], "  claude-opus-5.5            $5/$25     200K  ◀ opusModel")
+  assert.equal(lines[3], "  gpt-5-mini                  0.33×        –")
+  assert.equal(lines[5], "  text-embedding-ada-002          –        –  ◀ gptModel  ! not a chat model")
+})
+
+test("a configured model that cannot be used keeps its slot and mark within 80 columns, its ID whole", () => {
+  for (const unicode of [true, false]) {
+    const lines = renderModelRows([
+      { id: "claude-opus-5.5-1m", name: "Claude Opus 5.5 (1M)", chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict", slot: "opusModel" },
+      { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 400_000, price: { input: 1.25, output: 10 }, slot: "gptModel" },
+      { id: "text-embedding-ada-002", name: "Embedding V2 Ada", chat: false, unusable: "Not a chat model" },
+    ], false, unicode)
+
+    for (const line of lines) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+    }
+
+    // The reason no longer fits beside the slot; the config guide's warning under the table names it.
+    const slot = unicode ? "◀" : "<"
+    assert.equal(lines[1], `  claude-opus-5.5-1m      $10/$37.5  1M [1m]  ${slot} opusModel  !`)
+    assert.equal(lines[3], "  text-embedding-ada-002          " + (unicode ? "–" : "-") + "        " + (unicode ? "–" : "-") + "  ! not a chat model")
+  }
+})
+
+test("beside a long ID, a reason is cut to fit 80 columns and the ID is not", () => {
+  const longId = `model-${"y".repeat(40)}`
+  const lines = renderModelRows([
+    { id: longId, chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict" },
+  ], false, false)
+
+  assert.ok(lines[1].startsWith(`  ${longId}  `), lines[1])
+  assert.ok(displayWidth(lines[1]) <= 80, `${displayWidth(lines[1])} columns: ${lines[1]}`)
+  assert.match(lines[1], / {2}! prot\S*…$/)
 })
 
 test("the config guide shows the current routes and warns about values the startup check rejects", () => {

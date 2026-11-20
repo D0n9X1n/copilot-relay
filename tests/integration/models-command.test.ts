@@ -404,7 +404,7 @@ test("models hides non-chat models from the plain listing, shows them with --all
   assert.equal(plain.code, 0, plain.output)
   assert.match(plain.stdout, /^Copilot chat models · 1 of 2$/m)
   assert.match(plain.stdout, /^ {2}MODEL +NAME +COST +CONTEXT$/m)
-  assert.match(plain.stdout, /^ {2}gpt-6-astra {2}GPT-6 Astra {2}– +1\.1M \[1m\]$/m)
+  assert.match(plain.stdout, /^ {2}gpt-6-astra {2}GPT-6 Astra +– +1\.1M \[1m\]$/m)
   assert.doesNotMatch(plain.stdout, /text-embedding-ada-002/)
   assert.match(plain.stdout, /^1 model that is not a chat model is hidden: copilot-relay models --all$/m)
   // Token-cache notices are diagnostics, so stdout holds only the answer.

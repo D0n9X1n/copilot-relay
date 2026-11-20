@@ -1,6 +1,6 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
-import { columnWidths, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import { columnWidths, displayWidth, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
 import { redactedMarker } from "./redact"
 
 export interface ListedModel {
@@ -27,13 +27,18 @@ export type ModelKey = "gptModel" | "opusModel"
 // A price keeps the digits the catalog sent: whole dollars as "$8", cents as "$0.4".
 const dollars = (value: number): string => `$${value}`
 
-// What a call costs, from what the catalog reports: token prices first, then a multiplier, else a dash.
-const costOf = (model: ListedModel): string => {
+// What a call costs, from what the catalog reports: token prices first, then a multiplier, else the
+// mark for a missing value.
+const costOf = (model: ListedModel, unicode: boolean): string => {
   if (model.price !== undefined) {
     return `${dollars(model.price.input)}/${dollars(model.price.output)}`
   }
 
-  return model.multiplier === undefined ? "–" : `${model.multiplier}×`
+  if (model.multiplier === undefined) {
+    return mark("off", unicode)
+  }
+
+  return `${model.multiplier}${unicode ? "×" : "x"}`
 }
 
 export interface ConfiguredModel {
@@ -114,9 +119,9 @@ const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text
 
 // The window the relay offers: a known window of at least 1M carries [1m], the suffix Claude Code
 // reads as a 1M model.
-const contextOf = (model: ListedModel): string => {
+const contextOf = (model: ListedModel, unicode: boolean): string => {
   if (model.contextWindow === undefined) {
-    return "–"
+    return mark("off", unicode)
   }
 
   const size = formatTokens(model.contextWindow)
@@ -127,14 +132,15 @@ const contextOf = (model: ListedModel): string => {
 const lineWidth = 80
 const indent = 2
 const gutter = 2
-const nameColumn = 1
+
+const slotOf = (slot: ModelKey, unicode: boolean): string => `${unicode ? "◀" : "<"} ${slot}`
 
 // The last column: the config key that names this ID, then why it cannot be one, if it cannot.
 const noteOf = (model: ListedModel, unicode: boolean): string => {
   const parts: string[] = []
 
   if (model.slot !== undefined) {
-    parts.push(`◀ ${model.slot}`)
+    parts.push(slotOf(model.slot, unicode))
   }
 
   if (model.unusable !== undefined) {
@@ -144,43 +150,60 @@ const noteOf = (model: ListedModel, unicode: boolean): string => {
   return parts.join("  ")
 }
 
+// A note that does not fit the room left: a configured model keeps its slot and mark whole and
+// drops the reason, which the config guide's warning under the table states; any other reason is
+// cut by the table.
+const fittedNoteOf = (model: ListedModel, unicode: boolean, room: number): string => {
+  const note = noteOf(model, unicode)
+
+  if (displayWidth(note) <= room || model.slot === undefined || model.unusable === undefined) {
+    return note
+  }
+
+  return `${slotOf(model.slot, unicode)}  ${mark("warn", unicode)}`
+}
+
+const widthOf = (columns: Array<TableColumn<ListedModel>>, models: ListedModel[]): number => {
+  const widths = columnWidths(columns, models)
+  return indent + gutter * (columns.length - 1) + widths.reduce((sum, width) => sum + width, 0)
+}
+
 /**
  * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
- * it can be copied. NAME is shown only when every name fits whole on an 80-column line: a cut name
- * such as "Claude Op…" loses what tells two models apart, and MODEL already names each one. The
- * last column shares one place for the
- * slot an ID fills and the mark on an ID that cannot be gptModel or opusModel, so a listing with
- * both stays within 80 columns; the mark does not rely on color.
+ * it can be copied. COST and CONTEXT are numbers, right-aligned. The last column shares one place
+ * for the slot an ID fills and the mark on an ID that cannot be gptModel or opusModel; it gets the
+ * room the other columns leave on an 80-column line, so a listing with both fits. NAME is shown
+ * only when every name then fits whole as well: a cut name such as "Claude Op…" loses what tells
+ * two models apart, and MODEL already names each one. Without Unicode every mark is ASCII; no mark
+ * relies on color.
  */
 export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
-  const columns: Array<TableColumn<ListedModel>> = [
+  const fixed: Array<TableColumn<ListedModel>> = [
     { header: "MODEL", align: "left", cell: (model) => model.id },
-    { header: "NAME", align: "left", cell: (model) => model.name ?? "" },
-    { header: "COST", align: "left", cell: costOf },
-    { header: "CONTEXT", align: "right", cell: contextOf },
+    { header: "COST", align: "right", cell: (model) => costOf(model, unicode) },
+    { header: "CONTEXT", align: "right", cell: (model) => contextOf(model, unicode) },
   ]
+  const columns = [...fixed]
   const anyUnusable = models.some((model) => model.unusable !== undefined)
 
   // SLOT when the column holds only slots; NOTE once it also explains a mark.
   if (anyUnusable || models.some((model) => model.slot !== undefined)) {
+    const room = Math.max(lineWidth - widthOf(fixed, models) - gutter, displayWidth("NOTE"))
     columns.push({
       header: anyUnusable ? "NOTE" : "SLOT",
       align: "left",
-      cell: (model) => noteOf(model, unicode),
+      cell: (model) => fittedNoteOf(model, unicode, room),
       tone: (model) => model.unusable === undefined ? undefined : "warning",
+      maxWidth: room,
     })
   }
 
-  // NAME stays only when the longest name fits in the columns the others leave; an ID is never cut,
-  // so a long one can still push a row past 80.
-  const widths = columnWidths(columns, models)
-  const others = widths.filter((_width, index) => index !== nameColumn)
-  const room = lineWidth - indent - gutter * (columns.length - 1) - others.reduce((sum, width) => sum + width, 0)
-  if (widths[nameColumn] > room) {
-    columns.splice(nameColumn, 1)
-  }
+  // NAME stays only when every name fits whole beside the others; an ID is never cut, so a long
+  // one can still push a row past 80.
+  const withName = [columns[0], { header: "NAME", align: "left" as const, cell: (model: ListedModel) => model.name ?? "" }, ...columns.slice(1)]
+  const shown = widthOf(withName, models) <= lineWidth ? withName : columns
 
-  const lines = renderTable(columns, models, color)
+  const lines = renderTable(shown, models, color)
   // NOTE keeps the reason short so the row fits; this line says what the mark means.
   if (anyUnusable) {
     lines.push("", `${mark("warn", unicode)} marks a model that cannot be gptModel or opusModel.`)

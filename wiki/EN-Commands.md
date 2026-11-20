@@ -329,17 +329,21 @@ suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
 embeddings, are left out and counted under the table; `--all` lists them too, marked
 `!` in that same column, headed NOTE once it holds a mark, and a line under the
 table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
-one column keeps the table within 80 columns. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the
-answer.
+one column keeps the table within 80 columns: the column gets the room the others
+leave, a longer reason is cut with `…`, and a configured model that cannot be used
+keeps its slot and `!` and drops the reason, which the config guide's warning under
+the table states. COST and CONTEXT are right-aligned. Without Unicode the marks are
+ASCII: `<` for `◀`, `x` for `×` and `-` for `–`. The listing does not verify that a
+model works. The token-cache notices go to stderr, so stdout holds only the answer.
 
 ```text
 Copilot chat models · 4 of 6
 
-  MODEL              NAME               COST      CONTEXT  SLOT
+  MODEL              NAME                 COST    CONTEXT  SLOT
   claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
   claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
   gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
-  grok-4.7           Grok 4.7           $2/$6        500K
+  grok-4.7           Grok 4.7            $2/$6       500K
 
 2 models that are not chat models are hidden: copilot-relay models --all
 ```

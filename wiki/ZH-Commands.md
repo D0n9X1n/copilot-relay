@@ -270,18 +270,20 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 `–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
 `gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
 计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
-该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内。
+该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内：这一列使用其他列留下的宽度，
+较长的原因以 `…` 截断；已配置但不能使用的模型保留槽位和 `!`，省略原因，原因由表格下配置指引的警告说明。
+COST 和 CONTEXT 右对齐。终端不支持 Unicode 时标记为 ASCII：`<` 代替 `◀`，`x` 代替 `×`，`-` 代替 `–`。
 列表不验证模型能否工作。
 令牌缓存提示输出到 stderr，因此 stdout 只有结果。
 
 ```text
 Copilot chat models · 4 of 6
 
-  MODEL              NAME               COST      CONTEXT  SLOT
+  MODEL              NAME                 COST    CONTEXT  SLOT
   claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
   claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
   gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
-  grok-4.7           Grok 4.7           $2/$6        500K
+  grok-4.7           Grok 4.7            $2/$6       500K
 
 2 models that are not chat models are hidden: copilot-relay models --all
 ```
