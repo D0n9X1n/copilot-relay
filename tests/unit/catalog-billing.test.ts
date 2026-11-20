@@ -122,6 +122,20 @@ test("a price that converts to infinity is dropped, and a valid multiplier is us
   assert.equal(huge.cache, undefined)
 })
 
+test("batch_size 0 is free only when every reported price is 0", async () => {
+  const zeros = { input_price: 0, output_price: 0 }
+  const models = await loadCatalog([
+    entry("cache-charged", { token_prices: { batch_size: 0, default: { ...zeros, cache_price: 12 } } }),
+    entry("malformed-cache", { multiplier: 0.33, token_prices: { batch_size: 0, default: { ...zeros, cache_price: "12" } } }),
+    entry("write-charged", { token_prices: { batch_size: 0, default: { ...zeros, cache_price: 0, cache_write_price: 5 } } }),
+  ])
+
+  assert.equal(models.get("cache-charged")?.price, undefined)
+  assert.equal(models.get("malformed-cache")?.price, undefined)
+  assert.equal(models.get("malformed-cache")?.multiplier, 0.33)
+  assert.equal(models.get("write-charged")?.price, undefined)
+})
+
 test("missing or malformed billing leaves cost absent, never zero", async () => {
   const models = await loadCatalog([
     entry("none"),
