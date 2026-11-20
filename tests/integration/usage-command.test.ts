@@ -186,20 +186,22 @@ const storeToken = async (): Promise<void> => {
   await fs.writeFile(paths.githubTokenPath, `${token}\n`)
 }
 
-test("usage prints the plan, the SKU, the reset date and one line per quota", async () => {
+test("usage prints the plan, the SKU, the reset date and a row per quota, its percent left below", async () => {
   await storeToken()
 
   const result = await run(["usage"], "quota")
 
   assert.equal(result.code, 0, result.stderr)
   assert.equal(result.stdout, [
-    "Plan         fixture-plan",
-    "SKU          fixture-sku",
-    "Quota reset  2026-11-01",
+    "Copilot plan · fixture-plan · resets 2026-11-01",
+    "SKU fixture-sku",
     "",
-    "chat                  unlimited; overage not permitted, overage count 0",
-    "completions           unlimited; overage not permitted, overage count 0",
-    "premium_interactions  150 of 300 remaining (50%); overage permitted, overage count 0; credits used 12.5",
+    "  QUOTA                 LEFT        OVERAGE",
+    "  chat                  unlimited   not permitted",
+    "  completions           unlimited   not permitted",
+    "  premium_interactions  150 of 300  permitted",
+    "                        50% left",
+    "                        12.5 credits used",
     "",
   ].join("\n"))
   // One request, the usage request: no Copilot token exchange and no /user lookup.
@@ -309,7 +311,7 @@ test("usage sends its request through upstreamProxy and still writes no file", a
   const result = await run(["usage"], "quota")
 
   assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^Plan +fixture-plan$/m)
+  assert.match(result.stdout, /^Copilot plan · fixture-plan · resets 2026-11-01$/m)
   assert.deepEqual(result.requests, [`GET ${usageUrl}`])
   // One tunnel, with the proxy's credentials. It leads to the stand-in, which redirectGitHubTo
   // puts in GitHub's place.

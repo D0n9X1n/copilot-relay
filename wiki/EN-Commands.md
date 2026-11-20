@@ -101,7 +101,9 @@ Stops every copilot-relay server on the machine, on any port. It has no options.
 It collects candidates from the pid file, the processes listening on the configured
 port and the process list, and signals only a process it has verified to be a
 copilot-relay server: `SIGTERM`, then `SIGKILL` if the process is still running
-five seconds later. With none found, it logs
+five seconds later. It then logs one outcome line, such as
+`Stopped copilot-relay (pid 65686)` or, for several,
+`Stopped copilot-relay (pids 101, 202)`. With none found, it logs
 `No existing copilot-relay instance found`. It removes the pid file unless the
 process it names is still running.
 
@@ -317,6 +319,23 @@ included. It exits `0` with the report, or `1` with a one-line reason on stderr,
 such as no stored token. The fields and messages are under "Copilot plan and quota"
 in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
+```text
+Copilot plan · enterprise · resets 2026-12-01
+SKU copilot_enterprise_seat
+
+  QUOTA                 LEFT                  OVERAGE
+  chat                  unlimited             not permitted
+  completions           unlimited             not permitted
+  premium_interactions  919,253 of 1,000,000  permitted
+                        91.92531% left
+```
+
+A limited quota shows what is left of its entitlement. Its details follow on their
+own lines under it: GitHub's percent left, then the overage used and the credits
+used when GitHub reports them. A quota below 20% left is marked `!`, and below 5% `✗` (`x`
+where the terminal cannot show `✗`); color only adds emphasis. Numbers get thousands separators and
+keep every decimal GitHub sent; `--json` prints them as GitHub sent them.
+
 ## `cache`
 
 ```sh
@@ -331,11 +350,26 @@ copilot-relay cache --hourly --since 2d
 | `--since` | Start of the window: a duration such as 6h or 2d, or an ISO date or time. Without it, the summary covers the last 24 hours. |
 | `--model` | Only count models whose name contains this text, ignoring case. |
 | `--json` | Print the rows as a JSON array. |
-| `--goal` | Hit-rate goal in percent, with at most two decimals. A hit rate below it is shown in red. |
+| `--goal` | Hit-rate goal in percent, with at most two decimals. A hit rate below it is marked ✗ (x without unicode) and shown in red. |
 
 Reports how much of each model's input the prompt cache served, per upstream route,
 from the `completion` entries in the relay's log files under
-`~/.copilot-relay/logs/`. `--goal` defaults to `95`, and `--hourly` and `--daily`
+`~/.copilot-relay/logs/`:
+
+```text
+Prompt-cache hit rate · last 24 h · goal 95%
+
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
+
+1 of 3 rows with a known rate is below the goal.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
+```
+
+Each rate carries a mark, `✓` at or above the goal and `✗` below it, so the
+table reads the same without color. `--goal` defaults to `95`, and `--hourly` and `--daily`
 cannot be combined. It contacts neither the relay nor Copilot, does not read
 `config.yaml`, and writes nothing. Any report, an empty one included, exits `0`; an
 unusable option, or a logs directory that cannot be read, prints the reason on

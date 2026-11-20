@@ -15,7 +15,17 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { formatLogDate, paths } from "~/lib/paths"
-import { colorText, terminalText, type TerminalTone } from "~/lib/terminal"
+import {
+  formatCount,
+  formatTokens,
+  heading,
+  mark,
+  renderTable,
+  terminalText,
+  unicodeEnabled,
+  type TableColumn,
+  type TerminalTone,
+} from "~/lib/terminal"
 
 const completionRoutes = ["/chat/completions", "/responses", "/v1/messages"] as const
 
@@ -73,6 +83,8 @@ export interface CacheReportOptions {
   view: CacheView
   /** Only entries at or after this instant; every retained entry when absent. */
   since?: Date
+  /** True when --since set the start; otherwise a start is the default last 24 hours. */
+  sinceGiven?: boolean
   /** Only models whose name contains this text, ignoring case. */
   model?: string
   /** The hit-rate goal, in percent, with at most two decimals; buildCacheReport refuses others. */
@@ -661,33 +673,25 @@ export const resolveCacheOptions = (args: CacheArguments, now: Date): CacheRepor
     view,
     goal: goalText === undefined ? defaultGoal : parseGoal(goalText),
     ...(since !== undefined && { since }),
+    ...(sinceText !== undefined && { sinceGiven: true }),
     ...(model !== undefined && { model }),
   }
 }
 
-interface Column {
-  header: string
-  alignRight: boolean
-  cell: (row: CacheRow) => string
-  tone?: (row: CacheRow) => TerminalTone
-}
-
-const formatCount = (value: number): string => value.toLocaleString("en-US")
-
 // Truncated rather than rounded, so a row below the goal never prints as the goal itself. The same
-// integer decides belowGoal, so the rate's color always agrees with the printed rate.
-const formatHitRate = (row: CacheRow): string => {
+// integer decides belowGoal, so the mark always agrees with the printed rate.
+const formatHitRate = (row: CacheRow, unicode: boolean): string => {
   if (row.hitRate === null) {
-    return "-"
+    return mark("off", unicode)
   }
 
   const basisPoints = hitBasisPoints(row.cacheReadTokens, row.totalInputTokens)
+  const rate = `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
 
-  return `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
+  return `${mark(row.belowGoal ? "fail" : "ok", unicode)} ${rate}`
 }
 
-// The rate's color is the table's only mark of a missed goal. Without color, the title states the
-// goal and --json has belowGoal.
+// The mark says whether a row meets the goal; color only adds emphasis to it.
 const hitRateTone = (row: CacheRow): TerminalTone => {
   if (row.hitRate === null) {
     return "muted"
@@ -696,62 +700,140 @@ const hitRateTone = (row: CacheRow): TerminalTone => {
   return row.belowGoal ? "bad" : "good"
 }
 
-const bucketColumns: Record<CacheView, Array<Column>> = {
-  summary: [],
-  hourly: [{ header: "HOUR", alignRight: false, cell: (row) => row.bucket ?? "" }],
-  daily: [{ header: "DAY", alignRight: false, cell: (row) => row.bucket ?? "" }],
+// A trend names a route in a few letters so a model on two routes still fits 80 columns; the summary's
+// ROUTE column keeps the full path.
+const shortRoutes: Record<CompletionRoute, string> = {
+  "/chat/completions": "chat",
+  "/v1/messages": "messages",
+  "/responses": "responses",
 }
 
-// The table answers whether the cache works for each model and route: what the row is, how many
-// calls its rate rests on, and the rate. The token counts behind the rate are in --json.
-const dataColumns: Array<Column> = [
-  { header: "MODEL", alignRight: false, cell: (row) => row.model },
-  { header: "ROUTE", alignRight: false, cell: (row) => row.route },
-  { header: "REQUESTS", alignRight: true, cell: (row) => formatCount(row.requests) },
-  { header: "HIT RATE", alignRight: true, cell: formatHitRate, tone: hitRateTone },
-]
+// Models that used more than one route in these rows. A trend names the route only for them, so it
+// stays within five columns.
+const modelsOnSeveralRoutes = (rows: Array<CacheRow>): Set<string> => {
+  const routes = new Map<string, Set<string>>()
 
-const renderTable = (rows: Array<CacheRow>, view: CacheView, color: boolean): Array<string> => {
-  const columns = [...bucketColumns[view], ...dataColumns]
-  const cells = rows.map((row) => columns.map((column) => column.cell(row)))
-  const widths = columns.map((column, index) =>
-    Math.max(column.header.length, ...cells.map((rowCells) => rowCells[index].length)))
-  const pad = (text: string, index: number): string =>
-    columns[index].alignRight ? text.padStart(widths[index]) : text.padEnd(widths[index])
+  for (const row of rows) {
+    const seen = routes.get(row.model) ?? new Set<string>()
+    seen.add(row.route)
+    routes.set(row.model, seen)
+  }
 
-  const header = columns.map((column, index) => pad(column.header, index)).join("  ")
-  const body = rows.map((row, rowIndex) => {
-    const rendered = columns.map((column, index) => {
-      const text = pad(cells[rowIndex][index], index)
+  return new Set([...routes].filter(([, seen]) => seen.size > 1).map(([model]) => model))
+}
 
-      return column.tone === undefined ? text : colorText(text, column.tone(row), color)
-    })
+// " UTC-04:00" becomes "-04" and " UTC+05:45" becomes "+0545": enough to tell a repeated hour apart.
+const shortOffset = (suffix: string): string => {
+  const match = /^UTC([+-])(\d{2}):(\d{2})$/.exec(suffix)
+  if (match === null) {
+    return suffix === "" ? "" : ` ${suffix}`
+  }
 
-    return `  ${rendered.join("  ")}`
-  })
+  return `${match[1]}${match[2]}${match[3] === "00" ? "" : match[3]}`
+}
 
-  return [`  ${header}`, ...body]
+// An hour's label in the trend: "MM-DD HH:00" for the first hour of each day and "HH:00" after it, so
+// the column stays narrow. A repeated hour keeps a short UTC offset, such as "01:00-04". The bucket
+// itself, with its full offset, is unchanged in JSON.
+const hourLabels = (rows: Array<CacheRow>): Map<CacheRow, string> => {
+  const labels = new Map<CacheRow, string>()
+  let day = ""
+  let bucket = ""
+  for (const row of rows) {
+    const [date = "", hour = "", ...offset] = (row.bucket ?? "").split(" ")
+    const time = `${hour}${shortOffset(offset.join(" "))}`
+    if (row.bucket === bucket) {
+      labels.set(row, "")
+    } else if (date === day) {
+      labels.set(row, time)
+    } else {
+      labels.set(row, `${date.slice(5)} ${time}`)
+    }
+
+    day = date
+    bucket = row.bucket ?? ""
+  }
+
+  // A later hour lines up under the time of the first: the date part is right-aligned, the time and
+  // any offset left-aligned after it.
+  const dateWidth = Math.max(0, ...[...labels.values()].map((label) => label.indexOf(" ") + 1))
+  for (const [row, label] of labels) {
+    const space = label.indexOf(" ")
+    const datePart = space === -1 ? "" : label.slice(0, space + 1)
+    const timePart = space === -1 ? label : label.slice(space + 1)
+    labels.set(row, label === "" ? "" : `${datePart.padStart(dateWidth)}${timePart}`)
+  }
+
+  return labels
+}
+
+// The table answers whether the cache works for each model and route: what the row is, how much
+// traffic its rate rests on, and the rate. The summary has a ROUTE column; a trend leads with the
+// hour or day, shown once for the rows that share it, and names a route only where a model used two.
+const tableColumns = (rows: Array<CacheRow>, view: CacheView, unicode: boolean): Array<TableColumn<CacheRow>> => {
+  const several = modelsOnSeveralRoutes(rows)
+  const hours = hourLabels(rows)
+  const model: TableColumn<CacheRow> =
+    view === "summary" ?
+      { header: "MODEL", align: "left", cell: (row) => row.model }
+    : { header: "MODEL", align: "left", cell: (row) => several.has(row.model) ? `${row.model} (${shortRoutes[row.route]})` : row.model }
+
+  const leads: Record<CacheView, Array<TableColumn<CacheRow>>> = {
+    summary: [model, { header: "ROUTE", align: "left", cell: (row) => row.route }],
+    hourly: [{ header: "HOUR", align: "left", cell: (row) => hours.get(row) ?? "" }, model],
+    daily: [{ header: "DAY", align: "left", cell: (row) => row.bucket ?? "", repeatBlank: true }, model],
+  }
+  const lead = leads[view]
+
+  return [
+    ...lead,
+    { header: "REQUESTS", align: "right", cell: (row) => formatCount(row.requests) },
+    { header: "TOKENS", align: "right", cell: (row) => formatTokens(row.totalInputTokens) },
+    { header: "HIT RATE", align: "right", cell: (row) => formatHitRate(row, unicode), tone: hitRateTone },
+  ]
 }
 
 const viewTitles: Record<CacheView, string> = {
   summary: "Prompt-cache hit rate",
-  hourly: "Prompt-cache hit rate by local hour",
-  daily: "Prompt-cache hit rate by local day",
+  hourly: "Prompt-cache hit rate by hour",
+  daily: "Prompt-cache hit rate by day",
 }
 
 const formatLocalTime = (date: Date): string =>
   `${formatLogDate(date)} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`
 
-const describeScope = (options: CacheReportOptions): string => {
-  const span =
-    options.since === undefined ?
-      "across all retained logs"
-    : `since ${formatLocalTime(options.since)} local time`
+// The window in local time, and the model filter, which is the user's own text echoed back. In a
+// sentence the window reads "in the last 24 h" or "in all retained logs"; in a title it stands alone.
+const describeScope = (options: CacheReportOptions, inSentence = false): string => {
+  let span = inSentence ? "in all retained logs" : "all retained logs"
+  if (options.since !== undefined && options.sinceGiven === true) {
+    span = `since ${formatLocalTime(options.since)}`
+  } else if (options.since !== undefined) {
+    span = inSentence ? "in the last 24 h" : "last 24 h"
+  }
 
-  // The filter is the user's own text, echoed back to the terminal.
-  const model = options.model === undefined ? "" : `, for models matching "${terminalText(options.model)}"`
+  const model = options.model === undefined ? "" : `, models matching "${terminalText(options.model)}"`
 
   return `${span}${model}`
+}
+
+// One sentence under the table: how many rows with a known rate miss the goal.
+const goalNote = (rows: Array<CacheRow>): string | undefined => {
+  const known = rows.filter((row) => row.hitRate !== null)
+  if (known.length === 0) {
+    return undefined
+  }
+
+  const below = known.filter((row) => row.belowGoal).length
+  if (known.length === 1) {
+    return below === 0 ? "The only row with a known rate meets the goal." : "The only row with a known rate is below the goal."
+  }
+
+  if (below === 0) {
+    return `All ${formatCount(known.length)} rows with a known rate meet the goal.`
+  }
+
+  return `${formatCount(below)} of ${formatCount(known.length)} rows with a known rate ${below === 1 ? "is" : "are"} below the goal.`
 }
 
 // REQUESTS counts the calls that logged no cache read and HIT RATE leaves them out, so a line under
@@ -764,25 +846,30 @@ export const renderCacheReport = (
   rows: Array<CacheRow>,
   options: CacheReportOptions,
   color = false,
+  unicode = unicodeEnabled(),
 ): Array<string> => {
   if (rows.length === 0) {
     return [
-      `No prompt-cache data ${describeScope(options)}.`,
-      `The report reads the upstream completion entries in ${paths.logsDir}.`,
-      "They are written at logLevel info or debug, not error, and kept for logRetentionDays.",
+      `No prompt-cache data ${describeScope(options, true)}.`,
+      `The report reads upstream completion entries in ${paths.logsDir}, written at logLevel info or debug and kept for logRetentionDays.`,
     ]
   }
 
   const lines = [
-    `${viewTitles[options.view]} ${describeScope(options)}, goal ${options.goal}%`,
+    heading(viewTitles[options.view], `${describeScope(options)} · goal ${options.goal}%`),
     "",
-    ...renderTable(rows, options.view, color),
+    ...renderTable(tableColumns(rows, options.view, unicode), rows, color),
   ]
 
+  const notes = [goalNote(rows)]
   const unknownCalls = rows.reduce((total, row) => total + row.unknownCacheRequests, 0)
-
   if (unknownCalls > 0) {
-    lines.push("", unknownNote(unknownCalls))
+    notes.push(unknownNote(unknownCalls))
+  }
+
+  const present = notes.filter((note) => note !== undefined)
+  if (present.length > 0) {
+    lines.push("", ...present)
   }
 
   return lines

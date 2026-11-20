@@ -7,6 +7,9 @@ import sys
 from typing import NamedTuple
 
 PAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.md\Z")
+# GitHub shows _Sidebar.md beside every page. It is the only underscore page the wiki publishes;
+# any other, such as _Footer.md, is refused rather than silently published.
+SPECIAL_PAGES = frozenset({"_Sidebar.md"})
 # A URL scheme, a protocol-relative URL or a same-page anchor; none names a wiki page.
 EXTERNAL = re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*:|//|#)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
@@ -335,7 +338,7 @@ def page_files(directory):
             raise ValueError(f"wiki must be flat, without symlinks: {entry}")
 
         if entry.suffix == ".md":
-            if not PAGE.fullmatch(entry.name):
+            if not (PAGE.fullmatch(entry.name) or entry.name in SPECIAL_PAGES):
                 raise ValueError(f"unsupported wiki page name: {entry.name}")
 
             pages.append(entry)
