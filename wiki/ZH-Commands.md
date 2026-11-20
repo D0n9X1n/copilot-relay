@@ -81,8 +81,9 @@ copilot-relay stop
 停止本机上的每个 copilot-relay 服务，不限端口。它没有选项。
 
 它从 pid 文件、在配置端口上监听的进程以及进程列表中收集候选进程，只向已确认是 copilot-relay 服务
-的进程发送信号：先发 `SIGTERM`，五秒后进程仍在运行就发 `SIGKILL`。一个都没有找到时，记录
-`No existing copilot-relay instance found`。除非 pid 文件指向的进程仍在运行，否则它会删除该文件。
+的进程发送信号：先发 `SIGTERM`，五秒后进程仍在运行就发 `SIGKILL`。之后记录一行结果，例如
+`Stopped copilot-relay (pid 65686)`，停止了多个时为 `Stopped copilot-relay (pids 101, 202)`。
+一个都没有找到时，记录 `No existing copilot-relay instance found`。除非 pid 文件指向的进程仍在运行，否则它会删除该文件。
 
 它不需要有效的 `config.yaml`。文件无法加载时，它记录这一点，仍然停止能确认的中继，只是没有配置
 端口作为线索。文件能加载时，它还会对日志应用 `logRetentionDays`。
@@ -259,6 +260,19 @@ copilot-relay usage --json
 成功时打印报告并以 `0` 退出；否则在 stderr 打印一行原因（例如没有保存的 token）并以 `1` 退出。
 字段与消息见[日志与问题排查](ZH-Logging-Troubleshooting.md)中的“Copilot 套餐与配额”。
 
+```text
+Copilot plan · enterprise · resets 2026-12-01
+SKU copilot_enterprise_seat
+
+  QUOTA                 LEFT                              OVERAGE
+  chat                  unlimited                         not permitted
+  completions           unlimited                         not permitted
+  premium_interactions  919,253 of 1,000,000 (91.92531%)  permitted
+```
+
+剩余不足 20% 的配额标记为 `!`，不足 5% 标记为 `✗`（终端无法显示 `✗` 时为 `x`）；颜色只是额外强调。
+数字带千位分隔符，并保留 GitHub 发来的每一位小数；`--json` 按 GitHub 发来的原样打印。
+
 ## `cache`
 
 ```sh
@@ -273,10 +287,24 @@ copilot-relay cache --hourly --since 2d
 | `--since` | 时间窗口的起点：一段时长（如 6h 或 2d），或 ISO 日期或时间。不加它时，汇总覆盖最近 24 小时。 |
 | `--model` | 只统计名称包含这段文本的模型，不区分大小写。 |
 | `--json` | 把各行打印成 JSON 数组。 |
-| `--goal` | 命中率目标，单位为百分比，最多两位小数。低于它的命中率显示为红色。 |
+| `--goal` | 命中率目标，单位为百分比，最多两位小数。低于它的命中率标记为 ✗（无 unicode 时为 x）并显示为红色。 |
 
 根据 `~/.copilot-relay/logs/` 下中继日志文件的 `completion` 条目，按上游路由报告每个模型的输入中
-有多少由 prompt 缓存提供。`--goal` 默认为 `95`，`--hourly` 和 `--daily` 不能同时使用。它既不联系
+有多少由 prompt 缓存提供：
+
+```text
+Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%
+
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
+
+1 of 3 rows with a known rate is below the goal.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
+```
+
+每个命中率都带一个标记：达到目标时为 `✓`，低于时为 `✗`，所以没有颜色时表格读起来也一样。`--goal` 默认为 `95`，`--hourly` 和 `--daily` 不能同时使用。它既不联系
 中继，也不联系 Copilot，不读取 `config.yaml`，也不写入任何东西。任何报告，包括空报告，都以 `0`
 退出；选项无法使用，或日志目录无法读取时，在 stderr 说明原因并以 `1` 退出。报告本身见
 [Prompt 缓存](ZH-Prompt-Caching.md)中的“测量命中率”。

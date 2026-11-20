@@ -152,18 +152,19 @@ copilot-relay cache --hourly             # hourly trend over the last 24 hours
 copilot-relay cache --daily              # daily trend across the retained logs
 copilot-relay cache --since 6h           # a duration, or an ISO date or time
 copilot-relay cache --model opus         # names containing "opus", ignoring case
-copilot-relay cache --goal 97.5          # rates below 97.5% in red (default 95)
+copilot-relay cache --goal 97.5          # rates below 97.5% marked ✗ (default 95)
 copilot-relay cache --json               # an array of rows, for scripts
 ```
 
 ```text
-Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
+Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%
 
-  MODEL               ROUTE              REQUESTS  HIT RATE
-  claude-opus-5-5     /v1/messages              1    98.36%
-  claude-opus-5.5     /chat/completions         2    98.38%
-  gpt-5.5-2026-04-23  /responses                1    92.86%
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
 
+1 of 3 rows with a known rate is below the goal.
 HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 ```
 
@@ -171,7 +172,8 @@ HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 | --- | --- |
 | `MODEL`, `ROUTE` | The model the upstream reported, or `unknown` when the entry has none, and the upstream path. One model can be reported under different names on different routes, such as `claude-opus-5.5` and `claude-opus-5-5`. |
 | `REQUESTS` | Upstream calls that answered HTTP 200 and logged `input_tokens`, including calls cut off after their usage arrived and calls whose caching is unknown. |
-| `HIT RATE` | Input tokens read from the prompt cache, divided by total input, truncated to two decimals. On a color terminal it is green at or above `--goal` and red below it. It is `-`, in gray, when no call in the row reported its caching. |
+| `TOKENS` | Total input of the calls whose caching is known, shortened to K, M or B. It shows how much traffic a rate rests on: a 0% hour of 12K tokens matters less than one of 300M. |
+| `HIT RATE` | Input tokens read from the prompt cache, divided by total input, truncated to two decimals, after a mark: `✓` at or above `--goal`, `✗` below it. On a color terminal the mark and rate are also green or red. It is `–`, in gray, when no call in the row reported its caching. Where the terminal cannot show those marks (the Windows console host outside Windows Terminal, or a locale that is not UTF-8), they are `ok`, `x` and `-`. |
 
 A call whose entry carried no `cache_read_input_tokens` has unknown caching, not
 zero. It counts in `REQUESTS` but not in `HIT RATE`, and the line under the table
@@ -180,15 +182,30 @@ counts behind the rate (total input, cache read, uncached and cache write), and
 the counts of calls with unknown caching and with a cache read of 0, are in
 `--json`.
 
-The color of `HIT RATE` is the table's only mark of a missed goal. Without color
-(`NO_COLOR`, or output to a pipe), compare the rate with the goal in the title, or
-read `belowGoal` in `--json`. `HIT RATE` is truncated rather than rounded, so a rate
-below the goal never prints as the goal. `--goal` takes at most two decimals, and a
-rate is red exactly when the printed `HIT RATE` is below the goal.
+The mark says whether a row meets the goal, with or without color, so the table
+reads the same under `NO_COLOR` or in a pipe; `--json` carries it as `belowGoal`. A
+line under the table counts the rows with a known rate that are below the goal.
+`HIT RATE` is truncated rather than rounded, so a rate below the goal never prints as
+the goal. `--goal` takes at most two decimals, and a rate is marked `✗` exactly when
+the printed `HIT RATE` is below the goal.
 
-`--hourly` and `--daily` add an `HOUR` or `DAY` column in local time, matching
-the dates in the log file names. When clocks go back, a local hour that happens
-twice gets one row per real hour, each ending in its UTC offset, such as
+`--hourly` and `--daily` lead with an `HOUR` or `DAY` column in local time,
+matching the dates in the log file names, shown once for the rows that share it.
+They leave out `ROUTE`, which the summary shows; a model that used more than one
+route in the window gets the route after its name, such as
+`claude-opus-5.5 (/v1/messages)`.
+
+```text
+Prompt-cache hit rate by hour · since 2026-10-02 17:30 · goal 95%
+
+  HOUR              MODEL               REQUESTS  TOKENS  HIT RATE
+  2026-10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
+                    claude-opus-5.5            2   31.4K  ✓ 98.38%
+                    gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
+```
+
+When clocks go back, a local hour that happens twice gets one row per real hour,
+each ending in its UTC offset, such as
 `2026-11-01 01:00 UTC-04:00` and `2026-11-01 01:00 UTC-05:00`. Without `--since`,
 the summary and the hourly trend cover the last 24 hours and the daily trend
 covers every retained day. A duration counts back from now; a date, or a time
