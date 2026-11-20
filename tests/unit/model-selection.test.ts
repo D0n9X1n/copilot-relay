@@ -56,6 +56,14 @@ test("exposed IDs keep slot order, dedupe case-insensitively and use catalog cas
   assert.deepEqual(models.findMissingModels({ gptModel: "a", opusModel: "b", models: ["mai-code-2", "missing-1"] }, map), ["missing-1"])
 })
 
+test("auto adds each vendor's newest model after the two slots, and nothing without a catalog", () => {
+  const routing = { gptModel: "gpt-10-nova", opusModel: "claude-opus-5.5", models: "auto" as const }
+
+  assert.deepEqual(models.resolveExposedModels(routing, catalog as never), ["gpt-10-nova", "claude-opus-5.5", "zed-a-3"])
+  assert.deepEqual(models.resolveExposedModels(routing, new Map() as never), ["gpt-10-nova", "claude-opus-5.5"])
+  assert.deepEqual(models.resolveExposedModels(routing, undefined), ["gpt-10-nova", "claude-opus-5.5"])
+})
+
 test("canonical IDs strip every [1m], take catalog casing, and are lowercase otherwise", () => {
   const map = new Map([["GPT-10-Nova", {}]]) as never
   assert.equal(models.canonicalModelId("GPT-5.6-SOL[1M][1m]", undefined), "gpt-5.6-sol")
