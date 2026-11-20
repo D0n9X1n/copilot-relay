@@ -466,6 +466,22 @@ directory can be outside `~/.copilot-relay`. Replay opens no socket, uses no rea
 credentials, writes no token, config or new capture, and does not read
 `config.yaml`.
 
+The result names the verdict with a mark and what it means, the recorded request,
+and one row per upstream exchange with its status, outcome and token counts. A
+`DIFF` lists each differing field by path and a fixed reason under the table; it
+never quotes request or response text.
+
+```text
+Replay · POST /v1/messages
+
+  ✓ MATCH       the relay reproduces the recording
+    request     status 200 · outcome end_turn · 0 tool calls
+    blocks      text
+
+  #  UPSTREAM           STATUS  OUTCOME  IN  OUT  CACHED  WRITTEN
+  1  /chat/completions     200  stop      7    3       5        –
+```
+
 It exits `0` for `MATCH`, `2` for `DIFF` or `INCOMPLETE`, and `1` for `MISSING` or
 `MALFORMED`. What each verdict means, and why a capture must not be shared whole,
 are under "Debug captures and offline replay" in

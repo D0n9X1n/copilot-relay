@@ -288,9 +288,10 @@ Replay accepts Messages and count-tokens captures; a Codex `/v1/responses` captu
 is recorded for inspection but reported `MALFORMED` by replay. Replay runs the **actual current in-process handler** using recorded ordered
 upstream/refresh transport, with no sockets, real authentication, token/config
 writes or new capture. It compares actual outgoing requests and final JSON/SSE,
-not just two saved files. Output includes each exchange's status, known completion
-reason and numeric token/cache usage, plus client block types and tool-call count;
-it does not print tool arguments or response text. Do not use `auth`, restart the
+not just two saved files. Output is a heading, the verdict, and a table with each
+exchange's status, known completion reason and numeric token/cache usage, plus client
+block types and tool-call count (see `replay` in [Commands](EN-Commands.md)); it does
+not print tool arguments or response text. Do not use `auth`, restart the
 daemon or make a new Copilot call merely to replay a capture.
 
 | Verdict | Exit | Meaning |

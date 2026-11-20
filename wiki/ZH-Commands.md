@@ -390,6 +390,20 @@ copilot-relay replay /absolute/path/to/capture-directory
 出现在两个日期下时会被拒绝；明确给出的目录可以不在 `~/.copilot-relay` 之内。重放不打开 socket，
 不使用真实凭据，不写入 token、配置或新的捕获，也不读取 `config.yaml`。
 
+结果用一个标记给出结论及其含义，然后是记录的请求，以及每个上游交换一行：状态、结果和 token 数。`DIFF`
+在表格下按路径和固定原因列出每个不同的字段，从不引用请求或响应的文本。
+
+```text
+Replay · POST /v1/messages
+
+  ✓ MATCH       the relay reproduces the recording
+    request     status 200 · outcome end_turn · 0 tool calls
+    blocks      text
+
+  #  UPSTREAM           STATUS  OUTCOME  IN  OUT  CACHED  WRITTEN
+  1  /chat/completions     200  stop      7    3       5        –
+```
+
 `MATCH` 以 `0` 退出，`DIFF` 或 `INCOMPLETE` 以 `2` 退出，`MISSING` 或 `MALFORMED` 以 `1` 退出。
 每种结论的含义，以及为什么不能整份分享捕获，见
 [日志与问题排查](ZH-Logging-Troubleshooting.md)中的“Debug 捕获与离线重放”。

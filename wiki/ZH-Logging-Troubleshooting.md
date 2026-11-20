@@ -240,9 +240,9 @@ copilot-relay replay /absolute/path/to/capture-directory
 显式目录可位于默认 home 之外。重放只接受 Messages 和 token 计数的捕获；Codex 的
 `/v1/responses` 捕获只供查看，重放会报告 `MALFORMED`。重放使用记录的有序上游/刷新传输，运行**当前真正的进程内
 handler**，不创建 socket、不做真实认证、不写 token/config 或新捕获。它比较实际出站
-请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出包含每次交换的状态、已知完成
-原因和 token/缓存数字，以及客户端 block 类型和工具调用数；不会打印工具参数或响应
-正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
+请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出是一个标题、结论，以及一张表格，列出每次交换的
+状态、已知完成原因和 token/缓存数字，以及客户端 block 类型和工具调用数（见 [命令](ZH-Commands.md)中的
+`replay`）；不会打印工具参数或响应正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
 
 | 结果 | 退出码 | 含义 |
 | --- | ---: | --- |

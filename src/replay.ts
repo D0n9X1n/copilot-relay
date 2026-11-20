@@ -12,6 +12,19 @@ import { parseModelTokenLimits, type CopilotModel } from "./copilot/models"
 import { withRecordedTransport, type CaptureManifest, type CapturedBody } from "./lib/request-trace"
 import { withRuntimeState } from "./lib/state"
 import { createServer } from "./server"
+import {
+  colorEnabled,
+  colorText,
+  formatCount,
+  heading,
+  mark,
+  printableCell,
+  renderTable,
+  unicodeEnabled,
+  type MarkState,
+  type TableColumn,
+  type TerminalTone,
+} from "./lib/terminal"
 
 export interface ReplayResult {
   verdict: "MATCH" | "DIFF" | "INCOMPLETE" | "MISSING" | "MALFORMED"
@@ -977,6 +990,99 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
   }
 }
 
+type ReplayExchange = NonNullable<ReplayResult["summary"]>["exchanges"][number]
+
+// What each verdict says, with a mark that does not rely on color.
+const verdictViews: Record<ReplayResult["verdict"], { state: MarkState; tone: TerminalTone; meaning: string }> = {
+  MATCH: { state: "ok", tone: "good", meaning: "the relay reproduces the recording" },
+  DIFF: { state: "fail", tone: "bad", meaning: "the relay's current handling differs from the recording" },
+  INCOMPLETE: { state: "warn", tone: "warning", meaning: "the capture did not settle, so no match is claimed" },
+  MISSING: { state: "fail", tone: "bad", meaning: "no complete capture was found for that target" },
+  MALFORMED: { state: "fail", tone: "bad", meaning: "the capture is invalid, unsafe or beyond replay limits" },
+}
+
+// The label column: a mark and INCOMPLETE, the longest verdict, then a two-space gutter.
+const labelWidth = 14
+// Differences after this many are counted rather than listed, so a large diff stays readable.
+const shownDifferences = 30
+
+const tokens = (exchange: ReplayExchange, key: string): string => {
+  const value = exchange.usage[key]
+  return value === undefined ? "–" : formatCount(value)
+}
+
+const exchangeColumns = (exchanges: Array<ReplayExchange>): Array<TableColumn<ReplayExchange>> => {
+  const columns: Array<TableColumn<ReplayExchange>> = [
+    { header: "#", align: "right", cell: (exchange) => String(exchange.order) },
+    { header: "UPSTREAM", align: "left", cell: (exchange) => exchange.path },
+    { header: "STATUS", align: "right", cell: (exchange) => exchange.status === undefined ? "–" : String(exchange.status) },
+    { header: "OUTCOME", align: "left", cell: (exchange) => exchange.outcome },
+    { header: "IN", align: "right", cell: (exchange) => tokens(exchange, "input_tokens") },
+    { header: "OUT", align: "right", cell: (exchange) => tokens(exchange, "output_tokens") },
+    { header: "CACHED", align: "right", cell: (exchange) => tokens(exchange, "cache_read_input_tokens") },
+    { header: "WRITTEN", align: "right", cell: (exchange) => tokens(exchange, "cache_creation_input_tokens") },
+  ]
+
+  if (exchanges.some((exchange) => exchange.refusalCategory !== undefined)) {
+    columns.push({ header: "REFUSAL", align: "left", cell: (exchange) => exchange.refusalCategory ?? "" })
+  }
+
+  return columns
+}
+
+const describeRequest = (summary: NonNullable<ReplayResult["summary"]>): string => {
+  const parts = [`status ${summary.status ?? "unknown"}`, `outcome ${summary.outcome}`]
+
+  if (summary.toolCalls !== undefined) {
+    parts.push(summary.toolCalls === 1 ? "1 tool call" : `${formatCount(summary.toolCalls)} tool calls`)
+  }
+
+  return parts.join(" · ")
+}
+
+/**
+ * The replay result as text lines: the verdict and what it means, the recorded request, a table of
+ * its upstream exchanges, and each difference by path and fixed reason. Paths and reasons come from
+ * the comparison and never quote payload text. Kept free of IO, so it is tested directly.
+ */
+export const renderReplay = (result: ReplayResult, color = false, unicode = unicodeEnabled()): string[] => {
+  const view = verdictViews[result.verdict]
+  const summary = result.summary
+  const verdict = `${mark(view.state, unicode)} ${result.verdict}`
+  const lines = [
+    heading("Replay", summary === undefined ? undefined : `${summary.method} ${summary.path}`),
+    "",
+    `  ${colorText(verdict, view.tone, color)}${" ".repeat(labelWidth - verdict.length)}${view.meaning}`,
+  ]
+
+  if (summary !== undefined) {
+    lines.push(`    ${"request".padEnd(labelWidth - 2)}${describeRequest(summary)}`)
+
+    if (summary.contentBlocks !== undefined) {
+      lines.push(`    ${"blocks".padEnd(labelWidth - 2)}${summary.contentBlocks.join(", ") || "none"}`)
+    }
+
+    if (summary.exchanges.length > 0) {
+      lines.push("", ...renderTable(exchangeColumns(summary.exchanges), summary.exchanges, color))
+    }
+  }
+
+  if (result.differences.length > 0) {
+    const shown = result.differences.slice(0, shownDifferences)
+    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "")
+    lines.push(...renderTable([
+      { header: "", align: "left", cell: (difference: ReplayResult["differences"][number]) => difference.path, maxWidth: 48 },
+      { header: "", align: "left", cell: (difference) => difference.reason, maxWidth: 26 },
+    ], shown, color).slice(1))
+
+    if (result.differences.length > shownDifferences) {
+      lines.push(`  … and ${formatCount(result.differences.length - shownDifferences)} more`)
+    }
+  }
+
+  return lines.map((line) => printableCell(line).trimEnd())
+}
+
 export const replay = defineCommand({
   meta: {
     name: "replay",
@@ -991,27 +1097,7 @@ export const replay = defineCommand({
   },
   async run({ args }) {
     const result = await replayCapture(args.target)
-    console.log(result.verdict)
-    if (result.summary) {
-      const { method, path, status, routes, outcome } = result.summary
-      console.log(`${method} ${path} status=${status ?? "unknown"} outcome=${outcome}`)
-      console.log(`upstream=${routes.join(" -> ") || "none"}`)
-      for (const exchange of result.summary.exchanges) {
-        const usage = Object.entries(exchange.usage)
-          .map(([key, value]) => `${key}=${value}`)
-          .join(" ")
-        console.log(`exchange=${exchange.order} path=${exchange.path} status=${exchange.status ?? "unknown"} outcome=${exchange.outcome}${usage ? ` ${usage}` : ""}${exchange.refusalCategory ? ` refusal_category=${exchange.refusalCategory}` : ""}`)
-      }
-
-      if (result.summary.contentBlocks) {
-        console.log(`client_blocks=${result.summary.contentBlocks.join(",") || "none"} tool_calls=${result.summary.toolCalls ?? 0}`)
-      }
-    }
-
-    for (const difference of result.differences) {
-      console.log(`${difference.path}: ${difference.reason}`)
-    }
-
+    console.log(renderReplay(result, colorEnabled()).join("\n"))
     process.exitCode = result.exitCode
   },
 })
