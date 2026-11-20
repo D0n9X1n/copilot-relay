@@ -6,7 +6,7 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
 import { paths, ensurePaths } from "~/lib/paths"
-import { fetchUpstream } from "~/lib/upstream-dispatcher"
+import { fetchUpstream, type UpstreamRequestInit } from "~/lib/upstream-dispatcher"
 
 const copilotVersion = "0.26.7"
 const editorPluginVersion = `copilot-chat/${copilotVersion}`
@@ -29,6 +29,63 @@ interface DeviceCodeResponse {
 
 interface AccessTokenResponse {
   access_token?: string
+  error?: string
+}
+
+// Each GitHub auth call, body read included, gets this long; a stalled connection then fails
+// instead of holding startup.
+export const authCallTimeoutMs = 30_000
+
+// How long to poll when GitHub's device code reports no usable expires_in.
+export const defaultDeviceFlowSeconds = 900
+
+// The time the device flow waits on, so a test can drive it. `deadline` returns a signal that
+// aborts after `ms`; `sleep` rejects when its signal aborts.
+export interface AuthClock {
+  now: () => number
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>
+  deadline: (ms: number) => AbortSignal
+}
+
+export type AuthFetch = (url: string, init: UpstreamRequestInit) => Promise<Response>
+
+const realClock: AuthClock = {
+  now: () => Date.now(),
+  sleep: (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason)
+    }
+
+    signal?.addEventListener("abort", onAbort, { once: true })
+  }),
+  deadline: (ms) => AbortSignal.timeout(ms),
+}
+
+// One GitHub auth call and its JSON body, bounded by `bound` and by the caller's own signal.
+const fetchAuthJson = async <T>(
+  url: string,
+  init: UpstreamRequestInit,
+  bound: AbortSignal,
+  fetch: AuthFetch,
+  failure: string,
+): Promise<T> => {
+  const signal = init.signal ? AbortSignal.any([init.signal, bound]) : bound
+  const response = await fetch(url, { ...init, signal })
+  if (!response.ok) {
+    throw new HTTPError(failure, response)
+  }
+
+  return (await response.json()) as T
 }
 
 interface CopilotTokenResponse {
@@ -66,11 +123,6 @@ const standardHeaders = () => ({
   accept: "application/json",
   "content-type": "application/json",
 })
-
-const sleep = (ms: number) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
 
 const readGitHubToken = async () => {
   await ensurePaths()
@@ -196,74 +248,87 @@ const githubHeaders = (githubToken: string, vsCodeVersion: string) => ({
   "x-vscode-user-agent-library-version": "electron-fetch",
 })
 
-const getDeviceCode = async (): Promise<DeviceCodeResponse> => {
-  const response = await fetchUpstream(`${githubBaseUrl}/login/device/code`, {
+export const getDeviceCode = (clock: AuthClock = realClock, fetch: AuthFetch = fetchUpstream): Promise<DeviceCodeResponse> =>
+  fetchAuthJson<DeviceCodeResponse>(`${githubBaseUrl}/login/device/code`, {
     method: "POST",
     headers: standardHeaders(),
     body: JSON.stringify({
       client_id: githubClientId,
       scope: githubAppScopes,
     }),
-  })
+  }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get device code")
 
-  if (!response.ok) {
-    throw new HTTPError("Failed to get device code", response)
-  }
-
-  return (await response.json()) as DeviceCodeResponse
-}
-
-const pollAccessToken = async (
+// Polls until the user authorizes in the browser or the device code expires. Each poll and each wait
+// is cut to the time left, so the flow never outlives the code. A pending answer waits the interval;
+// slow_down adds five seconds to it for good; a denied or expired code stops at once; a network
+// failure or an error status is retried at the current interval.
+export const pollAccessToken = async (
   deviceCode: DeviceCodeResponse,
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
 ): Promise<string> => {
-  // GitHub asks clients to poll at `interval`; add a one-second cushion so
-  // long waits do not accidentally trigger OAuth `slow_down` responses.
-  const sleepDuration = (deviceCode.interval + 1) * 1000
+  const expiresIn = Number.isFinite(deviceCode.expires_in) && deviceCode.expires_in > 0 ?
+      deviceCode.expires_in
+    : defaultDeviceFlowSeconds
+  const endsAt = clock.now() + expiresIn * 1000
+  let intervalMs = (Number.isFinite(deviceCode.interval) && deviceCode.interval > 0 ? deviceCode.interval : 5) * 1000
+  const timeLeft = () => endsAt - clock.now()
 
-  // Device auth is intentionally user-driven: keep polling until the user
-  // finishes authorization in the browser instead of treating pending states
-  // as fatal startup errors.
-  while (true) {
-    const response = await fetchUpstream(`${githubBaseUrl}/login/oauth/access_token`, {
-      method: "POST",
-      headers: standardHeaders(),
-      body: JSON.stringify({
-        client_id: githubClientId,
-        device_code: deviceCode.device_code,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      }),
-    })
-
-    if (!response.ok) {
-      await sleep(sleepDuration)
-      continue
+  while (timeLeft() > 0) {
+    let answer: AccessTokenResponse | undefined
+    try {
+      answer = await fetchAuthJson<AccessTokenResponse>(`${githubBaseUrl}/login/oauth/access_token`, {
+        method: "POST",
+        headers: standardHeaders(),
+        body: JSON.stringify({
+          client_id: githubClientId,
+          device_code: deviceCode.device_code,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+      }, clock.deadline(Math.min(authCallTimeoutMs, timeLeft())), fetch, "GitHub device authorization poll failed")
+    } catch {
+      // A network failure, an error status or a stalled body: try again at the current interval.
+      answer = undefined
     }
 
-    const json = (await response.json()) as AccessTokenResponse
-    if (json.access_token) {
-      return json.access_token
+    if (answer?.access_token) {
+      return answer.access_token
     }
 
-    await sleep(sleepDuration)
+    if (answer?.error === "access_denied") {
+      throw new Error("GitHub sign-in was denied in the browser. Run copilot-relay auth to try again.")
+    }
+
+    if (answer?.error === "expired_token") {
+      throw new Error("The GitHub device code expired before sign-in finished. Run copilot-relay auth to get a new one.")
+    }
+
+    if (answer?.error === "slow_down") {
+      intervalMs += 5000
+    }
+
+    const wait = Math.min(intervalMs, timeLeft())
+    if (wait <= 0) {
+      break
+    }
+
+    await clock.sleep(wait)
   }
+
+  throw new Error("GitHub sign-in did not finish before the device code expired. Run copilot-relay auth to try again.")
 }
 
-const getGitHubUser = async (
+export const getGitHubUser = (
   githubToken: string,
   vsCodeVersion: string,
   signal?: AbortSignal,
-): Promise<GitHubUserResponse> => {
-  const response = await fetchUpstream(`${githubApiBaseUrl}/user`, {
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
+): Promise<GitHubUserResponse> =>
+  fetchAuthJson<GitHubUserResponse>(`${githubApiBaseUrl}/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
-    signal,
-  })
-
-  if (!response.ok) {
-    throw new HTTPError("Failed to get GitHub user", response)
-  }
-
-  return (await response.json()) as GitHubUserResponse
-}
+    ...(signal && { signal }),
+  }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get GitHub user")
 
 const getCopilotToken = async (
   githubToken: string,
