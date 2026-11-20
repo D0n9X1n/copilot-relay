@@ -279,7 +279,7 @@ export const models = defineCommand({
       if (search === "" && hidden > 0) {
         lines.push(hidden === 1
           ? "1 model that is not a chat model is hidden: copilot-relay models --all"
-          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`)
+          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`, "")
       }
 
       if (result.models.length > 0) {
