@@ -35,7 +35,6 @@ import {
   getModelRouting,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
-  type ReasoningEffort,
 } from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
@@ -274,7 +273,7 @@ const buildWebSearchRequestPayload = (
   payload: ClaudeMessagesPayload,
   requestedQuery: string,
   model: string,
-  effort: ReasoningEffort | undefined,
+  effort: string | undefined,
 ) => ({
   model,
   input: buildSearchInput(payload, requestedQuery),
@@ -704,7 +703,7 @@ export const createClaudeWebSearchExecution = async (
     )
   }
 
-  let effort: ReasoningEffort | undefined
+  let effort: string | undefined
 
   try {
     effort = resolveModelReasoningEffort(config, backendModel, getClaudeTurnEffort(payload).requested)

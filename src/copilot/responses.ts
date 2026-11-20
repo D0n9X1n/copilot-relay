@@ -44,6 +44,7 @@ export interface ResponsesApiResponse {
 
 export type ResponsesReasoningEffort =
   | "none"
+  | "minimal"
   | "low"
   | "medium"
   | "high"

@@ -111,13 +111,55 @@ export function getCachedCopilotModel(
 export const advertisesNoReasoningEffort = (capabilities: CopilotModel | undefined): boolean =>
   capabilities?.reasoningEfforts?.length === 0
 
+// The levels Copilot's /responses accepts, as its own error for an unknown level lists them. Used
+// when the catalog does not say which levels a model takes.
+const copilotReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+// Every level Codex can send, lowest first. Codex offers "ultra" for several models; Copilot
+// answers it with HTTP 400.
+const effortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+
+const effortRank = (effort: string): number => effortOrder.indexOf(effort)
+
+/**
+ * The reasoning effort to send for a requested one.
+ *
+ * A level the model advertises, or one this relay does not know, is sent as requested. Any other
+ * level becomes the highest advertised level below it, or the lowest advertised level when none is
+ * below it. A model that advertises no levels gets none, since Copilot rejects the field for it.
+ */
+export const clampReasoningEffort = (
+  requested: string,
+  advertised: Array<string> | undefined,
+): string | undefined => {
+  if (advertised?.length === 0) {
+    return undefined
+  }
+
+  const accepted = advertised ?? copilotReasoningEfforts
+  if (accepted.includes(requested) || effortRank(requested) === -1) {
+    return requested
+  }
+
+  const ranked = accepted
+    .filter((effort) => effortRank(effort) !== -1)
+    .sort((left, right) => effortRank(left) - effortRank(right))
+  const below = ranked.filter((effort) => effortRank(effort) <= effortRank(requested))
+
+  return below.at(-1) ?? ranked[0]
+}
+
+// The effort a Claude adapter sends: the requested or configured level, clamped to the levels the
+// model advertises, since Copilot answers HTTP 400 to one it does not. The result can be a level
+// only Copilot uses, such as minimal, so it is a wire string rather than a client effort.
 export function resolveModelReasoningEffort(
   config: ProxyConfig,
   model: string,
   requested?: ReasoningEffort,
-): ReasoningEffort | undefined {
-  if (!advertisesNoReasoningEffort(getCachedCopilotModel(config, model))) {
-    return resolveReasoningEffort(requested)
+): string | undefined {
+  const capabilities = getCachedCopilotModel(config, model)
+  if (!advertisesNoReasoningEffort(capabilities)) {
+    return clampReasoningEffort(resolveReasoningEffort(requested), capabilities?.reasoningEfforts)
   }
 
   // Only the relay's implicit default may be omitted; explicit intent must not disappear.
