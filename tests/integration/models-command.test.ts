@@ -448,6 +448,18 @@ test("models hides non-chat models from the plain listing, shows them with --all
   const colored = await harness.run(["models", "--all"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
   assert.match(colored.rawStdout, /\u001b\[33m/)
   assert.doesNotMatch(all.rawStdout, /\u001b/)
+
+  // The notes under the table are gray, so the eye stays on the table.
+  const listed = await harness.run(["models"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
+  assert.match(listed.rawStdout, /^\u001b\[90m1 model that is not a chat model is hidden: copilot-relay models --all\u001b\[0m$/m)
+  assert.match(listed.rawStdout, /^\u001b\[90mInference, tool, and effort compatibility are not verified by this listing\.\u001b\[0m$/m)
+  assert.match(listed.rawStdout, /^\u001b\[90m\(a real request, so it consumes Copilot usage\)\.\u001b\[0m$/m)
+
+  // A search heading is bold, whether it finds the model or only the closest IDs.
+  const found = await harness.run(["models", "ada"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
+  assert.match(found.rawStdout, /^\u001b\[1mUpstream models matching\u001b\[22m "ada" \(1\):$/m)
+  const closest = await harness.run(["models", "gpt6-astraa"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
+  assert.match(closest.rawStdout, /^No upstream model matches "gpt6-astraa"\. \u001b\[1mClosest IDs\u001b\[22m \(\d+\):$/m)
 })
 
 test("a search term and its hint never print a registered sensitive URL", async (t) => {

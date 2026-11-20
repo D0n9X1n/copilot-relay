@@ -857,7 +857,7 @@ export const renderCacheReport = (
   }
 
   const lines = [
-    heading(viewTitles[options.view], `${describeScope(options)} · goal ${options.goal}%`),
+    heading(viewTitles[options.view], `${describeScope(options)} · goal ${options.goal}%`, color),
     "",
     ...renderTable(tableColumns(rows, options.view, unicode), rows, color),
   ]

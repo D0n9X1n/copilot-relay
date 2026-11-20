@@ -1,6 +1,18 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
-import { colorText, columnWidths, displayWidth, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import {
+  colorText,
+  columnWidths,
+  displayWidth,
+  formatTokens,
+  mark,
+  priceRamp,
+  rampShade,
+  renderTable,
+  unicodeEnabled,
+  type ColorDepth,
+  type TableColumn,
+} from "./terminal"
 import { redactedMarker } from "./redact"
 
 export interface ListedModel {
@@ -168,10 +180,24 @@ const noteIndent = "    "
  * name then fits whole as well: a cut name such as "Claude Op…" loses what tells two models apart,
  * and MODEL already names each one. Without Unicode every mark is ASCII; no mark relies on color.
  */
-export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
+export const renderModelRows = (models: ListedModel[], color: boolean | ColorDepth = false, unicode = unicodeEnabled()): string[] => {
+  // true means color at the 16 colors every terminal has; a depth asks for more.
+  let depth: ColorDepth = color === true ? 4 : 0
+  if (typeof color === "number") {
+    depth = color
+  }
+
+  const colored = depth !== 0
+  // COST runs from green at the cheapest output price to red at the dearest; see priceRamp.
+  const position = priceRamp(models.flatMap((model) => model.price === undefined ? [] : [model.price.output]))
+  const costShade = (model: ListedModel): string | undefined => {
+    const at = position(model.price?.output)
+    return at === undefined || depth === 0 ? undefined : rampShade(at, depth)
+  }
+
   const fixed: Array<TableColumn<ListedModel>> = [
-    { header: "MODEL", align: "left", cell: (model) => model.id },
-    { header: "COST", align: "right", cell: (model) => costOf(model, unicode) },
+    { header: "MODEL", align: "left", cell: (model) => model.id, bold: (model) => model.slot !== undefined },
+    { header: "COST", align: "right", cell: (model) => costOf(model, unicode), tone: costShade },
     { header: "CONTEXT", align: "right", cell: (model) => contextOf(model, unicode) },
   ]
   const anyUnusable = models.some((model) => model.unusable !== undefined)
@@ -192,11 +218,13 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
 
   // NAME stays only when some model has a name and every name fits whole beside the others; an ID
   // is never cut, so a long one can still push a row past 80.
-  const withName = [columns[0], { header: "NAME", align: "left" as const, cell: (model: ListedModel) => model.name ?? "" }, ...columns.slice(1)]
+  // NAME repeats the ID in words, so it is muted and the ID leads.
+  const nameColumn: TableColumn<ListedModel> = { header: "NAME", align: "left", cell: (model) => model.name ?? "", tone: () => "muted" }
+  const withName = [columns[0], nameColumn, ...columns.slice(1)]
   const named = models.some((model) => model.name !== undefined)
   const shown = named && widthOf(withName, models) <= lineWidth ? withName : columns
 
-  const [header, ...rows] = renderTable(shown, models, color)
+  const [header, ...rows] = renderTable(shown, models, colored)
   const lines = [header]
   for (const [index, row] of rows.entries()) {
     const model = models[index]
@@ -204,7 +232,7 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
     lines.push(row)
 
     if (note !== "" && !inline(model)) {
-      lines.push(noteIndent + (model.unusable === undefined ? note : colorText(note, "warning", color)))
+      lines.push(noteIndent + (model.unusable === undefined ? note : colorText(note, "warning", colored)))
     }
   }
 

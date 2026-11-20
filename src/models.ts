@@ -9,7 +9,7 @@ import { HTTPError } from "~/lib/error"
 import { consola } from "consola"
 
 import { flushLogs, log, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
-import { colorEnabled, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
+import { boldText, colorDepth, colorText, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
 import {
@@ -92,19 +92,21 @@ const configuredModels = (
     }
   })
 
-const listingHeading = (search: string, result: ModelSearch, total: number, all: boolean): string => {
+const listingHeading = (search: string, result: ModelSearch, total: number, all: boolean, color: boolean): string => {
   if (search === "") {
     if (total === 0) {
       return "No models advertised by upstream."
     }
 
-    return all ? heading("Copilot models", String(total)) : heading("Copilot chat models", `${result.models.length} of ${total}`)
+    return all
+      ? heading("Copilot models", String(total), color)
+      : heading("Copilot chat models", `${result.models.length} of ${total}`, color)
   }
 
   const label = printable(search)
 
   if (result.found) {
-    return `Upstream models matching "${label}" (${result.models.length}):`
+    return `${boldText("Upstream models matching", color)} "${label}" (${result.models.length}):`
   }
 
   if (result.models.length === 0) {
@@ -112,7 +114,7 @@ const listingHeading = (search: string, result: ModelSearch, total: number, all:
     return `No upstream model matches "${label}".\nList them all with copilot-relay models --all.`
   }
 
-  return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
+  return `No upstream model matches "${label}". ${boldText("Closest IDs", color)} (${result.models.length}):`
 }
 
 export const models = defineCommand({
@@ -277,25 +279,30 @@ export const models = defineCommand({
       // The plain listing shows chat models; --all and a search show every match.
       const shown = search === "" && !args.all ? listed.filter((model) => model.chat !== false) : listed
       const result: ModelSearch = search === "" ? { found: true, models: shown } : searchModels(listed, search)
-      const color = colorEnabled()
-      const lines = [listingHeading(search, result, listed.length, Boolean(args.all))]
+      // The depth picks the price ramp's colors; any depth above 0 also turns on bold and tones.
+      const depth = colorDepth()
+      const color = depth !== 0
+      const lines = [listingHeading(search, result, listed.length, Boolean(args.all), color)]
 
       if (result.models.length > 0) {
-        lines.push("", ...renderModelRows(result.models, color), "")
+        lines.push("", ...renderModelRows(result.models, depth), "")
       }
 
+      // The notes under the table are muted, so the eye stays on the table above them.
       const hidden = listed.length - shown.length
       if (search === "" && hidden > 0) {
-        lines.push(hidden === 1
+        lines.push(colorText(hidden === 1
           ? "1 model that is not a chat model is hidden: copilot-relay models --all"
-          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`, "")
+          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`, "muted", color), "")
       }
 
       if (result.models.length > 0) {
         lines.push(
-          "Inference, tool, and effort compatibility are not verified by this listing.",
-          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}`,
-          "(a real request, so it consumes Copilot usage).",
+          ...[
+            "Inference, tool, and effort compatibility are not verified by this listing.",
+            `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}`,
+            "(a real request, so it consumes Copilot usage).",
+          ].map((note) => colorText(note, "muted", color)),
         )
       }
 

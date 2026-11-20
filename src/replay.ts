@@ -1179,7 +1179,7 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
   // The recorded method and path are made printable here, so the pass at the end can keep the
   // verdict's color.
   const lines = [
-    heading("Replay", summary === undefined ? undefined : `${printableCell(summary.method)} ${printableCell(summary.path)}`),
+    heading("Replay", summary === undefined ? undefined : `${printableCell(summary.method)} ${printableCell(summary.path)}`, color),
     "",
     `  ${colorText(verdict, view.tone, color)}${" ".repeat(labelWidth - verdict.length)}${view.meaning}`,
   ]
@@ -1198,7 +1198,7 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
   }
 
   if (result.differences.length > 0) {
-    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "", ...renderDifferences(result.differences))
+    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`, undefined, color), "", ...renderDifferences(result.differences))
   }
 
   // Every untrusted part was made printable before it was placed. As a backstop each line is

@@ -17,6 +17,20 @@ There is no `--version` option: `copilot-relay --version` prints
 the CLI that ran it and, when a relay is running, the version that relay reports,
 or `unknown` for a relay that does not report one.
 
+### Color and style
+
+On a terminal every command styles its output the same way. Titles, section labels
+and column names are bold, so the eye finds them first. A state, verdict or result
+is colored green, yellow or red, and always carries a mark and a word as well, so
+nothing depends on color. Detail that supports a value, such as a pid in
+parentheses or an unset setting's note, is gray. In `models`, COST runs from green
+at the cheapest price to red at the dearest; see [`models`](#models).
+
+Styling is on only when stdout is a terminal. `NO_COLOR` (any value), piped
+output and `TERM=dumb` turn every style off, bold included; `FORCE_COLOR` turns it
+on, and `FORCE_COLOR=2` or `3` asks for 256 or 16 million colors. The plain text is
+the same either way, and `--json` output is never styled.
+
 ## Summary
 
 | Command | What it does | Contacts |
@@ -323,7 +337,12 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 Lists the chat models Copilot's catalog advertises as a table of exact IDs, display
 names, costs and context windows. COST is what the catalog reports, in USD per
 million input/output tokens (`$8/$40`), or premium requests per call (`1×`) when it
-reports only a multiplier, or `–`. A window of at least 1M is marked `[1m]`, the ID
+reports only a multiplier, or `–`. A price is colored by its output price on a log
+scale over the priced rows shown: the cheapest paid price is green, the dearest red,
+those between amber and orange, and a free one (`$0/$0`) green; a multiplier, or a
+listing with nothing to compare, is not colored. Orange needs a 256-color terminal;
+on 16 colors the scale is three bands, green, yellow and red. The ID a config key
+names is bold. A window of at least 1M is marked `[1m]`, the ID
 suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
 `gptModel` or `opusModel` names. Models that are not chat models, such as
 embeddings, are left out and counted under the table; `--all` lists them too, marked

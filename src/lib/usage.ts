@@ -241,7 +241,7 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
   const detailLines = (row: QuotaRow): Array<string> => quotaDetails(row.snapshot).map((detail) => `${detailIndent}${printableCell(detail)}`)
   const table = [header, ...body.flatMap((line, index) => [line, ...detailLines(rows[index])])]
 
-  const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`)]
+  const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`, color)]
   if (usage.access_type_sku !== null) {
     lines.push(`SKU ${usage.access_type_sku}`)
   }
