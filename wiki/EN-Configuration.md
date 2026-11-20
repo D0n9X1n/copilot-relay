@@ -206,8 +206,10 @@ by nonzero outcome counts. A model ID appears once; long IDs wrap rather than
 being silently shortened. Rows arrive as each sequential probe finishes. `*`
 means effort or endpoint metadata was not advertised, not that it was verified.
 
-TTY output uses green for PASS, red for FAIL, yellow for INCOMPLETE and muted
-SKIPPED/NOT_TESTED labels. `status` and `status --deep` use the same policy for
+Each status starts with a mark that does not need color: `✓ PASS`, `✗ FAIL`,
+`! INCOMPLETE`, and `– SKIPPED` or `– NOT_TESTED` (`ok`, `x`, `!` and `-` where the
+terminal cannot show them). TTY output adds green for PASS, red for FAIL, yellow
+for INCOMPLETE and muted SKIPPED/NOT_TESTED. `status` and `status --deep` use the same policy for
 health, upstream checks and version mismatches. Text labels remain authoritative;
 color never changes an exit code. Pipes and dumb terminals default to plain text;
 `NO_COLOR` or `FORCE_COLOR=0` disables ANSI; `FORCE_COLOR=1` (also `2`, `3`, `true`

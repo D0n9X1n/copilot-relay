@@ -1009,8 +1009,8 @@ test("models deep never probes or prints a model ID or reply model holding the r
 
   assert.equal(result.code, 2, result.output)
   assert.deepEqual(sent, ["echo-model"])
-  assert.equal(result.stdout.match(/^\[unsupported ID\] +SKIPPED +- +Unsupported model ID \*$/gm)?.length, 2)
-  assert.match(result.stdout, /^echo-model +FAIL +\S+ +Model mismatch$/m)
+  assert.equal(result.stdout.match(/^ {2}\[unsupported ID\] +\S+ SKIPPED +- +Unsupported model ID \*$/gm)?.length, 2)
+  assert.match(result.stdout, /^ {2}echo-model +\S+ FAIL +\S+ +Model mismatch$/m)
   assert.match(result.stdout, /reported=unreported reason=model-mismatch/)
   assert.doesNotMatch(result.output, /relay-fixture/)
 })
@@ -1053,7 +1053,7 @@ for (const [name, env, colored] of [
     const result = await harness.run(["models", "--deep"], env)
 
     assert.equal(result.code, 0)
-    assert.equal(/\u001b\[32mPASS\u001b\[0m/.test(result.rawStdout), colored)
+    assert.equal(/\u001b\[32m\S+ PASS\u001b\[0m/.test(result.rawStdout), colored)
     if (!colored) {
       assert.doesNotMatch(result.rawStdout, /\u001b/)
     }
@@ -1197,7 +1197,7 @@ for (const interrupt of [false, true]) {
       assert.doesNotMatch(result.output, /PROBE_INTERRUPT_HANDLER_NOT_READY/)
     }
 
-    assert.match(result.stdout, /claude-opus-5\.5\s+NOT_TESTED/)
+    assert.match(result.stdout, /claude-opus-5\.5\s+\S+ NOT_TESTED/)
     assert.match(result.stdout, /Summary: 2 not tested/)
     assert.doesNotMatch(result.stdout, /\bFAIL\b|\bPASS\b/)
     assert.equal(harness.requests.filter((request) => request.method === "POST").length, 1)
@@ -1226,8 +1226,8 @@ test("models deep continues after a per-model timeout", async (t) => {
   assert.equal(result.code, 2)
   assert.match(result.stdout, /PROBE_DEADLINE_DELIVERED/)
   assert.match(result.stdout, /PROBE_DEADLINES_INDEPENDENT/)
-  assert.match(result.stdout, /claude-opus-5\.5\s+FAIL[^\n]+Timed out/)
-  assert.match(result.stdout, /gpt-6-astra\s+PASS[^\n]+Ready/)
+  assert.match(result.stdout, /claude-opus-5\.5\s+\S+ FAIL[^\n]+Timed out/)
+  assert.match(result.stdout, /gpt-6-astra\s+\S+ PASS[^\n]+Ready/)
   assert.match(result.stdout, /Summary: 1 passed · 1 failed/)
   assert.equal(harness.requests.filter((request) => request.method === "POST").length, 2)
 })

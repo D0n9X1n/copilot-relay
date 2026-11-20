@@ -1,4 +1,4 @@
-import { colorText, terminalText, type TerminalTone } from "./terminal"
+import { colorText, mark, terminalText, unicodeEnabled, type MarkState, type TerminalTone } from "./terminal"
 import type { RequestDiagnostic } from "./request-trace"
 
 export type ProbeStatus = "PASS" | "FAIL" | "INCOMPLETE" | "SKIPPED" | "NOT_TESTED"
@@ -26,6 +26,21 @@ const tones: Record<ProbeStatus, TerminalTone> = {
   SKIPPED: "muted",
   NOT_TESTED: "muted",
 }
+
+// Every status carries a mark, so it does not depend on color.
+const marks: Record<ProbeStatus, MarkState> = {
+  PASS: "ok",
+  FAIL: "fail",
+  INCOMPLETE: "warn",
+  SKIPPED: "off",
+  NOT_TESTED: "off",
+}
+
+// The table's indent and the columns beside the model: indent 2, gutter 2, status 12, gutter 2,
+// time 6, gutter 2.
+const indent = "  "
+const statusWidth = 12
+const fixedColumns = 26
 
 const reasonLabels: Record<string, string> = {
   "completed-text": "Ready",
@@ -65,17 +80,18 @@ export const probeReason = (code: string): string =>
   reasonLabels[code]
   ?? (/^HTTP-\d{3}$/.test(code) ? `HTTP ${code.slice(5)}` : "Unknown result")
 
-// Capping the model column at columns - 42 leaves the result at least 20 columns beside the 22 that
-// status and time take. The model column is at least 14 wide, so a terminal narrower than 56
-// columns squeezes the result instead.
+// Sized once from every ID the run will probe, so rows printed as each probe finishes line up.
+// Capping the model column at columns - 46 leaves the result at least 20 columns beside the 26 that
+// the indent, status and time take. The model column is at least 14 wide, so a terminal narrower
+// than 60 columns squeezes the result instead. A longer ID wraps within its column; it is never cut.
 export const probeColumnWidth = (ids: string[], columns: number): number =>
   Math.min(
     Math.max(14, ...ids.map((id) => terminalText(id).length)),
-    Math.max(14, columns - 42),
+    Math.max(14, columns - fixedColumns - 20),
   )
 
 export const renderProbeHeader = (width: number): string =>
-  `${"MODEL".padEnd(width)}  ${"STATUS".padEnd(10)}  ${"TIME".padStart(6)}  RESULT`
+  `${indent}${"MODEL".padEnd(width)}  ${"STATUS".padEnd(statusWidth)}  ${"TIME".padStart(6)}  RESULT`
 
 const wrap = (text: string, width: number): string[] => {
   const lines: string[] = []
@@ -104,22 +120,29 @@ const probeTime = (row: ProbeRow): string => {
   return `${(seconds / 3600).toFixed(1)}h`
 }
 
-export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, columns = 80): string[] => {
+export const renderProbeRow = (
+  row: ProbeRow,
+  width: number,
+  color: boolean,
+  columns = 80,
+  unicode = unicodeEnabled(),
+): string[] => {
   const modelLines = wrap(terminalText(row.id), width)
   const time = probeTime(row)
   const label = probeReason(row.detail) + (row.unverified ? " *" : "")
-  const resultLines = wrap(label, Math.max(1, columns - width - 22))
+  const resultLines = wrap(label, Math.max(1, columns - width - fixedColumns))
   // ANSI bytes do not occupy columns, so pad the uncolored label separately.
-  const status = colorText(row.status, tones[row.status], color) + " ".repeat(10 - row.status.length)
+  const statusText = `${mark(marks[row.status], unicode)} ${row.status}`
+  const status = colorText(statusText, tones[row.status], color) + " ".repeat(Math.max(0, statusWidth - statusText.length))
 
   // The model ID and the result wrap independently. Status and time sit on the first line only;
-  // later lines leave those 22 columns blank.
+  // later lines leave those columns blank.
   return Array.from(
     { length: Math.max(modelLines.length, resultLines.length) },
     (_, index) => {
       const model = (modelLines[index] ?? "").padEnd(width)
-      const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(22)
-      return `${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
+      const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(fixedColumns - indent.length)
+      return `${indent}${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
     },
   )
 }
