@@ -13,7 +13,7 @@ import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { withoutLogging } from "~/lib/log"
 import { paths } from "~/lib/paths"
-import { colorText, terminalText } from "~/lib/terminal"
+import { colorText, heading, mark, renderTable, terminalText, unicodeEnabled, type TableColumn, type TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher, InvalidProxyEnvironmentError } from "~/lib/upstream-dispatcher"
 
 // The quota ids GitHub sends today. They are always listed first, in this order; any other id the
@@ -122,69 +122,103 @@ export const parseCopilotUsage = (body: unknown): CopilotUsage => {
 
 const notReported = "not reported"
 
-// GitHub's number exactly as it arrived: no rounding, no separators, nothing derived from it.
-const formatNumber = (value: number | null): string => (value === null ? "?" : String(value))
+// GitHub's number with thousands separators and every decimal it sent; nothing rounded or derived.
+const formatNumber = (value: number | null): string => {
+  if (value === null) {
+    return "?"
+  }
 
-const formatAllowance = (snapshot: QuotaSnapshot): string => {
+  const [whole, fraction] = String(value).split(".")
+  const grouped = Number(whole).toLocaleString("en-US")
+
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`
+}
+
+// GitHub's own percent_remaining decides how low a quota is.
+const lowState = (snapshot: QuotaSnapshot): "warn" | "fail" | undefined => {
+  if (snapshot.unlimited === true || snapshot.percent_remaining === null) {
+    return undefined
+  }
+
+  if (snapshot.percent_remaining < 5) {
+    return "fail"
+  }
+
+  return snapshot.percent_remaining < 20 ? "warn" : undefined
+}
+
+const lowTones: Record<"warn" | "fail", TerminalTone> = { warn: "warning", fail: "bad" }
+
+const formatLeft = (snapshot: QuotaSnapshot, unicode: boolean): string => {
   if (snapshot.unlimited === true) {
     return "unlimited"
   }
 
-  const remaining = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)} remaining`
+  const left = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)} (${formatNumber(snapshot.percent_remaining)}%)`
+  const state = lowState(snapshot)
 
-  return `${remaining} (${formatNumber(snapshot.percent_remaining)}%)`
+  return state === undefined ? left : `${mark(state, unicode)} ${left}`
 }
 
 const formatOverage = (snapshot: QuotaSnapshot): string => {
-  let permitted = "overage ?"
+  let permitted = "?"
 
   if (snapshot.overage_permitted === true) {
-    permitted = "overage permitted"
+    permitted = "permitted"
   } else if (snapshot.overage_permitted === false) {
-    permitted = "overage not permitted"
+    permitted = "not permitted"
   }
 
-  return `${permitted}, overage count ${formatNumber(snapshot.overage_count)}`
+  if (snapshot.overage_count === null || snapshot.overage_count === 0) {
+    return permitted
+  }
+
+  return `${permitted}, ${formatNumber(snapshot.overage_count)} used`
 }
 
-const formatQuota = (snapshot: QuotaSnapshot): string => {
-  const parts = [formatAllowance(snapshot), formatOverage(snapshot)]
-
-  if (snapshot.credits_used !== null) {
-    parts.push(`credits used ${formatNumber(snapshot.credits_used)}`)
-  }
-
-  return parts.join("; ")
+interface QuotaRow {
+  id: string
+  snapshot: QuotaSnapshot | null
 }
 
 /** The report as text lines. Kept free of IO, so it is tested without a terminal. */
-export const renderCopilotUsage = (usage: CopilotUsage, color = false): Array<string> => {
+export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode = unicodeEnabled()): Array<string> => {
   const shown = (value: string | null): string => value ?? colorText(notReported, "muted", color)
-
-  const headings: Array<[string, string | null]> = [
-    ["Plan", usage.copilot_plan],
-    ["SKU", usage.access_type_sku],
-    ["Quota reset", usage.quota_reset_date],
-  ]
-  const labelWidth = Math.max(...headings.map(([label]) => label.length))
 
   // The known ids first, in their fixed order, whatever order the object holds its keys in.
   const known: Array<string> = [...knownQuotaIds]
   const ids = [...known, ...Object.keys(usage.quota_snapshots).filter((id) => !known.includes(id))]
-  const idWidth = Math.max(...ids.map((id) => id.length))
+  const rows: Array<QuotaRow> = ids.map((id) => ({ id, snapshot: usage.quota_snapshots[id] ?? null }))
 
-  const quotaLines = ids.map((id) => {
-    const snapshot = usage.quota_snapshots[id] ?? null
-    const text = snapshot === null ? colorText(notReported, "muted", color) : formatQuota(snapshot)
+  const columns: Array<TableColumn<QuotaRow>> = [
+    { header: "QUOTA", align: "left", cell: (row) => row.id },
+    {
+      header: "LEFT",
+      align: "left",
+      cell: (row) => row.snapshot === null ? notReported : formatLeft(row.snapshot, unicode),
+      tone: (row) => {
+        if (row.snapshot === null) {
+          return "muted"
+        }
 
-    return `${id.padEnd(idWidth)}  ${text}`
-  })
-
-  return [
-    ...headings.map(([label, value]) => `${label.padEnd(labelWidth)}  ${shown(value)}`),
-    "",
-    ...quotaLines,
+        const state = lowState(row.snapshot)
+        return state === undefined ? undefined : lowTones[state]
+      },
+    },
+    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null ? "" : formatOverage(row.snapshot) },
   ]
+
+  // Only a token-billed quota reports credits, so the column appears only when one does.
+  if (rows.some((row) => row.snapshot?.credits_used !== null && row.snapshot?.credits_used !== undefined)) {
+    columns.push({ header: "CREDITS", align: "right", cell: (row) => row.snapshot?.credits_used == null ? "" : formatNumber(row.snapshot.credits_used) })
+  }
+
+  const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`)]
+  if (usage.access_type_sku !== null) {
+    lines.push(`SKU ${usage.access_type_sku}`)
+  }
+
+  return [...lines, "", ...renderTable(columns, rows, color)]
 }
 
 // A stalled connection fails with a clear line instead of waiting for the socket timeouts.
