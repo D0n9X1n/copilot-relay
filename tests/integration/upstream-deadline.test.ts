@@ -493,13 +493,22 @@ test("finished requests leave no trace reachable and barely grow the heap", asyn
       resolve(out)
     })
   })
-  const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as { growthBytes: number; sampled: number; reachable: number }
+  const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
+    growthBytes: number
+    sampled: number
+    reachable: number
+    deadlines: { created: number; disposed: number }
+  }
 
   // A request that kept its trace until a 180-second timer fired held about 11 KB each: 2,000
   // requests grew the heap by over 20 MiB. Freed traces leave at most 1 MiB.
   assert.equal(result.sampled, 20)
   assert.equal(result.reachable, 0, "no finished request's trace is still reachable")
   assert.ok(result.growthBytes <= 1024 * 1024, `heap grew ${result.growthBytes} bytes over 2,000 requests`)
+  // Every request of the mixed run, warm-up included, owned one deadline and disposed it at the end
+  // of its response, streamed or not: no timer is left pending.
+  assert.equal(result.deadlines?.created, 3000, "one deadline per request")
+  assert.equal(result.deadlines.disposed, result.deadlines.created, "every deadline disposed")
 })
 
 const { probeModels } = await import("../../src/lib/model-probe")
@@ -719,4 +728,36 @@ test("preflight disposes its deadline when a model check fails", async () => {
   const after = upstreamDeadlineCounts()
   assert.equal(after.created - before.created, 1)
   assert.equal(after.disposed - before.disposed, 1)
+})
+
+test("a request whose rejected token triggers the shared refresh leaves its trace unreachable", async () => {
+  const { execFile } = await import("node:child_process")
+  const fixture = path.join(import.meta.dirname, "..", "fixtures", "refresh-trace-heap.ts")
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(process.execPath, ["--expose-gc", "--import", "tsx", fixture], {
+      cwd: path.join(import.meta.dirname, "..", ".."),
+      timeout: 60_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }, (error, out) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve(out)
+    })
+  })
+  const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
+    exchanges: number
+    ordinaryReachable: boolean
+    refreshedReachable: boolean
+    deadlines: { created: number; disposed: number }
+  }
+
+  // The second request's 401 ran the real token exchange once and was retried with the new token.
+  assert.equal(result.exchanges, 1)
+  assert.deepEqual(result.deadlines, { created: 2, disposed: 2 })
+  assert.equal(result.ordinaryReachable, false, "an ordinary finished trace is collected")
+  // The exchange reschedules the periodic refresh timer; that timer must not hold the request.
+  assert.equal(result.refreshedReachable, false, "the refreshed request's finished trace is collected")
 })
