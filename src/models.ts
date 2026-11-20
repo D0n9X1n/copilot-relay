@@ -3,7 +3,7 @@ import { defineCommand } from "citty"
 import { selectCopilotEndpoint } from "~/copilot/endpoint"
 import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { readAppConfig, type AppConfig } from "~/lib/app-config"
-import { setupProxyAuth } from "~/lib/auth"
+import { setupProxyAuth, signInLines } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { consola } from "consola"
@@ -235,9 +235,7 @@ export const models = defineCommand({
         // --deep keeps setup logging off the console, which would also hide the
         // default sign-in prompt, so the device code is printed to stderr here.
         await setupProxyAuth(config, args.deep ? {
-          onDeviceCode: (url, code) => console.error(
-            `Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`,
-          ),
+          onDeviceCode: (url, code) => console.error(signInLines(url, code).join("\n")),
         } : undefined)
 
         failure = "Could not fetch upstream model catalog"

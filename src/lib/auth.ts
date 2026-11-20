@@ -6,6 +6,7 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
 import { paths, ensurePaths } from "~/lib/paths"
+import { terminalText } from "~/lib/terminal"
 import { fetchUpstream, type UpstreamRequestInit } from "~/lib/upstream-dispatcher"
 
 const copilotVersion = "0.26.7"
@@ -69,6 +70,28 @@ const realClock: AuthClock = {
     signal?.addEventListener("abort", onAbort, { once: true })
   }),
   deadline: (ms) => AbortSignal.timeout(ms),
+}
+
+const quickEditTipText = "Tip: a click in this window pauses output; press Esc or Enter to resume."
+
+// In a Windows console with QuickEdit on, a click to copy the device code selects text and pauses the
+// process's console writes until Esc or Enter, which looks like sign-in hanging. The tip is shown
+// only on a Windows terminal, the stream that prints the code.
+export const quickEditTip = (
+  stream: { isTTY?: boolean },
+  platform: NodeJS.Platform = process.platform,
+): string | undefined => platform === "win32" && stream.isTTY === true ? quickEditTipText : undefined
+
+// What `setup` and `models --deep` print to stderr for the device code, the tip first.
+export const signInLines = (
+  url: string,
+  code: string,
+  stream: { isTTY?: boolean } = process.stderr,
+  platform: NodeJS.Platform = process.platform,
+): Array<string> => {
+  const tip = quickEditTip(stream, platform)
+  const line = `Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`
+  return tip === undefined ? [line] : [tip, line]
 }
 
 // One GitHub auth call and its JSON body, bounded by `bound` and by the caller's own signal.
@@ -384,6 +407,12 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
   if (options.onDeviceCode) {
     options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
   } else {
+    // The logger writes this prompt to stdout, so stdout decides whether the tip is shown.
+    const tip = quickEditTip(process.stdout)
+    if (tip !== undefined) {
+      log.info(tip)
+    }
+
     log.info(
       `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
     )

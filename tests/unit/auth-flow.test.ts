@@ -210,3 +210,37 @@ test("a stalled /user lookup fails after its own 30 seconds", async () => {
 
   await assert.rejects(lookup)
 })
+
+const { quickEditTip, signInLines } = await import("../../src/lib/auth")
+
+test("the QuickEdit tip appears only on a Windows terminal", () => {
+  const tip = "Tip: a click in this window pauses output; press Esc or Enter to resume."
+
+  assert.equal(quickEditTip({ isTTY: true }, "win32"), tip)
+  assert.equal(quickEditTip({ isTTY: false }, "win32"), undefined)
+  assert.equal(quickEditTip({ isTTY: undefined }, "win32"), undefined)
+  assert.equal(quickEditTip({ isTTY: true }, "darwin"), undefined)
+  assert.equal(quickEditTip({ isTTY: true }, "linux"), undefined)
+})
+
+test("the sign-in lines put the tip before the device code, on the stream that prints it", () => {
+  const url = "https://github.com/login/device"
+
+  assert.deepEqual(signInLines(url, "ABCD-1234", { isTTY: true }, "win32"), [
+    "Tip: a click in this window pauses output; press Esc or Enter to resume.",
+    "Sign in: open https://github.com/login/device and enter ABCD-1234.",
+  ])
+  assert.deepEqual(signInLines(url, "ABCD-1234", { isTTY: false }, "win32"), [
+    "Sign in: open https://github.com/login/device and enter ABCD-1234.",
+  ])
+  assert.deepEqual(signInLines(url, "ABCD-1234", { isTTY: true }, "linux"), [
+    "Sign in: open https://github.com/login/device and enter ABCD-1234.",
+  ])
+})
+
+const { authOutcomeLine } = await import("../../src/auth")
+
+test("auth names the signed-in user, or says the lookup failed without failing auth", () => {
+  assert.equal(authOutcomeLine("octocat"), "Logged in as octocat")
+  assert.equal(authOutcomeLine(undefined), "Logged in; GitHub user unavailable")
+})

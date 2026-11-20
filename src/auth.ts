@@ -7,6 +7,10 @@ import { readProxyConfig } from "~/lib/config"
 import { log } from "~/lib/log"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
+// The user lookup is best effort: sign-in has already succeeded when it fails or times out.
+export const authOutcomeLine = (login: string | undefined): string =>
+  login ? `Logged in as ${login}` : "Logged in; GitHub user unavailable"
+
 export const auth = defineCommand({
   meta: {
     name: "auth",
@@ -26,11 +30,7 @@ export const auth = defineCommand({
       force: true,
     })
 
-    const githubLogin = await authSession.githubLogin
-    if (githubLogin) {
-      log.info(`Logged in as ${githubLogin}`)
-    }
-
+    log.info(authOutcomeLine(await authSession.githubLogin))
     log.info("copilot-relay auth completed")
   },
 })
