@@ -179,6 +179,43 @@ test("preflight uses canonical upstream model ids", async () => {
   }
 })
 
+test("preflight probes the two slots and names selected IDs the catalog lacks", async (t) => {
+  const { log } = await import("../../src/lib/log")
+  const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-4.8", "grok-4.7"])
+  runtimeState.modelRouting = {
+    gptModel: "gpt-6-astra",
+    opusModel: "claude-opus-4.8",
+    models: ["grok-4.7", "not-in-catalog"],
+  }
+  runtimeState.upstreamBaseUrl = mock.baseUrl
+  runtimeState.thinkEffort = "max"
+  const logged: Array<string> = []
+  for (const level of ["error", "warn", "info"] as const) {
+    t.mock.method(log, level, (...values: Array<unknown>) => {
+      logged.push(values.join(" "))
+    })
+  }
+
+  try {
+    await validateUpstream({
+      copilotBaseUrl: mock.baseUrl, copilotToken: "test-token", host: "127.0.0.1",
+      port: 0, upstreamTimeoutMs: 1000, vsCodeVersion: "1.99.3",
+    }, "max")
+
+    assert.deepEqual(mock.requests.map((request) => request.path), ["/models", "/responses", "/chat/completions"])
+    const probedModels = mock.requests.flatMap((request) =>
+      request.path === "/models" ? [] : [(request.body as { model?: string }).model]
+    )
+    assert.deepEqual(probedModels, ["gpt-6-astra", "claude-opus-4.8"])
+    assert.ok(logged.some((line) => /Selected models not in Copilot's catalog, skipped: not-in-catalog$/.test(line)), logged.join("\n"))
+    assert.equal(logged.some((line) => /grok-4\.7/.test(line) && /skipped/.test(line)), false)
+    assert.equal(logged.some((line) => line.includes("test-token")), false)
+  } finally {
+    delete runtimeState.upstreamBaseUrl
+    await mock.close()
+  }
+})
+
 test("fresh default preflight probes Opus 5.5 without a context alias", async () => {
   const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"])
   runtimeState.thinkEffort = "max"

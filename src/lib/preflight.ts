@@ -7,7 +7,7 @@ import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
-import { getUpstreamModelIds } from "~/lib/models"
+import { findMissingModels, getModelRouting, getUpstreamModelIds } from "~/lib/models"
 import { loadCopilotModelCatalog, resolveModelReasoningEffort } from "~/copilot/models"
 import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { createChatCompletions } from "~/copilot/chat"
@@ -25,6 +25,12 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   }
 
   log.info(`Upstream models available: ${requiredModels.join(", ")}`)
+  // Selected extras are offered but never probed; one the catalog lacks is skipped, not fatal.
+  const missingSelected = findMissingModels(getModelRouting(), catalog.models)
+  if (missingSelected.length > 0) {
+    log.error(`Selected models not in Copilot's catalog, skipped: ${missingSelected.join(", ")}`)
+  }
+
   for (const model of requiredModels) {
     const limits = catalog.models.get(model)?.limits
     if (limits) {
