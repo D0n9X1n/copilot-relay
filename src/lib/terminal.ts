@@ -97,11 +97,6 @@ const cutCell = (text: string, maxWidth: number | undefined): string => {
   return `${kept}…`
 }
 
-const pad = (text: string, width: number, align: "left" | "right"): string => {
-  const spaces = " ".repeat(Math.max(0, width - displayWidth(text)))
-  return align === "right" ? spaces + text : text + spaces
-}
-
 const tableCell = <Row>(column: TableColumn<Row>, row: Row): string =>
   cutCell(printableCell(column.cell(row)), column.maxWidth)
 
@@ -116,9 +111,9 @@ export const columnWidths = <Row>(columns: Array<TableColumn<Row>>, rows: Array<
 
 /**
  * Lines of a table: a two-space indent and gutter, headers as given, every column as wide as its
- * widest cell or the given widths, whichever is wider, so an ID is never cut. Color is applied after
- * padding, so the plain text is the same with color on or off, and the last column carries no
- * trailing spaces.
+ * widest cell or the given widths, whichever is wider, so an ID is never cut. Color wraps each cell's
+ * text and padding stays outside it, so the plain text is the same with color on or off and no line
+ * ends in spaces.
  */
 export const renderTable = <Row>(
   columns: Array<TableColumn<Row>>,
@@ -136,13 +131,14 @@ export const renderTable = <Row>(
   const widths = columns.map((column, index) =>
     Math.max(minimumWidths[index] ?? 0, displayWidth(column.header), ...shown.map((rowCells) => displayWidth(rowCells[index]))))
 
-  // Padding is trimmed from the last column before color, whose reset would otherwise hide it.
+  // Color wraps the text alone and padding stays outside it, so a reset never hides trailing spaces
+  // and the plain text is the same with color on or off.
   const line = (texts: Array<string>, tones: Array<TerminalTone | undefined>): string => {
     const padded = texts.map((text, index) => {
-      const full = pad(text, widths[index], columns[index].align)
-      const cell = index === texts.length - 1 ? full.trimEnd() : full
+      const spaces = " ".repeat(Math.max(0, widths[index] - displayWidth(text)))
       const tone = tones[index]
-      return tone === undefined || cell === "" ? cell : colorText(cell, tone, color)
+      const shown = tone === undefined || text === "" ? text : colorText(text, tone, color)
+      return columns[index].align === "right" ? spaces + shown : shown + spaces
     })
     return `  ${padded.join("  ")}`.trimEnd()
   }

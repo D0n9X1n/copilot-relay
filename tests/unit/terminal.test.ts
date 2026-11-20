@@ -41,10 +41,10 @@ test("renderTable indents, pads with a two-space gutter and right-aligns numbers
   ])
 })
 
-test("renderTable colors after padding, so the plain text is the same with color on", () => {
+test("renderTable colors the text and pads outside the color, so the plain text is the same with color on", () => {
   const colored = renderTable(columns, rows, true)
   assert.deepEqual(colored.map((line) => stripVTControlCharacters(line)), renderTable(columns, rows, false))
-  assert.match(colored[2], /\u001b\[31m {2}72\.86%\u001b\[0m$/)
+  assert.match(colored[2], / {2}\u001b\[31m72\.86%\u001b\[0m$/)
 })
 
 test("renderTable writes no escape byte with color off", () => {
@@ -148,6 +148,26 @@ test("supplementary CJK takes two columns and a lone combining mark none", () =>
     renderTable([{ header: "ID", align: "left", cell: () => "𠀀𠀀x", maxWidth: 3 }], [{}], false)[1].trim(),
     "𠀀…",
   )
+})
+
+test("a colored cell followed by blank cells leaves no trailing padding", () => {
+  interface Quota {
+    quota: string
+    left: string
+  }
+
+  const quotaColumns: Array<TableColumn<Quota>> = [
+    { header: "QUOTA", align: "left", cell: (row) => row.quota },
+    { header: "LEFT", align: "left", cell: (row) => row.left, tone: () => "warning" },
+    { header: "USED", align: "right", cell: () => "" },
+    { header: "OVERAGE", align: "left", cell: () => "" },
+  ]
+
+  const rows = [{ quota: "premium", left: "100,000 of 1,000,000" }, { quota: "", left: "! 10% left" }]
+  const colored = renderTable(quotaColumns, rows, true).map((line) => stripVTControlCharacters(line))
+
+  assert.deepEqual(colored, renderTable(quotaColumns, rows, false))
+  assert.equal(colored[2], "           ! 10% left")
 })
 
 test("a text-presentation symbol takes one column and an emoji presentation two", () => {
