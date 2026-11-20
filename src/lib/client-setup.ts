@@ -4,12 +4,15 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
+import type { CatalogModel } from "~/codex/catalog"
 import { applyCodexSetup } from "~/codex/setup"
 import type { CopilotModelCatalog } from "~/copilot/models"
 import type { AppConfig } from "~/lib/app-config"
 import { applyClaudeAppSetup } from "~/lib/claude-app"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { getClaudeConfigPath, getCodexHome } from "~/lib/defaults"
+import { log } from "~/lib/log"
+import { parseModelSelection, resolveExposedModels } from "~/lib/models"
 import { paths } from "~/lib/paths"
 
 export const setupTargets = ["claude-code-cli", "claude-code-app", "codex-cli", "codex-app"] as const
@@ -64,6 +67,13 @@ export const setupClaudeCodeCli = async (context: SetupContext): Promise<SetupOu
   return { target: "claude-code-cli", path: result.configPath, status: result.changed ? "updated" : "already up to date" }
 }
 
+/** Codex's models: the exposed upstream IDs without [1m], gptModel first as Codex's default. */
+export const codexModels = (appConfig: AppConfig, catalog: CopilotModelCatalog | undefined): Array<CatalogModel> =>
+  resolveExposedModels(
+    { gptModel: appConfig.gptModel, opusModel: appConfig.opusModel, models: parseModelSelection(appConfig.models) },
+    catalog?.models,
+  ).map((id) => ({ id, capabilities: catalog?.models.get(id) }))
+
 // Codex CLI and the Codex app read the same $CODEX_HOME/config.toml.
 export const setupCodex = async (context: SetupContext, target: string): Promise<SetupOutcome> => {
   const { appConfig } = context
@@ -72,8 +82,7 @@ export const setupCodex = async (context: SetupContext, target: string): Promise
     baseUrl: context.baseUrl,
     catalogPath: paths.codexCatalogPath,
     codexHome: getCodexHome(),
-    // The same two models Claude Code offers; gptModel first, as Codex's default.
-    models: [appConfig.gptModel, appConfig.opusModel].map((id) => ({ id, capabilities: capabilities(context, id) })),
+    models: codexModels(appConfig, context.catalog),
     force: context.force,
   })
 
@@ -82,6 +91,30 @@ export const setupCodex = async (context: SetupContext, target: string): Promise
   }
 
   return { target, path: result.configPath, status: result.changed ? "updated" : "already up to date" }
+}
+
+/**
+ * `start`'s Codex setup when codexSetup is on: the same setup as `copilot-relay setup`, never forced,
+ * so a machine where Codex has not run is skipped. A failure is logged rather than stopping the relay.
+ */
+export const startupCodexSetup = async (
+  appConfig: AppConfig,
+  catalog: CopilotModelCatalog | undefined,
+  baseUrl: string,
+): Promise<void> => {
+  const codexHome = getCodexHome()
+  try {
+    const outcome = await setupCodex({ appConfig, baseUrl, catalog, force: false }, "codex")
+    if (outcome.status.startsWith("skipped")) {
+      log.info(`codex setup skipped: ${codexHome} does not exist`)
+    } else if (outcome.status === "updated") {
+      log.info(`codex settings updated: ${outcome.path}`)
+    } else {
+      log.info(`codex settings already up to date: ${outcome.path}`)
+    }
+  } catch (error) {
+    log.error(`Could not update codex settings (${codexHome}):`, error)
+  }
 }
 
 // The app lists opusModel first, its default as in Claude Code CLI, then gptModel for the sonnet and
