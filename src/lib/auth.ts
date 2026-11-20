@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
-import { paths, ensurePaths } from "~/lib/paths"
+import { ensurePaths, homeRelative, paths } from "~/lib/paths"
 import { fetchUpstream } from "~/lib/upstream-dispatcher"
 
 const copilotVersion = "0.26.7"
@@ -311,7 +311,7 @@ const isCopilotTokenError = (error: unknown): boolean =>
 const ensureGitHubToken = async (options: AuthOptions = {}) => {
   const existingToken = options.force ? "" : await readGitHubToken()
   if (existingToken) {
-    log.info(`Using cached GitHub token at ${paths.githubTokenPath}`)
+    log.info(`Using cached GitHub token at ${homeRelative(paths.githubTokenPath)}`)
     return existingToken
   }
 
@@ -326,7 +326,7 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
 
   const githubToken = await pollAccessToken(deviceCode)
   await writeGitHubToken(githubToken)
-  log.info(`GitHub token synced to ${paths.githubTokenPath}`)
+  log.info(`GitHub token synced to ${homeRelative(paths.githubTokenPath)}`)
 
   return githubToken
 }
@@ -431,7 +431,7 @@ export const setupProxyAuth = async (
   if (storedToken && getStoredTokenRemainingSeconds(storedToken) > 60) {
     config.copilotToken = storedToken.token
     refreshIn = getStoredTokenRemainingSeconds(storedToken)
-    log.info(`Using cached Copilot token at ${paths.copilotTokenPath}`)
+    log.info(`Using cached Copilot token at ${homeRelative(paths.copilotTokenPath)}`)
     scheduleCopilotTokenRefresh(refreshIn)
   } else {
     try {
@@ -485,6 +485,6 @@ export const runProxyAuth = async (
   })
 
   const user = await getGitHubUser(githubToken, config.vsCodeVersion)
-  log.info(`GitHub token written to ${paths.githubTokenPath}`)
+  log.info(`GitHub token written to ${homeRelative(paths.githubTokenPath)}`)
   log.info(`Logged in as ${user.login}`)
 }

@@ -395,7 +395,9 @@ test("models hides non-chat models from the plain listing, shows them with --all
   assert.match(plain.stdout, /^1 model that is not a chat model is hidden: copilot-relay models --all$/m)
   // Token-cache notices are diagnostics, so stdout holds only the answer.
   assert.doesNotMatch(plain.stdout, /Using cached|Next Copilot token refresh/)
-  assert.match(plain.stderr, /Using cached Copilot token/)
+  // The token files are named from ~, as the wiki's log samples show them.
+  assert.match(plain.stderr, /Using cached GitHub token at ~[\\/]\.copilot-relay[\\/]github_token$/m)
+  assert.match(plain.stderr, /Using cached Copilot token at ~[\\/]\.copilot-relay[\\/]copilot_token\.json$/m)
 
   const all = await harness.run(["models", "--all"])
 

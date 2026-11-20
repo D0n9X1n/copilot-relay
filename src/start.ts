@@ -137,7 +137,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // Checked before runtimeState.debug is updated below, so the warning appears
     // when debug capture switches on rather than on every reload.
     if (nextConfig.logLevel === "debug" && !runtimeState.debug) {
-      log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
+      // Two lines, so the warning fits a terminal beside the log prefix.
+      log.info("Debug capture stores full request and response bodies privately.")
+      log.info("Prompts may contain secrets: review a capture before sharing it.")
     }
 
     runtimeState.debug = nextConfig.logLevel === "debug"
