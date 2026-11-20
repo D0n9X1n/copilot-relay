@@ -15,7 +15,7 @@ process.env.CONSOLA_LEVEL = "0"
 const { createUpstreamDeadline, upstreamDeadlineCounts } = await import("../../src/lib/deadline")
 const { loadCopilotModelCatalog, loadStandaloneModelCatalog } = await import("../../src/copilot/models")
 const { createServer } = await import("../../src/server")
-const { getRequestTrace, withRecordedTransport } = await import("../../src/lib/request-trace")
+const { getRequestTrace, withRecordedTransport, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
 const { HTTPError } = await import("../../src/lib/error")
@@ -44,6 +44,44 @@ const completed = () => Response.json({
   status: "completed",
   output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
   usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+})
+
+// A catalog that predates the request and lacks its model, so admission refreshes it.
+const staleCatalogConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
+  ...configFor(upstreamTimeoutMs),
+  modelCatalog: { baseUrl: provider, models: new Map([["claude-opus-5.5", { type: "chat" }]]), fetchedAt: 0 },
+})
+
+const encoder = new TextEncoder()
+const sse = (event: Record<string, unknown>) => encoder.encode(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
+
+// A Responses stream that sends text the relay forwards to the client, then stalls until its
+// request's signal aborts; `aborted` records why.
+const stallingTextStream = (signal: AbortSignal | undefined, aborted: Array<string>) => new Response(new ReadableStream({
+  start(controller) {
+    controller.enqueue(sse({ type: "response.created", response: { id: "r", model, status: "in_progress", output: [] } }))
+    controller.enqueue(sse({ type: "response.output_item.added", output_index: 0, item: { type: "message", id: "m", role: "assistant", content: [] } }))
+    controller.enqueue(sse({ type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: "m", delta: "Hel" }))
+    signal?.addEventListener("abort", () => {
+      aborted.push((signal.reason as Error).name)
+      controller.error(signal.reason)
+    }, { once: true })
+  },
+}), { status: 200, headers: { "content-type": "text/event-stream" } })
+
+// Resolves after `ms`, or rejects when `signal` aborts first, as an upstream reply in flight does.
+const after = (ms: number, signal: AbortSignal | undefined) => new Promise<void>((resolve, reject) => {
+  const timer = setTimeout(resolve, ms)
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer)
+    reject(signal.reason)
+  }, { once: true })
+})
+
+const streamRequest = () => new Request("http://127.0.0.1/v1/messages", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ model, max_tokens: 64, stream: true, messages: [{ role: "user", content: "hello" }] }),
 })
 
 const noRefresh = async () => {
@@ -93,14 +131,17 @@ test("a deadline aborts with a TimeoutError, and disposing it clears its timer o
 })
 
 test("a relay request that needs discovery owns one deadline, disposed when its body ends", async () => {
-  const config = configFor(5000)
   runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = provider
-  const app = createServer(config)
+  const app = createServer(staleCatalogConfig(5000))
+  const paths: Array<string> = []
   const before = upstreamDeadlineCounts()
 
   await withRecordedTransport({
-    fetch: async (request) => request.path === "/models" ? catalog() : completed(),
+    fetch: async (request) => {
+      paths.push(request.path)
+      return request.path === "/models" ? catalog() : completed()
+    },
     refresh: noRefresh,
   }, async () => {
     const response = await post(app)
@@ -109,85 +150,166 @@ test("a relay request that needs discovery owns one deadline, disposed when its 
   })
 
   const after = upstreamDeadlineCounts()
+  assert.deepEqual(paths, ["/models", "/responses"])
   assert.equal(after.created - before.created, 1, "one deadline for the request, catalog included")
   assert.equal(after.disposed - before.disposed, 1, "disposed when the client body ended")
 })
 
-test("a client that cancels after the headers releases the request's deadline", async () => {
-  const config = configFor(5000)
+test("a client that cancels after the headers releases the request's deadline at once", async () => {
   runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = provider
-  runtimeState.modelCatalog = undefined
-  const app = createServer(config)
+  // A deadline far beyond the test, so only the cancel can release it.
+  const app = createServer(probeConfig(60_000))
+  const aborted: Array<string> = []
   const before = upstreamDeadlineCounts()
 
   await withRecordedTransport({
-    fetch: async (request) => {
-      if (request.path === "/models") {
-        return catalog()
-      }
-
-      // A stream that sends one event, then stalls until the request is cancelled.
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"model\":\"gpt-6-astra\",\"status\":\"in_progress\",\"output\":[]}}\n\n"))
-          request.signal?.addEventListener("abort", () => controller.error(request.signal?.reason), { once: true })
-        },
-      }), { status: 200, headers: { "content-type": "text/event-stream" } })
-    },
+    fetch: async (request) => stallingTextStream(request.signal, aborted),
     refresh: noRefresh,
   }, async () => {
-    const response = await app.fetch(new Request("http://127.0.0.1/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 64, stream: true, messages: [{ role: "user", content: "hello" }] }),
-    }))
+    const response = await app.fetch(streamRequest())
     const reader = response.body!.getReader()
-    await reader.read()
+    const first = await reader.read()
+    assert.match(new TextDecoder().decode(first.value), /message_start/)
+
+    const started = performance.now()
     await reader.cancel()
+    assert.ok(performance.now() - started < 1000, "the cancel did not wait for the deadline")
   })
 
   await new Promise((resolve) => setImmediate(resolve))
   const after = upstreamDeadlineCounts()
   assert.equal(after.created - before.created, 1)
   assert.equal(after.disposed - before.disposed, 1)
+  assert.deepEqual(aborted, ["AbortError"], "the cancel, not the deadline, ended the upstream call")
 })
 
-test("a stream that stalls after its headers is cut off at the request's deadline", async () => {
-  const config = configFor(150)
+test("a stream that stalls after its headers is cut off at the request's deadline as a timeout", async () => {
   runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = provider
-  const app = createServer(config)
+  const app = createServer(probeConfig(150))
+  const aborted: Array<string> = []
+  const traces: Array<{ signal: AbortSignal }> = []
+  const before = upstreamDeadlineCounts()
 
   await withRecordedTransport({
-    fetch: async (request) => {
-      if (request.path === "/models") {
-        return catalog()
-      }
+    fetch: async (request) => stallingTextStream(request.signal, aborted),
+    refresh: noRefresh,
+  }, () => withTraceObserver((trace) => traces.push(trace), async () => {
+    const response = await app.fetch(streamRequest())
+    const started = Date.now()
+    const text = await response.text()
 
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"model\":\"gpt-6-astra\",\"status\":\"in_progress\",\"output\":[]}}\n\n"))
-          request.signal?.addEventListener("abort", () => controller.error(request.signal?.reason), { once: true })
-        },
-      }), { status: 200, headers: { "content-type": "text/event-stream" } })
-    },
+    assert.ok(Date.now() - started < 5000, "the stalled stream ended at the deadline")
+    // The streamed error event's text is generic for any failure after the stream opens; what ended
+    // this one is pinned below by the reason the upstream call was aborted with.
+    assert.match(text, /event: error\n/)
+  }))
+
+  const after = upstreamDeadlineCounts()
+  assert.deepEqual(aborted, ["TimeoutError"], "the deadline, not a cancel, ended the upstream call")
+  assert.equal(traces[0]?.signal.aborted, false, "the deadline ends the upstream call, not the client trace")
+  assert.equal(after.created - before.created, 1)
+  assert.equal(after.disposed - before.disposed, 1)
+})
+
+test("a request rejected before any upstream call disposes its deadline with its response", async () => {
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
+  runtimeState.upstreamBaseUrl = provider
+  const app = createServer(probeConfig(60_000))
+  const before = upstreamDeadlineCounts()
+
+  await withRecordedTransport({
+    fetch: async () => assert.fail("no upstream call"),
     refresh: noRefresh,
   }, async () => {
     const response = await app.fetch(new Request("http://127.0.0.1/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 64, stream: true, messages: [{ role: "user", content: "hello" }] }),
+      body: JSON.stringify({ model, max_tokens: 64, output_config: { effort: "loudest" }, messages: [{ role: "user", content: "hello" }] }),
     }))
-    const started = Date.now()
-    const text = await response.text()
-
-    assert.ok(Date.now() - started < 5000, "the stalled stream ended at the deadline")
-    assert.match(text, /timed out|upstream_timeout|error/)
+    assert.equal(response.status, 400)
+    await response.text()
   })
+
+  const after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 1)
+  assert.equal(after.disposed - before.disposed, 1)
 })
 
-// A failed reply whose body never ends until its request's signal aborts, as a stalled upstream sends it.
+test("the WebSearch passes share one deadline, and a turn that crosses it times out", async () => {
+  const opus = "claude-opus-4.8"
+  runtimeState.modelRouting = { gptModel: model, opusModel: opus }
+  runtimeState.upstreamBaseUrl = provider
+  // Each pass alone fits in 400 ms; together they do not.
+  const app = createServer({
+    ...configFor(400),
+    claudeUpstreamApi: undefined,
+    modelCatalog: { baseUrl: provider, models: new Map([
+      [opus, { type: "chat", supportedEndpoints: ["/chat/completions"] }],
+      [model, { type: "chat", supportedEndpoints: ["/responses"] }],
+    ]) },
+  })
+  const paths: Array<string> = []
+  const traces: Array<{ signal: AbortSignal }> = []
+  const before = upstreamDeadlineCounts()
+
+  const response = await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      const pass = paths.length
+      await after(pass < 3 ? 150 : 300, request.signal)
+      if (request.path === "/responses") {
+        return Response.json({
+          id: "resp_web_search",
+          created_at: 1,
+          model,
+          output: [
+            { type: "web_search_call", action: { type: "search", query: "copilot docs", queries: ["copilot docs"] } },
+            { type: "message", role: "assistant", content: [{ type: "output_text", text: "1. Docs - https://docs.github.com/en/copilot" }] },
+          ],
+          usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 },
+        })
+      }
+
+      const payload = JSON.parse(request.body ?? "{}") as { tools?: Array<{ function?: { name?: string } }> }
+      const search = payload.tools?.find((tool) => /web_search|WebSearch/.test(tool.function?.name ?? ""))
+      return Response.json({
+        id: "chat",
+        created: 1,
+        model: opus,
+        choices: [{
+          index: 0,
+          message: search
+            ? { role: "assistant", content: null, tool_calls: [{ id: "call_search", type: "function", function: { name: search.function?.name, arguments: JSON.stringify({ query: "copilot docs" }) } }] }
+            : { role: "assistant", content: "Found it." },
+          finish_reason: search ? "tool_calls" : "stop",
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })
+    },
+    refresh: noRefresh,
+  }, () => withTraceObserver((trace) => traces.push(trace), () => app.fetch(new Request("http://127.0.0.1/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "opus",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "search the web for copilot docs" }],
+      tools: [{ name: "web_search", type: "web_search_20250305", max_uses: 1 }],
+    }),
+  }))))
+  const body = await response.text()
+
+  assert.deepEqual(paths, ["/chat/completions", "/responses", "/chat/completions"])
+  assert.equal(response.status, 504, body)
+  assert.match(body, /upstream_timeout/)
+  assert.equal(traces[0]?.signal.aborted, false)
+  const counts = upstreamDeadlineCounts()
+  assert.equal(counts.created - before.created, 1, "one deadline for all three passes")
+  assert.equal(counts.disposed - before.disposed, 1)
+})
+
 // The error a promise rejects with, so a test can read its response body.
 const rejection = async (promise: Promise<unknown>): Promise<InstanceType<typeof HTTPError>> => {
   try {
@@ -296,43 +418,60 @@ test("a standalone catalog error's readable body is settled before its deadline 
   assert.deepEqual(await error.response.json(), { error: "bad request" })
 })
 
-test("two concurrent requests keep their own deadlines when one is cancelled", async () => {
-  const config = configFor(5000)
+test("two concurrent requests discover separately, and cancelling one leaves the other intact", async () => {
   runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = provider
-  const app = createServer(config)
-  const catalogReleased = Promise.withResolvers<void>()
+  const app = createServer(staleCatalogConfig(5000))
+  // Each /models reply sends its headers at once and holds its body until released.
+  const catalogs: Array<{ release: () => void }> = []
+  const bothHeadersSent = Promise.withResolvers<void>()
   const before = upstreamDeadlineCounts()
 
   await withRecordedTransport({
     fetch: async (request) => {
-      if (request.path === "/models") {
-        // Both requests wait here, so the first is cancelled while discovery is shared.
-        await catalogReleased.promise
-        return catalog()
+      if (request.path !== "/models") {
+        return completed()
       }
 
-      return completed()
+      const payload = await catalog().text()
+      let release = () => {}
+      const response = new Response(new ReadableStream({
+        start(controller) {
+          release = () => {
+            controller.enqueue(encoder.encode(payload))
+            controller.close()
+          }
+
+          request.signal?.addEventListener("abort", () => controller.error(request.signal?.reason), { once: true })
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } })
+      catalogs.push({ release })
+      if (catalogs.length === 2) {
+        bothHeadersSent.resolve()
+      }
+
+      return response
     },
     refresh: noRefresh,
   }, async () => {
     const first = new AbortController()
-    const cancelled = post(app, first.signal).then(async (response) => {
-      await response.text()
-    }, () => {})
+    // The cancelled request ends either before its response or while its body is read.
+    const cancelled = post(app, first.signal).then((response) => response.text()).catch(() => {})
     const kept = post(app)
-    await new Promise((resolve) => setImmediate(resolve))
+
+    await bothHeadersSent.promise
     first.abort(new DOMException("client went away", "AbortError"))
-    catalogReleased.resolve()
+    await cancelled
+    catalogs[1]?.release()
 
     const response = await kept
     assert.equal(response.status, 200, await response.clone().text())
     await response.text()
-    await cancelled
   })
 
   await new Promise((resolve) => setImmediate(resolve))
   const after = upstreamDeadlineCounts()
+  assert.equal(catalogs.length, 2, "one catalog fetch per request")
   assert.equal(after.created - before.created, 2, "one deadline per request")
   assert.equal(after.disposed - before.disposed, 2, "both released")
 })
@@ -495,14 +634,6 @@ test("preflight reads a failed catalog body inside its deadline and times out a 
   assert.equal(after.disposed - before.disposed, 1)
 })
 
-const { withTraceObserver } = await import("../../src/lib/request-trace")
-
-// A catalog that predates the request and lacks its model, so admission refreshes it.
-const staleCatalogConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
-  ...configFor(upstreamTimeoutMs),
-  modelCatalog: { baseUrl: provider, models: new Map([["claude-opus-5.5", { type: "chat" }]]), fetchedAt: 0 },
-})
-
 for (const route of ["/v1/messages", "/v1/responses"] as const) {
   test(`${route} answers a discovery error body that stalls past the deadline with its timeout`, async () => {
     runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
@@ -532,3 +663,60 @@ for (const route of ["/v1/messages", "/v1/responses"] as const) {
     assert.equal(traces[0]?.signal.aborted, false, "the client trace is not aborted")
   })
 }
+
+test("a deep run holds one catalog deadline, then one per probe, even a probe that never reaches the relay", async (t) => {
+  t.mock.method(console, "log", () => {})
+  const ids = [model, "gpt-6-nova"]
+  const traces: Array<{ signal: AbortSignal }> = []
+  const before = upstreamDeadlineCounts()
+
+  const config = configFor(5000)
+  const loaded = await withRecordedTransport({
+    fetch: async () => Response.json({ data: ids.map((id) => ({ id, supported_endpoints: ["/responses"], capabilities: { type: "chat", supports: { reasoning_effort: ["low"] } } })) }),
+    refresh: noRefresh,
+  }, () => loadStandaloneModelCatalog(config))
+  let counts = upstreamDeadlineCounts()
+  assert.equal(counts.created - before.created, 1, "the catalog load's deadline")
+  assert.equal(counts.disposed - before.disposed, 1, "disposed before any probe starts")
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      const trace = getRequestTrace()
+      if (trace) {
+        traces.push(trace)
+      }
+
+      return Response.json({ ...JSON.parse(await completed().text()), model: (JSON.parse(request.body ?? "{}") as { model: string }).model })
+    },
+    refresh: noRefresh,
+  }, () => probeModels(config, [...loaded.models], { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 5000 }))
+  counts = upstreamDeadlineCounts()
+  assert.equal(traces.length, 2)
+  assert.ok(traces.every((trace) => !trace.signal.aborted), "a finished probe leaves its client trace un-aborted")
+  assert.equal(counts.created - before.created, 3, "one deadline per probe")
+  assert.equal(counts.disposed - before.disposed, 3)
+
+  // A header the probe cannot send ends it before the relay admits it.
+  await withRecordedTransport({
+    fetch: async () => assert.fail("no upstream call"),
+    refresh: noRefresh,
+  }, () => probeModels({ ...config, apiKey: "relay\nkey" }, [[model, loaded.models.get(model)!]], { maxTokens: 64, timeoutMs: 1000, totalTimeoutMs: 5000 }))
+  counts = upstreamDeadlineCounts()
+  assert.equal(counts.created - before.created, 4)
+  assert.equal(counts.disposed - before.disposed, 4, "a probe that never reached the relay disposes its deadline")
+})
+
+test("preflight disposes its deadline when a model check fails", async () => {
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
+  runtimeState.upstreamBaseUrl = provider
+  const before = upstreamDeadlineCounts()
+
+  await assert.rejects(withRecordedTransport({
+    fetch: async (request) => request.path === "/models" ? catalog() : Response.json({ error: { message: "bad" } }, { status: 400 }),
+    refresh: noRefresh,
+  }, () => validateUpstream(configFor(5000), "low")), /Preflight failed for model=gpt-6-astra/)
+
+  const after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 1)
+  assert.equal(after.disposed - before.disposed, 1)
+})
