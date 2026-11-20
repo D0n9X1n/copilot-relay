@@ -83,6 +83,11 @@ const parseBilling = (billing: unknown): { price?: ModelPrice; multiplier?: numb
   const tokenPrices = isRecord(billing.token_prices) ? billing.token_prices : undefined
   const prices = isRecord(tokenPrices?.default) ? tokenPrices.default : undefined
   const batchSize = tokenPrices?.batch_size
+  // A model with no token charge comes with batch_size 0 and every price 0: it is free, not unknown.
+  if (prices && batchSize === 0 && prices.input_price === 0 && prices.output_price === 0) {
+    return { price: { input: 0, output: 0, ...(prices.cache_price === 0 && { cache: 0 }) } }
+  }
+
   if (prices && isPositiveInteger(batchSize) && isPrice(prices.input_price) && isPrice(prices.output_price)) {
     const perMillion = (hundredths: number) => hundredths / 100 * (1_000_000 / batchSize)
     return {

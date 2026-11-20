@@ -97,6 +97,15 @@ test("a multiplier is kept as reported, a fraction and zero included", async () 
   assert.equal(models.get("fraction")?.price, undefined)
 })
 
+// The live catalog reports a model with no token charge as batch_size 0 with every price 0.
+test("a model whose prices are all zero, with batch_size 0, costs nothing rather than unknown", async () => {
+  const models = await loadCatalog([
+    entry("gpt-4.1", { token_prices: { batch_size: 0, default: { input_price: 0, output_price: 0, cache_price: 0, cache_write_price: 0 } } }),
+  ])
+
+  assert.deepEqual(models.get("gpt-4.1")?.price, { input: 0, output: 0, cache: 0 })
+})
+
 test("missing or malformed billing leaves cost absent, never zero", async () => {
   const models = await loadCatalog([
     entry("none"),
