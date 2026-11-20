@@ -184,6 +184,28 @@ test("Claude Code CLI setup skips a machine where Claude Code never ran, unless 
   assert.equal((await setupClaudeCodeCli({ ...context, force: true })).status, "updated")
 })
 
+test("when the shared Codex config is skipped, the Codex app is reported skipped too, not up to date", async (t) => {
+  const { runSetup } = await import("../../src/lib/client-setup")
+  const { renderSetupOutcomes } = await import("../../src/setup")
+  const codexHome = process.env.CODEX_HOME!
+  await fs.rm(codexHome, { recursive: true, force: true })
+  t.after(() => fs.rm(codexHome, { recursive: true, force: true }))
+  const context = {
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+    force: false,
+  }
+
+  const outcomes = await runSetup(["codex-cli", "codex-app"], context)
+
+  assert.deepEqual(outcomes.map((outcome) => outcome.status.split(":")[0]), ["skipped", "skipped"])
+  const rows = renderSetupOutcomes(outcomes, context.baseUrl, false, true).slice(3)
+  assert.match(rows[0], /^ {2}codex-cli +– skipped /)
+  assert.match(rows[1], /^ {2}codex-app +– skipped /)
+  await assert.rejects(fs.stat(codexHome))
+})
+
 test("a model the app would refuse is listed under a Claude route name for its tier", () => {
   assert.equal(appModelName({ id: "claude-opus-5.5", tier: "opus" }), "claude-opus-5.5")
   assert.equal(appModelName({ id: "gpt-6-astra", tier: "sonnet" }), "claude-sonnet-relay")

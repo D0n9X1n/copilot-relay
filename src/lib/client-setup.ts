@@ -151,6 +151,9 @@ export const runSetup = async (targets: Array<SetupTarget>, context: SetupContex
       } else if (codex === undefined) {
         codex = await setupCodex(context, target)
         outcomes.push(codex)
+      } else if (/^(skipped|failed)\b/.test(codex.status)) {
+        // The Codex app has no config of its own: it was skipped or failed exactly as the first one.
+        outcomes.push({ ...codex, target })
       } else {
         outcomes.push({ ...codex, target, status: "shares the Codex config above" })
       }
