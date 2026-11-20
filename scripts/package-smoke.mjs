@@ -292,21 +292,23 @@ try {
     // only has to pass config validation.
     const app = path.join(home, ".copilot-relay")
     await fs.mkdir(app)
-    await fs.writeFile(path.join(app, "config.yaml"), [
-      "host: 127.0.0.1",
-      "port: 65535",
-      `copilotBaseUrl: http://127.0.0.1:${upstreamPort}`,
-      "upstreamProxy: ",
-      "claudeSetup: false",
-      "logLevel: info",
-      "logRetentionDays: 3",
-      "thinkEffort: high",
-      "upstreamTimeoutSeconds: 5",
-      "webSearchBackend: ",
-      // gptModel is left out, so the packed template's default fills it in.
-      "opusModel: claude-opus-5.5",
-      "",
-    ].join("\n"))
+    // The packed template is the starting config, as on a fresh install; only the settings an
+    // offline run needs are replaced, so gptModel and opusModel are the template's own defaults.
+    const offline = {
+      port: "65535",
+      copilotBaseUrl: `http://127.0.0.1:${upstreamPort}`,
+      claudeSetup: "false",
+      codexSetup: "false",
+      thinkEffort: "high",
+      upstreamTimeoutSeconds: "5",
+    }
+    const template = await fs.readFile(path.join(installed, "config.default.yaml"), "utf8")
+    const seeded = template.replace(/^([A-Za-z]+):.*$/gm, (line, key) => key in offline ? `${key}: ${offline[key]}` : line)
+    for (const key of Object.keys(offline)) {
+      assert.match(seeded, new RegExp(`^${key}: `, "m"), `the packed template has no ${key} line`)
+    }
+
+    await fs.writeFile(path.join(app, "config.yaml"), seeded)
     await fs.writeFile(path.join(app, "github_token"), "offline-github-fixture\n", { mode: 0o600 })
     await fs.writeFile(path.join(app, "copilot_token.json"), JSON.stringify({
       token: "offline-copilot-fixture",
