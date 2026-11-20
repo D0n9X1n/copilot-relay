@@ -136,6 +136,22 @@ test("batch_size 0 is free only when every reported price is 0", async () => {
   assert.equal(models.get("write-charged")?.price, undefined)
 })
 
+test("batch_size 0 with a missing input or output price is not free", async () => {
+  const models = await loadCatalog([
+    entry("empty", { token_prices: { batch_size: 0, default: {} } }),
+    entry("input-only", { token_prices: { batch_size: 0, default: { input_price: 0 } } }),
+    entry("empty-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 0, default: {} } }),
+    entry("input-only-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 0, default: { input_price: 0 } } }),
+  ])
+
+  for (const id of ["empty", "input-only", "empty-with-multiplier", "input-only-with-multiplier"]) {
+    assert.equal(models.get(id)?.price, undefined, id)
+  }
+
+  assert.equal(models.get("empty-with-multiplier")?.multiplier, 0.33)
+  assert.equal(models.get("input-only-with-multiplier")?.multiplier, 0.33)
+})
+
 test("missing or malformed billing leaves cost absent, never zero", async () => {
   const models = await loadCatalog([
     entry("none"),
