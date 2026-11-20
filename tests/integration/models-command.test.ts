@@ -465,7 +465,13 @@ test("models search prints the config line for one match and suggests the closes
   assert.equal(none.code, 1)
   assert.match(none.stdout, /^No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast … +– +–\n {2}gpt-6-astra +GPT-6 Astra +– +–\n {2}gpt-6\.1-sol +GPT-6\.1 Sol +– +–$/m)
   assert.match(none.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
-  assert.equal(harness.requests.length, 3)
+
+  // With nothing close, the hint names --all, since the plain listing hides non-chat models.
+  const nothing = await harness.run(["models", "unrelated-word"])
+
+  assert.equal(nothing.code, 1)
+  assert.match(nothing.stdout, /^No upstream model matches "unrelated-word"\. List them all with copilot-relay models --all\.$/m)
+  assert.equal(harness.requests.length, 4)
 })
 
 test("models rejects a search with --deep or without letters or digits before any request", async (t) => {

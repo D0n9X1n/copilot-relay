@@ -111,7 +111,7 @@ const listingHeading = (search: string, result: ModelSearch, total: number, all:
   }
 
   if (result.models.length === 0) {
-    return `No upstream model matches "${label}". List them all with copilot-relay models.`
+    return `No upstream model matches "${label}". List them all with copilot-relay models --all.`
   }
 
   return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
