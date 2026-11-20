@@ -14,7 +14,7 @@ import { createReadStream, type Dirent } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { formatLogDate, paths } from "~/lib/paths"
+import { formatLogDate, homeRelative, paths } from "~/lib/paths"
 import {
   formatCount,
   formatTokens,
@@ -851,7 +851,8 @@ export const renderCacheReport = (
   if (rows.length === 0) {
     return [
       `No prompt-cache data ${describeScope(options, true)}.`,
-      `The report reads upstream completion entries in ${paths.logsDir}, written at logLevel info or debug and kept for logRetentionDays.`,
+      `The report reads upstream completion entries in ${homeRelative(paths.logsDir)},`,
+      "written at logLevel info or debug and kept for logRetentionDays.",
     ]
   }
 

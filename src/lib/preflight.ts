@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { log } from "~/lib/log"
+import { log, withoutConsoleLogging } from "~/lib/log"
 import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
 import { getUpstreamModelIds } from "~/lib/models"
@@ -26,10 +26,12 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
 
   log.info(`Upstream models available: ${requiredModels.join(", ")}`)
 
+  // The limits are key=value records the log is searched for; the console's Models line shows
+  // each window, so they go to the file alone.
   for (const model of requiredModels) {
     const limits = catalog.models.get(model)?.limits
     if (limits) {
-      log.info(`Model token limits: model=${model} context=${limits.max_context_window_tokens} input=${limits.max_prompt_tokens} output=${limits.max_output_tokens} non_streaming_output=${limits.max_non_streaming_output_tokens ?? limits.max_output_tokens}`)
+      withoutConsoleLogging(() => log.info(`Model token limits: model=${model} context=${limits.max_context_window_tokens} input=${limits.max_prompt_tokens} output=${limits.max_output_tokens} non_streaming_output=${limits.max_non_streaming_output_tokens ?? limits.max_output_tokens}`))
     } else {
       log.error(`Model token limits unavailable: model=${model}; preserving client budgets without assuming a capacity.`)
     }
@@ -98,10 +100,13 @@ export const validateUpstream = async (
   await ensureRequiredModels(config)
 
   // Scope the configured default as this check's fallback rather than an explicit
-  // client control, so a model that advertises no effort support receives none.
+  // client control, so a model that advertises no effort support receives none. Each check's
+  // request and result records go to the log file alone; the console gets one line for all.
   await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
     for (const model of getUpstreamModelIds()) {
-      await validateModelRequest(config, model)
+      await withoutConsoleLogging(() => validateModelRequest(config, model))
     }
   })
+
+  log.info(`Preflight OK: ${getUpstreamModelIds().join(", ")}`)
 }

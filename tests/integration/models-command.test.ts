@@ -8,6 +8,7 @@ import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 
+import { displayWidth } from "../../src/lib/terminal"
 import { replyJson, startFakeGitHub, withoutProxyVariables } from "../fixtures/network"
 
 const entry = new URL("../../src/main.ts", import.meta.url)
@@ -276,6 +277,8 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
     { id: "a-\u001b[2K\u001b[1Aexample\r\nforged-row" },
     { id: "b-named", name: "Evil\u001b[31m\r\nName" },
     { id: `http://${request.headers.host}${secretPath}/model` },
+    // A long name holding a sensitive URL: too long to show whole, so NAME is left out.
+    { id: "c-long-name", name: `${"n".repeat(60)}http://${request.headers.host}${secretPath}/model` },
   ] }))
 
   const result = await harness.run()
@@ -283,9 +286,25 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   assert.equal(result.code, 0)
   const listing = result.rawStdout.slice(result.rawStdout.indexOf("Copilot chat models"))
   assert.doesNotMatch(listing, /\u001b|\r/)
+  assert.ok(!listing.includes(secretPath.slice(0, 6)), listing)
   assert.match(listing, /^ {2}a-exampleforged-row +– +–$/m)
-  assert.match(listing, /^ {2}b-named +EvilName +– +–$/m)
+  assert.match(listing, /^ {2}b-named +– +–$/m)
+  assert.doesNotMatch(listing, /NAME|n{20}/)
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
+})
+
+test("models shows a display name whole once its terminal controls are removed", async (t) => {
+  const harness = await fixture(t, (_request, response) => respond(response, { data: [
+    { id: "b-named", name: "Evil\u001b[31m\r\nName" },
+  ] }))
+
+  const result = await harness.run()
+
+  assert.equal(result.code, 0)
+  const listing = result.rawStdout.slice(result.rawStdout.indexOf("Copilot chat models"))
+  assert.doesNotMatch(listing, /\u001b|\r/)
+  assert.match(listing, /^ {2}MODEL +NAME +COST +CONTEXT$/m)
+  assert.match(listing, /^ {2}b-named {2}EvilName +– +–$/m)
 })
 
 // Why: models registered the apiKey but printed through the URL scrub alone, so a key
@@ -304,10 +323,9 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
 
   assert.equal(unadvertised.code, 0, unadvertised.output)
   assert.match(unadvertised.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
-  assert.match(unadvertised.stdout, /Warning: gptModel \[redacted\] is not advertised by upstream; the startup check rejects it\./)
+  assert.match(unadvertised.stdout, /Warning: gptModel \[redacted\] is not advertised by upstream\./)
 
-  // The key as a catalog ID, inside a display name, and ending a name that would have been
-  // shortened through the key had it not been replaced first.
+  // The key as a catalog ID, inside a display name, and ending a name too long to show whole.
   catalog = { data: [
     { id: relayKey },
     { id: "named-model", name: `Leaked ${relayKey} name` },
@@ -316,8 +334,8 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
   const advertised = await harness.run()
 
   assert.equal(advertised.code, 0, advertised.output)
-  // The key is replaced before the long name is cut, so no part of it survives the cut.
-  assert.match(advertised.stdout, /^ {2}long-named-model {2}x{17}… +– +–\n {2}named-model +Leaked \[redacted\]… +– +–\n {2}\[redacted\] +– +– {2}◀ gptModel$/m)
+  // The long name leaves NAME out, so no name and no fragment of the key is printed.
+  assert.match(advertised.stdout, /^ {2}long-named-model +– +–\n {2}named-model +– +–\n {2}\[redacted\] +– +– {2}◀ gptModel$/m)
   assert.doesNotMatch(advertised.output, /relay-fixture/)
 
   // A search for the key itself.
@@ -343,7 +361,7 @@ for (const [name, mark] of [["U+200B", "\u200b"], ["U+0085", "\u0085"]] as const
     const listed = await harness.run()
 
     assert.equal(listed.code, 0, listed.output)
-    assert.match(listed.stdout, /^ {2}named-model {2}Leaked \[redacted\]… +– +–$/m)
+    assert.match(listed.stdout, /^ {2}named-model {2}Leaked \[redacted\] name +– +–$/m)
     assert.match(listed.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
 
     // In a search.
@@ -365,13 +383,13 @@ test("models shows display names, marks IDs that cannot be configured, and expla
 
   assert.equal(result.code, 0, result.output)
   assert.match(result.stdout, /^Copilot chat models · 2 of 3\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-6-astra +GPT-6 Astra +– +–\n {2}unnamed-chat +– +–\n\n1 model that is not a chat model is hidden: copilot-relay models --all$/m)
-  assert.ok(result.stdout.includes(`Config file: ${path.join(harness.home, ".copilot-relay", "config.yaml")}`))
+  assert.ok(result.stdout.includes(`Config file: ${path.join("~", ".copilot-relay", "config.yaml")}`), result.stdout)
   assert.match(result.stdout, /^ {2}gptModel: missing-gpt-model {4}# requests without "opus" in the model name$/m)
   assert.match(result.stdout, /^ {2}opusModel: missing-opus-model {2}# requests with "opus" in the model name$/m)
-  assert.match(result.stdout, /Warning: gptModel missing-gpt-model is not advertised by upstream; the startup check rejects it\./)
-  assert.match(result.stdout, /Warning: opusModel missing-opus-model is not advertised by upstream; the startup check rejects it\./)
+  assert.match(result.stdout, /Warning: gptModel missing-gpt-model is not advertised by upstream\./)
+  assert.match(result.stdout, /Warning: opusModel missing-opus-model is not advertised by upstream\./)
   assert.match(result.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
-  assert.match(result.stdout, /A running relay applies the change to new requests; restarting reruns the startup check\./)
+  assert.match(result.stdout, /A running relay uses the change for new requests; a restart rechecks it\./)
   assert.equal(harness.requests.length, 1)
 })
 
@@ -386,18 +404,26 @@ test("models hides non-chat models from the plain listing, shows them with --all
   assert.equal(plain.code, 0, plain.output)
   assert.match(plain.stdout, /^Copilot chat models · 1 of 2$/m)
   assert.match(plain.stdout, /^ {2}MODEL +NAME +COST +CONTEXT$/m)
-  assert.match(plain.stdout, /^ {2}gpt-6-astra {2}GPT-6 Astra {2}– +1\.1M \[1m\]$/m)
+  assert.match(plain.stdout, /^ {2}gpt-6-astra {2}GPT-6 Astra +– +1\.1M \[1m\]$/m)
   assert.doesNotMatch(plain.stdout, /text-embedding-ada-002/)
   assert.match(plain.stdout, /^1 model that is not a chat model is hidden: copilot-relay models --all$/m)
   // Token-cache notices are diagnostics, so stdout holds only the answer.
   assert.doesNotMatch(plain.stdout, /Using cached|Next Copilot token refresh/)
-  assert.match(plain.stderr, /Using cached Copilot token/)
+  // The token files are named from ~, as the wiki's log samples show them.
+  assert.match(plain.stderr, /Using cached GitHub token at ~[\\/]\.copilot-relay[\\/]github_token$/m)
+  assert.match(plain.stderr, /Using cached Copilot token at ~[\\/]\.copilot-relay[\\/]copilot_token\.json$/m)
 
   const all = await harness.run(["models", "--all"])
 
   assert.equal(all.code, 0, all.output)
   assert.match(all.stdout, /^Copilot models · 2$/m)
-  assert.match(all.stdout, /^ {2}text-embedding-ada-002 +Embedding V2 Ada +– +– {2}! cannot be gptModel or opusModel: not a chat model$/m)
+  assert.match(all.stdout, /^ {2}text-embedding-ada-002 +Embedding V2 Ada +– +– {2}! not a chat model$/m)
+  assert.match(all.stdout, /^! marks a model that cannot be gptModel or opusModel\.$/m)
+  // The test's home is a long temporary path; under a real home the config line reads from ~.
+  for (const line of all.stdout.split("\n").filter((text) => !text.startsWith("Config file:"))) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+
   assert.doesNotMatch(all.stdout, /hidden/)
 
   // An explicit search still finds a non-chat model and explains why it cannot be configured.
@@ -405,7 +431,8 @@ test("models hides non-chat models from the plain listing, shows them with --all
 
   assert.equal(searched.code, 0, searched.output)
   assert.match(searched.stdout, /^Upstream models matching "ada" \(1\):$/m)
-  assert.match(searched.stdout, /text-embedding-ada-002 .*cannot be gptModel or opusModel: not a chat model/)
+  assert.match(searched.stdout, /text-embedding-ada-002 .*! not a chat model/)
+  assert.match(searched.stdout, /^! marks a model that cannot be gptModel or opusModel\.$/m)
 
   // Forced color reaches stdout, NO_COLOR removes it.
   const colored = await harness.run(["models", "--all"], { NO_COLOR: undefined, FORCE_COLOR: "1" })
@@ -427,6 +454,22 @@ test("a search term and its hint never print a registered sensitive URL", async 
   assert.match(result.stdout, /No upstream model matches "http:\/\/127\.0\.0\.1:\d+\[redacted\]"/)
 })
 
+test("a search never matches the marker that hides a URL in a display name, and still matches the rest", async (t) => {
+  const harness = await fixture(t, (request, response) => respond(response, { data: [
+    { id: "mock-model", name: `Example model http://${request.headers.host}${secretPath}/mock-tenant` },
+  ] }))
+
+  const marker = await harness.run(["models", "redacted"])
+  const named = await harness.run(["models", "example model"])
+
+  assert.equal(marker.code, 1)
+  assert.match(marker.stdout, /No upstream model matches "redacted"/)
+  // The rest of the name is still searched, and the URL is still hidden in what is printed.
+  assert.equal(named.code, 0)
+  assert.match(named.stdout, /^ {2}mock-model\b/m)
+  assert.ok(!named.stdout.includes(secretPath.slice(0, 6)), named.stdout)
+})
+
 test("models search prints the config line for one match and suggests the closest IDs for none", async (t) => {
   const harness = await fixture(t, (_request, response) => respond(response, { data: [
     { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
@@ -439,7 +482,7 @@ test("models search prints the config line for one match and suggests the closes
   const single = await harness.run(["models", "sol", "fast"])
 
   assert.equal(single.code, 0, single.output)
-  assert.match(single.stdout, /^Upstream models matching "sol fast" \(1\):\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast … +– +–$/m)
+  assert.match(single.stdout, /^Upstream models matching "sol fast" \(1\):\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\) +– +–$/m)
   assert.match(single.stdout, /To use gpt-5\.6-sol-fast, set this line in the config file:\n {2}gptModel: gpt-5\.6-sol-fast\n/)
   assert.match(single.stdout, /copilot-relay models --deep --model gpt-5\.6-sol-fast/)
 
@@ -452,9 +495,19 @@ test("models search prints the config line for one match and suggests the closes
   const none = await harness.run(["models", "gpt6-fast"])
 
   assert.equal(none.code, 1)
-  assert.match(none.stdout, /^No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast … +– +–\n {2}gpt-6-astra +GPT-6 Astra +– +–\n {2}gpt-6\.1-sol +GPT-6\.1 Sol +– +–$/m)
+  assert.match(none.stdout, /^No upstream model matches "gpt6-fast"\. Closest IDs \(3\):\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-5\.6-sol-fast {2}GPT-5\.6 Sol Fast \(Internal only\) +– +–\n {2}gpt-6-astra +GPT-6 Astra +– +–\n {2}gpt-6\.1-sol +GPT-6\.1 Sol +– +–$/m)
   assert.match(none.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
-  assert.equal(harness.requests.length, 3)
+
+  // With nothing close, the hint names --all, since the plain listing hides non-chat models.
+  const nothing = await harness.run(["models", "unrelated-word"])
+
+  assert.equal(nothing.code, 1)
+  assert.match(nothing.stdout, /^No upstream model matches "unrelated-word"\.\nList them all with copilot-relay models --all\.$/m)
+  for (const line of nothing.stdout.split("\n")) {
+    assert.ok(line.length <= 80, `${line.length} columns: ${line}`)
+  }
+
+  assert.equal(harness.requests.length, 4)
 })
 
 test("models rejects a search with --deep or without letters or digits before any request", async (t) => {
@@ -923,7 +976,7 @@ for (const logLevel of ["info", "debug"] as const) {
       const replayed = await harness.run(["replay", id])
 
       assert.equal(replayed.code, 0, replayed.output)
-      assert.match(replayed.stdout, /^MATCH$/m)
+      assert.match(replayed.stdout, /^ {2}(?:✓|ok) MATCH {7}the relay reproduces the recording$/m)
     } else {
       assert.match(result.stdout, /capture=off/)
       assert.doesNotMatch(result.stdout, /Offline replay:/)

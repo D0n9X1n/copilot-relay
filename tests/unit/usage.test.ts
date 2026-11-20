@@ -26,7 +26,7 @@ const { displayWidth } = await import("../../src/lib/terminal")
 const { setupProxyAuth } = await import("../../src/lib/auth")
 const { vscodeVersion } = await import("../../src/lib/config")
 const { flushLogs } = await import("../../src/lib/log")
-const { paths } = await import("../../src/lib/paths")
+const { homeRelative, paths } = await import("../../src/lib/paths")
 const { configureUpstreamDispatcher, getUpstreamDispatcher } = await import("../../src/lib/upstream-dispatcher")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
@@ -497,7 +497,8 @@ test("without a stored token the command suggests copilot-relay auth and sends n
 
   const message = await failure()
 
-  assert.match(message, /^No GitHub token is stored at .+github_token\. Sign in with copilot-relay auth\.$/)
+  assert.equal(message, `No GitHub token at ${homeRelative(paths.githubTokenPath)}. Run copilot-relay auth.`)
+  assert.ok(message.length <= 80, message)
   assert.equal(requests.length, 0)
   await assert.rejects(fs.access(paths.githubTokenPath), { code: "ENOENT" })
 })
@@ -506,7 +507,7 @@ test("an empty token file counts as no token", async (t) => {
   await storeToken("")
   mockGitHub(t, noNetwork)
 
-  assert.match(await failure(), /^No GitHub token is stored at .+ Sign in with copilot-relay auth\.$/)
+  assert.match(await failure(), /^No GitHub token at .+\. Run copilot-relay auth\.$/)
 })
 
 for (const status of [401, 403]) {

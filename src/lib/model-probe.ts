@@ -192,11 +192,7 @@ export async function probeModels(
 
   const results: ProbeResult[] = []
   const app = createServer(config)
-  const columns = Math.max(40, process.stdout.columns || 80)
-  const width = probeColumnWidth(
-    entries.map(([id]) => safeId(id, config) ? id : "[unsupported ID]"),
-    columns,
-  )
+  const width = probeColumnWidth(entries.map(([id]) => safeId(id, config) ? id : "[unsupported ID]"))
   const color = colorEnabled()
 
   if (entries.length) {
@@ -414,7 +410,7 @@ export async function probeModels(
       }
 
       results.push(row)
-      for (const line of renderProbeRow(row, width, color, columns)) {
+      for (const line of renderProbeRow(row, width, color)) {
         printLine(line)
       }
 

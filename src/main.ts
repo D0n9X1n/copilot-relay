@@ -6,6 +6,7 @@ import { defineCommand, runMain } from "citty"
 import { auth } from "./auth"
 import { cache } from "./cache"
 import { completion } from "./completion"
+import { showHelp } from "./lib/help"
 import { models } from "./models"
 import { replay } from "./replay"
 import { restart } from "./restart"
@@ -24,4 +25,4 @@ const main = defineCommand({
   subCommands: { auth, cache, models, replay, restart, setup, start, status, stop, usage, completion },
 })
 
-await runMain(main)
+await runMain(main, { showUsage: showHelp })

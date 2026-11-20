@@ -11,7 +11,7 @@ const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-setup-view-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
 
-const { renderSetupOutcomes } = await import("../../src/setup")
+const { renderSetupNotes, renderSetupOutcomes } = await import("../../src/setup")
 const { displayWidth } = await import("../../src/lib/terminal")
 
 test.after(async () => {
@@ -37,6 +37,21 @@ test("setup prints a heading and one marked row per client with its result and w
   ])
 })
 
+test("setup prints paths under the home directory from ~, so a normal row fits 80 columns", () => {
+  const userHome = os.homedir()
+  const real = [
+    { target: "claude-code-cli", path: path.join(userHome, ".claude", "settings.json"), status: "updated" },
+    { target: "claude-code-app", path: path.join(userHome, "Library", "Application Support", "Claude-3p"), status: "already up to date" },
+    { target: "codex-cli", path: path.join(userHome, ".codex", "config.toml"), status: "already up to date" },
+  ]
+  const lines = renderSetupOutcomes(real, "http://127.0.0.1:4142", false, false)
+
+  assert.match(lines[3], new RegExp(`ok updated +${path.join("~", ".claude", "settings.json").replace(/[\\.]/g, "\\$&")}$`))
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
 test("a failed client is marked without relying on color, and a long detail is cut", () => {
   const failed = [{ target: "codex-cli", path: "", status: `failed: ${"x".repeat(80)}` }]
   const lines = renderSetupOutcomes(failed, "http://127.0.0.1:4142", false, false)
@@ -47,4 +62,30 @@ test("a failed client is marked without relying on color, and a long detail is c
   const colored = renderSetupOutcomes(failed, "http://127.0.0.1:4142", true, false)
   assert.deepEqual(colored.map((line) => stripVTControlCharacters(line)), lines)
   assert.match(colored[3], /\u001b\[31mx failed\u001b\[0m/)
+})
+
+test("a failure reason gets the room the other columns leave, so its ASCII row fits 80 columns", () => {
+  const mixed = [
+    { target: "claude-code-cli", path: "/home/u/.claude/settings.json", status: "already up to date" },
+    { target: "codex-cli", path: "", status: `failed: ${"y".repeat(80)}` },
+  ]
+  const lines = renderSetupOutcomes(mixed, "http://127.0.0.1:4142", false, false)
+
+  assert.equal(lines[3], "  claude-code-cli  ok up to date  /home/u/.claude/settings.json")
+  assert.match(lines[4], /^ {2}codex-cli {8}x failed {7}y+…$/)
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
+test("the notes after an update fit 80 columns", () => {
+  const notes = renderSetupNotes([
+    { target: "claude-code-app", path: "/home/u/Claude-3p", status: "updated" },
+    { target: "codex-cli", path: "/home/u/.codex/config.toml", status: "updated" },
+  ])
+
+  assert.equal(notes.length, 3)
+  for (const line of notes) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
 })

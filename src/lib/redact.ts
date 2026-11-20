@@ -20,8 +20,8 @@
  */
 const sensitiveOrigins = new Set<string>()
 
-/** Marker written in place of everything after the origin. */
-const redactedMarker = "[redacted]"
+/** Marker written in place of everything after the origin, and in place of a registered secret. */
+export const redactedMarker = "[redacted]"
 
 /**
  * ANSI escape sequences: CSI (`ESC [ … final`), OSC (`ESC ] … BEL/ST`), and the

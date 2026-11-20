@@ -2,9 +2,11 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { stripVTControlCharacters } from "node:util"
 
-import { colorEnabled, terminalText } from "../../src/lib/terminal"
+import { registerLogSecret } from "../../src/lib/log"
+import { colorEnabled, displayWidth, terminalText } from "../../src/lib/terminal"
 import {
   probeColumnWidth,
+  probeHint,
   renderProbeDetails,
   renderProbeHeader,
   renderProbeRow,
@@ -32,44 +34,52 @@ for (const [env, tty, expected] of [
 }
 
 test("probe table has stable plain text beneath status colors, and a mark on every status", () => {
-  const width = probeColumnWidth([row.id], 80)
-  const plain = renderProbeRow(row, width, false, 80, true).join("\n")
+  const width = probeColumnWidth([row.id])
+  const plain = renderProbeRow(row, width, false, true).join("\n")
 
   assert.equal(renderProbeHeader(width), "  MODEL            STATUS          TIME  RESULT")
   assert.equal(plain, "  claude-opus-5.5  ✓ PASS          1.2s  Ready")
-  assert.equal(stripVTControlCharacters(renderProbeRow(row, width, true, 80, true).join("\n")), plain)
-  assert.match(renderProbeRow(row, width, true, 80, true).join("\n"), /\u001b\[32m✓ PASS\u001b\[0m/)
+  assert.equal(stripVTControlCharacters(renderProbeRow(row, width, true, true).join("\n")), plain)
+  assert.match(renderProbeRow(row, width, true, true).join("\n"), /\u001b\[32m✓ PASS\u001b\[0m/)
 
   const marks = (["FAIL", "INCOMPLETE", "SKIPPED", "NOT_TESTED"] as const)
-    .map((status) => renderProbeRow({ ...row, status }, width, false, 80, true)[0].slice(2 + width + 2, 2 + width + 2 + 12).trimEnd())
+    .map((status) => renderProbeRow({ ...row, status }, width, false, true)[0].slice(2 + width + 2, 2 + width + 2 + 12).trimEnd())
   assert.deepEqual(marks, ["✗ FAIL", "! INCOMPLETE", "– SKIPPED", "– NOT_TESTED"])
-  assert.match(renderProbeRow({ ...row, status: "FAIL" }, width, false, 80, false)[0], /^ {2}claude-opus-5\.5 {2}x FAIL /)
+  assert.match(renderProbeRow({ ...row, status: "FAIL" }, width, false, false)[0], /^ {2}claude-opus-5\.5 {2}x FAIL /)
 })
 
 test("two rows printed one at a time line up under the header", () => {
   const second = { ...row, id: "gpt-6.2-astra", latency: 15_300 }
-  const width = probeColumnWidth([row.id, second.id], 80)
+  const width = probeColumnWidth([row.id, second.id])
   const header = renderProbeHeader(width)
-  const first = renderProbeRow(row, width, false, 80, true)[0]
-  const next = renderProbeRow(second, width, false, 80, true)[0]
+  const first = renderProbeRow(row, width, false, true)[0]
+  const next = renderProbeRow(second, width, false, true)[0]
 
   assert.equal(header.indexOf("STATUS"), first.indexOf("✓"))
   assert.equal(first.indexOf("✓"), next.indexOf("✓"))
   assert.equal(header.indexOf("RESULT"), next.indexOf("Ready"))
 })
 
-for (const columns of [60, 80, 120]) {
-  test(`long model IDs remain readable at ${columns} columns`, () => {
-    const longRow = { ...row, id: "claude-" + "x".repeat(110), status: "INCOMPLETE" as const, detail: "output-budget-exhausted-usage-unreported", unverified: true }
-    const width = probeColumnWidth([longRow.id], columns)
-    const lines = renderProbeRow(longRow, width, true, columns).map(stripVTControlCharacters)
+test("a registered secret inside a long ID prints neither whole nor in pieces", () => {
+  const key = "probefixturesecret0003"
+  registerLogSecret(key)
+  const id = `${"m".repeat(32)}${key}-tail`
+  const width = probeColumnWidth([id])
+  const printed = renderProbeRow({ ...row, id }, width, false, true).join("\n")
 
-    assert(lines.every((line) => line.length <= columns), JSON.stringify(lines))
-    // The ID wraps within its column rather than being truncated.
-    // After the two-space indent.
-    assert.equal(lines.map((line) => line.slice(2, 2 + width).trimEnd()).join(""), longRow.id)
-  })
-}
+  for (let length = 2; length <= key.length; length += 1) {
+    assert.ok(!printed.includes(key.slice(0, length)), `prefix of length ${length} printed: ${printed}`)
+  }
+})
+
+test("a long ID stays whole on one row, so it can be copied", () => {
+  const id = "claude-" + "x".repeat(110)
+  const width = probeColumnWidth([id])
+  const lines = renderProbeRow({ ...row, id }, width, false, true)
+
+  assert.equal(lines.length, 1)
+  assert.ok(lines[0].startsWith(`  ${id}  ✓ PASS`))
+})
 
 test("details include failure location without hiding unknown evidence", () => {
   const details = renderProbeDetails(row, {
@@ -91,8 +101,9 @@ test("details include failure location without hiding unknown evidence", () => {
 
 test("large configured timeouts keep the duration column bounded", () => {
   for (const latency of [999_999, 3_600_000, 2_147_483_000]) {
-    const text = renderProbeRow({ ...row, latency }, 14, false, 60).join("\n")
-    assert(text.split("\n").every((line) => line.length <= 60))
+    const text = renderProbeRow({ ...row, latency }, 14, false).join("\n")
+    // TIME stays six characters wide, so the row is as wide as one with a short duration.
+    assert.equal(text.length, renderProbeRow({ ...row, latency: 1200 }, 14, false).join("\n").length)
     assert.match(text, /\b[\d.]+[smh]\b/)
   }
 })
@@ -129,4 +140,21 @@ test("summaries distinguish all outcomes without zero-filled boilerplate", () =>
 
   const rows = ["PASS", "FAIL", "INCOMPLETE", "SKIPPED", "NOT_TESTED"].map((status) => ({ ...row, status } as ProbeRow))
   assert.equal(renderProbeSummary(rows), "Summary: 1 passed · 1 failed · 1 incomplete · 1 skipped · 1 not tested")
+})
+
+test("every probe hint fits 80 columns", () => {
+  const codes = [
+    "protocol-policy-conflict", "unsupported-relay-endpoint", "no-advertised-endpoint", "probe-timeout",
+    "upstream-timeout-or-HTTP-504", "authentication-rejected", "refresh-failed", "access-denied", "rate-limited",
+    "refusal", "output-budget-exhausted", "model-mismatch", "model-not-supported", "unknown-error", "HTTP-502",
+  ]
+
+  for (const code of codes) {
+    const hint = probeHint(code)
+    assert.ok(hint !== undefined, code)
+
+    for (const line of hint.split("\n")) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+    }
+  }
 })

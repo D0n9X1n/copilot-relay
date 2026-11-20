@@ -11,7 +11,7 @@ import consola from "consola"
 import type { LogLevelName } from "~/lib/app-config"
 import { sameFile, sameOpenedFile } from "~/lib/file-identity"
 import { getLogPath, paths } from "~/lib/paths"
-import { scrubSensitiveUrls } from "~/lib/redact"
+import { redactedMarker, scrubSensitiveUrls } from "~/lib/redact"
 
 const logCleanupCheckIntervalMs = 60 * 60 * 1000
 let logRetentionDays = 3
@@ -49,7 +49,7 @@ let currentLogLevel = consolaLevelByName.info
 const registeredLogSecrets = new Set<string>()
 const logSecretForms = new Set<string>()
 let logSecretPattern: RegExp | undefined
-const redactedSecret = "[redacted]"
+const redactedSecret = redactedMarker
 const truncatedMarker = "[truncated]"
 const maxLogArgumentBytes = 16 * 1024
 // Leave room for the timestamp, level, separating spaces, and final newline.

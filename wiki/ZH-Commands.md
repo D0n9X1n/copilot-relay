@@ -129,9 +129,10 @@ copilot-relay status --deep --json
 
 标题显示运行 `status` 的 CLI 的版本，中继在运行时还显示它的地址。其下每一行回答一个问题，并以不依赖
 颜色的标记开头：`✓` 是，`✗` 失败，`!` 需要注意，`–` 未检查或未运行（终端无法显示时为 `ok`、`x`、
-`!` 和 `-`）。对正在运行的中继，`version` 一行显示该中继报告的版本；中继不报告版本时显示 `unknown`；
-与已安装版本不一致时，显示不一致，并给出重启它的命令。日志和配置路径列在 `Files` 下，解析后的每个配置
-键列在 `Config` 下。
+`!` 和 `-`）。正在运行的中继报告的版本与已安装版本一致时，不显示 `version` 一行，因为标题已经显示了
+这个版本；中继不报告版本时，这一行显示 `unknown`；版本不一致时，显示不一致，并给出重启它的命令。日志
+和配置路径列在 `Files` 下，位于主目录下时从 `~` 开始显示；解析后的每个配置键列在 `Config` 下，最后
+说明哪些键要重启后才生效。
 
 ```text
 copilot-relay 0.8.0 · http://127.0.0.1:4142
@@ -139,7 +140,6 @@ copilot-relay 0.8.0 · http://127.0.0.1:4142
   ✓ process   running (pid 65686, up 2d 21h)
   ✓ health    ok (3ms)
   – upstream  not checked (use --deep)
-  ✓ version   0.8.0
   ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
 
 Files
@@ -150,6 +150,8 @@ Config
     host                    127.0.0.1
     port                    4142
     …
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
 ```
 
 | 退出码 | 含义 |
@@ -228,8 +230,9 @@ Copilot 的模型目录以获取模型名称、上下文大小和推理等级，
 它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。不是合法 JSON 或含有类型错误设置的 Claude Code 设置文件，以及不是 JSON 对象的 Claude app 文件，会保持不变，并报告为失败。未知目标或无法读取 `config.yaml` 时以 `1` 退出，任一目标失败
 以 `2` 退出，否则以 `0` 退出。
 
-结果是一张表格，每个客户端一行并带标记：setup 做了什么，以及写入的文件，或跳过、失败的原因。过长的原因
-以 `…` 截断。
+结果是一张表格，每个客户端一行并带标记：setup 做了什么，以及写入的文件（位于主目录下时从 `~` 开始显示），
+或跳过、失败的原因。过长的原因以 `…` 截断。Codex 应用与 Codex CLI 共用配置，因此那份配置被跳过或失败时，
+Codex 应用也报告为跳过或失败。
 
 ```text
 Client setup · http://127.0.0.1:4142
@@ -264,28 +267,36 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 
 以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称、费用和上下文窗口。COST 是目录报告的费用，
 单位为每百万输入/输出 token 的美元（`$8/$40`）；目录只报告倍率时显示每次调用的高级请求数（`1×`），否则为
-`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。SLOT 标出 `gptModel` 或
-`opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
-计数；`--all` 也会列出它们，并注明它们不能用作 `gptModel` 或 `opusModel`。列表不验证模型能否工作。
+`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
+`gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
+计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
+该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内：这一列使用其他列留下的宽度，
+较长的原因以 `…` 截断；已配置但不能使用的模型保留槽位和 `!`，省略原因，原因由表格下配置指引的警告说明。
+COST 和 CONTEXT 右对齐。终端不支持 Unicode 时标记为 ASCII：`<` 代替 `◀`，`x` 代替 `×`，`-` 代替 `–`。
+列表不验证模型能否工作。
 令牌缓存提示输出到 stderr，因此 stdout 只有结果。
 
 ```text
 Copilot chat models · 4 of 6
 
-  MODEL              NAME               COST      CONTEXT  SLOT
+  MODEL              NAME                 COST    CONTEXT  SLOT
   claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
   claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
   gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
-  grok-4.7           Grok 4.7           $2/$6        500K
+  grok-4.7           Grok 4.7            $2/$6       500K
 
 2 models that are not chat models are hidden: copilot-relay models --all
 ```
 
-过长的显示名称以 `…` 截断；ID 从不截断，便于复制。不加引号的
-多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。`--deep` 检查
+只有每个显示名称都能在 80 列内完整显示时才有 NAME 列；否则表格省略这一列，因为截断后的名称（如 `Claude Op…`）
+会丢掉区分两个模型的部分，而 MODEL 已经标明每个模型。ID 从不截断，便于复制。不加引号的
+多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。没有匹配时，搜索打印最接近
+的 ID；没有接近的 ID 时，提示使用 `copilot-relay models --all`。每次列出之后，配置指引显示当前的
+`gptModel` 和 `opusModel` 行，并对启动检查会拒绝的值给出警告。`--deep` 检查
 `--model` 给出的 ID，或目录中的每个条目。它只向能够探测、且在总超时之前轮到的条目发送真实请求；
 其他条目只得到一个状态，不发送请求。这些请求经过在命令自身进程内构建的中继管线，而不是正在运行的
-中继，并会消耗 Copilot 用量。其他所有选项都需要 `--deep`，搜索也不能与它同时使用：先找到 ID，再用
+中继，并会消耗 Copilot 用量。`--details`、`--model`、`--effort`、`--max-tokens`、`--timeout` 和
+`--total-timeout` 需要 `--deep`；`--all` 不需要。搜索不能与 `--deep` 同时使用：先找到 ID，再用
 `--deep --model <id>` 测试。它像 `start` 一样加载 `config.yaml` 并登录；加 `--deep` 时，设备码提示
 输出到 stderr。
 
@@ -382,6 +393,20 @@ copilot-relay replay /absolute/path/to/capture-directory
 `~/.copilot-relay/captures/<local-date>/<request-id>/`。ID 会在这些日期目录中查找，同一个 ID
 出现在两个日期下时会被拒绝；明确给出的目录可以不在 `~/.copilot-relay` 之内。重放不打开 socket，
 不使用真实凭据，不写入 token、配置或新的捕获，也不读取 `config.yaml`。
+
+结果用一个标记给出结论及其含义，然后是记录的请求，以及每个上游交换一行：状态、结果和 token 数。`DIFF`
+在表格下按路径和固定原因列出每个不同的字段，从不引用请求或响应的文本。
+
+```text
+Replay · POST /v1/messages
+
+  ✓ MATCH       the relay reproduces the recording
+    request     status 200 · outcome end_turn · 0 tool calls
+    blocks      text
+
+  #  UPSTREAM           STATUS  OUTCOME  IN  OUT  CACHED  WRITTEN
+  1  /chat/completions     200  stop      7    3       5        –
+```
 
 `MATCH` 以 `0` 退出，`DIFF` 或 `INCOMPLETE` 以 `2` 退出，`MISSING` 或 `MALFORMED` 以 `1` 退出。
 每种结论的含义，以及为什么不能整份分享捕获，见

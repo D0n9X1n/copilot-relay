@@ -23,7 +23,7 @@ import {
   type ModelSearch,
 } from "~/lib/model-listing"
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
-import { paths } from "~/lib/paths"
+import { homeRelative, paths } from "~/lib/paths"
 import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
@@ -37,10 +37,10 @@ class ModelsUsageError extends Error {}
 // two would escape the scrub that runs on each printed line.
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 
-// Catalog names are untrusted: control characters and secrets are removed and a long name is
-// shortened so it cannot take over a row.
+// Catalog names are untrusted: control characters, secrets and sensitive URLs are removed before a
+// long name is shortened, so a cut can never leave part of one behind.
 const displayName = (name: string | undefined): string | undefined => {
-  const text = printable(name ?? "").trim()
+  const text = printableCell(name ?? "").trim()
 
   if (text === "") {
     return undefined
@@ -110,7 +110,8 @@ const listingHeading = (search: string, result: ModelSearch, total: number, all:
   }
 
   if (result.models.length === 0) {
-    return `No upstream model matches "${label}". List them all with copilot-relay models.`
+    // The hint takes its own line, so a long search term cannot push it past 80 columns.
+    return `No upstream model matches "${label}".\nList them all with copilot-relay models --all.`
   }
 
   return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
@@ -296,11 +297,12 @@ export const models = defineCommand({
       if (result.models.length > 0) {
         lines.push(
           "Inference, tool, and effort compatibility are not verified by this listing.",
-          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}; it consumes Copilot usage.`,
+          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}`,
+          "(a real request, so it consumes Copilot usage).",
         )
       }
 
-      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
+      lines.push("", ...renderConfigGuide(homeRelative(paths.configPath), configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
       // Table cells were made printable and scrubbed by the table before any cut, and every other
       // line holding user, catalog or config text was built from printable strings. Each line is
       // scrubbed once more as a backstop; hidden characters are removed but the table's color stays.

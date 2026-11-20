@@ -240,9 +240,9 @@ copilot-relay replay /absolute/path/to/capture-directory
 显式目录可位于默认 home 之外。重放只接受 Messages 和 token 计数的捕获；Codex 的
 `/v1/responses` 捕获只供查看，重放会报告 `MALFORMED`。重放使用记录的有序上游/刷新传输，运行**当前真正的进程内
 handler**，不创建 socket、不做真实认证、不写 token/config 或新捕获。它比较实际出站
-请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出包含每次交换的状态、已知完成
-原因和 token/缓存数字，以及客户端 block 类型和工具调用数；不会打印工具参数或响应
-正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
+请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出是一个标题、结论，以及一张表格，列出每次交换的
+状态、已知完成原因和 token/缓存数字，以及客户端 block 类型和工具调用数（见 [命令](ZH-Commands.md)中的
+`replay`）；不会打印工具参数或响应正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
 
 | 结果 | 退出码 | 含义 |
 | --- | ---: | --- |
@@ -278,15 +278,19 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ### 启动
 
-在 `info` 级别，启动日志会确认生效的配置和 preflight：
+在 `info` 级别，启动日志会确认生效的配置和 preflight。日志文件包含下面每一行；控制台省略逐个模型的记录
+（`Model token limits`、preflight 的 `Model request` 行和 `Preflight OK: model=…`），改为打印一行
+`Preflight OK: <models>` 摘要，使启动输出适合终端宽度：
 
 ```text
 info Log level: info
 info Default think effort: xhigh
 info Running upstream preflight
 info Upstream models available: gpt-6.2-astra, claude-opus-5.5
+info Model token limits: model=gpt-6.2-astra context=1050000 input=922000 output=128000 non_streaming_output=128000
 info Preflight OK: model=gpt-6.2-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5.5 think_effort=xhigh
+info Preflight OK: gpt-6.2-astra, claude-opus-5.5
 info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```
@@ -797,7 +801,7 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 
 | 情况 | 消息 |
 | --- | --- |
-| 没有保存的 token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| 没有保存的 token | `No GitHub token at <path>. Run copilot-relay auth.` |
 | token 文件无法读取 | `Could not read the GitHub token at <path>: <code>.` |
 | `config.yaml` 无法读取或无效 | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
 | `upstreamProxy: env` 且 `HTTPS_PROXY` 或 `HTTP_PROXY` 格式错误 | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |

@@ -263,8 +263,10 @@ test("replay reports bounded per-exchange outcome and usage without trusting arb
   const result = await runCli(capture.directory)
 
   assert.equal(result.code, 0)
-  assert.match(result.output, /exchange=1 .*outcome=stop .*input_tokens=7 .*output_tokens=3 .*cache_read_input_tokens=5/)
-  assert.match(result.output, /client_blocks=text tool_calls=0/)
+  // The exchange row: order, route, status, outcome, then input, output and cached tokens.
+  assert.match(result.output, /^ {2}1 {2}\/chat\/completions +200 {2}stop +7 +3 +5 +–$/m)
+  assert.match(result.output, /^ {4}request {5}status 200 · outcome end_turn · 0 tool calls$/m)
+  assert.match(result.output, /^ {4}blocks {6}text$/m)
   assert.doesNotMatch(result.output, /PRIVATE_METADATA|PRIVATE_PROMPT|PRIVATE_RESPONSE/)
 })
 
@@ -732,9 +734,11 @@ const assertRealCaptureReplaysOffline = async (
 
   assert.ok(!/PRIVATE_|fake-capture-token|NETWORK_OR_AUTH_FORBIDDEN/.test(result.output), "CLI exposed capture content or attempted network/auth")
   assert.equal(result.code, 0, result.output)
-  assert.match(result.output, /^MATCH\r?\n/)
-  assert.ok(result.output.includes(`POST /v1/messages status=200 outcome=${outcome}`))
-  assert.ok(result.output.includes(`upstream=${capture.manifest.exchanges.map((exchange) => exchange.path).join(" -> ")}`), "CLI must report recorded upstream routes")
+  assert.match(result.output, /^Replay · POST \/v1\/messages\r?\n\r?\n {2}(?:✓|ok) MATCH /)
+  assert.ok(result.output.includes(`status 200 · outcome ${outcome}`))
+  // Every recorded upstream route has its own row, in order.
+  const routes = [...result.output.matchAll(/^ {2}\d+ {2}(\/\S+)/gm)].map((match) => match[1])
+  assert.deepEqual(routes, capture.manifest.exchanges.map((exchange) => exchange.path), "CLI must report recorded upstream routes")
 }
 
 test("real debug capture replays a 401 refresh retry with an intentionally cancelled discarded body", { timeout: 25_000 }, async (t) => {
