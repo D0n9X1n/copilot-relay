@@ -521,6 +521,18 @@ test("a daemon version or model ID holding control sequences prints without them
   assert.match(out, /evilmodel/)
 })
 
+test("a health or upstream failure detail prints without control sequences or line breaks", () => {
+  const out = renderStatus({
+    ...runningStatus,
+    health: { detail: "bad\u001b[2Jgateway\u009b31m", ok: false },
+    deep: { detail: "http 500: line one\nline two\u001b[31m", ok: false },
+  }, false, true)
+
+  assert.doesNotMatch(out.join("\n"), /\u001b|\u009b/)
+  assert.ok(out.some((line) => line.endsWith("health    FAILED — badgateway31m")), out.join("\n"))
+  assert.ok(out.some((line) => /upstream {2}FAILED — http 500: line one ?line two$/.test(line)), out.join("\n"))
+})
+
 // Why: a daemon older than v0.3.1 reports no version at all. Unknown is not a
 // mismatch — filling the gap with the CLI's version is precisely the bug, and
 // warning on every old daemon would be noise.

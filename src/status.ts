@@ -310,19 +310,21 @@ export const renderStatus = (status: RelayStatus, color = false, unicode = unico
     stateRow("ok", "process", "running", ` (pid ${status.pid}, up ${formatUptime(status.startedAt)})`, "good", color, unicode),
   ]
 
+  // Probe details quote what the relay or fetch answered, so each is cleaned of controls, secrets
+  // and sensitive URLs before it is placed in a row. JSON keeps the detail as it was.
   const health = status.health
   lines.push(
     health?.ok ?
       stateRow("ok", "health", "ok", ` (${health.ms}ms)`, "good", color, unicode)
-    : stateRow("fail", "health", "FAILED", health?.detail ? ` — ${health.detail}` : "", "bad", color, unicode),
+    : stateRow("fail", "health", "FAILED", health?.detail ? ` — ${printableCell(health.detail)}` : "", "bad", color, unicode),
   )
 
   // Only /v1/messages proves the relay can serve Claude Code; health and models pass on a relay
   // whose Copilot token expired an hour ago, so an unchecked upstream says so.
   if (status.deep?.ok) {
-    lines.push(stateRow("ok", "upstream", "ok", ` (${status.deep.ms}ms) — ${status.deep.detail ?? "end-to-end Copilot round trip"}`, "good", color, unicode))
+    lines.push(stateRow("ok", "upstream", "ok", ` (${status.deep.ms}ms) — ${printableCell(status.deep.detail ?? "end-to-end Copilot round trip")}`, "good", color, unicode))
   } else if (status.deep) {
-    lines.push(stateRow("fail", "upstream", "FAILED", status.deep.detail ? ` — ${status.deep.detail}` : "", "bad", color, unicode))
+    lines.push(stateRow("fail", "upstream", "FAILED", status.deep.detail ? ` — ${printableCell(status.deep.detail)}` : "", "bad", color, unicode))
   } else {
     lines.push(stateRow("off", "upstream", "not checked", " (use --deep)", "muted", color, unicode))
   }
