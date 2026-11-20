@@ -124,7 +124,7 @@ test("cache --hourly prints one row per hour, model and route, ending in its hit
   const result = await run(["cache", "--hourly", "--goal", "98.37"])
 
   assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^Prompt-cache hit rate by hour · since .+ · goal 98\.37%$/m)
+  assert.match(result.stdout, /^Prompt-cache hit rate by hour · last 24 h · goal 98\.37%$/m)
   assert.match(result.stdout, /^ {2}HOUR +MODEL +REQUESTS +TOKENS +HIT RATE$/m)
 
   // 98.36% is just under the goal and 98.38% just over it. NO_COLOR is set, so no rate is colored:
@@ -147,6 +147,6 @@ test("cache says plainly when nothing matches", async () => {
   const result = await run(["cache", "--model", "no-such-model"])
 
   assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^No prompt-cache data since .+, models matching "no-such-model"\.$/m)
-  assert.match(result.stdout, /written at logLevel info or debug, not error/)
+  assert.match(result.stdout, /^No prompt-cache data in the last 24 h, models matching "no-such-model"\.$/m)
+  assert.match(result.stdout, /written at logLevel info or debug and kept for logRetentionDays\.$/m)
 })
