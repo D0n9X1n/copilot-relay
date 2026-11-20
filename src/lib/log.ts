@@ -2,7 +2,7 @@
 // rotation and retention cleanup.
 import fs, { type FileHandle } from "node:fs/promises"
 import type { Stats } from "node:fs"
-import { AsyncLocalStorage } from "node:async_hooks"
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks"
 import timers from "node:timers"
 import { inspect } from "node:util"
 
@@ -424,6 +424,11 @@ const drainLogQueue = async (): Promise<void> => {
   scheduleLogIdleClose()
 }
 
+// Runs a function in the context this module was loaded in, outside any request. A drain started
+// from a request would carry that request's async context into its promises and the idle-close
+// timer it sets, keeping a finished request reachable until the timer fired.
+const outsideRequests = AsyncResource.bind(<T>(run: () => T): T => run())
+
 // Only the push that finds the queue empty schedules a drain; later entries join that drain or the
 // next one. A failed drain must not stop the ones after it.
 const queueLogEntry = (entry: LogEntry): void => {
@@ -431,7 +436,9 @@ const queueLogEntry = (entry: LogEntry): void => {
   if (logQueue.length === 1) {
     // The drain this schedules sets the next idle close.
     timers.clearTimeout(logIdleClose)
-    logWriteChain = logWriteChain.then(drainLogQueue).catch(() => undefined)
+    outsideRequests(() => {
+      logWriteChain = logWriteChain.then(drainLogQueue).catch(() => undefined)
+    })
   }
 }
 
