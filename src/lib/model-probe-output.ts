@@ -1,4 +1,4 @@
-import { colorText, mark, terminalText, unicodeEnabled, type MarkState, type TerminalTone } from "./terminal"
+import { displayWidth, mark, printableCell, renderTable, unicodeEnabled, type MarkState, type TableColumn, type TerminalTone } from "./terminal"
 import type { RequestDiagnostic } from "./request-trace"
 
 export type ProbeStatus = "PASS" | "FAIL" | "INCOMPLETE" | "SKIPPED" | "NOT_TESTED"
@@ -36,11 +36,9 @@ const marks: Record<ProbeStatus, MarkState> = {
   NOT_TESTED: "off",
 }
 
-// The table's indent and the columns beside the model: indent 2, gutter 2, status 12, gutter 2,
-// time 6, gutter 2.
-const indent = "  "
+// STATUS fits its widest mark and word, "! INCOMPLETE"; TIME fits the six characters probeTime writes.
 const statusWidth = 12
-const fixedColumns = 26
+const timeWidth = 6
 
 const reasonLabels: Record<string, string> = {
   "completed-text": "Ready",
@@ -80,36 +78,21 @@ export const probeReason = (code: string): string =>
   reasonLabels[code]
   ?? (/^HTTP-\d{3}$/.test(code) ? `HTTP ${code.slice(5)}` : "Unknown result")
 
-// Sized once from every ID the run will probe, so rows printed as each probe finishes line up.
-// Capping the model column at columns - 46 leaves the result at least 20 columns beside the 26 that
-// the indent, status and time take. The model column is at least 14 wide, so a terminal narrower
-// than 60 columns squeezes the result instead. A longer ID wraps within its column; it is never cut.
-export const probeColumnWidth = (ids: string[], columns: number): number =>
-  Math.min(
-    Math.max(14, ...ids.map((id) => terminalText(id).length)),
-    Math.max(14, columns - fixedColumns - 20),
-  )
+// Sized once from every ID the run will probe, so rows printed as each probe finishes line up. The
+// width is that of the ID as printed, after controls and secrets are removed, and at least 14. A long
+// ID widens the table rather than wrapping, so it stays whole and can be copied.
+export const probeColumnWidth = (ids: string[]): number =>
+  Math.max(14, ...ids.map((id) => displayWidth(printableCell(id))))
 
-export const renderProbeHeader = (width: number): string =>
-  `${indent}${"MODEL".padEnd(width)}  ${"STATUS".padEnd(statusWidth)}  ${"TIME".padStart(6)}  RESULT`
-
-const wrap = (text: string, width: number): string[] => {
-  const lines: string[] = []
-  for (let index = 0; index < text.length; index += width) {
-    lines.push(text.slice(index, index + width))
-  }
-
-  return lines
-}
-
+// The six-column TIME field: seconds below 999.95 s (so 999,999 ms is not printed as "1000.0s"),
+// minutes below an hour, then hours, whole from 1000 h on, so a long run never widens the column.
 const probeTime = (row: ProbeRow): string => {
   if (!row.sent) {
     return "-"
   }
 
-  // The six-column TIME field holds seconds up to 999.9s; from 1000 s on, minutes are shown instead.
   const seconds = row.latency / 1000
-  if (seconds < 1000) {
+  if (seconds < 999.95) {
     return `${seconds.toFixed(1)}s`
   }
 
@@ -117,35 +100,39 @@ const probeTime = (row: ProbeRow): string => {
     return `${(seconds / 60).toFixed(1)}m`
   }
 
-  return `${(seconds / 3600).toFixed(1)}h`
+  const hours = `${(seconds / 3600).toFixed(1)}h`
+  return hours.length <= timeWidth ? hours : `${Math.round(seconds / 3600)}h`
 }
 
-export const renderProbeRow = (
-  row: ProbeRow,
-  width: number,
-  color: boolean,
-  columns = 80,
-  unicode = unicodeEnabled(),
-): string[] => {
-  const modelLines = wrap(terminalText(row.id), width)
-  const time = probeTime(row)
-  const label = probeReason(row.detail) + (row.unverified ? " *" : "")
-  const resultLines = wrap(label, Math.max(1, columns - width - fixedColumns))
-  // ANSI bytes do not occupy columns, so pad the uncolored label separately.
-  const statusText = `${mark(marks[row.status], unicode)} ${row.status}`
-  const status = colorText(statusText, tones[row.status], color) + " ".repeat(Math.max(0, statusWidth - statusText.length))
-
-  // The model ID and the result wrap independently. Status and time sit on the first line only;
-  // later lines leave those columns blank.
-  return Array.from(
-    { length: Math.max(modelLines.length, resultLines.length) },
-    (_, index) => {
-      const model = (modelLines[index] ?? "").padEnd(width)
-      const statusAndTime = index === 0 ? `  ${status}  ${time.padStart(6)}  ` : " ".repeat(fixedColumns - indent.length)
-      return `${indent}${model}${statusAndTime}${resultLines[index] ?? ""}`.trimEnd()
-    },
-  )
+interface ProbeCells {
+  row?: ProbeRow
+  unicode: boolean
 }
+
+// The probe table on the shared renderer, so every cell is cleaned and has its secrets scrubbed before
+// it is laid out, and its color wraps the text alone.
+const probeColumns: Array<TableColumn<ProbeCells>> = [
+  { header: "MODEL", align: "left", cell: (cells) => cells.row?.id ?? "" },
+  {
+    header: "STATUS",
+    align: "left",
+    cell: (cells) => cells.row === undefined ? "" : `${mark(marks[cells.row.status], cells.unicode)} ${cells.row.status}`,
+    tone: (cells) => cells.row === undefined ? undefined : tones[cells.row.status],
+  },
+  { header: "TIME", align: "right", cell: (cells) => cells.row === undefined ? "" : probeTime(cells.row) },
+  {
+    header: "RESULT",
+    align: "left",
+    cell: (cells) => cells.row === undefined ? "" : probeReason(cells.row.detail) + (cells.row.unverified ? " *" : ""),
+  },
+]
+
+export const renderProbeHeader = (width: number): string =>
+  renderTable(probeColumns, [], false, [width, statusWidth, timeWidth])[0]
+
+// One row, at the widths the header was printed with.
+export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, unicode = unicodeEnabled()): string[] =>
+  [renderTable(probeColumns, [{ row, unicode }], color, [width, statusWidth, timeWidth])[1]]
 
 export const renderProbeSummary = (rows: ProbeRow[]): string => {
   if (!rows.length) {

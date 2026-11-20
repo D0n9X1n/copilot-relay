@@ -37,10 +37,10 @@ class ModelsUsageError extends Error {}
 // two would escape the scrub that runs on each printed line.
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 
-// Catalog names are untrusted: control characters and secrets are removed and a long name is
-// shortened so it cannot take over a row.
+// Catalog names are untrusted: control characters, secrets and sensitive URLs are removed before a
+// long name is shortened, so a cut can never leave part of one behind.
 const displayName = (name: string | undefined): string | undefined => {
-  const text = printable(name ?? "").trim()
+  const text = printableCell(name ?? "").trim()
 
   if (text === "") {
     return undefined

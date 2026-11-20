@@ -276,6 +276,8 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
     { id: "a-\u001b[2K\u001b[1Aexample\r\nforged-row" },
     { id: "b-named", name: "Evil\u001b[31m\r\nName" },
     { id: `http://${request.headers.host}${secretPath}/model` },
+    // A long name whose sensitive URL straddles the 80-character name cut.
+    { id: "c-long-name", name: `${"n".repeat(60)}http://${request.headers.host}${secretPath}/model` },
   ] }))
 
   const result = await harness.run()
@@ -283,6 +285,7 @@ test("models sanitizes terminal controls and redacts sensitive URLs in upstream 
   assert.equal(result.code, 0)
   const listing = result.rawStdout.slice(result.rawStdout.indexOf("Copilot chat models"))
   assert.doesNotMatch(listing, /\u001b|\r/)
+  assert.ok(!listing.includes(secretPath.slice(0, 6)), listing)
   assert.match(listing, /^ {2}a-exampleforged-row +– +–$/m)
   assert.match(listing, /^ {2}b-named +EvilName +– +–$/m)
   assert.match(listing, /http:\/\/127\.0\.0\.1:\d+\[redacted\]/)
