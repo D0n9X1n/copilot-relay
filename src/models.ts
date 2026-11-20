@@ -19,6 +19,7 @@ import {
   searchModels,
   type ConfiguredModel,
   type ListedModel,
+  type ModelKey,
   type ModelSearch,
 } from "~/lib/model-listing"
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
@@ -49,19 +50,29 @@ const displayName = (name: string | undefined): string | undefined => {
 }
 
 // Every advertised ID, with the reason request admission would refuse it as gptModel or opusModel.
-const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog): ListedModel[] =>
+// The config key whose value names this ID, matched the way routing matches a slot: by its
+// canonical spelling, ignoring case and [1m].
+const slotFor = (id: string, appConfig: AppConfig): ModelKey | undefined =>
+  (["opusModel", "gptModel"] as const).find((key) => normalizeCopilotModelId(appConfig[key]).toLowerCase() === id.toLowerCase())
+
+const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog, appConfig: AppConfig): ListedModel[] =>
   [...catalog.models.keys()].sort().map((id) => {
     const selection = selectCopilotEndpoint(config, id)
-    const name = displayName(catalog.models.get(id)?.name)
+    const model = catalog.models.get(id)
+    const name = displayName(model?.name)
+    const slot = slotFor(id, appConfig)
 
     return {
       id: printable(id),
       ...(name !== undefined && { name }),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
       chat: selection.endpoint !== undefined || selection.reason !== "unsupported-model-type",
-      ...(catalog.models.get(id)?.limits?.max_context_window_tokens !== undefined && {
-        contextWindow: catalog.models.get(id)?.limits?.max_context_window_tokens,
+      ...(model?.limits?.max_context_window_tokens !== undefined && {
+        contextWindow: model.limits.max_context_window_tokens,
       }),
+      ...(model?.price !== undefined && { price: { input: model.price.input, output: model.price.output } }),
+      ...(model?.multiplier !== undefined && { multiplier: model.multiplier }),
+      ...(slot !== undefined && { slot }),
     }
   })
 
@@ -264,7 +275,7 @@ export const models = defineCommand({
         return
       }
 
-      const listed = listedModels(config, catalog)
+      const listed = listedModels(config, catalog, appConfig)
       // The plain listing shows chat models; --all and a search show every match.
       const shown = search === "" && !args.all ? listed.filter((model) => model.chat !== false) : listed
       const result: ModelSearch = search === "" ? { found: true, models: shown } : searchModels(listed, search)

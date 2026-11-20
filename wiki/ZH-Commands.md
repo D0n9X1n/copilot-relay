@@ -262,19 +262,21 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 | `--total-timeout` | 所有探测的总超时秒数，须为正数（默认 300）。 |
 | `--all` | 列出每个公布的模型，包括不是聊天模型的那些。 |
 
-以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称和上下文窗口。窗口不小于 1M 的标为
-`[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。不是聊天模型的（例如 embeddings）不列出，只在表格下
+以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称、费用和上下文窗口。COST 是目录报告的费用，
+单位为每百万输入/输出 token 的美元（`$8/$40`）；目录只报告倍率时显示每次调用的高级请求数（`1×`），否则为
+`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。SLOT 标出 `gptModel` 或
+`opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
 计数；`--all` 也会列出它们，并注明它们不能用作 `gptModel` 或 `opusModel`。列表不验证模型能否工作。
 令牌缓存提示输出到 stderr，因此 stdout 只有结果。
 
 ```text
 Copilot chat models · 4 of 6
 
-  MODEL              NAME                 CONTEXT
-  claude-opus-5.5    Claude Opus 5.5      1M [1m]
-  claude-sonnet-5.5  Claude Sonnet 5.5       200K
-  gpt-6.2-astra      GPT-6.2 Astra      1.1M [1m]
-  grok-4.7           Grok 4.7                256K
+  MODEL              NAME               COST      CONTEXT  SLOT
+  claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
+  claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
+  gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
+  grok-4.7           Grok 4.7           $2/$6        500K
 
 2 models that are not chat models are hidden: copilot-relay models --all
 ```

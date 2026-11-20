@@ -188,7 +188,8 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     process.exit(1)
   }
 
-  log.info(`Exposed models: ${getSlotModelIds().join(", ")}`)
+  const [gptSlot, opusSlot = gptSlot] = getSlotModelIds()
+  log.info(`Models: ${gptSlot} (gptModel), ${opusSlot} (opusModel)`)
 
   // Preflight has read each model's tokenizer from the catalog. Loading them before listening keeps
   // the first count_tokens request from waiting for one.

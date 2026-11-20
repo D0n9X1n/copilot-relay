@@ -317,8 +317,11 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 | `--all` | List every advertised model, including those that are not chat models. |
 
 Lists the chat models Copilot's catalog advertises as a table of exact IDs, display
-names and context windows. A window of at least 1M is marked `[1m]`, the ID suffix
-Claude Code reads as a 1M model. Models that are not chat models, such as
+names, costs and context windows. COST is what the catalog reports, in USD per
+million input/output tokens (`$8/$40`), or premium requests per call (`1×`) when it
+reports only a multiplier, or `–`. A window of at least 1M is marked `[1m]`, the ID
+suffix Claude Code reads as a 1M model. SLOT marks the model `gptModel` or
+`opusModel` names. Models that are not chat models, such as
 embeddings, are left out and counted under the table; `--all` lists them too, with
 a note that they cannot be `gptModel` or `opusModel`. The listing does not verify
 that a model works. The token-cache notices go to stderr, so stdout holds only the
@@ -327,11 +330,11 @@ answer.
 ```text
 Copilot chat models · 4 of 6
 
-  MODEL              NAME                 CONTEXT
-  claude-opus-5.5    Claude Opus 5.5      1M [1m]
-  claude-sonnet-5.5  Claude Sonnet 5.5       200K
-  gpt-6.2-astra      GPT-6.2 Astra      1.1M [1m]
-  grok-4.7           Grok 4.7                256K
+  MODEL              NAME               COST      CONTEXT  SLOT
+  claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
+  claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
+  gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
+  grok-4.7           Grok 4.7           $2/$6        500K
 
 2 models that are not chat models are hidden: copilot-relay models --all
 ```

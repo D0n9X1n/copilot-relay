@@ -338,7 +338,7 @@ info Running upstream preflight
 info Upstream models available: gpt-6-astra, claude-opus-5
 info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
-info Exposed models: gpt-6-astra[1m], claude-opus-5
+info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 

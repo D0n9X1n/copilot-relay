@@ -13,9 +13,27 @@ export interface ListedModel {
   chat?: boolean
   // The catalog's context window in tokens, when it reports one.
   contextWindow?: number
+  // USD per million input and output tokens, when the catalog reports token prices.
+  price?: { input: number; output: number }
+  // Premium requests per call, when the catalog reports only a multiplier.
+  multiplier?: number
+  // The config key that routes to this ID, when one does.
+  slot?: ModelKey
 }
 
 export type ModelKey = "gptModel" | "opusModel"
+
+// A price keeps the digits the catalog sent: whole dollars as "$8", cents as "$0.4".
+const dollars = (value: number): string => `$${value}`
+
+// What a call costs, from what the catalog reports: token prices first, then a multiplier, else a dash.
+const costOf = (model: ListedModel): string => {
+  if (model.price !== undefined) {
+    return `${dollars(model.price.input)}/${dollars(model.price.output)}`
+  }
+
+  return model.multiplier === undefined ? "–" : `${model.multiplier}×`
+}
 
 export interface ConfiguredModel {
   key: ModelKey
@@ -109,8 +127,13 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
   const columns: Array<TableColumn<ListedModel>> = [
     { header: "MODEL", align: "left", cell: (model) => model.id },
     { header: "NAME", align: "left", cell: (model) => model.name ?? "", maxWidth: 18 },
+    { header: "COST", align: "left", cell: costOf },
     { header: "CONTEXT", align: "right", cell: contextOf },
   ]
+
+  if (models.some((model) => model.slot !== undefined)) {
+    columns.push({ header: "SLOT", align: "left", cell: (model) => model.slot === undefined ? "" : `◀ ${model.slot}` })
+  }
 
   if (models.some((model) => model.unusable !== undefined)) {
     columns.push({

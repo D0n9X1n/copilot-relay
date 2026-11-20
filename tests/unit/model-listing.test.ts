@@ -56,18 +56,35 @@ test("a config line is offered only for an exact ID or the one usable match", ()
   assert.equal(searchModels(catalog, "ada").chosen, undefined)
 })
 
-test("the listing is a table of exact IDs, names, context windows and notes", () => {
+test("the listing is a table of exact IDs, names, costs, context windows and notes", () => {
   assert.deepEqual(renderModelRows([
     { id: "bare-model", chat: true },
     { id: "gpt-6-astra", name: "GPT-6 Astra", chat: true, contextWindow: 1_050_000 },
     { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", chat: true, contextWindow: 200_000 },
     { id: "text-embedding-ada-002", chat: false, unusable: "Not a chat model" },
   ], false, true), [
-    "  MODEL                   NAME                 CONTEXT  NOTE",
-    "  bare-model                                         –",
-    "  gpt-6-astra             GPT-6 Astra        1.1M [1m]",
-    "  claude-sonnet-5.5       Claude Sonnet 5.5       200K",
-    "  text-embedding-ada-002                             –  ! cannot be gptModel or opusModel: not a chat model",
+    "  MODEL                   NAME               COST    CONTEXT  NOTE",
+    "  bare-model                                 –             –",
+    "  gpt-6-astra             GPT-6 Astra        –     1.1M [1m]",
+    "  claude-sonnet-5.5       Claude Sonnet 5.5  –          200K",
+    "  text-embedding-ada-002                     –             –  ! cannot be gptModel or opusModel: not a chat model",
+  ])
+})
+
+test("the listing shows each model's cost and which slot uses it", () => {
+  assert.deepEqual(renderModelRows([
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5", chat: true, contextWindow: 1_000_000, price: { input: 4, output: 20 }, slot: "opusModel" },
+    { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 1_050_000, price: { input: 8, output: 40 }, slot: "gptModel" },
+    { id: "gpt-4.1", name: "GPT-4.1", chat: true, contextWindow: 128_000, price: { input: 0, output: 0 } },
+    { id: "grok-4.7", name: "Grok 4.7", chat: true, multiplier: 0.33 },
+    { id: "bare-model", chat: true },
+  ], false, true), [
+    "  MODEL            NAME             COST      CONTEXT  SLOT",
+    "  claude-opus-5.5  Claude Opus 5.5  $4/$20    1M [1m]  ◀ opusModel",
+    "  gpt-6.2-astra    GPT-6.2 Astra    $8/$40  1.1M [1m]  ◀ gptModel",
+    "  gpt-4.1          GPT-4.1          $0/$0        128K",
+    "  grok-4.7         Grok 4.7         0.33×           –",
+    "  bare-model                        –               –",
   ])
 })
 
@@ -79,7 +96,7 @@ test("a long name is cut but an ID never is", () => {
   ], false, true)
 
   assert.ok(lines[1].startsWith(`  ${longId}  Long`))
-  assert.match(lines[2], /^ {2}short +A display name fa… +–$/)
+  assert.match(lines[2], /^ {2}short +A display name fa… +– +–$/)
 })
 
 test("the config guide shows the current routes and warns about values the startup check rejects", () => {
