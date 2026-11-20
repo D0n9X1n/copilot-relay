@@ -9,7 +9,7 @@ import { HTTPError } from "~/lib/error"
 import { consola } from "consola"
 
 import { flushLogs, log, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
-import { colorDepth, colorText, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
+import { boldText, colorDepth, colorText, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
 import {
@@ -106,7 +106,7 @@ const listingHeading = (search: string, result: ModelSearch, total: number, all:
   const label = printable(search)
 
   if (result.found) {
-    return `Upstream models matching "${label}" (${result.models.length}):`
+    return `${boldText("Upstream models matching", color)} "${label}" (${result.models.length}):`
   }
 
   if (result.models.length === 0) {
@@ -114,7 +114,7 @@ const listingHeading = (search: string, result: ModelSearch, total: number, all:
     return `No upstream model matches "${label}".\nList them all with copilot-relay models --all.`
   }
 
-  return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
+  return `No upstream model matches "${label}". ${boldText("Closest IDs", color)} (${result.models.length}):`
 }
 
 export const models = defineCommand({

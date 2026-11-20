@@ -3,7 +3,7 @@ import { createUpstreamDeadline } from "~/lib/deadline"
 import type { ProxyConfig } from "~/lib/config"
 import { log, scrubLogSecrets, withoutConsoleLogging, withoutLogging } from "~/lib/log"
 import { RequestTrace, withTraceObserver, type RequestDiagnostic } from "~/lib/request-trace"
-import { colorEnabled } from "~/lib/terminal"
+import { colorEnabled, heading } from "~/lib/terminal"
 import {
   probeColumnWidth,
   probeHint,
@@ -54,6 +54,10 @@ const safeId = (id: unknown, config: ProxyConfig): id is string =>
   && /^[A-Za-z0-9._\[\]-]{1,128}$/.test(id)
   && !holdsCredential(id, config)
   && !/(?:gh[pousr]_|github_pat_|sk-|eyJ)/.test(id)
+
+// The probe run's title: how many models, and that each check is a real, billed request.
+export const modelCheckTitle = (count: number, color: boolean): string =>
+  heading("Model check", `${count} ${count === 1 ? "model" : "models"} · real Copilot usage`, color)
 
 // Every line probeModels prints, --details included, is scrubbed again as a backstop behind
 // safeId and the trace's allowlist.
@@ -174,7 +178,7 @@ export async function probeModels(
   entries: Array<[string, CopilotModel]>,
   options: ModelProbeOptions,
 ): Promise<number> {
-  printLine(`\nModel check · ${entries.length} ${entries.length === 1 ? "model" : "models"} · real Copilot usage`)
+  printLine(`\n${modelCheckTitle(entries.length, colorEnabled())}`)
   printLine("Isolated relay pipeline; not running-daemon health.")
   printLine(`Up to ${options.maxTokens} output tokens/probe; existing retries may add calls.\n`)
 

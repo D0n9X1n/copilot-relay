@@ -81,6 +81,13 @@ const columns: Array<TableColumn<Row>> = [
   { header: "COST", align: "right", cell: (row) => row.price, tone: (row) => row.price === "$40" ? "38;5;166" : undefined },
 ]
 
+test("a cell with both a tone and bold gets the tone alone", () => {
+  const both: Array<TableColumn<Row>> = [{ header: "COST", align: "left", cell: (row) => row.price, tone: () => "bad", bold: () => true }]
+  const [, line] = renderTable(both, [{ id: "x", price: "$40", slot: true }], true)
+
+  assert.equal(line, "  \u001b[31m$40\u001b[0m")
+})
+
 test("renderTable bolds the header row and chosen cells with color on, and the plain text stays the same", () => {
   const rows: Array<Row> = [{ id: "gpt-6.2-astra", price: "$40", slot: true }, { id: "grok-4.7", price: "$6", slot: false }]
   const colored = renderTable(columns, rows, true)

@@ -274,8 +274,10 @@ const stateRow = (
   color: boolean,
   unicode: boolean,
 ): string => {
-  // A detail in parentheses, such as a pid or a latency, is muted so the state word leads.
-  const detail = /^ \([^()]*\)$/.test(rest) ? ` ${colorText(rest.slice(1), "muted", color)}` : rest
+  // A detail in parentheses right after the word, such as a pid or a latency, is muted so the state
+  // word leads; any description after it stays plain.
+  const parenthesized = /^ (\([^()]*\))(.*)$/.exec(rest)
+  const detail = parenthesized === null ? rest : ` ${colorText(parenthesized[1], "muted", color)}${parenthesized[2]}`
   return `  ${mark(state, unicode)} ${label.padEnd(9)} ${colorText(word, tone, color)}${detail}`
 }
 
