@@ -188,6 +188,27 @@ test("a stream that stalls after its headers is cut off at the request's deadlin
 })
 
 // A failed reply whose body never ends until its request's signal aborts, as a stalled upstream sends it.
+// The error a promise rejects with, so a test can read its response body.
+const rejection = async (promise: Promise<unknown>): Promise<InstanceType<typeof HTTPError>> => {
+  try {
+    await promise
+  } catch (error) {
+    assert.ok(error instanceof HTTPError, `expected an HTTPError, got ${String(error)}`)
+    return error
+  }
+
+  assert.fail("expected the promise to reject")
+}
+
+const stalledError = (signal: AbortSignal | undefined, observed: { cancelled: boolean }) => new Response(new ReadableStream({
+  start(controller) {
+    signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true })
+  },
+  cancel() {
+    observed.cancelled = true
+  },
+}), { status: 400, headers: { "content-type": "application/json" } })
+
 test("a catalog load given its caller's signal starts no timer of its own", async (t) => {
   const timeouts = t.mock.method(AbortSignal, "timeout")
 
@@ -229,16 +250,50 @@ test("a standalone catalog load owns one deadline and disposes it once the load 
   assert.equal(after.created - before.created, 1, "success: one deadline")
   assert.equal(after.disposed - before.disposed, 1, "success: disposed")
 
+  // An error reply's body is read inside the deadline: a stalled one ends at the deadline as a
+  // timeout, and the error the command handles holds a settled copy.
+  const observed = { cancelled: false }
+  let upstreamSignal: AbortSignal | undefined
+  const failed = withRecordedTransport({
+    fetch: async (request) => {
+      upstreamSignal = request.signal
+      return stalledError(request.signal, observed)
+    },
+    refresh: noRefresh,
+  }, () => loadStandaloneModelCatalog(configFor(30)))
+  const timedOut = await rejection(failed)
+  assert.equal(timedOut.response.status, 504)
+  assert.match(await timedOut.response.text(), /upstream_timeout/)
+  assert.equal(upstreamSignal?.aborted, true, "error: the stalled body was cut off at the deadline")
+  after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 2, "error: one deadline")
+  assert.equal(after.disposed - before.disposed, 2, "error: disposed after the body settled")
+
   // A reply that never arrives is aborted at the deadline.
   await assert.rejects(withRecordedTransport({
     fetch: (request) => new Promise((_resolve, reject) => request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true })),
     refresh: noRefresh,
   }, () => loadStandaloneModelCatalog(configFor(30))), (error: InstanceType<typeof HTTPError>) => error.response.status === 504)
   after = upstreamDeadlineCounts()
-  assert.equal(after.created - before.created, 2, "abort: one deadline")
-  assert.equal(after.disposed - before.disposed, 2, "abort: disposed")
+  assert.equal(after.created - before.created, 3, "abort: one deadline")
+  assert.equal(after.disposed - before.disposed, 3, "abort: disposed")
 
   assert.equal(timeouts.mock.callCount(), 0)
+})
+
+test("a standalone catalog error's readable body is settled before its deadline is disposed", async () => {
+  const before = upstreamDeadlineCounts()
+  const failed = withRecordedTransport({
+    fetch: async () => new Response(JSON.stringify({ error: "bad request" }), { status: 400 }),
+    refresh: noRefresh,
+  }, () => loadStandaloneModelCatalog(configFor(5000)))
+
+  const error = await rejection(failed)
+  const after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 1)
+  assert.equal(after.disposed - before.disposed, 1, "disposed before the command reads the error")
+  assert.equal(error.response.status, 400)
+  assert.deepEqual(await error.response.json(), { error: "bad request" })
 })
 
 test("two concurrent requests keep their own deadlines when one is cancelled", async () => {
@@ -418,4 +473,24 @@ test("a Copilot call given its caller's signal starts no timer of its own", asyn
 
   assert.deepEqual(upstreamDeadlineCounts(), before)
   assert.equal(timeouts.mock.callCount(), 0)
+})
+
+test("preflight reads a failed catalog body inside its deadline and times out a stalled one", async () => {
+  const observed = { cancelled: false }
+  let upstreamSignal: AbortSignal | undefined
+  const before = upstreamDeadlineCounts()
+
+  const error = await rejection(withRecordedTransport({
+    fetch: async (request) => {
+      upstreamSignal = request.signal
+      return stalledError(request.signal, observed)
+    },
+    refresh: noRefresh,
+  }, () => validateUpstream(configFor(30), "low")))
+
+  assert.equal(error.response.status, 504)
+  assert.equal(upstreamSignal?.aborted, true, "the stalled body was cut off at the deadline")
+  const after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 1)
+  assert.equal(after.disposed - before.disposed, 1)
 })
