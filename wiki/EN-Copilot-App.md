@@ -2,8 +2,8 @@
 
 The GitHub Copilot app and Copilot CLI can use a custom model provider, a preview
 feature GitHub calls bring your own key. Pointed at the relay, they reach the same
-exposed models Claude Code and Codex use, `gptModel`, `opusModel` and the models the
-`models` key selects (see [Models](EN-Models.md)), and their usage
+two models Claude Code and Codex use, `gptModel` and `opusModel` (see
+[Models](EN-Models.md)), and their usage
 shows up in the relay's logs and in `copilot-relay cache`.
 
 The app already talks to GitHub Copilot directly, with the same models. Route it
@@ -46,16 +46,15 @@ Open **Settings → Model providers**, add a provider, and fill it in:
 | Wire API | Responses |
 | API key | your relay `apiKey` |
 
-Then add the exposed models, one entry per model:
+Then add the two models, one entry per slot:
 
 | Model ID | Display name |
 | --- | --- |
-| `gpt-6-astra` | `GPT-6 Astra · Relay` |
-| `claude-opus-5.5` | `Claude Opus 5.5 · Relay` |
-| each other exposed ID, such as `gpt-6.2-astra`, `mai-code-2` or `grok-4.7` | Copilot's name for it, followed by `· Relay` |
+| `gpt-6.2-astra` (your `gptModel`) | `GPT-6.2 Astra · Relay` |
+| `claude-opus-5.5` (your `opusModel`) | `Claude Opus 5.5 · Relay` |
 
 The display names keep Copilot's own model names and add `· Relay`, so the
-picker does not show a relay model and a built-in one under the same label. Use the IDs the relay logs at startup on its `Exposed models:` line, without `[1m]`.
+picker does not show a relay model and a built-in one under the same label. Use the IDs from your `config.yaml`, without `[1m]`.
 
 If the form offers no Responses choice, use the Anthropic type with base URL
 `http://127.0.0.1:4142` and the same key and models instead.
@@ -83,7 +82,7 @@ export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:4142/v1
 export COPILOT_PROVIDER_TYPE=openai
 export COPILOT_PROVIDER_WIRE_API=responses
 export COPILOT_PROVIDER_API_KEY="<your relay apiKey>"
-export COPILOT_MODEL=gpt-6-astra
+export COPILOT_MODEL=gpt-6.2-astra
 ```
 
 In PowerShell:
@@ -93,11 +92,11 @@ $env:COPILOT_PROVIDER_BASE_URL = "http://127.0.0.1:4142/v1"
 $env:COPILOT_PROVIDER_TYPE = "openai"
 $env:COPILOT_PROVIDER_WIRE_API = "responses"
 $env:COPILOT_PROVIDER_API_KEY = "<your relay apiKey>"
-$env:COPILOT_MODEL = "gpt-6-astra"
+$env:COPILOT_MODEL = "gpt-6.2-astra"
 ```
 
-Set `COPILOT_MODEL` to `claude-opus-5.5` for Opus, or to another exposed ID such as
-`grok-4.7`, or switch with `/model` in a session. For the Anthropic type, set `COPILOT_PROVIDER_TYPE=anthropic`, use base
+Set `COPILOT_MODEL` to `claude-opus-5.5` for Opus, or switch with `/model` in a
+session. For the Anthropic type, set `COPILOT_PROVIDER_TYPE=anthropic`, use base
 URL `http://127.0.0.1:4142`, and leave `COPILOT_PROVIDER_WIRE_API` unset.
 
 ## Check it works
@@ -136,4 +135,4 @@ URL `http://127.0.0.1:4142`, and leave `COPILOT_PROVIDER_WIRE_API` unset.
 | `500 Unsupported Claude API route` on another path, such as `/v1/v1/messages` or `/responses` | The base URL has the wrong ending: `/v1` for Responses, none for Anthropic. |
 | `401` with `authentication_error` | The key does not match `apiKey`. Copy it again from `config.yaml`. |
 | Connection refused | The relay is not running, or listens on another port. Run `copilot-relay status`. |
-| A model is missing from the picker | Add it to the provider by hand, with an ID from the relay's `Exposed models:` line, without `[1m]`. |
+| A model is missing from the picker | Add it to the provider by hand, with its `gptModel` or `opusModel` ID from `config.yaml`, without `[1m]`. |

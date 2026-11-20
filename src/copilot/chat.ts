@@ -247,10 +247,10 @@ export const createChatCompletions = async (
   const requestedThinkEffort =
     options.requestedThinkEffort ?? getRequestReasoningEffort(payload) ?? "unset"
   const requestedThinking = options.requestedThinking ?? "none"
-  const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
 
   const upstreamModelId = normalizeCopilotModelId(payload.model)
-  const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens)
+  const maxTokens = await boundModelOutputTokens(config, upstreamModelId, payload.max_tokens, signal)
   const selection = requireCopilotEndpoint(config, upstreamModelId)
 
   if (selection.endpoint === "/v1/messages") {

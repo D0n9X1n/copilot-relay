@@ -117,8 +117,8 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
 
   try {
     const [first, second] = await Promise.all([
-      loadCopilotModelCatalog(config),
-      loadCopilotModelCatalog(config),
+      loadCopilotModelCatalog(config, undefined),
+      loadCopilotModelCatalog(config, undefined),
     ])
 
     assert.equal(first, second)
@@ -412,7 +412,7 @@ test("a changed upstream never reuses the previous provider's capacities", async
   const config = configFor(first.baseUrl)
 
   try {
-    await loadCopilotModelCatalog(config)
+    await loadCopilotModelCatalog(config, undefined)
     config.copilotBaseUrl = second.baseUrl
     runtimeState.upstreamBaseUrl = second.baseUrl
 
@@ -437,10 +437,10 @@ test("a late catalog response cannot replace a newer provider's catalog", async 
 
   try {
     // The first provider's catalog is held until the second one has loaded.
-    const old = loadCopilotModelCatalog(config)
+    const old = loadCopilotModelCatalog(config, undefined)
     config.copilotBaseUrl = second.baseUrl
     runtimeState.upstreamBaseUrl = second.baseUrl
-    const current = await loadCopilotModelCatalog(config)
+    const current = await loadCopilotModelCatalog(config, undefined)
     release()
     await old
 
@@ -456,7 +456,7 @@ test("a late catalog response cannot replace a newer provider's catalog", async 
 test("invalid catalogs fail explicitly", async () => {
   const mock = await startModels({ data: "invalid" })
   try {
-    await assert.rejects(loadCopilotModelCatalog(configFor(mock.baseUrl)), /invalid model catalog/)
+    await assert.rejects(loadCopilotModelCatalog(configFor(mock.baseUrl), undefined), /invalid model catalog/)
   } finally {
     await mock.close()
   }
@@ -467,7 +467,7 @@ test("unreported limits preserve explicit budgets and omit capacity claims", asy
   const config = configFor(mock.baseUrl)
 
   try {
-    await loadCopilotModelCatalog(config)
+    await loadCopilotModelCatalog(config, undefined)
 
     assert.equal(getCachedCopilotModel(config, "gpt-6-astra")?.limits, undefined)
     assert.equal(await boundModelOutputTokens(config, "gpt-6-astra", 32_000), 32_000)

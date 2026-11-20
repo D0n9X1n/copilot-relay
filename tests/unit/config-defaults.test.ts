@@ -74,7 +74,7 @@ test("applies defaults only to absent keys", async () => {
 
   assert.equal(config.port, 5000)
   assert.equal(config.opusModel, "claude-opus-5.5")
-  assert.equal(config.gptModel, "gpt-6-astra")
+  assert.equal(config.gptModel, "gpt-6.2-astra")
   assert.equal(config.logRetentionDays, 3)
 })
 
@@ -83,17 +83,9 @@ test("uses shipped defaults for a fresh install", async () => {
   const config = await readAppConfig()
 
   assert.equal(config.opusModel, "claude-opus-5.5")
-  assert.equal(config.gptModel, "gpt-6-astra")
-  assert.equal(config.models, "auto")
-})
-
-// Why: models is stored as the user wrote it; the exposed list is computed from it at runtime.
-test("models keeps its literal through repeated reads", async () => {
-  await writeConfigFile("models: grok-4.7, MAI-CODE-2\n")
-
-  assert.equal((await readAppConfig()).models, "grok-4.7, MAI-CODE-2")
-  assert.equal((await readAppConfig()).models, "grok-4.7, MAI-CODE-2")
-  assert.match(await readConfigFile(), /^models: grok-4\.7, MAI-CODE-2$/m)
+  assert.equal(config.gptModel, "gpt-6.2-astra")
+  assert.equal(Object.hasOwn(config, "models"), false)
+  assert.doesNotMatch(await readConfigFile(), /^models:/m)
 })
 
 test("preserves an existing Opus 5 selection after the default changes", async () => {

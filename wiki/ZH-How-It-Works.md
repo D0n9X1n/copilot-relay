@@ -113,7 +113,7 @@ Preflight 在 socket 绑定之前运行，所以一个连配置模型都够不�
 全新安装的首选值：
 
 ```yaml
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 

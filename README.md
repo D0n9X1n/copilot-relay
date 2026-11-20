@@ -10,7 +10,7 @@
 - **Claude Code, familiar workflow** — Messages API compatibility, streaming responses, and tool calls.
 - **Codex CLI and the Codex app** — set up on start with no ChatGPT sign-in, offering the same models as Claude Code; [details](wiki/EN-Codex.md) · [中文](wiki/ZH-Codex.md).
 - **WebSearch that fits the conversation** — relay-managed search, followed by an answer that can still use your tools.
-- **Your models, your settings** — configurable GPT/Opus routes and reasoning effort; `models: auto` also offers the newest model of each vendor in your catalog ([Models](wiki/EN-Models.md) · [中文](wiki/ZH-Models.md)); existing selections survive upgrades.
+- **Your models, your settings** — two configurable models, `gptModel` (default `gpt-6.2-astra`) and `opusModel`, with a 1M window detected from Copilot's catalog, plus reasoning effort ([Models](wiki/EN-Models.md) · [中文](wiki/ZH-Models.md)); existing selections survive upgrades.
 - **Use the advertised capacity** — discovered context/output limits, without silently shortening your input.
 - **Use advertised chat models** — catalog-driven endpoint selection, optional effort support, and clear opt-in per-model deep checks.
 - **Choose Claude's upstream protocol** — `claudeUpstreamApi: chat-completions` stays the default; opt into `auto` or `messages` for native Claude transport.

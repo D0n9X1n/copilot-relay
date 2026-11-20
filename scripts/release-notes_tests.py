@@ -129,6 +129,26 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("SHA-256", rendered)
         self.assertEqual(rendered, self.success())
 
+    def test_tagged_supplement_is_appended_after_verification(self):
+        notes = self.path / "release-notes"
+        notes.mkdir()
+        (notes / "v0.3.9.md").write_text("## Breaking changes\n\n- One change.\n", encoding="utf-8")
+        self.git("add", "release-notes/v0.3.9.md")
+        self.commit("add release supplement")
+        self.retag()
+        rendered = self.success()
+        headings = [line for line in rendered.splitlines() if line.startswith("#")]
+        self.assertEqual(headings[-2:], ["## Verification", "## Breaking changes"])
+        self.assertTrue(rendered.endswith("- One change.\n"))
+
+    def test_supplement_comes_from_the_tag_not_the_checkout(self):
+        notes = self.path / "release-notes"
+        notes.mkdir()
+        (notes / "v0.3.9.md").write_text("## Untagged\n", encoding="utf-8")
+        rendered = self.success()
+        self.assertNotIn("Untagged", rendered)
+        self.assertTrue(rendered.endswith("`SHA256SUMS`.\n"))
+
     def test_exact_tag_commit_package_not_current_checkout(self):
         self.write_package("99.0.0")
         self.commit("later development must not leak")

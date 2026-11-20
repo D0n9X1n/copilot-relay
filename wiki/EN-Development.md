@@ -239,6 +239,12 @@ lookups fail before any notes are emitted. `PREVIOUS_TAG` may select an explicit
 ancestor base; `RELEASE_FIRST=1` is the explicit first-release opt-in and cannot be
 combined with `PREVIOUS_TAG`.
 
+A release can add hand-written sections, such as breaking changes or measurements,
+in `release-notes/<tag>.md`. The generator reads that file from the tagged commit,
+never the checkout, and appends it after Verification, so every rerun of the
+workflow reproduces the same body. Commit it in the feature PR, where it is
+reviewed like any other file.
+
 The publish workflow generates notes before creating or updating the GitHub
 Release. This does not gate the parallel npm/GitHub Packages jobs: verify all
 publish jobs, not just package availability. Running the generator alone never
@@ -278,6 +284,11 @@ Rules that keep publishing correct:
   `#anchor` links and examples inside code are fine.
 - **English and 中文 stay synchronized.** Every `EN-` page has a `ZH-`
   counterpart with matching structure.
+- **The sidebar links every page.** `wiki/_Sidebar.md` is the one page with no
+  `EN-`/`ZH-` pair and the only underscore page the publisher accepts; GitHub
+  shows it beside every page. It has an English group, open, and a 中文 group,
+  folded, and each links Home and every page of its language exactly once. A new
+  or renamed page goes into both groups in the same change.
 
 **One-way.** Edits made in the wiki tab's browser editor are overwritten on the
 next publish. Change `wiki/`.
@@ -332,7 +343,8 @@ absent, `wiki/` is flat, `EN-`/`ZH-` pairs match, every relative link resolves,
 no cross-page anchor link exists, the publish transform leaves no broken link,
 no tracked file references the removed `docs/` tree, and each Commands page has a
 section for every command `src/main.ts` registers, naming its options and
-arguments.
+arguments. `tests/unit/wiki-sidebar.test.ts` checks the sidebar: its two groups in
+order, English open and 中文 folded, and each page linked once in its group.
 
 It invokes the production publisher on the real wiki and also runs
 `scripts/publish-wiki_tests.py`: offline fixtures for navigation, code spans,

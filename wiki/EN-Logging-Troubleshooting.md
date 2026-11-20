@@ -288,9 +288,10 @@ Replay accepts Messages and count-tokens captures; a Codex `/v1/responses` captu
 is recorded for inspection but reported `MALFORMED` by replay. Replay runs the **actual current in-process handler** using recorded ordered
 upstream/refresh transport, with no sockets, real authentication, token/config
 writes or new capture. It compares actual outgoing requests and final JSON/SSE,
-not just two saved files. Output includes each exchange's status, known completion
-reason and numeric token/cache usage, plus client block types and tool-call count;
-it does not print tool arguments or response text. Do not use `auth`, restart the
+not just two saved files. Output is a heading, the verdict, and a table with each
+exchange's status, known completion reason and numeric token/cache usage, plus client
+block types and tool-call count (see `replay` in [Commands](EN-Commands.md)); it does
+not print tool arguments or response text. Do not use `auth`, restart the
 daemon or make a new Copilot call merely to replay a capture.
 
 | Verdict | Exit | Meaning |
@@ -329,16 +330,22 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ### Startup
 
-At `info`, startup logs confirm the active config and preflight:
+At `info`, startup logs confirm the active config and preflight. The log file holds
+every line below; the console leaves out the per-model records (`Model token limits`,
+the preflight's `Model request` lines and `Preflight OK: model=…`) and prints the
+one-line `Preflight OK: <models>` summary in their place, so startup fits a
+terminal:
 
 ```text
 info Log level: info
 info Default think effort: xhigh
 info Running upstream preflight
-info Upstream models available: gpt-6-astra, claude-opus-5
-info Preflight OK: model=gpt-6-astra think_effort=xhigh
-info Preflight OK: model=claude-opus-5 think_effort=xhigh
-info Exposed models: gpt-6-astra[1m], claude-opus-5
+info Upstream models available: gpt-6.2-astra, claude-opus-5.5
+info Model token limits: model=gpt-6.2-astra context=1050000 input=922000 output=128000 non_streaming_output=128000
+info Preflight OK: model=gpt-6.2-astra think_effort=xhigh
+info Preflight OK: model=claude-opus-5.5 think_effort=xhigh
+info Preflight OK: gpt-6.2-astra, claude-opus-5.5
+info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 
@@ -912,7 +919,7 @@ another case or encoding, is not found.
 
 | Case | Message |
 | --- | --- |
-| No stored token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| No stored token | `No GitHub token at <path>. Run copilot-relay auth.` |
 | The token file cannot be read | `Could not read the GitHub token at <path>: <code>.` |
 | `config.yaml` cannot be read or is invalid | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
 | `upstreamProxy: env` with a malformed `HTTPS_PROXY` or `HTTP_PROXY` | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |
@@ -927,6 +934,35 @@ another case or encoding, is not found.
 The `config.yaml` line names no reason, because that file can hold credentials,
 such as an `upstreamProxy` password. [Configuration](EN-Configuration.md) lists
 the rules.
+
+## Sign-in waits or seems stuck
+
+`copilot-relay auth`, and `start`, `setup` or `models` with no stored GitHub
+token, print a device code and wait for you to enter it at the URL shown. Each
+call to GitHub, response body included, gets 30 seconds. The wait as a whole ends
+when the device code expires: GitHub's `expires_in`, or 15 minutes when GitHub
+sends none, counted from when the code arrives, so time spent showing it counts
+too. A denied sign-in or an expired code stops at once with a message that says
+so, whatever HTTP status GitHub answers with; a network error or a GitHub 5xx is
+retried at the polling interval. Sign-in therefore never waits forever.
+
+**Windows: output stops until you press Enter.** The likely cause, not yet
+confirmed on a Windows console, is QuickEdit mode rather than the relay. A click
+in the window, such as one to select the device code, starts a selection that
+pauses every program writing to that console until the selection ends. If that
+is what happened, **Esc** or **Enter** ends the selection and output resumes. On a
+Windows terminal the relay prints this reminder above the code:
+
+```text
+Tip: a click in this window pauses output; press Esc or Enter to resume.
+```
+
+To stop it happening, turn QuickEdit off in the console's Properties, or use
+Windows Terminal, whose selection does not pause output.
+
+**What sign-in reports.** `copilot-relay auth` ends with `Logged in as <login>`.
+If the token was saved but the GitHub user lookup failed, it prints
+`Logged in; GitHub user unavailable` instead; the token still works.
 
 ## Token cache problems
 

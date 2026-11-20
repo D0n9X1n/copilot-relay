@@ -1,4 +1,5 @@
 // `copilot-relay status`: report whether a relay is running, and whether it works.
+
 import { defineCommand } from "citty"
 import type { Agent, RequestInit } from "undici"
 
@@ -10,7 +11,7 @@ import { getRelayBaseUrl } from "~/lib/address"
 import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
 import { registerLogSecret, scrubLogSecrets, setLogLevel } from "~/lib/log"
-import { getLogPath, paths } from "~/lib/paths"
+import { getLogPath, homeRelative, paths } from "~/lib/paths"
 import {
   formatUpstreamProxyForDisplay,
   formatUrlForDisplay,
@@ -20,7 +21,8 @@ import {
 } from "~/lib/redact"
 import { loadUndici } from "~/lib/undici"
 import { appVersion } from "~/lib/version"
-import { colorEnabled, colorText, withoutHiddenCharacters } from "~/lib/terminal"
+import { colorEnabled, colorText, heading, mark, printableCell, unicodeEnabled, withoutHiddenCharacters } from "~/lib/terminal"
+import type { MarkState, TerminalTone } from "~/lib/terminal"
 
 /**
  * Exit codes, so `status` is usable in a health check or a script.
@@ -204,8 +206,7 @@ const configRowOrder: Record<keyof StatusConfig, number> = {
   webSearchBackend: 11,
   gptModel: 12,
   opusModel: 13,
-  models: 14,
-  claudeUpstreamApi: 15,
+  claudeUpstreamApi: 14,
 }
 
 const configRowKeys = (
@@ -218,7 +219,6 @@ const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
   apiKey: "(unset — clients need no key)",
   upstreamProxy: "(unset — connects directly)",
   webSearchBackend: "(unset — uses gptModel)",
-  models: "(empty — gptModel and opusModel only)",
 }
 
 /**
@@ -252,102 +252,114 @@ const renderConfig = (
 
   if (running) {
     lines.push(
-      "    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.",
+      "    host, port, claudeSetup, codexSetup and upstreamProxy take effect",
+      "    on restart; the rest hot-reload.",
     )
   }
 
   return lines
 }
 
+// A state row: a mark that carries the state without color, the label, then the value. Color only
+// emphasizes the leading word of the value.
+const stateRow = (
+  state: MarkState,
+  label: string,
+  word: string,
+  rest: string,
+  tone: TerminalTone,
+  color: boolean,
+  unicode: boolean,
+): string => `  ${mark(state, unicode)} ${label.padEnd(9)} ${colorText(word, tone, color)}${rest}`
+
+// Paths and versions come from a pid file and config another process wrote, so each is cleaned of
+// controls, secrets and sensitive URLs before it is laid out. JSON keeps the full paths.
+const filesBlock = (status: RelayStatus): Array<string> => [
+  "Files",
+  `    ${"log".padEnd(10)}${printableCell(homeRelative(status.logPath))}`,
+  `    ${"config".padEnd(10)}${printableCell(homeRelative(status.configPath))}`,
+]
+
 /**
  * Pure state-to-lines mapping, kept free of IO so it can be tested directly
  * without spawning a relay or opening a socket.
+ *
+ * The answer comes first: a heading with the build and address, then one marked row per question
+ * (is the process up, does it answer, does Copilot answer through it, which build serves, which
+ * models it offers). Paths and the resolved config follow under their own headings.
  */
-export const renderStatus = (status: RelayStatus, color = false): Array<string> => {
-  const lines = [`copilot-relay ${status.version}`]
-
+export const renderStatus = (status: RelayStatus, color = false, unicode = unicodeEnabled()): Array<string> => {
   if (!status.running) {
-    lines.push(
-      `  process    ${colorText("not running", "warning", color)}`,
-      `  log        ${status.logPath}`,
-      `  config     ${status.configPath}`,
+    return [
+      heading(`copilot-relay ${status.version}`),
+      "",
+      stateRow("off", "process", "not running", "", "warning", color, unicode),
+      "",
+      ...filesBlock(status),
+      "",
+      "Config",
       ...renderConfig(status.config, false),
       "",
-      "  Start it with: copilot-relay start",
-    )
-    return lines
+      "Start it with: copilot-relay start",
+    ]
   }
 
-  lines.push(
-    `  process    ${colorText("running", "good", color)} (pid ${status.pid}, up ${formatUptime(status.startedAt)})`,
-  )
+  const lines = [
+    heading(`copilot-relay ${status.version}`, status.baseUrl),
+    "",
+    stateRow("ok", "process", "running", ` (pid ${status.pid}, up ${formatUptime(status.startedAt)})`, "good", color, unicode),
+  ]
 
-  // The daemon's own build, distinct from the header line above, which is the
-  // CLI that was invoked. Always shown when running: the case this exists for
-  // is an upgrade the user believes landed, and a row that appears only on
-  // mismatch would leave "did it even check?" unanswered.
-  if (status.daemonVersion === undefined) {
-    lines.push(
-      `  version    ${colorText("unknown", "muted", color)} (daemon predates version reporting — restart to report it)`,
-    )
-  } else if (hasVersionMismatch(status)) {
-    lines.push(
-      `  version    ${status.daemonVersion} — ${colorText("MISMATCH", "warning", color)}, ${status.version} is installed`,
-    )
-  } else {
-    lines.push(`  version    ${status.daemonVersion}`)
-  }
-
-  lines.push(`  listening  ${status.baseUrl}`)
-
+  // Probe details quote what the relay or fetch answered, so each is cleaned of controls, secrets
+  // and sensitive URLs before it is placed in a row. JSON keeps the detail as it was.
   const health = status.health
   lines.push(
     health?.ok ?
-      `  health     ${colorText("ok", "good", color)} (${health.ms}ms)`
-    : `  health     ${colorText("FAILED", "bad", color)}${health?.detail ? ` — ${health.detail}` : ""}`,
+      stateRow("ok", "health", "ok", ` (${health.ms}ms)`, "good", color, unicode)
+    : stateRow("fail", "health", "FAILED", health?.detail ? ` — ${printableCell(health.detail)}` : "", "bad", color, unicode),
   )
+
+  // Only /v1/messages proves the relay can serve Claude Code; health and models pass on a relay
+  // whose Copilot token expired an hour ago, so an unchecked upstream says so.
+  if (status.deep?.ok) {
+    lines.push(stateRow("ok", "upstream", "ok", ` (${status.deep.ms}ms) — ${printableCell(status.deep.detail ?? "end-to-end Copilot round trip")}`, "good", color, unicode))
+  } else if (status.deep) {
+    lines.push(stateRow("fail", "upstream", "FAILED", status.deep.detail ? ` — ${printableCell(status.deep.detail)}` : "", "bad", color, unicode))
+  } else {
+    lines.push(stateRow("off", "upstream", "not checked", " (use --deep)", "muted", color, unicode))
+  }
+
+  // The heading names the installed build. A version row appears only when the daemon serves another
+  // build, or does not say which: then the heading alone would not answer whether an upgrade landed.
+  if (status.daemonVersion === undefined) {
+    lines.push(stateRow("off", "version", "unknown", " (restart to report it)", "muted", color, unicode))
+  } else if (hasVersionMismatch(status)) {
+    lines.push(stateRow("warn", "version", printableCell(status.daemonVersion), ` — ${colorText("MISMATCH", "warning", color)}, ${status.version} is installed`, "warning", color, unicode))
+  }
 
   lines.push(
     status.models?.length ?
-      `  models     ${status.models.join(", ")}`
-    : `  models     ${colorText("unavailable", "warning", color)}`,
+      stateRow("ok", "models", status.models.map(printableCell).join(", "), "", "good", color, unicode)
+    : stateRow("warn", "models", "unavailable", "", "warning", color, unicode),
   )
 
-  if (status.deep) {
-    lines.push(
-      status.deep.ok ?
-        `  upstream   ${colorText("ok", "good", color)} (${status.deep.ms}ms) — ${status.deep.detail ?? "end-to-end Copilot round trip"}`
-      : `  upstream   ${colorText("FAILED", "bad", color)}${status.deep.detail ? ` — ${status.deep.detail}` : ""}`,
-    )
-  } else {
-    lines.push(`  upstream   ${colorText("not checked", "muted", color)} (use --deep)`)
-  }
+  lines.push("", ...filesBlock(status), "", "Config", ...renderConfig(status.config, true))
 
-  lines.push(
-    `  log        ${status.logPath}`,
-    `  config     ${status.configPath}`,
-    ...renderConfig(status.config, true),
-  )
-
-  // Only /v1/messages proves the relay can serve Claude Code; the first two
-  // layers pass on a relay whose Copilot token expired an hour ago.
   if (status.health?.ok && status.deep && !status.deep.ok) {
     lines.push(
       "",
-      "  The relay is listening but cannot reach Copilot.",
-      "  Try: copilot-relay auth",
+      "The relay is listening but cannot reach Copilot.",
+      "Try: copilot-relay auth",
     )
   }
 
-  // A mismatch is nearly always an upgrade that installed but never restarted,
-  // so the next step is named rather than left to be inferred. Surfaced, not
-  // just recorded: the version row alone reads as trivia next to a green
-  // health line.
+  // A mismatch is nearly always an upgrade that installed but never restarted, so the next step is
+  // named rather than left to be inferred.
   if (hasVersionMismatch(status)) {
     lines.push(
       "",
-      `  The running relay is ${status.daemonVersion}; ${status.version} is installed.`,
-      "  Restart it to serve the installed version: copilot-relay restart",
+      `The running relay is ${printableCell(status.daemonVersion ?? "")}; ${status.version} is installed.`,
+      "Restart it to serve the installed version: copilot-relay restart",
     )
   }
 

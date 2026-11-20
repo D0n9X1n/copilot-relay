@@ -1,4 +1,5 @@
 import { publishCopilotModelCatalog, type ProxyConfig } from "~/lib/config"
+import { withUpstreamDeadline } from "~/lib/deadline"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import {
@@ -13,6 +14,7 @@ import {
   fetchCopilot,
   getCopilotProviderContext,
   readCopilotJson,
+  toCopilotAbortHTTPError,
 } from "./client"
 
 export interface CopilotModel {
@@ -23,10 +25,16 @@ export interface CopilotModel {
   reasoningEfforts?: string[]
   // The catalog's display name. Only `copilot-relay models` prints it; routing never reads it.
   name?: string
-  // Read only by the auto model selection.
-  vendor?: string
-  pickerEnabled?: boolean
-  pickerCategory?: string
+  // What a call costs, in USD per million tokens, when the catalog reports token prices.
+  price?: ModelPrice
+  // Premium requests per call, when the catalog reports only a multiplier.
+  multiplier?: number
+}
+
+export interface ModelPrice {
+  input: number
+  output: number
+  cache?: number
 }
 
 export interface CopilotModelCatalog {
@@ -63,6 +71,41 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0
+
+const isPrice = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
+
+// Copilot reports token prices in hundredths of a USD per batch_size tokens, and a multiplier as
+// premium requests per call. A value that is missing or not a finite non-negative number is left out,
+// so an unknown cost is never shown as free.
+const parseBilling = (billing: unknown): { price?: ModelPrice; multiplier?: number } => {
+  if (!isRecord(billing)) {
+    return {}
+  }
+
+  const tokenPrices = isRecord(billing.token_prices) ? billing.token_prices : undefined
+  const prices = isRecord(tokenPrices?.default) ? tokenPrices.default : undefined
+  const batchSize = tokenPrices?.batch_size
+  // A model with no token charge comes with batch_size 0 and every price it reports 0: it is free, not
+  // unknown. Any other price at batch_size 0 is malformed, so the multiplier or nothing applies.
+  const allZero = prices && prices.input_price === 0 && prices.output_price === 0
+    && Object.values(prices).every((price) => price === 0)
+  if (allZero && batchSize === 0) {
+    return { price: { input: 0, output: 0, ...(prices.cache_price === 0 && { cache: 0 }) } }
+  }
+
+  if (prices && isPositiveInteger(batchSize) && isPrice(prices.input_price) && isPrice(prices.output_price)) {
+    const perMillion = (hundredths: number) => hundredths / 100 * (1_000_000 / batchSize)
+    const input = perMillion(prices.input_price)
+    const output = perMillion(prices.output_price)
+    const cache = isPrice(prices.cache_price) ? perMillion(prices.cache_price) : undefined
+    // A price too large to convert is no price: fall back to the multiplier, if any.
+    if (isPrice(input) && isPrice(output)) {
+      return { price: { input, output, ...(isPrice(cache) && { cache }) } }
+    }
+  }
+
+  return isPrice(billing.multiplier) ? { multiplier: billing.multiplier } : {}
+}
 
 export function parseModelTokenLimits(value: unknown): ModelTokenLimits | undefined {
   if (!isRecord(value)) {
@@ -206,8 +249,48 @@ const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): s
   return parseStringArray(supports.reasoning_effort)
 }
 
+// The x-github-api-version the /models request sends.
+const catalogApiVersion = "2026-06-01"
+
+// A failed reply's body is read here, under the signal that bounds the request, so it never outlives
+// the deadline that owns it. The error carries a copy its handler can read or drop at any time. A
+// timeout or cancel during the read is reported as one, like any other aborted Copilot call.
+const settleErrorResponse = async (
+  response: Response,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<Response> => {
+  let body: ArrayBuffer | null
+  try {
+    body = await response.arrayBuffer()
+  } catch (error) {
+    const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
+    if (abortError) {
+      throw abortError
+    }
+
+    body = null
+  }
+
+  // The copy is already decoded and complete, so the framing headers no longer describe it.
+  const headers = new Headers(response.headers)
+  for (const name of ["content-encoding", "content-length", "transfer-encoding"]) {
+    headers.delete(name)
+  }
+
+  return new Response(body !== null && body.byteLength > 0 ? body : null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+// The catalog request never starts a timer. Its caller passes the signal of the operation it runs
+// in: a relay request's, which the trace's deadline joins, or the deadline a command or preflight
+// owns. Without one, as for a direct embedder, the load is bounded only by the trace if any.
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
+  callerSignal: AbortSignal | undefined,
 ): Promise<CopilotModelCatalog> {
   const provider = getCopilotProviderContext(config)
   const pending = pendingCatalogs.get(config)
@@ -216,7 +299,7 @@ export async function loadCopilotModelCatalog(
   }
 
   const promise = (async () => {
-    const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
+    const signal = createCopilotRequestSignal(callerSignal)
     const response = await fetchCopilot(
       provider,
       "/models",
@@ -224,10 +307,14 @@ export async function loadCopilotModelCatalog(
         method: "GET",
         headers: { accept: "application/json" },
       },
-      { signal, timeoutMs: config.upstreamTimeoutMs },
+      // Only this API version reports each model's token prices; inference keeps the default one.
+      { signal, timeoutMs: config.upstreamTimeoutMs, apiVersion: catalogApiVersion },
     )
     if (!response.ok) {
-      throw new HTTPError("Failed to validate upstream models", response)
+      throw new HTTPError(
+        "Failed to validate upstream models",
+        await settleErrorResponse(response, signal, config.upstreamTimeoutMs),
+      )
     }
 
     const payload = await readCopilotJson<unknown>(
@@ -258,9 +345,7 @@ export async function loadCopilotModelCatalog(
         ...(typeof capabilities?.type === "string" && { type: capabilities.type }),
         ...(reasoningEfforts !== undefined && { reasoningEfforts }),
         ...(typeof model.name === "string" && model.name !== "" && { name: model.name }),
-        ...(typeof model.vendor === "string" && { vendor: model.vendor }),
-        ...(typeof model.model_picker_enabled === "boolean" && { pickerEnabled: model.model_picker_enabled }),
-        ...(typeof model.model_picker_category === "string" && { pickerCategory: model.model_picker_category }),
+        ...parseBilling(model.billing),
       })
     }
 
@@ -290,9 +375,15 @@ export async function loadCopilotModelCatalog(
   }
 }
 
+// A command's catalog load outside the relay, such as `models` or `setup`: it owns one deadline,
+// disposed once the load has settled, a failed reply's body included.
+export const loadStandaloneModelCatalog = (config: ProxyConfig): Promise<CopilotModelCatalog> =>
+  withUpstreamDeadline(config.upstreamTimeoutMs, (signal) => loadCopilotModelCatalog(config, signal))
+
 export async function ensureCopilotModelCatalog(
   config: ProxyConfig,
   model: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Admission fixes capabilities for every pass, even if discovery omitted the target.
   if (pinnedCatalogs.has(config)) {
@@ -317,7 +408,7 @@ export async function ensureCopilotModelCatalog(
     }
   }
 
-  await loadCopilotModelCatalog(config)
+  await loadCopilotModelCatalog(config, signal)
   if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
     throw new Error("Copilot base URL changed during model discovery; retry the request.")
   }
@@ -327,8 +418,9 @@ export async function boundModelOutputTokens(
   config: ProxyConfig,
   model: string,
   requested: number | null | undefined,
+  signal?: AbortSignal,
 ): Promise<number | null | undefined> {
-  await ensureCopilotModelCatalog(config, model)
+  await ensureCopilotModelCatalog(config, model, signal)
 
   const limits = getCachedCopilotModel(config, model)?.limits
   if (!limits || !isPositiveInteger(requested)) {

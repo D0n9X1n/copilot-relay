@@ -421,5 +421,35 @@ grep -rn "](.*\\.md)" /tmp/relay-wiki || echo "no unstripped .md links"
         self.assertEqual(list(self.destination.iterdir()), [])
 
 
+    def test_sidebar_is_published_with_its_links_rewritten(self):
+        self.write("README.md", "# Home\n")
+        self.write("EN-Guide.md", "# Guide\n")
+        self.write("_Sidebar.md", "- [Home](README.md)\n- [Guide](EN-Guide.md)\n")
+
+        self.success("build", self.source, self.destination)
+
+        self.assertEqual((self.destination / "_Sidebar.md").read_text(encoding="utf-8"),
+                         "- [Home](Home)\n- [Guide](EN-Guide)\n")
+        self.success("verify", self.destination)
+
+    def test_other_underscore_pages_are_rejected(self):
+        self.write("README.md", "# Home\n")
+        self.write("_Footer.md", "footer\n")
+
+        result = self.cli("build", self.source, self.destination)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported wiki page name: _Footer.md", result.stderr)
+        self.assertEqual(list(self.destination.iterdir()), [])
+
+    def test_sidebar_link_to_a_missing_page_fails(self):
+        self.write("README.md", "# Home\n")
+        self.write("_Sidebar.md", "- [Missing](EN-Missing.md)\n")
+
+        result = self.cli("build", self.source, self.destination)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("EN-Missing", result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

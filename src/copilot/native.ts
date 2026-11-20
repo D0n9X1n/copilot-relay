@@ -277,7 +277,7 @@ export async function createNativeMessages(
   validateNativeMessages(payload)
 
   // Bounding may refresh the model catalog that the effort check below reads.
-  const maxTokens = await boundModelOutputTokens(config, payload.model, payload.max_tokens)
+  const maxTokens = await boundModelOutputTokens(config, payload.model, payload.max_tokens, options.signal)
 
   validateNativeModelEffort(config, payload.model, payload)
 
@@ -580,7 +580,7 @@ export async function handleNativeMessages(
   options: NativeOptions,
   write?: (event: ClaudeStreamEventData) => Promise<void>,
 ): Promise<ClaudeResponse | undefined> {
-  const signal = createCopilotRequestSignal(options.signal, config.upstreamTimeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
   const canSearch = hasClaudeWebSearch(payload)
   const request = { ...payload, stream: Boolean(write) }
 

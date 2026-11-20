@@ -89,3 +89,26 @@ test("an upstream connection idle for longer than undici's 4 s default is reused
 
   assert.equal(upstream.connections(), 1)
 })
+
+test("a request sends x-github-api-version 2025-04-01 unless it names another version", async (t) => {
+  const versions: Array<string | undefined> = []
+  const server = createServer((request, response) => {
+    const version = request.headers["x-github-api-version"]
+    versions.push(Array.isArray(version) ? version[0] : version)
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end("{}")
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+  const address = server.address()
+  assert(address && typeof address === "object")
+  const provider = { baseUrl: `http://127.0.0.1:${address.port}`, token: "test-token", vsCodeVersion: "1.99.3" }
+
+  await (await fetchCopilot(provider, "/chat/completions", { method: "POST", body: "{}" })).text()
+  await (await fetchCopilot(provider, "/models", { method: "GET" }, { apiVersion: "2026-06-01" })).text()
+
+  assert.deepEqual(versions, ["2025-04-01", "2026-06-01"])
+})

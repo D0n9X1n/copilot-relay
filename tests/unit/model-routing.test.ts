@@ -5,15 +5,17 @@ import {
   configurableReasoningEfforts,
   defaultModelRouting,
   defaultReasoningEffort,
-  getExposedModelIds,
+  getSlotModelIds,
   getUpstreamModelIds,
   isReasoningEffort,
   isConfiguredReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
+  modelNormalizations,
   routeModelId,
+  slotPreparations,
 } from "../../src/lib/models"
-import { runtimeState } from "../../src/lib/state"
+import { runtimeState, snapshotRuntimeState, withRuntimeState } from "../../src/lib/state"
 
 test.afterEach(() => {
   delete runtimeState.modelRouting
@@ -87,16 +89,16 @@ test("keeps the verified Opus 5.5 upstream ID without context aliases", () => {
   assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
 })
 
-test("defaults to Astra and keeps the Opus lane separate", () => {
+test("defaults to GPT-6.2 Astra and keeps the Opus lane separate", () => {
   assert.deepEqual(defaultModelRouting, {
-    gptModel: "gpt-6-astra",
+    gptModel: "gpt-6.2-astra",
     opusModel: "claude-opus-5.5",
   })
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
-  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6.2-astra", "claude-opus-5.5"])
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6.2-astra", "claude-opus-5.5"])
 
-  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]"])
+  useCatalog([["gpt-6.2-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6.2-astra[1m]", "claude-opus-5.5[1m]"])
 })
 
 // Why: a configured [1m] is the user's statement about the window, so it survives while the
@@ -105,14 +107,13 @@ test("keeps a configured [1m] until the catalog reports the window", () => {
   runtimeState.modelRouting = {
     gptModel: "gpt-6-astra[1m]",
     opusModel: "claude-opus-5.5",
-    models: [],
   }
 
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5"])
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 
   useCatalog([["gpt-6-astra", 500_000], ["claude-opus-5.5", 1_000_000]])
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5[1m]"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6-astra", "claude-opus-5.5[1m]"])
 })
 
 // Why: model discovery is consumed by Claude Code while availability checks are
@@ -125,7 +126,7 @@ test("splits Claude-facing and upstream configured model ids", () => {
   }
   useCatalog([["gpt-5.6-sol", 1_000_000], ["claude-opus-4.8", 200_000]])
 
-  assert.deepEqual(getExposedModelIds(), [
+  assert.deepEqual(getSlotModelIds(), [
     "gpt-5.6-sol[1m]",
     "claude-opus-4.8",
   ])
@@ -177,16 +178,15 @@ test("routes Claude picker aliases through the configured model pair", () => {
     assert.equal(routeModelId(model), "opus-test")
   }
 
-  assert.deepEqual(getExposedModelIds(), ["gpt-test", "opus-test"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-test", "opus-test"])
 })
 
-// Why: an exposed model is a real choice in the picker, so it reaches Copilot as itself;
-// a catalog model nobody exposed still follows the opus/gpt split.
-test("routes exposed IDs to themselves and strips every [1m]", () => {
+// Why: only the two slots are offered and routed; a catalog model that v0.7.x exposed as an extra
+// now follows the opus/gpt split like any other name.
+test("routes a catalog model that is not a slot by the opus rule", () => {
   runtimeState.modelRouting = {
     gptModel: "gpt-6-astra",
     opusModel: "claude-opus-5.5",
-    models: ["grok-4.7"],
   }
   useCatalog([
     ["gpt-6-astra", 1_050_000],
@@ -195,28 +195,212 @@ test("routes exposed IDs to themselves and strips every [1m]", () => {
     ["claude-sonnet-5", 200_000],
   ])
 
-  assert.equal(routeModelId("grok-4.7"), "grok-4.7")
-  assert.equal(routeModelId("GROK-4.7[1M][1m]"), "grok-4.7")
+  assert.equal(routeModelId("grok-4.7"), "gpt-6-astra")
+  assert.equal(routeModelId("GROK-4.7[1M][1m]"), "gpt-6-astra")
   assert.equal(routeModelId("claude-sonnet-5"), "gpt-6-astra")
   assert.equal(routeModelId("opus[1m]"), "claude-opus-5.5")
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]", "grok-4.7"])
-  // Startup preflight and the tokenizer preload read this list: the two slots, never the extras.
+  assert.equal(routeModelId("claude-opus-4-5-20251101"), "claude-opus-5.5")
+  for (const alias of ["sonnet", "haiku", "claude-haiku-4-5-20251001", "codex-auto-review"]) {
+    assert.equal(routeModelId(alias), "gpt-6-astra")
+  }
+
+  assert.deepEqual(getSlotModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]"])
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 })
 
-// Why: with no extra models the opus/gpt split is unchanged, except that a slot's own
-// name always reaches that slot even when it contains "opus".
-test("an empty selection routes as before except exact slot names", () => {
+// Why: a slot's own name always reaches that slot, even when the opus rule would send it to the
+// other one, with or without [1m].
+test("an exact slot name wins over the opus rule in both directions", () => {
   runtimeState.modelRouting = {
     gptModel: "gpt-opus-lab",
-    opusModel: "claude-opus-5.5",
-    models: [],
+    opusModel: "claude-sonnet-5",
   }
 
-  assert.equal(routeModelId("gpt-opus-lab"), "gpt-opus-lab")
-  assert.equal(routeModelId("opus"), "claude-opus-5.5")
+  for (const model of ["gpt-opus-lab", "gpt-opus-lab[1m]", "GPT-OPUS-LAB"]) {
+    assert.equal(routeModelId(model), "gpt-opus-lab")
+  }
+
+  for (const model of ["claude-sonnet-5", "claude-sonnet-5[1m]"]) {
+    assert.equal(routeModelId(model), "claude-sonnet-5")
+  }
+
+  assert.equal(routeModelId("opus"), "claude-sonnet-5")
   assert.equal(routeModelId("haiku"), "gpt-opus-lab")
-  assert.deepEqual(getExposedModelIds(), ["gpt-opus-lab", "claude-opus-5.5"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-opus-lab", "claude-sonnet-5"])
+})
+
+test("offers one entry when both slots name the same model", () => {
+  runtimeState.modelRouting = {
+    gptModel: "claude-opus-5.5",
+    opusModel: "CLAUDE-OPUS-5.5[1m]",
+  }
+
+  assert.deepEqual(getSlotModelIds(), ["claude-opus-5.5"])
+})
+
+// Why: slots are normalized once per routing generation and catalog, not per request. Every
+// request routes on a copy of the routing object, so the copies must share one preparation.
+test("prepares the slots once per routing generation and catalog", () => {
+  runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
+  const before = slotPreparations()
+
+  for (let index = 0; index < 100; index++) {
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  }
+
+  assert.equal(slotPreparations() - before, 1)
+
+  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  for (let index = 0; index < 100; index++) {
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("opus"))
+  }
+
+  assert.equal(slotPreparations() - before, 2)
+})
+
+test("three live routing generations each prepare once", () => {
+  useCatalog([["gpt-a", 1_000], ["gpt-b", 1_000], ["gpt-c", 1_000], ["claude-opus-5.5", 1_000]])
+  const snapshots = ["gpt-a", "gpt-b", "gpt-c"].map((gptModel) => {
+    runtimeState.modelRouting = { gptModel, opusModel: "claude-opus-5.5" }
+    return snapshotRuntimeState()
+  })
+  const before = slotPreparations()
+
+  for (let index = 0; index < 100; index++) {
+    const snapshot = snapshots[index % 3]
+    withRuntimeState({ ...snapshot }, () => routeModelId("sonnet"))
+  }
+
+  assert.equal(slotPreparations() - before, 3)
+  assert.equal(withRuntimeState(snapshots[1], () => routeModelId("haiku")), "gpt-b")
+})
+
+test("a cold routing source snapshotted many times prepares once", () => {
+  runtimeState.modelRouting = { gptModel: "gpt-cold", opusModel: "claude-opus-5.5" }
+  const before = slotPreparations()
+
+  for (let index = 0; index < 100; index++) {
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  }
+
+  assert.equal(slotPreparations() - before, 1)
+})
+
+test("a slot the warm catalog omits is normalized once per generation and catalog", () => {
+  runtimeState.modelRouting = { gptModel: "GPT-NOT-LISTED[1m]", opusModel: "claude-opus-5.5" }
+  useCatalog([["claude-opus-5.5", 1_000_000]])
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  const before = modelNormalizations()
+
+  for (let index = 0; index < 100; index++) {
+    assert.equal(withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet")), "gpt-not-listed")
+  }
+
+  assert.equal(modelNormalizations() - before, 0)
+
+  // Without a catalog, the same: the slot is computed once for this generation, then never again.
+  delete runtimeState.modelCatalog
+  runtimeState.modelRouting = { gptModel: "GPT-NO-CATALOG[1m]", opusModel: "claude-opus-5.5" }
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  const beforeWithout = modelNormalizations()
+  for (let index = 0; index < 100; index++) {
+    assert.equal(withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet")), "gpt-no-catalog")
+  }
+
+  assert.equal(modelNormalizations() - beforeWithout, 0)
+})
+
+test("the slots are canonicalized once per catalog and other names every time", () => {
+  runtimeState.modelRouting = { gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5" }
+  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  const before = modelNormalizations()
+
+  for (const spelling of ["GPT-6-ASTRA[1m]", "gpt-6-astra", "gpt-6-astra[1m]", "claude-opus-5.5"]) {
+    assert.equal(normalizeCopilotModelId(spelling), spelling.startsWith("claude") ? "claude-opus-5.5" : "gpt-6-astra")
+  }
+
+  assert.equal(modelNormalizations() - before, 0)
+
+  assert.equal(normalizeCopilotModelId("Unknown-Model[1m]"), "unknown-model")
+  assert.equal(normalizeCopilotModelId("Unknown-Model[1m]"), "unknown-model")
+  assert.equal(modelNormalizations() - before, 2)
+
+  // A refreshed catalog is a new map, so its spelling is computed afresh.
+  useCatalog([["GPT-6-Astra", 1_050_000]])
+  assert.equal(normalizeCopilotModelId("gpt-6-astra"), "GPT-6-Astra")
+})
+
+// Why: a slot's pins belong to its routing generation. After a reload replaces the slot, the retired
+// spelling is an ordinary name again, while a request still running on the old routing keeps its pin.
+test("a retired slot loses its pin when routing is reloaded, with and without a catalog", () => {
+  for (const withCatalog of [true, false]) {
+    if (withCatalog) {
+      useCatalog([["retired-slot", 1_000_000], ["replacement-slot", 1_000_000], ["claude-opus-5.5", 1_000_000]])
+    } else {
+      delete runtimeState.modelCatalog
+    }
+
+    runtimeState.modelRouting = { gptModel: "retired-slot", opusModel: "claude-opus-5.5" }
+    const oldSnapshot = snapshotRuntimeState()
+    withRuntimeState(oldSnapshot, () => routeModelId("sonnet"))
+
+    runtimeState.modelRouting = { gptModel: "replacement-slot", opusModel: "claude-opus-5.5" }
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+
+    const before = modelNormalizations()
+    withRuntimeState(snapshotRuntimeState(), () => {
+      normalizeCopilotModelId("retired-slot")
+      normalizeCopilotModelId("retired-slot")
+    })
+    assert.equal(modelNormalizations() - before, 2, `retired slot, catalog ${withCatalog}`)
+
+    // A request still running on the old routing keeps the pin its generation prepared.
+    const oldBefore = modelNormalizations()
+    withRuntimeState(oldSnapshot, () => normalizeCopilotModelId("retired-slot"))
+    assert.equal(modelNormalizations() - oldBefore, 0, `in-flight old routing, catalog ${withCatalog}`)
+  }
+})
+
+// Why: pins live only with a routing generation's preparation, so many reloads with distinct slots
+// leave nothing behind once their routing objects are gone.
+test("distinct slots across many reloads do not keep earlier slots' pins", () => {
+  useCatalog([["claude-opus-5.5", 1_000_000]])
+  for (let index = 0; index < 50; index++) {
+    runtimeState.modelRouting = { gptModel: `reload-slot-${index}`, opusModel: "claude-opus-5.5" }
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  }
+
+  const before = modelNormalizations()
+  for (let index = 0; index < 49; index++) {
+    normalizeCopilotModelId(`reload-slot-${index}`)
+  }
+
+  assert.equal(modelNormalizations() - before, 49)
+})
+
+// Why: no cache is keyed by client-supplied names, so an oversized model name is canonicalized each
+// time it is looked up and kept by nothing once its request settles.
+test("an oversized model name is canonicalized each time and not cached", () => {
+  useCatalog([["gpt-6-astra", 1_050_000]])
+  const name = `${"x".repeat(1024 * 1024)}-model`
+  const before = modelNormalizations()
+
+  normalizeCopilotModelId(name)
+  normalizeCopilotModelId(name)
+
+  assert.equal(modelNormalizations() - before, 2)
+})
+
+test("a snapshot keeps the two-field routing shape", () => {
+  runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("opus"))
+
+  assert.deepEqual(Object.keys(snapshotRuntimeState().modelRouting ?? {}), ["gptModel", "opusModel"])
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshotRuntimeState().modelRouting)), {
+    gptModel: "gpt-6-astra",
+    opusModel: "claude-opus-5.5",
+  })
 })
 
 // Why: /v1/models is a user-visible Claude Code discovery endpoint. This
@@ -228,14 +412,14 @@ test("exposes configured model ids in stable order", () => {
     opusModel: "opus-test",
   }
 
-  assert.deepEqual(getExposedModelIds(), ["gpt-test", "opus-test"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-test", "opus-test"])
 })
 
 // Why: startup and tests often call model helpers before config hot reload has
 // populated runtime state. This scenario guarantees safe defaults are always
 // available.
 test("falls back to default routing when runtime config is unset", () => {
-  assert.deepEqual(getExposedModelIds(), [
+  assert.deepEqual(getSlotModelIds(), [
     normalizeClaudeModelId(defaultModelRouting.gptModel),
     defaultModelRouting.opusModel,
   ])

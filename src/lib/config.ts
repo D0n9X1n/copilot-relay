@@ -11,7 +11,8 @@ export interface ProxyConfig {
   copilotBaseUrl: string
   copilotToken: string | undefined
   copilotTokenGeneration?: number
-  refreshCopilotToken?: (rejectedToken: string, generation: number) => Promise<void>
+  // Refreshes a rejected token; a caller whose signal aborts stops waiting without ending the refresh.
+  refreshCopilotToken?: (rejectedToken: string, generation: number, signal?: AbortSignal) => Promise<void>
   modelCatalog?: CopilotModelCatalog
   upstreamTimeoutMs: number
   vsCodeVersion: string
@@ -30,6 +31,8 @@ export interface ProxyEnv {
   // Set only by the relay's own in-process calls, such as the model probe; no client can set it.
   Bindings: {
     relayProbe?: boolean
+    // The probe's own upstream deadline, used instead of one armed at admission.
+    upstreamDeadline?: AbortSignal
   }
   Variables: {
     config: ProxyConfig

@@ -1,5 +1,7 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
+import { colorText, columnWidths, displayWidth, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import { redactedMarker } from "./redact"
 
 export interface ListedModel {
   // The exact upstream ID, which is the value gptModel or opusModel takes.
@@ -8,9 +10,36 @@ export interface ListedModel {
   name?: string
   // Why request admission refuses this ID, as a probe result label; absent when it is routable.
   unusable?: string
+  // False for a model the catalog says is not a chat model; the plain listing hides those.
+  chat?: boolean
+  // The catalog's context window in tokens, when it reports one.
+  contextWindow?: number
+  // USD per million input and output tokens, when the catalog reports token prices.
+  price?: { input: number; output: number }
+  // Premium requests per call, when the catalog reports only a multiplier.
+  multiplier?: number
+  // The config key that routes to this ID, when one does.
+  slot?: ModelKey
 }
 
 export type ModelKey = "gptModel" | "opusModel"
+
+// A price keeps the digits the catalog sent: whole dollars as "$8", cents as "$0.4".
+const dollars = (value: number): string => `$${value}`
+
+// What a call costs, from what the catalog reports: token prices first, then a multiplier, else the
+// mark for a missing value.
+const costOf = (model: ListedModel, unicode: boolean): string => {
+  if (model.price !== undefined) {
+    return `${dollars(model.price.input)}/${dollars(model.price.output)}`
+  }
+
+  if (model.multiplier === undefined) {
+    return mark("off", unicode)
+  }
+
+  return `${model.multiplier}${unicode ? "×" : "x"}`
+}
 
 export interface ConfiguredModel {
   key: ModelKey
@@ -31,9 +60,14 @@ export interface ModelSearch {
 export const normalizeModelSearch = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9]/g, "")
 
+// IDs and names arrive whole, with secrets and sensitive URLs already replaced by the redaction
+// marker. The text on each side of a marker is searched on its own, so neither the hidden text, the
+// word "redacted", nor the two sides joined together can match.
+const segments = (text: string): string[] =>
+  text.split(redactedMarker).map(normalizeModelSearch).filter((segment) => segment !== "")
+
 const contains = (model: ListedModel, fragment: string): boolean =>
-  normalizeModelSearch(model.id).includes(fragment)
-  || normalizeModelSearch(model.name ?? "").includes(fragment)
+  [...segments(model.id), ...segments(model.name ?? "")].some((segment) => segment.includes(fragment))
 
 // Shorter fragments, such as "gpt", match most of a catalog and narrow nothing down.
 const minimumFragment = 4
@@ -76,45 +110,110 @@ export const searchModels = (models: ListedModel[], search: string): ModelSearch
 
   const usable = matches.filter((model) => model.unusable === undefined)
   // An exact ID wins over the longer IDs that contain it.
-  const exact = usable.find((model) => normalizeModelSearch(model.id) === wanted)
+  const exact = usable.find((model) => !model.id.includes(redactedMarker) && normalizeModelSearch(model.id) === wanted)
   const chosen = exact ?? (usable.length === 1 ? usable[0] : undefined)
 
   return { found: true, models: matches, chosen }
 }
 
-// A very long ID keeps its own width instead of pushing every other name to the right.
-const maximumIdWidth = 40
-
 const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1)
 
-const detailsOf = (model: ListedModel): string => {
-  const details: string[] = []
+// The window the relay offers: a known window of at least 1M carries [1m], the suffix Claude Code
+// reads as a 1M model.
+const contextOf = (model: ListedModel, unicode: boolean): string => {
+  if (model.contextWindow === undefined) {
+    return mark("off", unicode)
+  }
 
-  if (model.name !== undefined) {
-    details.push(model.name)
+  const size = formatTokens(model.contextWindow)
+  return model.contextWindow >= 1_000_000 ? `${size} [1m]` : size
+}
+
+// The table's line budget: a two-space indent and a two-space gutter between columns.
+const lineWidth = 80
+const indent = 2
+const gutter = 2
+
+const slotOf = (slot: ModelKey, unicode: boolean): string => `${unicode ? "◀" : "<"} ${slot}`
+
+// The last column: the config key that names this ID, then why it cannot be one, if it cannot.
+const noteOf = (model: ListedModel, unicode: boolean): string => {
+  const parts: string[] = []
+
+  if (model.slot !== undefined) {
+    parts.push(slotOf(model.slot, unicode))
   }
 
   if (model.unusable !== undefined) {
-    details.push(`cannot be gptModel or opusModel: ${lowerFirst(model.unusable)}`)
+    parts.push(`${mark("warn", unicode)} ${lowerFirst(model.unusable)}`)
   }
 
-  return details.join(" · ")
+  return parts.join("  ")
 }
 
-// Each row starts with the exact ID, the value config.yaml takes, so it can be copied as is.
-export const renderModelRows = (models: ListedModel[]): string[] => {
-  const described = models.filter((model) => detailsOf(model) !== "")
-  const width = Math.min(maximumIdWidth, Math.max(0, ...described.map((model) => model.id.length)))
+const widthOf = (columns: Array<TableColumn<ListedModel>>, models: ListedModel[]): number => {
+  const widths = columnWidths(columns, models)
+  return indent + gutter * (columns.length - 1) + widths.reduce((sum, width) => sum + width, 0)
+}
 
-  return models.map((model) => {
-    const details = detailsOf(model)
+// A note under its row starts two columns in from the row, so it reads as part of that row.
+const noteIndent = "    "
 
-    if (details === "") {
-      return model.id
+/**
+ * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
+ * it can be copied. COST and CONTEXT are numbers, right-aligned. The last column shares one place
+ * for the slot an ID fills and the mark on an ID that cannot be gptModel or opusModel. A note wider
+ * than the room MODEL, COST and CONTEXT leave on an 80-column line is never cut: it prints whole on
+ * its own line under its row, so the slot and the mark always show. NAME is shown only when every
+ * name then fits whole as well: a cut name such as "Claude Op…" loses what tells two models apart,
+ * and MODEL already names each one. Without Unicode every mark is ASCII; no mark relies on color.
+ */
+export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
+  const fixed: Array<TableColumn<ListedModel>> = [
+    { header: "MODEL", align: "left", cell: (model) => model.id },
+    { header: "COST", align: "right", cell: (model) => costOf(model, unicode) },
+    { header: "CONTEXT", align: "right", cell: (model) => contextOf(model, unicode) },
+  ]
+  const anyUnusable = models.some((model) => model.unusable !== undefined)
+  const room = lineWidth - widthOf(fixed, models) - gutter
+  const inline = (model: ListedModel): boolean => displayWidth(noteOf(model, unicode)) <= room
+  const columns = [...fixed]
+
+  // SLOT when the column holds only slots; NOTE once it also explains a mark. It is left out when
+  // every note prints under its row.
+  if (models.some((model) => noteOf(model, unicode) !== "" && inline(model))) {
+    columns.push({
+      header: anyUnusable ? "NOTE" : "SLOT",
+      align: "left",
+      cell: (model) => inline(model) ? noteOf(model, unicode) : "",
+      tone: (model) => model.unusable === undefined ? undefined : "warning",
+    })
+  }
+
+  // NAME stays only when some model has a name and every name fits whole beside the others; an ID
+  // is never cut, so a long one can still push a row past 80.
+  const withName = [columns[0], { header: "NAME", align: "left" as const, cell: (model: ListedModel) => model.name ?? "" }, ...columns.slice(1)]
+  const named = models.some((model) => model.name !== undefined)
+  const shown = named && widthOf(withName, models) <= lineWidth ? withName : columns
+
+  const [header, ...rows] = renderTable(shown, models, color)
+  const lines = [header]
+  for (const [index, row] of rows.entries()) {
+    const model = models[index]
+    const note = noteOf(model, unicode)
+    lines.push(row)
+
+    if (note !== "" && !inline(model)) {
+      lines.push(noteIndent + (model.unusable === undefined ? note : colorText(note, "warning", color)))
     }
+  }
 
-    return `${model.id.padEnd(width)}  ${details}`
-  })
+  // A note keeps the reason short; this line says what the mark means.
+  if (anyUnusable) {
+    lines.push("", `${mark("warn", unicode)} marks a model that cannot be gptModel or opusModel.`)
+  }
+
+  return lines
 }
 
 const routes: Record<ModelKey, string> = {
@@ -122,7 +221,7 @@ const routes: Record<ModelKey, string> = {
   opusModel: "requests with \"opus\" in the model name",
 }
 
-const applyNote = "A running relay applies the change to new requests; restarting reruns the startup check."
+const applyNote = "A running relay uses the change for new requests; a restart rechecks it."
 
 // Requests whose model name contains "opus" go to opusModel, so an Opus ID is offered there.
 const keyFor = (id: string): ModelKey => id.toLowerCase().includes("opus") ? "opusModel" : "gptModel"
@@ -154,12 +253,19 @@ export const renderConfigGuide = (
     lines.push(`  ${settingOf(model).padEnd(width)}  # ${routes[model.key]}`)
   }
 
+  let rejected = false
   for (const model of configured) {
     const problem = problemOf(model)
 
     if (problem !== undefined) {
-      lines.push(`  Warning: ${model.key} ${model.value} ${problem}; the startup check rejects it.`)
+      lines.push(`  Warning: ${model.key} ${model.value} ${problem}.`)
+      rejected = true
     }
+  }
+
+  // Said once under the warnings, so each warning stays one short line.
+  if (rejected) {
+    lines.push("  The startup check rejects these values.")
   }
 
   if (chosen === undefined) {

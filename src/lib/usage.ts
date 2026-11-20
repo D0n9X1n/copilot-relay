@@ -12,8 +12,8 @@ import { getCopilotUsage, readStoredGitHubToken } from "~/lib/auth"
 import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { withoutLogging } from "~/lib/log"
-import { paths } from "~/lib/paths"
-import { colorText, terminalText } from "~/lib/terminal"
+import { homeRelative, paths } from "~/lib/paths"
+import { colorText, columnWidths, heading, mark, printableCell, renderTable, terminalText, unicodeEnabled, type TableColumn, type TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher, InvalidProxyEnvironmentError } from "~/lib/upstream-dispatcher"
 
 // The quota ids GitHub sends today. They are always listed first, in this order; any other id the
@@ -122,69 +122,131 @@ export const parseCopilotUsage = (body: unknown): CopilotUsage => {
 
 const notReported = "not reported"
 
-// GitHub's number exactly as it arrived: no rounding, no separators, nothing derived from it.
-const formatNumber = (value: number | null): string => (value === null ? "?" : String(value))
+// GitHub's number with thousands separators and every decimal it sent; nothing rounded or derived.
+const formatNumber = (value: number | null): string => {
+  if (value === null) {
+    return "?"
+  }
 
-const formatAllowance = (snapshot: QuotaSnapshot): string => {
+  const text = String(value)
+  // An exponent form such as 1e-7 is printed as is: grouping its digits would round it.
+  if (text.includes("e")) {
+    return text
+  }
+
+  const [whole, fraction] = text.split(".")
+  const grouped = Number(whole).toLocaleString("en-US")
+
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`
+}
+
+// GitHub's own percent_remaining decides how low a quota is.
+const lowState = (snapshot: QuotaSnapshot): "warn" | "fail" | undefined => {
+  if (snapshot.unlimited === true || snapshot.percent_remaining === null) {
+    return undefined
+  }
+
+  if (snapshot.percent_remaining < 5) {
+    return "fail"
+  }
+
+  return snapshot.percent_remaining < 20 ? "warn" : undefined
+}
+
+const lowTones: Record<"warn" | "fail", TerminalTone> = { warn: "warning", fail: "bad" }
+
+const formatLeft = (snapshot: QuotaSnapshot, unicode: boolean): string => {
   if (snapshot.unlimited === true) {
     return "unlimited"
   }
 
-  const remaining = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)} remaining`
+  const left = `${formatNumber(snapshot.remaining)} of ${formatNumber(snapshot.entitlement)}`
+  const state = lowState(snapshot)
 
-  return `${remaining} (${formatNumber(snapshot.percent_remaining)}%)`
+  return state === undefined ? left : `${mark(state, unicode)} ${left}`
 }
 
-const formatOverage = (snapshot: QuotaSnapshot): string => {
-  let permitted = "overage ?"
-
+const formatPermitted = (snapshot: QuotaSnapshot): string => {
   if (snapshot.overage_permitted === true) {
-    permitted = "overage permitted"
-  } else if (snapshot.overage_permitted === false) {
-    permitted = "overage not permitted"
+    return "permitted"
   }
 
-  return `${permitted}, overage count ${formatNumber(snapshot.overage_count)}`
+  return snapshot.overage_permitted === false ? "not permitted" : "?"
 }
 
-const formatQuota = (snapshot: QuotaSnapshot): string => {
-  const parts = [formatAllowance(snapshot), formatOverage(snapshot)]
+// The overage count GitHub reports, or nothing when it reports none.
+const formatOverageUsed = (snapshot: QuotaSnapshot): string =>
+  snapshot.overage_count === null || snapshot.overage_count === 0 ? "" : `${formatNumber(snapshot.overage_count)} overage used`
 
-  if (snapshot.credits_used !== null) {
-    parts.push(`credits used ${formatNumber(snapshot.credits_used)}`)
+interface QuotaRow {
+  id: string
+  snapshot: QuotaSnapshot | null
+}
+
+// A quota's details below its row, one per line: GitHub's percent left for a limited quota, then the
+// overage used and the credits used when GitHub reports them. They sit outside the table's columns,
+// so a long number never widens the table.
+const quotaDetails = (snapshot: QuotaSnapshot | null): Array<string> => {
+  if (snapshot === null) {
+    return []
   }
 
-  return parts.join("; ")
+  const details: Array<string> = []
+  if (snapshot.unlimited !== true) {
+    details.push(`${formatNumber(snapshot.percent_remaining)}% left`)
+  }
+
+  const used = formatOverageUsed(snapshot)
+  if (used !== "") {
+    details.push(used)
+  }
+
+  if (snapshot.credits_used !== null && snapshot.credits_used !== undefined) {
+    details.push(`${formatNumber(snapshot.credits_used)} credits used`)
+  }
+
+  return details
 }
 
 /** The report as text lines. Kept free of IO, so it is tested without a terminal. */
-export const renderCopilotUsage = (usage: CopilotUsage, color = false): Array<string> => {
+export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode = unicodeEnabled()): Array<string> => {
   const shown = (value: string | null): string => value ?? colorText(notReported, "muted", color)
-
-  const headings: Array<[string, string | null]> = [
-    ["Plan", usage.copilot_plan],
-    ["SKU", usage.access_type_sku],
-    ["Quota reset", usage.quota_reset_date],
-  ]
-  const labelWidth = Math.max(...headings.map(([label]) => label.length))
 
   // The known ids first, in their fixed order, whatever order the object holds its keys in.
   const known: Array<string> = [...knownQuotaIds]
   const ids = [...known, ...Object.keys(usage.quota_snapshots).filter((id) => !known.includes(id))]
-  const idWidth = Math.max(...ids.map((id) => id.length))
+  const rows: Array<QuotaRow> = ids.map((id) => ({ id, snapshot: usage.quota_snapshots[id] ?? null }))
 
-  const quotaLines = ids.map((id) => {
-    const snapshot = usage.quota_snapshots[id] ?? null
-    const text = snapshot === null ? colorText(notReported, "muted", color) : formatQuota(snapshot)
+  const columns: Array<TableColumn<QuotaRow>> = [
+    { header: "QUOTA", align: "left", cell: (row) => row.id },
+    {
+      header: "LEFT",
+      align: "left",
+      cell: (row) => row.snapshot === null ? notReported : formatLeft(row.snapshot, unicode),
+      tone: (row) => {
+        if (row.snapshot === null) {
+          return "muted"
+        }
 
-    return `${id.padEnd(idWidth)}  ${text}`
-  })
-
-  return [
-    ...headings.map(([label, value]) => `${label.padEnd(labelWidth)}  ${shown(value)}`),
-    "",
-    ...quotaLines,
+        const state = lowState(row.snapshot)
+        return state === undefined ? undefined : lowTones[state]
+      },
+    },
+    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null ? "" : formatPermitted(row.snapshot) },
   ]
+
+  // The table without details, then each quota's details under its row, indented to the LEFT column.
+  const [header, ...body] = renderTable(columns, rows, color)
+  const detailIndent = " ".repeat(2 + columnWidths(columns, rows)[0] + 2)
+  const detailLines = (row: QuotaRow): Array<string> => quotaDetails(row.snapshot).map((detail) => `${detailIndent}${printableCell(detail)}`)
+  const table = [header, ...body.flatMap((line, index) => [line, ...detailLines(rows[index])])]
+
+  const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`)]
+  if (usage.access_type_sku !== null) {
+    lines.push(`SKU ${usage.access_type_sku}`)
+  }
+
+  return [...lines, "", ...table]
 }
 
 // A stalled connection fails with a clear line instead of waiting for the socket timeouts.
@@ -313,12 +375,13 @@ const readToken = async (): Promise<string> => {
     const code = (error as NodeJS.ErrnoException | undefined)?.code
     const reason = typeof code === "string" ? `: ${code}` : ""
 
-    throw new CopilotUsageError(terminalText(`Could not read the GitHub token at ${paths.githubTokenPath}${reason}.`))
+    throw new CopilotUsageError(terminalText(`Could not read the GitHub token at ${homeRelative(paths.githubTokenPath)}${reason}.`))
   }
 
   if (token === undefined) {
     throw new CopilotUsageError(
-      terminalText(`No GitHub token is stored at ${paths.githubTokenPath}. Sign in with copilot-relay auth.`),
+      // One line within 80 columns: the path from ~ and the command to run.
+      terminalText(`No GitHub token at ${homeRelative(paths.githubTokenPath)}. Run copilot-relay auth.`),
     )
   }
 

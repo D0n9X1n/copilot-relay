@@ -16,6 +16,7 @@ import {
   refuseExternalConnections,
   startEchoingProxy,
   startRecordingProxy,
+  unicodeTerminal,
   withProxyEnvironment,
   withoutProxyVariables,
 } from "../fixtures/network"
@@ -321,6 +322,7 @@ const runRelay = async (
       cwd,
       env: {
         ...withoutProxyVariables(process.env),
+        ...unicodeTerminal,
         ...env,
         CONSOLA_LEVEL: undefined,
         HOME: childHome,
@@ -422,7 +424,7 @@ test("models reads the catalog through upstreamProxy", async (t) => {
   const result = await runRelay(childHome, ["models"])
 
   assert.equal(result.code, 0, result.output)
-  assert.match(result.output, /Upstream-advertised models \(1\):\nproxied-model\n/)
+  assert.match(result.output, /^Copilot chat models · 1 of 1\n\n {2}MODEL +COST +CONTEXT\n {2}proxied-model +– +–$/m)
   assert.deepEqual(
     proxy.records.map((record) => `${record.method} ${record.target}`),
     ["CONNECT api.github.com:443", `CONNECT ${copilot.host}`],

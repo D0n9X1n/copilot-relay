@@ -25,7 +25,7 @@ test.after(async () => {
 })
 
 test.beforeEach(() => {
-  runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5", models: ["grok-4.7"] }
+  runtimeState.modelRouting = { gptModel: "grok-4.7", opusModel: "claude-opus-5.5" }
 })
 
 test.afterEach(() => {

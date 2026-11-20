@@ -205,6 +205,10 @@ issues、可选的 Manually closed issues (unverified release linkage)、Changes
 API 查询失败时，会在输出任何说明之前失败。`PREVIOUS_TAG` 可指定祖先基准；
 `RELEASE_FIRST=1` 显式允许首次发布，不能与 `PREVIOUS_TAG` 同时使用。
 
+一个发布可以在 `release-notes/<tag>.md` 中加入手写的章节，例如不兼容变更或测量结果。生成器
+从打 tag 的提交读取该文件，从不读取工作区，并把它追加在 Verification 之后，所以 workflow 每次
+重跑都得到相同的内容。在功能 PR 中提交它，像其他文件一样接受评审。
+
 发布 workflow 会先生成说明，再创建或更新 GitHub Release。这不会阻止并行的 npm 和
 GitHub Packages job，因此必须验证所有发布 job，而不能只看包是否可用。单独运行生成器
 不会创建 tag 或发布包。它的离线测试包含在 `npm run test:unit` 中。
@@ -237,6 +241,10 @@ GitHub Packages job，因此必须验证所有发布 job，而不能只看包是
 - **不要跨页锚点。** 像 `](ZH-Internals.md#某节)` 这样的真实链接会在发布前被拒绝，
   变换不会重写它。同页 `#锚点` 链接与代码中的示例没问题。
 - **English 与中文保持同步。** 每个 `EN-` 页面都有结构对应的 `ZH-` 页面。
+- **侧边栏链接每个页面。** `wiki/_Sidebar.md` 是唯一没有 `EN-`/`ZH-` 配对的页面，也是发布脚本
+  唯一接受的下划线开头的页面；GitHub 在每个页面旁边显示它。它有一个展开的 English 分组和一个
+  折叠的中文分组，每组各链接首页和本语言的每个页面恰好一次。新增或改名的页面要在同一次改动中
+  加入两个分组。
 
 **单向发布。** 在 wiki 标签页的浏览器编辑器里做的修改，会在下次发布时被覆盖。请改
 `wiki/`。
@@ -284,6 +292,8 @@ wiki 已发布或已验证。
 `EN-`/`ZH-` 成对、每个相对链接都能解析、不存在跨页锚点链接、发布变换不留下坏链接、
 没有任何被跟踪的文件还引用已删除的 `docs/` 树、每个“命令”页面都为 `src/main.ts`
 注册的每个命令写出一节及其选项与参数。
+`tests/unit/wiki-sidebar.test.ts` 检查侧边栏：两个分组的顺序、English 展开而中文折叠，
+以及每个页面在本组中恰好链接一次。
 
 它对真实 wiki 调用生产发布脚本，还会运行 `scripts/publish-wiki_tests.py`：覆盖导航、
 代码 span、反引号/波浪号围栏、外部 URL、校验和安全替换扁平目录的离线 fixture。测试使用

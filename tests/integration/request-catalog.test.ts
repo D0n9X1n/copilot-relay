@@ -18,7 +18,7 @@ process.env.CONSOLA_LEVEL = "0"
 const { snapshotProxyConfig } = await import("../../src/lib/config")
 const { boundModelOutputTokens, ensureCopilotModelCatalog, loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { createServer, startServer } = await import("../../src/server")
-const { normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
+const { modelNormalizations, normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
 const { RequestTrace, withRecordedTransport, withRequestTrace, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
@@ -269,14 +269,16 @@ test("first auto request after provider reload discovers native support before v
   })
 })
 
-test("a model the refreshed catalog exposes is admitted and executed as one routed model", async () => {
+test("a model the refreshed catalog lists still routes to its slot, chosen once", async () => {
   const root = configFor(providerB)
   const stale = () => ({ baseUrl: providerA, models: new Map() })
   root.modelCatalog = stale()
   runtimeState.modelCatalog = root.modelCatalog
-  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5", models: "auto" }
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = providerB
   const app = createServer(root)
+  // Each entry is a picker-enabled chat model with a vendor, so a newest-per-vendor selection would
+  // have offered grok-4.7 as a model of its own.
   const listed = (id: string, vendor: string, endpoints: Array<string>, supports: Record<string, unknown>) => ({
     id,
     vendor,
@@ -285,28 +287,22 @@ test("a model the refreshed catalog exposes is admitted and executed as one rout
     capabilities: { type: "chat", supports },
   })
 
-  const requests: Array<{ path: string; body: Record<string, unknown> }> = []
-  const post = (body: unknown) => app.fetch(new Request("http://127.0.0.1/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  }))
-
+  const requests: Array<{ path: string; body: Record<string, unknown>; apiVersion: string | null }> = []
   await withRecordedTransport({
     fetch: async (request) => {
-      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} })
+      const apiVersion = new Headers(request.headers).get("x-github-api-version")
+      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {}, apiVersion })
       if (request.path === "/models") {
         return Response.json({ data: [
           listed(model, "OpenAI", ["/responses"], { reasoning_effort: ["low", "medium", "high"] }),
           listed("claude-opus-5.5", "Anthropic", ["/v1/messages"], { reasoning_effort: ["low", "medium", "high"] }),
-          // A well-formed supports object without reasoning_effort: the model takes no effort.
           listed("grok-4.7", "xAI", ["/responses"], { streaming: true }),
         ] })
       }
 
       return Response.json({
-        id: "resp_grok",
-        model: "grok-4.7",
+        id: "resp_astra",
+        model,
         created_at: 1,
         status: "completed",
         output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
@@ -317,29 +313,17 @@ test("a model the refreshed catalog exposes is admitted and executed as one rout
       throw new Error("Unexpected credential refresh")
     },
   }, async () => {
-    const refused = await post({
-      model: "grok-4.7",
-      max_tokens: 64,
-      stream: true,
-      output_config: { effort: "high" },
-      messages: [{ role: "user", content: "hello" }],
-    })
-    const refusal = await refused.json() as { error: { code: string } }
-
-    assert.equal(refused.status, 400)
-    assert.doesNotMatch(refused.headers.get("content-type") ?? "", /text\/event-stream/)
-    assert.equal(refusal.error.code, "relay_unsupported_effort")
-    assert.deepEqual(requests.map((request) => request.path), ["/models"])
-
-    // Stale again, so the next admission also routes before and after discovery.
-    root.modelCatalog = stale()
-    runtimeState.modelCatalog = root.modelCatalog
-
-    const response = await post({ model: "grok-4.7", max_tokens: 64, messages: [{ role: "user", content: "hello" }] })
+    const response = await app.fetch(new Request("http://127.0.0.1/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "grok-4.7", max_tokens: 64, messages: [{ role: "user", content: "hello" }] }),
+    }))
 
     assert.equal(response.status, 200, await response.clone().text())
-    assert.deepEqual(requests.map((request) => request.path), ["/models", "/models", "/responses"])
-    assert.equal(requests.at(-1)?.body.model, "grok-4.7")
+    assert.deepEqual(requests.map((request) => request.path), ["/models", "/responses"])
+    assert.equal(requests.at(-1)?.body.model, model)
+    // The catalog asks for the API version that reports prices; inference keeps the default one.
+    assert.deepEqual(requests.map((request) => request.apiVersion), ["2026-06-01", "2025-04-01"])
   })
 })
 
@@ -460,7 +444,7 @@ test("concurrent request traces discover independently while same-config callers
     refresh: async () => {
       throw new Error("Unexpected credential refresh")
     },
-  }, () => Promise.allSettled([loadCopilotModelCatalog(first), loadCopilotModelCatalog(first)]))))
+  }, () => Promise.allSettled([loadCopilotModelCatalog(first, undefined), loadCopilotModelCatalog(first, undefined)]))))
 
   try {
     await started.promise
@@ -509,4 +493,59 @@ test("concurrent request traces discover independently while same-config callers
 
     await Promise.all([firstTrace.finished, secondTrace.finished])
   }
+})
+
+test("a refreshed catalog's spelling of the chosen slot reaches the native request", async () => {
+  const root = configFor(providerB)
+  root.modelCatalog = { baseUrl: providerA, models: new Map() }
+  runtimeState.modelCatalog = root.modelCatalog
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5-lab" }
+  runtimeState.upstreamBaseUrl = providerB
+  const app = createServer(root)
+
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+  await withRecordedTransport({
+    fetch: async (request) => {
+      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} })
+      if (request.path === "/models") {
+        return Response.json({ data: [
+          { id: model, supported_endpoints: ["/responses"], capabilities: { type: "chat", supports: {} } },
+          { id: "claude-opus-5.5-Lab", supported_endpoints: ["/v1/messages"], capabilities: { type: "chat", supports: {} } },
+        ] })
+      }
+
+      return Response.json({
+        id: "msg_lab",
+        type: "message",
+        role: "assistant",
+        model: "claude-opus-5.5-Lab",
+        content: [{ type: "text", text: "OK" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+      })
+    },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
+  }, async () => {
+    const post = () => app.fetch(new Request("http://127.0.0.1/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "opus", max_tokens: 64, messages: [{ role: "user", content: "hello" }] }),
+    }))
+    const response = await post()
+
+    assert.equal(response.status, 200, await response.clone().text())
+    assert.deepEqual(requests.map((request) => request.path), ["/models", "/v1/messages"])
+    assert.equal(requests.at(-1)?.body.model, "claude-opus-5.5-Lab")
+
+    // A warm request on the same catalog takes the native route with no slot normalization.
+    const before = modelNormalizations()
+    const warm = await post()
+
+    assert.equal(warm.status, 200, await warm.clone().text())
+    assert.deepEqual(requests.map((request) => request.path), ["/models", "/v1/messages", "/v1/messages"])
+    assert.equal(requests.at(-1)?.body.model, "claude-opus-5.5-Lab")
+    assert.equal(modelNormalizations() - before, 0)
+  })
 })

@@ -147,7 +147,7 @@ test("Claude Code CLI setup reports a settings file it will not touch as a failu
   t.after(() => fs.rm(settings, { force: true }))
 
   const outcome = await setupClaudeCodeCli({
-    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5", models: "" } as never,
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
     baseUrl: "http://127.0.0.1:4142",
     catalog: undefined,
     force: false,
@@ -174,7 +174,7 @@ test("Claude Code CLI setup skips a machine where Claude Code never ran, unless 
   await fs.rm(dir, { recursive: true, force: true })
   t.after(() => fs.rm(dir, { recursive: true, force: true }))
   const context = {
-    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5", models: "" } as never,
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
     baseUrl: "http://127.0.0.1:4142",
     catalog: undefined,
   }
@@ -182,6 +182,51 @@ test("Claude Code CLI setup skips a machine where Claude Code never ran, unless 
   assert.match((await setupClaudeCodeCli({ ...context, force: false })).status, /^skipped/)
   await assert.rejects(fs.stat(dir))
   assert.equal((await setupClaudeCodeCli({ ...context, force: true })).status, "updated")
+})
+
+test("when the shared Codex config is skipped, the Codex app is reported skipped too, not up to date", async (t) => {
+  const { runSetup } = await import("../../src/lib/client-setup")
+  const { renderSetupOutcomes } = await import("../../src/setup")
+  const codexHome = process.env.CODEX_HOME!
+  await fs.rm(codexHome, { recursive: true, force: true })
+  t.after(() => fs.rm(codexHome, { recursive: true, force: true }))
+  const context = {
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+    force: false,
+  }
+
+  const outcomes = await runSetup(["codex-cli", "codex-app"], context)
+
+  assert.deepEqual(outcomes.map((outcome) => outcome.status.split(":")[0]), ["skipped", "skipped"])
+  const rows = renderSetupOutcomes(outcomes, context.baseUrl, false, true).slice(3)
+  assert.match(rows[0], /^ {2}codex-cli +– skipped /)
+  assert.match(rows[1], /^ {2}codex-app +– skipped /)
+  await assert.rejects(fs.stat(codexHome))
+})
+
+test("when the shared Codex config fails, the Codex app is reported failed too, without a second attempt", async (t) => {
+  const { runSetup } = await import("../../src/lib/client-setup")
+  await useCodexHome(t)
+  // Only the first write fails, so a second attempt would succeed and hide the failure.
+  const mkdir = t.mock.method(fs, "mkdir", async () => {
+    throw new Error("disk briefly unavailable")
+  }, { times: 1 })
+  const context = {
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+    force: false,
+  }
+
+  const outcomes = await runSetup(["codex-cli", "codex-app"], context)
+
+  assert.deepEqual(outcomes.map((outcome) => [outcome.target, outcome.status]), [
+    ["codex-cli", "failed: disk briefly unavailable"],
+    ["codex-app", "failed: disk briefly unavailable"],
+  ])
+  assert.equal(mkdir.mock.callCount(), 1)
 })
 
 test("a model the app would refuse is listed under a Claude route name for its tier", () => {
@@ -234,36 +279,39 @@ const readCodexSlugs = async (): Promise<Array<{ slug: string; description: stri
   return written.models
 }
 
-test("codexModels lists canonical exposed IDs without [1m], gptModel first, then the extras", async () => {
+test("codexModels lists the two slots without [1m], gptModel first, one entry when equal", async () => {
   const { codexModels } = await import("../../src/lib/client-setup")
-  const appConfig = { gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5", models: "Grok-4.7, not-in-catalog" } as never
+  const appConfig = { gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5" } as never
 
   const listed = codexModels(appConfig, codexCatalog)
 
-  assert.deepEqual(listed.map((model) => model.id), ["gpt-6-astra", "claude-opus-5.5", "grok-4.7"])
+  assert.deepEqual(listed.map((model) => model.id), ["gpt-6-astra", "claude-opus-5.5"])
   assert.equal(listed[0]?.capabilities?.limits?.max_context_window_tokens, 1_050_000)
-  assert.equal(listed[2]?.capabilities?.name, "Grok 4.7")
   assert.deepEqual(
-    codexModels({ gptModel: "gpt-6-astra[1m]", opusModel: "claude-opus-5.5", models: "" } as never, undefined).map((model) => model.id),
+    codexModels({ gptModel: "gpt-6-astra[1m]", opusModel: "claude-opus-5.5" } as never, undefined).map((model) => model.id),
     ["gpt-6-astra", "claude-opus-5.5"],
+  )
+  assert.deepEqual(
+    codexModels({ gptModel: "claude-opus-5.5", opusModel: "CLAUDE-OPUS-5.5[1m]" } as never, codexCatalog).map((model) => model.id),
+    ["claude-opus-5.5"],
   )
 })
 
-test("Codex setup lists canonical exposed IDs, keeps the selection and the bundled Astra entry", async (t) => {
+test("Codex setup lists the two slots, keeps a listed selection and the bundled Astra entry", async (t) => {
   const { setupCodex } = await import("../../src/lib/client-setup")
-  const codexHome = await useCodexHome(t, "model = \"grok-4.7\"\n")
-  const appConfig = { apiKey: "", gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5", models: "grok-4.7" } as never
+  const codexHome = await useCodexHome(t, "model = \"claude-opus-5.5\"\n")
+  const appConfig = { apiKey: "", gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5" } as never
 
   const outcome = await setupCodex({ appConfig, baseUrl: "http://127.0.0.1:4142", catalog: codexCatalog, force: false }, "codex-cli")
   const written = await readCodexSlugs()
 
   assert.equal(outcome.status, "updated")
-  assert.deepEqual(written.map((entry) => entry.slug), ["gpt-6-astra", "claude-opus-5.5", "grok-4.7"])
+  assert.deepEqual(written.map((entry) => entry.slug), ["gpt-6-astra", "claude-opus-5.5"])
   assert.notEqual(written[0]?.description, "gpt-6-astra through copilot-relay")
-  assert.match(await fs.readFile(path.join(codexHome, "config.toml"), "utf8"), /^model = "grok-4\.7"$/m)
+  assert.match(await fs.readFile(path.join(codexHome, "config.toml"), "utf8"), /^model = "claude-opus-5\.5"$/m)
 })
 
-test("startup's Codex setup writes every exposed model, keeps the selection, and logs the outcome", async (t) => {
+test("startup's Codex setup writes the two slots, replaces a model they do not list, and logs the outcome", async (t) => {
   const { startupCodexSetup } = await import("../../src/lib/client-setup")
   const { log } = await import("../../src/lib/log")
   const codexHome = await useCodexHome(t, "model = \"grok-4.7\"\n")
@@ -271,14 +319,13 @@ test("startup's Codex setup writes every exposed model, keeps the selection, and
   t.mock.method(log, "info", (...values: Array<unknown>) => {
     logged.push(values.join(" "))
   })
-  const appConfig = { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5", models: "grok-4.7" } as never
+  const appConfig = { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never
 
   await startupCodexSetup(appConfig, codexCatalog, "http://127.0.0.1:4142")
   const written = await readCodexSlugs()
 
-  assert.deepEqual(written.map((entry) => entry.slug), ["gpt-6-astra", "claude-opus-5.5", "grok-4.7"])
-  assert.notEqual(written[0]?.description, "gpt-6-astra through copilot-relay")
-  assert.match(await fs.readFile(path.join(codexHome, "config.toml"), "utf8"), /^model = "grok-4\.7"$/m)
+  assert.deepEqual(written.map((entry) => entry.slug), ["gpt-6-astra", "claude-opus-5.5"])
+  assert.match(await fs.readFile(path.join(codexHome, "config.toml"), "utf8"), /^model = "gpt-6-astra"$/m)
   assert.deepEqual(logged, [`codex settings updated: ${path.join(codexHome, "config.toml")}`])
 
   await startupCodexSetup(appConfig, codexCatalog, "http://127.0.0.1:4142")
@@ -296,7 +343,7 @@ test("startup's Codex setup skips a machine without Codex and logs a failure ins
     })
   }
 
-  const appConfig = { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5", models: "" } as never
+  const appConfig = { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never
   const missingHome = path.join(codexHome, "absent")
   process.env.CODEX_HOME = missingHome
   await startupCodexSetup(appConfig, undefined, "http://127.0.0.1:4142")

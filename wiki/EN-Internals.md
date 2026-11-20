@@ -62,7 +62,7 @@ src/
     defaults.ts               shipped defaults
     paths.ts                  ~/.copilot-relay layout, resolved at import time
     auth.ts                   token storage and refresh scheduling
-    models.ts                 routing + thinkEffort validation
+    models.ts                 two-slot routing, 1M IDs, thinkEffort validation
     preflight.ts              startup upstream verification
     lifecycle.ts              pid file, findRelayOnPort, findRelayProcessIds
     log.ts                    formatLogValue, rotation, retention
@@ -72,7 +72,8 @@ src/
     upstream-diagnostics.ts   upstream error context capture
     upstream-dispatcher.ts    one undici dispatcher for Copilot and GitHub calls, upstreamProxy
     error.ts                  error shaping
-    state.ts                  runtime state
+    state.ts                  runtime state, request snapshots, routing generations
+    terminal.ts               shared view kit: tables, marks, widths, color
     version.ts                build version
 ```
 
@@ -110,8 +111,7 @@ No default migration is added. A user's pin belongs to the user; the old
 Hot-reloaded — applies to work that starts after the change:
 
 `logLevel`, `logRetentionDays`, `thinkEffort`, `upstreamTimeoutSeconds`,
-`copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`, `gptModel`, `opusModel`,
-`models`
+`copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`, `gptModel`, `opusModel`
 
 Requires restart:
 
@@ -365,55 +365,58 @@ maintenance cost with no test covering it.
 ## Model routing
 
 `src/lib/models.ts` decides which Copilot models clients see and where a Claude
-request goes. `parseModelSelection` reads the `models` key into `"auto"`, an empty
-list, or a list of IDs; `readAppConfig` keeps the literal, and `start` stores the
-parsed value with `gptModel` and `opusModel` in the runtime routing state on start
-and on every reload.
+request goes. There are two slots, `gptModel` and `opusModel`; `start` stores them in
+the runtime routing state on start and on every reload. There is no model list and no
+other route: every Claude request reaches one of the two slots.
 
-- `selectNewestPerVendor(catalog)` implements `auto`: among catalog models with
-  `model_picker_enabled`, type `chat`, a vendor other than `Experimental`, and a
-  number in the ID (the first `\d+(\.\d+)*`), it keeps one per vendor, the highest
-  version compared as a number tuple, then picker category `powerful` > `versatile` >
-  `lightweight`, then the lower ID. It returns the winners in catalog order.
-- `resolveExposedModels(routing, catalog)` returns `gptModel`, `opusModel`, then the
-  selection, each through `canonicalModelId` (every `[1m]` stripped, the catalog's
-  casing), deduplicated case-insensitively. A listed ID the catalog lacks is skipped;
-  without a catalog `auto` adds nothing and a listed ID is kept. `findMissingModels`
-  names the skipped IDs. The daemon (`getExposedUpstreamModelIds`) and standalone
-  `setup` call the same function.
-- The daemon keeps its last exposed lists in `exposedCache`: the upstream IDs
-  (`getExposedUpstreamModelIds`), the IDs Claude Code sees (`getExposedModelIds`),
-  and a lowercase-to-ID map that `routeModelId` matches against. The key is the
-  current catalog's `models` Map by identity, or no catalog, plus the values of
-  `gptModel`, `opusModel` and `models` (`"auto"` or the list, compared element by
-  element). The routing object itself is not the key, because
-  `snapshotRuntimeState` copies it for every request. `currentCatalog()` still
-  compares the catalog's `baseUrl` with `upstreamBaseUrl` on every call, so a reload
-  to another upstream, a catalog refresh, a changed selection, or a model probe's
-  temporary `{ gptModel: id, opusModel: id }` misses the cache and recomputes, and
-  restoring the saved routing gives the earlier lists again. Both getters return a
-  copy, so a caller cannot change the cached lists.
-- `canonicalModelId` looks an ID up in a per-catalog index (`catalogIndexes`, a
-  `WeakMap` from the catalog's Map to its keys by lowercase form), built on first use.
-  When two keys differ only in case, the first in catalog order wins. Both caches rely
-  on a published catalog never changing in place: `CopilotModelCatalog.models` in
-  `src/copilot/models.ts` is a `ReadonlyMap`, so such a change fails typecheck, and
-  discovery publishes a new catalog instead.
-- `routeModelId`, which `translateModelName` in `src/claude/translate.ts` calls, sends
-  a name matching an exposed ID, in any case and with any `[1m]`, to that ID; any other
-  name containing `opus` to `opusModel`; and the rest to `gptModel`. A catalog ID that
-  is not exposed is not passed through on the Claude route. Codex's route resolves
-  models separately (`resolveCodexModel`, below).
+- `routeModelSlot(model)` makes one decision per request. It strips every `[1m]` and
+  compares case-insensitively: the `opusModel` ID wins first, then the `gptModel` ID;
+  any other name containing `opus` goes to `opusModel`, and the rest to `gptModel`, so
+  Claude Code's picker aliases (`opus`, `sonnet`, `haiku`) keep a predictable route.
+  `handleClaudeMessageRequest` in `src/routes/claude.ts` chooses the slot once, before catalog
+  discovery, and after discovery reads the same slot's ID again with
+  `slotModelId(slot)`: a refreshed catalog can change the slot's spelling, never its
+  route. `routeModelId`, which `translateModelName` in `src/claude/translate.ts` calls,
+  is the two steps together. Codex's route resolves models separately
+  (`resolveCodexModel`, below).
+- `getSlotModelIds()` gives the IDs clients are offered: `gptModel`, then `opusModel`
+  unless it is the same model, each through `normalizeClaudeModelId`. `GET /v1/models`
+  and the startup `Models: <gpt> (gptModel), <opus> (opusModel)` line use it.
+  `getUpstreamModelIds()` gives the two slots' wire IDs for preflight and the tokenizer
+  preload.
+- The slots are prepared once per routing generation and catalog, not once per request.
+  `snapshotRuntimeState` in `src/lib/state.ts` copies the routing for every request, so
+  the copy cannot be a cache key; instead `routingGeneration` keeps one identity, in a
+  `WeakMap` beside the routing object, that the published routing and all its copies
+  share, and a reload publishes a new one. `preparedSlots` maps a generation, then a
+  catalog's `models` Map, to the prepared slots: both wire IDs, their lowercase forms,
+  and pins for the slots' configured spelling, wire spelling and `[1m]` forms. Both
+  keys are weak, so a retired generation's pins go with its last request.
+  `slotPreparations()` and `modelNormalizations()` are the test hooks that pin this.
+- `canonicalModelId(id, catalog)` strips every `[1m]` and takes the catalog key that
+  matches case-insensitively, else the lowercased ID. A slot's spelling is read from its
+  pins; any other name is computed each time through a per-catalog index
+  (`catalogIndexes`, a `WeakMap` from the catalog's Map to its keys by lowercase form,
+  built on first use; when two keys differ only in case, the first in catalog order
+  wins). No cache is keyed by a client-supplied name, so such a name never outlives its
+  request. Both the index and the pins rely on a published catalog never changing in
+  place: `CopilotModelCatalog.models` in `src/copilot/models.ts` is a `ReadonlyMap`, so
+  such a change fails typecheck, and discovery publishes a new catalog instead.
 - `normalizeClaudeModelId(model, contextWindowTokens?)` gives the ID Claude Code sees:
   any ID, Claude or not, whose own catalog window is at least 1,000,000 gets `[1m]`
   (the model's 1M version; the catalog has no separate `-1m` IDs), a smaller known
-  window gives the plain ID, and an unknown window leaves the ID as given. `getExposedModelIds` applies it for `GET /v1/models`
-  and the startup `Exposed models:` line; `applyClaudeConfig` in
-  `src/lib/claude-settings.ts` applies it to each saved model with that model's own
-  window (`contextWindowOf`). Without a catalog, as when standalone setup cannot fetch
-  one, an ID therefore stays as configured.
-- Preflight and the tokenizer preload cover only `gptModel` and `opusModel`
-  (`getUpstreamModelIds`); an extra model's tokenizer loads on first use.
+  window gives the plain ID, and an unknown window leaves the ID as given.
+  `applyClaudeConfig` in `src/lib/claude-settings.ts` applies it to each saved model
+  with that model's own window (`contextWindowOf`). Without a catalog, as when
+  standalone setup cannot fetch one, an ID therefore stays as configured.
+- `loadCopilotModelCatalog` sends `x-github-api-version: 2026-06-01`
+  (`catalogApiVersion`) on the `/models` request only, because that version reports
+  `billing.token_prices`; inference keeps the client's default version. `parseBilling`
+  converts the prices, given in hundredths of a USD per `batch_size` tokens, to USD per
+  million tokens. A model reported with `batch_size` 0 and every price 0 is free; any
+  other malformed, missing or non-finite price falls back to the premium-request
+  `multiplier`, and with neither the cost is unknown, never shown as free.
+  `copilot-relay models` shows the result in its COST column.
 
 `clampReasoningEffort(requested, advertised)` in `src/copilot/models.ts` sends an
 advertised level as is, a level the relay does not know as is, and any other level as
@@ -1430,6 +1433,40 @@ property names. `MATCH` is local transformation agreement, not a new model run,
 a cache benchmark, or proof of a historical refusal's cause. Incomplete/aborted
 captures cannot produce a match; see the CLI verdict table in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+
+## Terminal views
+
+Every command's human output is built from `src/lib/terminal.ts`, so all views share
+one look and one set of rules. JSON output never passes through it.
+
+- `printableCell(text)` runs before a cell is measured, cut or padded: controls and
+  hidden characters go first (one inside a secret would keep it from matching), then
+  registered secrets (`scrubLogSecrets`) and secret-bearing URLs
+  (`scrubSensitiveUrls`). A secret cut in two would escape the scrub, so nothing is
+  cut before this runs.
+- `displayWidth(text)` counts terminal columns per grapheme (`Intl.Segmenter`): East
+  Asian wide and fullwidth characters, the supplementary ideograph planes and emoji
+  in emoji presentation take two; a combining mark or zero-width character takes
+  none; a symbol in text presentation, such as `®` or `✓`, takes one.
+- `renderTable(columns, rows, color, minimumWidths)` gives a two-space indent and
+  gutter, and every column as wide as its widest cell, so an ID is never cut.
+  `columnWidths` computes the same widths ahead of time for a table printed one row
+  at a time. Color wraps each cell's text and padding stays outside it, so the plain
+  text is the same with color on or off and no line ends in spaces.
+- `mark(state)` gives `✓` `✗` `!` `–`, or `ok` `x` `!` `-` where
+  `unicodeEnabled()` says the terminal cannot show them: on Windows only Windows
+  Terminal or an editor's terminal, elsewhere a UTF-8 locale. A state always carries
+  a mark, so it never depends on color alone. `colorEnabled()` decides color from
+  the TTY and `NO_COLOR`/`FORCE_COLOR`.
+- `heading(title, detail)` is a view's first line: the command, then ` · ` and its
+  subject.
+
+The views keep to 80 columns and at most five table columns. When a table would
+pass 80, the view moves detail to a line under its row or leaves out an optional
+column, such as `models`' NAME; an exact value, such as a model ID or a quota
+amount, is never cut.
+`tests/unit/terminal.test.ts` pins the width rules; each command's own test pins
+its view.
 
 ## Logging invariants
 

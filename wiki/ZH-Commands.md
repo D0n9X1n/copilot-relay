@@ -81,8 +81,9 @@ copilot-relay stop
 停止本机上的每个 copilot-relay 服务，不限端口。它没有选项。
 
 它从 pid 文件、在配置端口上监听的进程以及进程列表中收集候选进程，只向已确认是 copilot-relay 服务
-的进程发送信号：先发 `SIGTERM`，五秒后进程仍在运行就发 `SIGKILL`。一个都没有找到时，记录
-`No existing copilot-relay instance found`。除非 pid 文件指向的进程仍在运行，否则它会删除该文件。
+的进程发送信号：先发 `SIGTERM`，五秒后进程仍在运行就发 `SIGKILL`。之后记录一行结果，例如
+`Stopped copilot-relay (pid 65686)`，停止了多个时为 `Stopped copilot-relay (pids 101, 202)`。
+一个都没有找到时，记录 `No existing copilot-relay instance found`。除非 pid 文件指向的进程仍在运行，否则它会删除该文件。
 
 它不需要有效的 `config.yaml`。文件无法加载时，它记录这一点，仍然停止能确认的中继，只是没有配置
 端口作为线索。文件能加载时，它还会对日志应用 `logRetentionDays`。
@@ -126,8 +127,32 @@ copilot-relay status --deep --json
 `/healthz`，通过后再请求 `/v1/models`；加 `--deep` 时还会发送一个简短的 `POST /v1/messages`，
 经中继到达 Copilot。`/healthz` 和 `/v1/models` 从不联系 Copilot。
 
-第一行显示运行 `status` 的 CLI 的版本。对正在运行的中继，`version` 一行显示该中继报告的版本；
-中继不报告版本时显示 `unknown`；与已安装版本不一致时，显示不一致，并给出重启它的命令。
+标题显示运行 `status` 的 CLI 的版本，中继在运行时还显示它的地址。其下每一行回答一个问题，并以不依赖
+颜色的标记开头：`✓` 是，`✗` 失败，`!` 需要注意，`–` 未检查或未运行（终端无法显示时为 `ok`、`x`、
+`!` 和 `-`）。正在运行的中继报告的版本与已安装版本一致时，不显示 `version` 一行，因为标题已经显示了
+这个版本；中继不报告版本时，这一行显示 `unknown`；版本不一致时，显示不一致，并给出重启它的命令。日志
+和配置路径列在 `Files` 下，位于主目录下时从 `~` 开始显示；解析后的每个配置键列在 `Config` 下，最后
+说明哪些键要重启后才生效。
+
+```text
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 65686, up 2d 21h)
+  ✓ health    ok (3ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
+    host                    127.0.0.1
+    port                    4142
+    …
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
+```
 
 | 退出码 | 含义 |
 | --- | --- |
@@ -205,10 +230,25 @@ Copilot 的模型目录以获取模型名称、上下文大小和推理等级，
 它会说明，并只写入模型 ID。它不启动中继，也从不打印 apiKey。不是合法 JSON 或含有类型错误设置的 Claude Code 设置文件，以及不是 JSON 对象的 Claude app 文件，会保持不变，并报告为失败。未知目标或无法读取 `config.yaml` 时以 `1` 退出，任一目标失败
 以 `2` 退出，否则以 `0` 退出。
 
+结果是一张表格，每个客户端一行并带标记：setup 做了什么，以及写入的文件（位于主目录下时从 `~` 开始显示），
+或跳过、失败的原因。过长的原因以 `…` 截断。Codex 应用与 Codex CLI 共用配置，因此那份配置被跳过或失败时，
+Codex 应用也报告为跳过或失败。
+
+```text
+Client setup · http://127.0.0.1:4142
+
+  CLIENT           RESULT        DETAIL
+  claude-code-cli  ✓ updated     ~/.claude/settings.json
+  claude-code-app  – skipped     the app has not run here
+  codex-cli        ✓ up to date  ~/.codex/config.toml
+  codex-app        ✓ up to date  shares the Codex config above
+```
+
 ## `models`
 
 ```sh
-copilot-relay models                                   # 列出
+copilot-relay models                                   # 列出聊天模型
+copilot-relay models --all                             # 列出全部模型
 copilot-relay models opus                              # 按 ID 或显示名称搜索
 copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 ```
@@ -223,12 +263,41 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 | `--max-tokens` | 每次探测的输出预算（默认 4096；受目录限制约束）。 |
 | `--timeout` | 每次探测的超时秒数，须为正数（默认 30；受配置的超时约束）。 |
 | `--total-timeout` | 所有探测的总超时秒数，须为正数（默认 300）。 |
+| `--all` | 列出每个公布的模型，包括不是聊天模型的那些。 |
 
-列出 Copilot 模型目录公布的模型 ID，并标出中继无法使用的那些；列表不验证模型能否工作。不加引号的
-多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。`--deep` 检查
+以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称、费用和上下文窗口。COST 是目录报告的费用，
+单位为每百万输入/输出 token 的美元（`$8/$40`）；目录只报告倍率时显示每次调用的高级请求数（`1×`），否则为
+`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
+`gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
+计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
+该模型不能用作 `gptModel` 或 `opusModel`。ID 短于约 50 列时，共用一列让表格保持在 80 列以内（ID 从不截断）：这一列使用其他列留下的宽度；
+比这更宽的说明从不截断，而是完整地打印在该行下方单独缩进的一行，因此槽位及其 `!` 总会显示。没有名称时
+省略 NAME 列，所有说明都在行下方时省略 NOTE 列。COST 和 CONTEXT 右对齐。
+终端不支持 Unicode 时标记为 ASCII：`<` 代替 `◀`，`x` 代替 `×`，`-` 代替 `–`。
+列表不验证模型能否工作。
+令牌缓存提示输出到 stderr，因此 stdout 只有结果。
+
+```text
+Copilot chat models · 4 of 6
+
+  MODEL              NAME                 COST    CONTEXT  SLOT
+  claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
+  claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
+  gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
+  grok-4.7           Grok 4.7            $2/$6       500K
+
+2 models that are not chat models are hidden: copilot-relay models --all
+```
+
+只有每个显示名称都能在 80 列内完整显示时才有 NAME 列；否则表格省略这一列，因为截断后的名称（如 `Claude Op…`）
+会丢掉区分两个模型的部分，而 MODEL 已经标明每个模型。ID 从不截断，便于复制。不加引号的
+多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。没有匹配时，搜索打印最接近
+的 ID；没有接近的 ID 时，提示使用 `copilot-relay models --all`。每次列出之后，配置指引显示当前的
+`gptModel` 和 `opusModel` 行，并对启动检查会拒绝的值给出警告。`--deep` 检查
 `--model` 给出的 ID，或目录中的每个条目。它只向能够探测、且在总超时之前轮到的条目发送真实请求；
 其他条目只得到一个状态，不发送请求。这些请求经过在命令自身进程内构建的中继管线，而不是正在运行的
-中继，并会消耗 Copilot 用量。其他所有选项都需要 `--deep`，搜索也不能与它同时使用：先找到 ID，再用
+中继，并会消耗 Copilot 用量。`--details`、`--model`、`--effort`、`--max-tokens`、`--timeout` 和
+`--total-timeout` 需要 `--deep`；`--all` 不需要。搜索不能与 `--deep` 同时使用：先找到 ID，再用
 `--deep --model <id>` 测试。它像 `start` 一样加载 `config.yaml` 并登录；加 `--deep` 时，设备码提示
 输出到 stderr。
 
@@ -259,6 +328,20 @@ copilot-relay usage --json
 成功时打印报告并以 `0` 退出；否则在 stderr 打印一行原因（例如没有保存的 token）并以 `1` 退出。
 字段与消息见[日志与问题排查](ZH-Logging-Troubleshooting.md)中的“Copilot 套餐与配额”。
 
+```text
+Copilot plan · enterprise · resets 2026-12-01
+SKU copilot_enterprise_seat
+
+  QUOTA                 LEFT                  OVERAGE
+  chat                  unlimited             not permitted
+  completions           unlimited             not permitted
+  premium_interactions  919,253 of 1,000,000  permitted
+                        91.92531% left
+```
+
+有上限的配额显示其额度中剩余的部分。详细信息各占一行，列在它下面：GitHub 给出的剩余百分比，以及 GitHub 报告时的超额用量和已用额度点数。剩余不足 20% 的配额标记为 `!`，不足 5% 标记为 `✗`（终端无法显示 `✗` 时为 `x`）；颜色只是额外强调。
+数字带千位分隔符，并保留 GitHub 发来的每一位小数；`--json` 按 GitHub 发来的原样打印。
+
 ## `cache`
 
 ```sh
@@ -273,10 +356,24 @@ copilot-relay cache --hourly --since 2d
 | `--since` | 时间窗口的起点：一段时长（如 6h 或 2d），或 ISO 日期或时间。不加它时，汇总覆盖最近 24 小时。 |
 | `--model` | 只统计名称包含这段文本的模型，不区分大小写。 |
 | `--json` | 把各行打印成 JSON 数组。 |
-| `--goal` | 命中率目标，单位为百分比，最多两位小数。低于它的命中率显示为红色。 |
+| `--goal` | 命中率目标，单位为百分比，最多两位小数。低于它的命中率标记为 ✗（无 unicode 时为 x）并显示为红色。 |
 
 根据 `~/.copilot-relay/logs/` 下中继日志文件的 `completion` 条目，按上游路由报告每个模型的输入中
-有多少由 prompt 缓存提供。`--goal` 默认为 `95`，`--hourly` 和 `--daily` 不能同时使用。它既不联系
+有多少由 prompt 缓存提供：
+
+```text
+Prompt-cache hit rate · last 24 h · goal 95%
+
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
+
+1 of 3 rows with a known rate is below the goal.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
+```
+
+每个命中率都带一个标记：达到目标时为 `✓`，低于时为 `✗`，所以没有颜色时表格读起来也一样。`--goal` 默认为 `95`，`--hourly` 和 `--daily` 不能同时使用。它既不联系
 中继，也不联系 Copilot，不读取 `config.yaml`，也不写入任何东西。任何报告，包括空报告，都以 `0`
 退出；选项无法使用，或日志目录无法读取时，在 stderr 说明原因并以 `1` 退出。报告本身见
 [Prompt 缓存](ZH-Prompt-Caching.md)中的“测量命中率”。
@@ -297,6 +394,21 @@ copilot-relay replay /absolute/path/to/capture-directory
 `~/.copilot-relay/captures/<local-date>/<request-id>/`。ID 会在这些日期目录中查找，同一个 ID
 出现在两个日期下时会被拒绝；明确给出的目录可以不在 `~/.copilot-relay` 之内。重放不打开 socket，
 不使用真实凭据，不写入 token、配置或新的捕获，也不读取 `config.yaml`。
+
+结果用一个标记给出结论及其含义，然后是记录的请求，以及每个上游交换一行：状态、结果和 token 数。`DIFF`
+在表格下按路径和固定原因列出不同的字段，从不引用请求或响应的文本。路径从不截断：太长、无法在 80 列内
+与原因并排的路径单独占一行，原因缩进打印在它下方。列出每一个不同之处；比较在 100 个之后停止。
+
+```text
+Replay · POST /v1/messages
+
+  ✓ MATCH       the relay reproduces the recording
+    request     status 200 · outcome end_turn · 0 tool calls
+    blocks      text
+
+  #  UPSTREAM           STATUS  OUTCOME  IN  OUT  CACHED  WRITTEN
+  1  /chat/completions     200  stop      7    3       5        –
+```
 
 `MATCH` 以 `0` 退出，`DIFF` 或 `INCOMPLETE` 以 `2` 退出，`MISSING` 或 `MALFORMED` 以 `1` 退出。
 每种结论的含义，以及为什么不能整份分享捕获，见

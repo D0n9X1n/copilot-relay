@@ -4,17 +4,18 @@ import { randomUUID } from "node:crypto"
 import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { log } from "~/lib/log"
+import { log, withoutConsoleLogging } from "~/lib/log"
 import { snapshotRuntimeState, withRuntimeState } from "~/lib/state"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
-import { findMissingModels, getModelRouting, getUpstreamModelIds } from "~/lib/models"
+import { getUpstreamModelIds } from "~/lib/models"
 import { loadCopilotModelCatalog, resolveModelReasoningEffort } from "~/copilot/models"
 import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { createChatCompletions } from "~/copilot/chat"
 import { handleNativeMessages } from "~/copilot/native"
+import { withUpstreamDeadline } from "~/lib/deadline"
 
-const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
-  const catalog = await loadCopilotModelCatalog(config)
+const ensureRequiredModels = async (config: ProxyConfig, signal: AbortSignal): Promise<void> => {
+  const catalog = await loadCopilotModelCatalog(config, signal)
   const requiredModels = getUpstreamModelIds()
   const missingModels = requiredModels.filter((model) => !catalog.models.has(model))
 
@@ -25,16 +26,13 @@ const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   }
 
   log.info(`Upstream models available: ${requiredModels.join(", ")}`)
-  // Selected extras are offered but never probed; one the catalog lacks is skipped, not fatal.
-  const missingSelected = findMissingModels(getModelRouting(), catalog.models)
-  if (missingSelected.length > 0) {
-    log.error(`Selected models not in Copilot's catalog, skipped: ${missingSelected.join(", ")}`)
-  }
 
+  // The limits are key=value records the log is searched for; the console's Models line shows
+  // each window, so they go to the file alone.
   for (const model of requiredModels) {
     const limits = catalog.models.get(model)?.limits
     if (limits) {
-      log.info(`Model token limits: model=${model} context=${limits.max_context_window_tokens} input=${limits.max_prompt_tokens} output=${limits.max_output_tokens} non_streaming_output=${limits.max_non_streaming_output_tokens ?? limits.max_output_tokens}`)
+      withoutConsoleLogging(() => log.info(`Model token limits: model=${model} context=${limits.max_context_window_tokens} input=${limits.max_prompt_tokens} output=${limits.max_output_tokens} non_streaming_output=${limits.max_non_streaming_output_tokens ?? limits.max_output_tokens}`))
     } else {
       log.error(`Model token limits unavailable: model=${model}; preserving client budgets without assuming a capacity.`)
     }
@@ -56,6 +54,7 @@ const createProbePayload = (model: string) => ({
 const validateModelRequest = async (
   config: ProxyConfig,
   model: string,
+  signal: AbortSignal,
 ): Promise<void> => {
   // Report the effort actually sent. Without a client request this cannot throw: it is
   // the configured default, or undefined for a model that advertises no effort support.
@@ -65,7 +64,7 @@ const validateModelRequest = async (
     const selection = requireCopilotEndpoint(config, model)
 
     if (selection.endpoint === "/v1/messages") {
-      await handleNativeMessages(config, createProbePayload(model), { requestId: randomUUID() })
+      await handleNativeMessages(config, createProbePayload(model), { requestId: randomUUID(), signal })
     } else {
       const response = await createChatCompletions(
         config,
@@ -73,6 +72,7 @@ const validateModelRequest = async (
         {
           client: "generic",
           requestedModel: model,
+          signal,
           timeoutMs: config.upstreamTimeoutMs,
         },
       )
@@ -95,18 +95,25 @@ const validateModelRequest = async (
   }
 }
 
+// Preflight is one operation with one upstream deadline: the catalog load and every model's check
+// share it, and each failed reply's body is read before it is disposed.
 export const validateUpstream = async (
   config: ProxyConfig,
   thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   log.info("Running upstream preflight")
-  await ensureRequiredModels(config)
+  await withUpstreamDeadline(config.upstreamTimeoutMs, async (signal) => {
+    await ensureRequiredModels(config, signal)
 
-  // Scope the configured default as this check's fallback rather than an explicit
-  // client control, so a model that advertises no effort support receives none.
-  await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
-    for (const model of getUpstreamModelIds()) {
-      await validateModelRequest(config, model)
-    }
+    // Scope the configured default as this check's fallback rather than an explicit
+    // client control, so a model that advertises no effort support receives none. Each check's
+    // request and result records go to the log file alone; the console gets one line for all.
+    await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
+      for (const model of getUpstreamModelIds()) {
+        await withoutConsoleLogging(() => validateModelRequest(config, model, signal))
+      }
+    })
   })
+
+  log.info(`Preflight OK: ${getUpstreamModelIds().join(", ")}`)
 }

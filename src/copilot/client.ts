@@ -43,6 +43,8 @@ export interface FetchCopilotOptions {
   requestId?: string
   signal?: AbortSignal
   timeoutMs?: number
+  // The x-github-api-version to send instead of the default; the model catalog asks for a newer one.
+  apiVersion?: string
 }
 
 interface CopilotRequestInit {
@@ -56,14 +58,15 @@ const shouldRetryResponse = (response: Response): boolean =>
   // signals, such as "unsupported_api_for_model", that callers need to inspect.
   response.status >= 500 && response.status <= 599
 
-export const createCopilotRequestSignal = (
-  signal?: AbortSignal,
-  timeoutMs = copilotRequestTimeoutMs,
-): AbortSignal | undefined => {
+// The signal a Copilot call uses: its caller's signal and, inside a relay request, the request's
+// own signal and upstream deadline. It never starts a timer: the operation that owns the call owns
+// the deadline (see ~/lib/deadline) and passes its signal down.
+export const createCopilotRequestSignal = (signal?: AbortSignal): AbortSignal | undefined => {
+  const trace = getRequestTrace()
   const signals = [
     signal,
-    getRequestTrace()?.signal,
-    timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+    trace?.signal,
+    trace?.upstreamDeadline,
   ].filter((value): value is AbortSignal => value !== undefined)
 
   if (signals.length === 0) {
@@ -129,6 +132,22 @@ export const toCopilotAbortHTTPError = (
     }),
     message,
   )
+}
+
+// A route's own abort checkpoint, between upstream calls. An expired request deadline throws the same
+// 504 upstream_timeout HTTPError a timed-out Copilot call does, so the route answers it the same way;
+// a caller's cancel is rethrown unchanged. The deadline can expire before any upstream call, since it
+// starts when the request is admitted, while its body may still be uploading.
+export const throwIfRequestAborted = (signal: AbortSignal | undefined, timeoutMs: number): void => {
+  if (!signal?.aborted) {
+    return
+  }
+
+  if (getAbortName(signal.reason) === "TimeoutError") {
+    throw toCopilotAbortHTTPError(signal.reason, signal, timeoutMs)
+  }
+
+  throw signal.reason
 }
 
 // Copilot answers a prompt over the model's max_prompt_tokens with HTTP 400, this code and this
@@ -232,7 +251,7 @@ const buildHeaders = (
   headers.set("editor-plugin-version", editorPluginVersion)
   headers.set("user-agent", userAgent)
   headers.set("openai-intent", "conversation-panel")
-  headers.set("x-github-api-version", apiVersion)
+  headers.set("x-github-api-version", options.apiVersion ?? apiVersion)
   headers.set("x-request-id", upstreamRequestId)
   headers.set("x-vscode-user-agent-library-version", "electron-fetch")
 
@@ -346,7 +365,7 @@ export const fetchCopilot = async (
   }
 
   const timeoutMs = options.timeoutMs ?? copilotRequestTimeoutMs
-  const signal = createCopilotRequestSignal(options.signal, timeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
   let lastError: unknown
   let transientRetries = 0
   let authRecoveryUsed = false
@@ -432,7 +451,7 @@ export const fetchCopilot = async (
         markDiscardedResponse(response)
         await response.body?.cancel()
         signal?.throwIfAborted()
-        await recordedRefresh(() => waitWithSignal(provider.refreshToken!(attemptedToken, attemptedGeneration), signal))
+        await recordedRefresh(() => waitWithSignal(provider.refreshToken!(attemptedToken, attemptedGeneration, signal), signal))
         signal?.throwIfAborted()
         log.info(`${formatRequestId(options.requestId)}Copilot token refresh completed; retrying ${path}`)
         continue

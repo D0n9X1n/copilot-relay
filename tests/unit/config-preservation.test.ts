@@ -33,7 +33,6 @@ const completeValues: Record<keyof AppConfig, string> = {
   webSearchBackend: "search-fixture",
   gptModel: "gpt-fixture",
   opusModel: "opus-fixture",
-  models: "grok-4.7, mai-code-2",
   claudeUpstreamApi: "chat-completions",
 }
 
@@ -118,9 +117,6 @@ for (const [key, value] of [
   ["apiKey", "short-key-15chr"],
   ["apiKey", "\"two words key value\""],
   ["upstreamProxy", "socks5://proxy.invalid:1080"],
-  ["models", "auto, grok-4.7"],
-  ["models", "gpt-6.2-astra[1m]"],
-  ["models", "grok-4.7,,x"],
 ] as const) {
   test(`readAppConfig rejects explicit ${key}=${value || "(empty)"} without changing the file`, async () => {
     const original = `# keep this document\n${key}: ${value}\n`
@@ -356,25 +352,6 @@ test("hot reload applies a complete valid edit without rewriting the document", 
 
 // Admission reads the live key on every request, so a valid edit must reach it at once. A
 // rejected edit keeps the previous key: dropping it would leave the relay open.
-// Why: models changes what clients are offered, so a reload applies it like any other key,
-// and a rejected value is reported without repeating it.
-test("hot reload moves models from auto to a list to empty and keeps each literal", async (t) => {
-  await writeConfigFile(completeDocument({ models: "auto" }))
-  const reloads: string[] = []
-  const { poll, errors } = await startWatcher(t, (next) => reloads.push(next.models))
-  await writeConfigFile(completeDocument({ models: "grok-4.7, mai-code-2" }))
-  await poll()
-  await writeConfigFile(completeDocument({ models: "" }))
-  await poll()
-  await writeConfigFile(completeDocument({ models: "PRIVATE VALUE" }))
-  await poll()
-
-  assert.deepEqual(reloads, ["grok-4.7, mai-code-2", ""])
-  assert.equal(errors.length, 1)
-  assert.match(String(errors[0]), /Invalid models/)
-  assert.doesNotMatch(String(errors[0]), /PRIVATE VALUE/)
-})
-
 test("hot reload applies a changed or cleared apiKey and keeps the previous key through a rejected edit", async (t) => {
   const firstKey = "reload-fixture-key-0001"
   const secondKey = "reload-fixture-key-0002"
@@ -702,4 +679,45 @@ test("watcher reloads do not overlap or apply a stale read after a newer edit", 
   assert.equal(applied.length, 1)
   assert.equal(applied[0].thinkEffort, "medium")
   assert.equal(await readConfigFile(), newest)
+})
+
+// Why: a release before the two-model strategy wrote a models line into every config. The line has
+// no effect now; its value is not checked, so even a malformed one cannot stop startup, and the
+// file keeps its bytes.
+for (const newline of ["\n", "\r\n"]) {
+  test(`a leftover models line is kept as written and ignored (${JSON.stringify(newline)})`, async () => {
+    const original = [
+      "# my relay",
+      "gptModel: gpt-fixture # mine",
+      "opusModel: opus-fixture",
+      "# extras I used to want",
+      "models: [bad]",
+      "",
+    ].join(newline)
+    await writeConfigFile(original)
+
+    const config = await readAppConfig()
+
+    assert.equal(config.gptModel, "gpt-fixture")
+    assert.equal(config.opusModel, "opus-fixture")
+    assert.equal(Object.hasOwn(config, "models"), false)
+    assert.ok((await readConfigFile()).startsWith(original))
+    assert.match(await readConfigFile(), /^models: \[bad\]\r?$/m)
+  })
+}
+
+test("a duplicate models line still fails as a duplicate key does", async () => {
+  const original = "models: auto\nmodels: grok-4.7\n"
+  await writeConfigFile(original)
+
+  await assert.rejects(readAppConfig(), /Duplicate config key on line 2/)
+  assert.equal(await readConfigFile(), original)
+})
+
+test("an invalid known key beside a leftover models line still fails", async () => {
+  const original = "models: [bad]\nport: 0\n"
+  await writeConfigFile(original)
+
+  await assert.rejects(readAppConfig(), /Invalid port/)
+  assert.equal(await readConfigFile(), original)
 })

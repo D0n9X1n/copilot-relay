@@ -104,10 +104,11 @@ export const hasClaudeWebSearch = (payload: ClaudeMessagesPayload): boolean =>
 export const isClaudeWebSearchToolName = (name: string): boolean =>
   name === "web_search" || name === claudeCodeWebSearchToolName
 
-export const getWebSearchBackendModel = (config: ProxyConfig): string =>
-  normalizeCopilotModelId(
-    config.webSearchBackend?.trim() || getModelRouting().gptModel,
-  )
+// Without an explicit backend, the GPT slot, which routing has already normalized.
+export const getWebSearchBackendModel = (config: ProxyConfig): string => {
+  const backend = config.webSearchBackend?.trim()
+  return backend ? normalizeCopilotModelId(backend) : getModelRouting().gptModel
+}
 
 export const prepareClaudeWebSearchDecisionPayload = (
   payload: ClaudeMessagesPayload,
@@ -687,7 +688,7 @@ export const createClaudeWebSearchExecution = async (
   options: { requestId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<WebSearchExecutionResult> => {
   const backendModel = getWebSearchBackendModel(config)
-  const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
   const backend = getCachedCopilotModel(config, backendModel)
   const hasIncompatibleType = backend?.type !== undefined && backend.type !== "chat"
   const excludesResponses = backend?.supportedEndpoints !== undefined

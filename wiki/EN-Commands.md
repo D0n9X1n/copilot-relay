@@ -101,7 +101,9 @@ Stops every copilot-relay server on the machine, on any port. It has no options.
 It collects candidates from the pid file, the processes listening on the configured
 port and the process list, and signals only a process it has verified to be a
 copilot-relay server: `SIGTERM`, then `SIGKILL` if the process is still running
-five seconds later. With none found, it logs
+five seconds later. It then logs one outcome line, such as
+`Stopped copilot-relay (pid 65686)` or, for several,
+`Stopped copilot-relay (pids 101, 202)`. With none found, it logs
 `No existing copilot-relay instance found`. It removes the pid file unless the
 process it names is still running.
 
@@ -155,10 +157,35 @@ relay it requests `/healthz` and, when that passes, `/v1/models`; with `--deep` 
 also sends a short `POST /v1/messages`, which goes through the relay to Copilot.
 `/healthz` and `/v1/models` never contact Copilot.
 
-The first line shows the version of the CLI that ran `status`. For a running relay,
-the `version` row shows the version the relay reports, `unknown` for a relay that
-does not report one, or a mismatch with the installed version together with the
-command to restart it.
+The heading names the CLI that ran `status` and, when a relay runs, its address.
+Each row under it answers one question and starts with a mark that does not need
+color: `✓` yes, `✗` failed, `!` needs attention, `–` not checked or not running
+(`ok`, `x`, `!` and `-` where the terminal cannot show them). A running relay that
+reports the installed version gets no `version` row, since the heading already
+shows it; the row appears with `unknown` for a relay that does not report one, or
+with a mismatch and the command to restart it. The log and config paths follow
+under `Files`, from `~` when they are under the home directory, and every resolved
+key under `Config`, ending with the keys that take effect only on restart.
+
+```text
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 65686, up 2d 21h)
+  ✓ health    ok (3ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
+    host                    127.0.0.1
+    port                    4142
+    …
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
+```
 
 | Exit | Meaning |
 | --- | --- |
@@ -257,10 +284,26 @@ type, or a Claude app file that is not a JSON object, is left unchanged and
 reported as a failure. It exits `1` for an unknown
 target or a `config.yaml` it cannot read, `2` when any target fails, and `0` otherwise.
 
+The result is a table with one marked row per client: what setup did, and the file
+it wrote, from `~` when it is under the home directory, or the reason it skipped or
+failed. A long reason is cut with `…`. The Codex app shares the Codex CLI's config,
+so it is skipped or failed when that config is.
+
+```text
+Client setup · http://127.0.0.1:4142
+
+  CLIENT           RESULT        DETAIL
+  claude-code-cli  ✓ updated     ~/.claude/settings.json
+  claude-code-app  – skipped     the app has not run here
+  codex-cli        ✓ up to date  ~/.codex/config.toml
+  codex-app        ✓ up to date  shares the Codex config above
+```
+
 ## `models`
 
 ```sh
-copilot-relay models                                   # list
+copilot-relay models                                   # list chat models
+copilot-relay models --all                             # list every model
 copilot-relay models opus                              # search by ID or display name
 copilot-relay models --deep --model claude-opus-5.5    # test one model
 ```
@@ -275,16 +318,51 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 | `--max-tokens` | Output budget per probe (default 4096; bounded by catalog limits). |
 | `--timeout` | Positive per-probe timeout in seconds (default 30; bounded by configured timeout). |
 | `--total-timeout` | Positive timeout in seconds for all probes (default 300). |
+| `--all` | List every advertised model, including those that are not chat models. |
 
-Lists the model IDs Copilot's catalog advertises, marking the ones the relay cannot
-use; the listing does not verify that a model works. Unquoted words form one search,
+Lists the chat models Copilot's catalog advertises as a table of exact IDs, display
+names, costs and context windows. COST is what the catalog reports, in USD per
+million input/output tokens (`$8/$40`), or premium requests per call (`1×`) when it
+reports only a multiplier, or `–`. A window of at least 1M is marked `[1m]`, the ID
+suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
+`gptModel` or `opusModel` names. Models that are not chat models, such as
+embeddings, are left out and counted under the table; `--all` lists them too, marked
+`!` in that same column, headed NOTE once it holds a mark, and a line under the
+table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
+one column keeps the table within 80 columns while IDs are under about 50 columns
+(an ID is never cut): the column gets the room the others leave, and a note wider than that is never cut but printed whole on its own
+indented line under its row, so a slot and its `!` always show. NAME is left out
+when no model has a name, and NOTE when every note is under its row. COST and
+CONTEXT are right-aligned. Without Unicode the marks are ASCII: `<` for `◀`, `x` for
+`×` and `-` for `–`. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the answer.
+
+```text
+Copilot chat models · 4 of 6
+
+  MODEL              NAME                 COST    CONTEXT  SLOT
+  claude-opus-5.5    Claude Opus 5.5    $4/$20    1M [1m]  ◀ opusModel
+  claude-sonnet-5.5  Claude Sonnet 5.5  $2/$10    1M [1m]
+  gpt-6.2-astra      GPT-6.2 Astra      $8/$40  1.1M [1m]  ◀ gptModel
+  grok-4.7           Grok 4.7            $2/$6       500K
+
+2 models that are not chat models are hidden: copilot-relay models --all
+```
+
+NAME appears only when every name fits whole on an 80-column line; otherwise the table leaves it out, because
+a cut name such as `Claude Op…` loses what tells two models apart and MODEL already names each one. An ID is
+never cut, so it can be copied. Unquoted words form one search,
 and a search prints the matching models and the `config.yaml` line that selects one.
+A search that matches nothing prints the closest IDs, or, when none is close, points
+to `copilot-relay models --all`. Under every listing, the config guide shows the
+current `gptModel` and `opusModel` lines and warns about a value the startup check
+would reject.
 `--deep` checks the `--model` ID, or every entry in the catalog. It sends a real
 request only to an entry it can probe before the total timeout; the other entries
 get a status without a request. The requests go through a relay pipeline built
 inside the command's own process rather than a running relay, and consume Copilot
-usage. Every other option requires `--deep`, and a search cannot be combined with
-it: find the ID first, then test it with `--deep --model <id>`. It loads
+usage. `--details`, `--model`, `--effort`, `--max-tokens`, `--timeout` and
+`--total-timeout` require `--deep`; `--all` does not. A search cannot be combined
+with `--deep`: find the ID first, then test it with `--deep --model <id>`. It loads
 `config.yaml` and signs in as `start` does; with `--deep`, the device-code prompt
 goes to stderr.
 
@@ -317,6 +395,23 @@ included. It exits `0` with the report, or `1` with a one-line reason on stderr,
 such as no stored token. The fields and messages are under "Copilot plan and quota"
 in [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
+```text
+Copilot plan · enterprise · resets 2026-12-01
+SKU copilot_enterprise_seat
+
+  QUOTA                 LEFT                  OVERAGE
+  chat                  unlimited             not permitted
+  completions           unlimited             not permitted
+  premium_interactions  919,253 of 1,000,000  permitted
+                        91.92531% left
+```
+
+A limited quota shows what is left of its entitlement. Its details follow on their
+own lines under it: GitHub's percent left, then the overage used and the credits
+used when GitHub reports them. A quota below 20% left is marked `!`, and below 5% `✗` (`x`
+where the terminal cannot show `✗`); color only adds emphasis. Numbers get thousands separators and
+keep every decimal GitHub sent; `--json` prints them as GitHub sent them.
+
 ## `cache`
 
 ```sh
@@ -331,11 +426,26 @@ copilot-relay cache --hourly --since 2d
 | `--since` | Start of the window: a duration such as 6h or 2d, or an ISO date or time. Without it, the summary covers the last 24 hours. |
 | `--model` | Only count models whose name contains this text, ignoring case. |
 | `--json` | Print the rows as a JSON array. |
-| `--goal` | Hit-rate goal in percent, with at most two decimals. A hit rate below it is shown in red. |
+| `--goal` | Hit-rate goal in percent, with at most two decimals. A hit rate below it is marked ✗ (x without unicode) and shown in red. |
 
 Reports how much of each model's input the prompt cache served, per upstream route,
 from the `completion` entries in the relay's log files under
-`~/.copilot-relay/logs/`. `--goal` defaults to `95`, and `--hourly` and `--daily`
+`~/.copilot-relay/logs/`:
+
+```text
+Prompt-cache hit rate · last 24 h · goal 95%
+
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
+
+1 of 3 rows with a known rate is below the goal.
+HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
+```
+
+Each rate carries a mark, `✓` at or above the goal and `✗` below it, so the
+table reads the same without color. `--goal` defaults to `95`, and `--hourly` and `--daily`
 cannot be combined. It contacts neither the relay nor Copilot, does not read
 `config.yaml`, and writes nothing. Any report, an empty one included, exits `0`; an
 unusable option, or a logs directory that cannot be read, prints the reason on
@@ -361,6 +471,24 @@ those date directories, and an ID found under two dates is refused; an explicit
 directory can be outside `~/.copilot-relay`. Replay opens no socket, uses no real
 credentials, writes no token, config or new capture, and does not read
 `config.yaml`.
+
+The result names the verdict with a mark and what it means, the recorded request,
+and one row per upstream exchange with its status, outcome and token counts. A
+`DIFF` lists the differing fields by path and a fixed reason under the table; it
+never quotes request or response text. A path is never cut: one too long to sit
+beside its reason on an 80-column line prints on its own line, with the reason
+indented under it. Every difference is listed; the comparison stops after 100.
+
+```text
+Replay · POST /v1/messages
+
+  ✓ MATCH       the relay reproduces the recording
+    request     status 200 · outcome end_turn · 0 tool calls
+    blocks      text
+
+  #  UPSTREAM           STATUS  OUTCOME  IN  OUT  CACHED  WRITTEN
+  1  /chat/completions     200  stop      7    3       5        –
+```
 
 It exits `0` for `MATCH`, `2` for `DIFF` or `INCOMPLETE`, and `1` for `MISSING` or
 `MALFORMED`. What each verdict means, and why a capture must not be shared whole,

@@ -240,9 +240,9 @@ copilot-relay replay /absolute/path/to/capture-directory
 显式目录可位于默认 home 之外。重放只接受 Messages 和 token 计数的捕获；Codex 的
 `/v1/responses` 捕获只供查看，重放会报告 `MALFORMED`。重放使用记录的有序上游/刷新传输，运行**当前真正的进程内
 handler**，不创建 socket、不做真实认证、不写 token/config 或新捕获。它比较实际出站
-请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出包含每次交换的状态、已知完成
-原因和 token/缓存数字，以及客户端 block 类型和工具调用数；不会打印工具参数或响应
-正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
+请求与最终 JSON/SSE，不是仅比较两个已保存文件。输出是一个标题、结论，以及一张表格，列出每次交换的
+状态、已知完成原因和 token/缓存数字，以及客户端 block 类型和工具调用数（见 [命令](ZH-Commands.md)中的
+`replay`）；不会打印工具参数或响应正文。不要只为重放就运行 `auth`、重启守护进程或重新调用 Copilot。
 
 | 结果 | 退出码 | 含义 |
 | --- | ---: | --- |
@@ -278,16 +278,20 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ### 启动
 
-在 `info` 级别，启动日志会确认生效的配置和 preflight：
+在 `info` 级别，启动日志会确认生效的配置和 preflight。日志文件包含下面每一行；控制台省略逐个模型的记录
+（`Model token limits`、preflight 的 `Model request` 行和 `Preflight OK: model=…`），改为打印一行
+`Preflight OK: <models>` 摘要，使启动输出适合终端宽度：
 
 ```text
 info Log level: info
 info Default think effort: xhigh
 info Running upstream preflight
-info Upstream models available: gpt-6-astra, claude-opus-5
-info Preflight OK: model=gpt-6-astra think_effort=xhigh
-info Preflight OK: model=claude-opus-5 think_effort=xhigh
-info Exposed models: gpt-6-astra[1m], claude-opus-5
+info Upstream models available: gpt-6.2-astra, claude-opus-5.5
+info Model token limits: model=gpt-6.2-astra context=1050000 input=922000 output=128000 non_streaming_output=128000
+info Preflight OK: model=gpt-6.2-astra think_effort=xhigh
+info Preflight OK: model=claude-opus-5.5 think_effort=xhigh
+info Preflight OK: gpt-6.2-astra, claude-opus-5.5
+info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```
 
@@ -797,7 +801,7 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 
 | 情况 | 消息 |
 | --- | --- |
-| 没有保存的 token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| 没有保存的 token | `No GitHub token at <path>. Run copilot-relay auth.` |
 | token 文件无法读取 | `Could not read the GitHub token at <path>: <code>.` |
 | `config.yaml` 无法读取或无效 | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
 | `upstreamProxy: env` 且 `HTTPS_PROXY` 或 `HTTP_PROXY` 格式错误 | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |
@@ -811,6 +815,30 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 
 `config.yaml` 那一行不给出原因，因为这个文件可能含有凭据，例如 `upstreamProxy` 的密码。
 规则见[配置说明](ZH-Configuration.md)。
+
+## 登录一直等待或看起来卡住
+
+`copilot-relay auth`，以及没有已保存 GitHub token 时的 `start`、`setup`、`models`，
+会打印一个设备码，然后等你在给出的网址里输入。每次调用 GitHub（包括读取响应体）最多
+30 秒。整个等待在设备码过期时结束：以 GitHub 返回的 `expires_in` 为准，没有返回时为
+15 分钟，从收到设备码时开始计算，显示设备码所花的时间也算在内。在浏览器里拒绝登录或
+设备码过期时，无论 GitHub 返回什么 HTTP 状态，都会立刻停止并给出说明；网络错误或 GitHub
+返回 5xx 时，按轮询间隔重试。所以登录不会无限等待。
+
+**Windows：输出停住，按 Enter 才继续。** 可能的原因（尚未在 Windows 控制台上确认）是
+控制台的“快速编辑模式”（QuickEdit），而不是中转本身。在窗口里点一下（比如为了选中
+设备码），会开始一次选择，并暂停所有向这个控制台写输出的程序，直到选择结束。如果是
+这种情况，按 **Esc** 或 **Enter** 结束选择即可恢复输出。在 Windows 终端里，中转会在设备码上方打印这条提示：
+
+```text
+Tip: a click in this window pauses output; press Esc or Enter to resume.
+```
+
+要彻底避免，可以在控制台“属性”里关闭快速编辑模式，或改用 Windows Terminal——它的
+选择不会暂停输出。
+
+**登录结果。** `copilot-relay auth` 最后打印 `Logged in as <login>`。如果 token 已保存
+但查询 GitHub 用户失败，则打印 `Logged in; GitHub user unavailable`；token 依然可用。
 
 ## Token 缓存问题
 

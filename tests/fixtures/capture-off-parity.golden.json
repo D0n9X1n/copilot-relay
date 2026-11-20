@@ -1,0 +1,39 @@
+{
+  "recordedFrom": "v0.7.1 (335e11f), same scenario, capture off",
+  "lines": [
+    "<time> info request_id=<request-id> upstream_request_id=<upstream-request-id-1> completion path=/chat/completions http_status=200 body=complete message_id=chat_decision model=claude-opus-4.8 finish_reason=tool_calls stop_reason=unknown terminal=true input_tokens=1200 output_tokens=40 cache_read_input_tokens=1000",
+    "<time> info request_id=<request-id> upstream_request_id=<upstream-request-id-2> completion path=/responses http_status=200 body=complete message_id=resp_search model=gpt-5.5 finish_reason=unknown stop_reason=unknown terminal=unknown input_tokens=300 output_tokens=60 cache_read_input_tokens=100",
+    "<time> info request_id=<request-id> upstream_request_id=<upstream-request-id-3> completion path=/chat/completions http_status=200 body=complete message_id=chat_final model=claude-opus-4.8 finish_reason=stop stop_reason=unknown terminal=true input_tokens=1500 output_tokens=25 cache_read_input_tokens=1400",
+    "<time> info request_id=<request-id> request outcome http_status=200 body=complete message_id=chat_final model=claude-opus-4.8 finish_reason=unknown stop_reason=end_turn terminal=true input_tokens=500 output_tokens=125 cache_read_input_tokens=2500"
+  ],
+  "cacheRows": [
+    {
+      "bucket": null,
+      "model": "claude-opus-4.8",
+      "route": "/chat/completions",
+      "requests": 2,
+      "unknownCacheRequests": 0,
+      "zeroCacheReadRequests": 0,
+      "totalInputTokens": 2700,
+      "cacheReadTokens": 2400,
+      "uncachedInputTokens": 300,
+      "cacheWriteTokens": null,
+      "hitRate": 0.8888888888888888,
+      "belowGoal": true
+    },
+    {
+      "bucket": null,
+      "model": "gpt-5.5",
+      "route": "/responses",
+      "requests": 1,
+      "unknownCacheRequests": 0,
+      "zeroCacheReadRequests": 0,
+      "totalInputTokens": 300,
+      "cacheReadTokens": 100,
+      "uncachedInputTokens": 200,
+      "cacheWriteTokens": null,
+      "hitRate": 0.3333333333333333,
+      "belowGoal": true
+    }
+  ]
+}

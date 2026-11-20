@@ -127,32 +127,36 @@ copilot-relay status
 ```
 
 ```text
-copilot-relay 0.2.5
-  process    running (pid 93744, up 1h 16m)
-  version    0.2.5
-  listening  http://127.0.0.1:4142
-  health     ok (9ms)
-  models     gpt-6-astra[1m], claude-opus-5
-  upstream   not checked (use --deep)
-  log        C:\Users\you\.copilot-relay\logs\copilot-relay.2026-07-25.log
-  config     C:\Users\you\.copilot-relay\config.yaml
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 93744, up 1h 16m)
+  ✓ health    ok (9ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-6-astra
-    opusModel               claude-opus-5
-    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.
+    gptModel                gpt-6.2-astra
+    opusModel               claude-opus-5.5
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
 ```
 
 上面的 `config` 块是节选；`status` 会打印全部解析后的配置项。参见
 [配置说明](ZH-Configuration.md)。
 
-`version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行
-是你刚刚调用的那个 CLI。执行 `npm i -g copilot-relay@latest` 之后，在服务真正重启之前，
-两者会不一致：
+标题行给出你刚刚调用的那个 CLI 的版本。只有当**正在运行的守护进程**报告了另一个版本，或者
+没有报告版本时，才会出现 `version` 这一行。执行 `npm i -g copilot-relay@latest` 之后，在服务
+真正重启之前，它会一直出现：
 
 ```text
-  version    0.2.6 — MISMATCH, 0.3.0 is installed
+  ! version   0.7.1 — MISMATCH, 0.8.0 is installed
 ```
 
 重启服务后再查一次。版本不一致不会改变退出码 —— relay 仍然可用，只是它不是你刚装上的
@@ -196,14 +200,14 @@ Invoke-RestMethod http://127.0.0.1:4142/healthz
 (Invoke-RestMethod http://127.0.0.1:4142/v1/models).data.id
 ```
 
-期望看到你配置的模型，例如 `gpt-6-astra[1m]` 和 `claude-opus-5`。结果直接来自配置，
+期望看到你配置的模型，例如 `gpt-6.2-astra[1m]` 和 `claude-opus-5.5[1m]`。结果直接来自配置，
 **同样不访问上游**。一个 Copilot 令牌一小时前就过期的 relay，前两层照样通过。
 
 ### 第三层 —— 端到端
 
 ```powershell
 $body = @{
-  model      = "gpt-6-astra"
+  model      = "gpt-6.2-astra"
   max_tokens = 256
   messages   = @(@{ role = "user"; content = "Reply with the single word: ok" })
 } | ConvertTo-Json -Depth 5
@@ -305,6 +309,11 @@ Unregister-ScheduledTask -TaskName "copilot-relay" -Confirm:$false
 
 **`LastTaskResult` 是 `1`。** 启动前校验失败：鉴权过期或没有网络。看当天日志，然后执行
 `copilot-relay auth`。
+
+**`copilot-relay auth` 或 `start` 停在设备码，按 Enter 才继续。** 最可能（尚未确认）
+的原因是在窗口里点了一下，控制台的快速编辑模式暂停了输出；按 Esc 或 Enter 即可恢复。登录本身有时间上限，不会
+超过设备码的有效期。详见[日志与问题排查](ZH-Logging-Troubleshooting.md)中的“登录一直等待
+或看起来卡住”。
 
 **`LastTaskResult` 是 `267009`。** 不是错误 —— `SCHED_S_TASK_RUNNING`，任务正在运行。
 

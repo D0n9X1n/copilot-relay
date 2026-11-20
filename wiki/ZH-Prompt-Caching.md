@@ -118,18 +118,19 @@ copilot-relay cache --hourly             # 最近 24 小时的按小时趋势
 copilot-relay cache --daily              # 所有保留日志的按天趋势
 copilot-relay cache --since 6h           # 一段时长，或 ISO 日期或时间
 copilot-relay cache --model opus         # 名称包含 "opus" 的模型，不区分大小写
-copilot-relay cache --goal 97.5          # 低于 97.5% 的命中率显示为红色（默认 95）
+copilot-relay cache --goal 97.5          # 低于 97.5% 的命中率标记为 ✗（默认 95）
 copilot-relay cache --json               # 行数组，供脚本使用
 ```
 
 ```text
-Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%
+Prompt-cache hit rate · last 24 h · goal 95%
 
-  MODEL               ROUTE              REQUESTS  HIT RATE
-  claude-opus-5-5     /v1/messages              1    98.36%
-  claude-opus-5.5     /chat/completions         2    98.38%
-  gpt-5.5-2026-04-23  /responses                1    92.86%
+  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE
+  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%
+  claude-opus-5.5     /chat/completions         2   31.4K  ✓ 98.38%
+  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%
 
+1 of 3 rows with a known rate is below the goal.
 HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 ```
 
@@ -137,21 +138,36 @@ HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 | --- | --- |
 | `MODEL`、`ROUTE` | 上游报告的模型（条目中没有时为 `unknown`）和上游路径。同一模型在不同路由上可能以不同名称报告，例如 `claude-opus-5.5` 与 `claude-opus-5-5`。 |
 | `REQUESTS` | 返回 HTTP 200 并记录了 `input_tokens` 的上游调用，包括用量到达后才被中断的调用，以及缓存情况未知的调用。 |
-| `HIT RATE` | 由 prompt 缓存提供的输入 token 除以总输入，截断到两位小数。在彩色终端中，达到 `--goal` 时为绿色，低于时为红色。该行没有调用报告缓存情况时为灰色的 `-`。 |
+| `TOKENS` | 缓存情况已知的调用的总输入，缩写为 K、M 或 B。它说明命中率依据的流量有多大：12K token 的 0% 小时，远不如 300M 的那么重要。 |
+| `HIT RATE` | 由 prompt 缓存提供的输入 token 除以总输入，截断到两位小数，前面带一个标记：达到 `--goal` 时为 `✓`，低于时为 `✗`。在彩色终端中，标记与命中率同时显示为绿色或红色。该行没有调用报告缓存情况时为灰色的 `–`。终端无法显示这些标记时（Windows Terminal 之外的 Windows 控制台主机，或非 UTF-8 的 locale），它们显示为 `ok`、`x` 和 `-`。 |
 
 条目中没有 `cache_read_input_tokens` 的调用，缓存情况是未知，不是零。它计入 `REQUESTS`，
 但不计入 `HIT RATE`；表格下方一行说明这样的调用有多少，没有时不显示这一行。
 命中率所依据的 token 计数（总输入、缓存读取、未缓存与缓存写入），
 以及缓存情况未知和缓存读取为 0 的调用数，都在 `--json` 中。
 
-`HIT RATE` 的颜色是表格中未达到目标的唯一标记。没有颜色时（`NO_COLOR`，或输出到管道），
-请把命中率与标题中的目标比较，或读取 `--json` 中的 `belowGoal`。`HIT RATE` 截断而不是
-四舍五入，所以低于目标的命中率永远不会显示成目标值本身。`--goal` 最多两位小数；打印出的
-`HIT RATE` 低于目标时，它才显示为红色，且一定显示为红色。
+标记说明一行是否达到目标，有没有颜色都一样，所以在 `NO_COLOR` 下或输出到管道时，表格读起来相同；
+`--json` 中对应 `belowGoal`。表格下方一行统计缓存情况已知、且低于目标的行数。`HIT RATE`
+截断而不是四舍五入，所以低于目标的命中率永远不会显示成目标值本身。`--goal` 最多两位小数；
+打印出的 `HIT RATE` 低于目标时，它才标记为 `✗`，且一定标记为 `✗`。
 
-`--hourly` 和 `--daily` 会增加一列本地时间的 `HOUR` 或 `DAY`，与日志文件名中的日期一致。
-时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
-`2026-11-01 01:00 UTC-04:00` 和 `2026-11-01 01:00 UTC-05:00`。不加 `--since` 时，汇总和
+`--hourly` 和 `--daily` 以一列本地时间的 `HOUR` 或 `DAY` 开头，与日志文件名中的日期一致；
+共用同一小时或同一天的行只显示一次。`HOUR` 在每天的第一个小时显示月和日，例如 `10-03 12:00`，
+之后只显示时间；`--json` 仍保留完整日期。它们不显示汇总中的 `ROUTE`；在时间窗口内用过不止一条路由的模型，
+会在名称后加上简短的路由名 `chat`、`messages` 或 `responses`，例如 `claude-opus-5.5 (messages)`。
+
+```text
+Prompt-cache hit rate by hour · last 24 h · goal 95%
+
+  HOUR         MODEL               REQUESTS  TOKENS  HIT RATE
+  10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
+               claude-opus-5.5            2   31.4K  ✓ 98.38%
+               gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
+```
+
+时钟回拨时，重复出现的本地小时按每个真实小时各占一行，表格里带简短的 UTC 偏移量，例如
+`01:00-04` 和 `01:00-05`；`--json` 保留完整的时间桶 `2026-11-01 01:00 UTC-04:00` 和
+`2026-11-01 01:00 UTC-05:00`。不加 `--since` 时，汇总和
 按小时趋势覆盖最近 24 小时，按天趋势覆盖每个保留的日期。时长从现在往回计算；日期，或没有
 `Z` 和偏移量的时间，按本地时间解释。
 

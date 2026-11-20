@@ -1,5 +1,22 @@
 # Configuration
 
+## Minimal config
+
+Most installs change nothing: the first start writes `~/.copilot-relay/config.yaml`
+with working defaults. The keys people change are these three:
+
+```yaml
+gptModel: gpt-6.2-astra     # every request whose model name lacks "opus"
+opusModel: claude-opus-5.5  # every request whose model name contains "opus"
+apiKey:                     # set a key before binding beyond 127.0.0.1
+```
+
+They apply to new requests without a restart. To choose the two models, see
+[Models](EN-Models.md). A `models:` line an earlier release wrote has no effect;
+you can delete it.
+
+## The file
+
 `copilot-relay` stores runtime configuration under:
 
 ```text
@@ -43,9 +60,8 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 claudeUpstreamApi: chat-completions
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
-models: auto
 ```
 
 ## Keys
@@ -58,16 +74,15 @@ models: auto
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `upstreamProxy` | Outbound proxy for Copilot and GitHub calls, sign-in included. Empty (the default) connects directly; `env` uses `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; otherwise an absolute `http://` or `https://` proxy URL. Requires restart. See [upstreamProxy rules](#upstreamproxy-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
-| `codexSetup` | When `true`, `start` sets up Codex CLI and the Codex app when `$CODEX_HOME` (default `~/.codex`) exists: a model list of the exposed models (see `models`), and `config.toml` pointed at this relay with no ChatGPT sign-in. See [Codex](EN-Codex.md). |
+| `codexSetup` | When `true`, `start` sets up Codex CLI and the Codex app when `$CODEX_HOME` (default `~/.codex`) exists: a model list of `gptModel` and `opusModel`, and `config.toml` pointed at this relay with no ChatGPT sign-in. See [Codex](EN-Codex.md). |
 | `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
 | `logRetentionDays` | Local calendar days to retain normal relay logs and debug captures, including today; positive integer, default `3`. Active/unknown captures are protected; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for cleanup rules. |
 | `thinkEffort` | Fallback reasoning effort when the request omits it: `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `claudeUpstreamApi` | Claude upstream protocol: `chat-completions` (default), `auto`, or `messages`. Does not change non-Claude routing. |
-| `gptModel` | Upstream model for a Claude request that names no exposed model and no `opus`, and for a Codex request whose model the catalog does not list. |
-| `opusModel` | Upstream model for a Claude request that names no exposed model but contains `opus`. |
-| `models` | Extra models offered to clients: `auto` (default, the newest model of each vendor), empty (only `gptModel` and `opusModel`), or comma-separated Copilot IDs. The file keeps what you wrote; an invalid value stops startup, and a hot reload with one keeps the running config. Hot-reloads. See [Models](EN-Models.md). |
+| `gptModel` | Upstream model for a Claude request whose model name is this slot's own or contains no `opus`, and for a Codex request whose model the catalog does not list. Default `gpt-6.2-astra`. A configured ID whose catalog window is at least 1M is shown to Claude Code as `<id>[1m]`. See [Models](EN-Models.md). |
+| `opusModel` | Upstream model for a Claude request whose model name is this slot's own, or any other name containing `opus`. |
 
 ## Choose Claude's upstream protocol
 
@@ -206,8 +221,10 @@ by nonzero outcome counts. A model ID appears once; long IDs wrap rather than
 being silently shortened. Rows arrive as each sequential probe finishes. `*`
 means effort or endpoint metadata was not advertised, not that it was verified.
 
-TTY output uses green for PASS, red for FAIL, yellow for INCOMPLETE and muted
-SKIPPED/NOT_TESTED labels. `status` and `status --deep` use the same policy for
+Each status starts with a mark that does not need color: `✓ PASS`, `✗ FAIL`,
+`! INCOMPLETE`, and `– SKIPPED` or `– NOT_TESTED` (`ok`, `x`, `!` and `-` where the
+terminal cannot show them). TTY output adds green for PASS, red for FAIL, yellow
+for INCOMPLETE and muted SKIPPED/NOT_TESTED. `status` and `status --deep` use the same policy for
 health, upstream checks and version mismatches. Text labels remain authoritative;
 color never changes an exit code. Pipes and dumb terminals default to plain text;
 `NO_COLOR` or `FORCE_COLOR=0` disables ANSI; `FORCE_COLOR=1` (also `2`, `3`, `true`
@@ -819,7 +836,6 @@ Hot-reloaded, applying to work that starts after the change:
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
-- `models`
 - `apiKey`
 
 Requires restart:
@@ -854,8 +870,8 @@ exception: each attempt reads the live refreshed token.
 
 Changing `gptModel` reroutes new upstream requests, but does not rewrite the model
 or token settings already saved in `~/.claude/settings.json`. Check those settings
-when switching models; managed setup only seeds absent budgets. Changing `models`
-changes the exposed models and `GET /v1/models` at once, but the Codex model list
+when switching models; managed setup only seeds absent budgets. Changing
+`gptModel` or `opusModel` changes `GET /v1/models` at once, but the Codex model list
 is written at start, so it needs a restart.
 
 ## Claude Code settings
@@ -916,10 +932,10 @@ beyond it; see [Require a client key](#require-a-client-key) and
 `claudeSetup` sets `model` to `gptModel`'s Claude Code ID only when neither `model`
 nor `ANTHROPIC_MODEL` is set. It keeps the model settings you have, changing only
 their `[1m]` to match each model's own window, and it never writes `availableModels`
-or `modelPicker`. To pick between Opus, GPT and the other exposed models
-in `/model`, add a `modelPicker` to your user `~/.claude/settings.json` as
-[Models](EN-Models.md) shows; it also explains why Claude Code's gateway model
-discovery does not list the non-Claude models.
+or `modelPicker`. To show both slots by their own names in `/model`, add a
+`modelPicker` to your user `~/.claude/settings.json` as [Models](EN-Models.md)
+shows; it also explains why Claude Code's gateway model discovery does not list a
+non-Claude model.
 
 ## Runtime files
 

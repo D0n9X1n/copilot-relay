@@ -15,7 +15,7 @@ import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
-import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds, parseModelSelection } from "~/lib/models"
+import { defaultReasoningEffort, getSlotModelIds, getUpstreamModelIds } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUpstreamProxyForDisplay, formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
@@ -137,7 +137,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     // Checked before runtimeState.debug is updated below, so the warning appears
     // when debug capture switches on rather than on every reload.
     if (nextConfig.logLevel === "debug" && !runtimeState.debug) {
-      log.info("Debug capture stores full request and response bodies privately; prompts may contain secrets. Do not share captures without review.")
+      // Two lines, so the warning fits a terminal beside the log prefix.
+      log.info("Debug capture stores full request and response bodies privately.")
+      log.info("Prompts may contain secrets: review a capture before sharing it.")
     }
 
     runtimeState.debug = nextConfig.logLevel === "debug"
@@ -154,7 +156,6 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     runtimeState.modelRouting = {
       gptModel: nextConfig.gptModel,
       opusModel: nextConfig.opusModel,
-      models: parseModelSelection(nextConfig.models),
     }
   }
 
@@ -189,7 +190,8 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     process.exit(1)
   }
 
-  log.info(`Exposed models: ${getExposedModelIds().join(", ")}`)
+  const [gptSlot, opusSlot = gptSlot] = getSlotModelIds()
+  log.info(`Models: ${gptSlot} (gptModel), ${opusSlot} (opusModel)`)
 
   // Preflight has read each model's tokenizer from the catalog. Loading them before listening keeps
   // the first count_tokens request from waiting for one.

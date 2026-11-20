@@ -1,5 +1,21 @@
 # 配置说明
 
+## 最小配置
+
+大多数安装什么都不用改：第一次启动会写入带有可用默认值的 `~/.copilot-relay/config.yaml`。
+常改的是这三个键：
+
+```yaml
+gptModel: gpt-6.2-astra     # 模型名不含 "opus" 的每个请求
+opusModel: claude-opus-5.5  # 模型名含 "opus" 的每个请求
+apiKey:                     # 绑定到 127.0.0.1 以外的地址前先设置一个 key
+```
+
+它们对新请求立即生效，无需重启。选择这两个模型见[为每个客户端选择模型](ZH-Models.md)。
+旧版本写入的 `models:` 行不起任何作用，可以删除。
+
+## 配置文件
+
 `copilot-relay` 的运行配置在：
 
 ```text
@@ -38,9 +54,8 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 claudeUpstreamApi: chat-completions
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
-models: auto
 ```
 
 ## 字段说明
@@ -53,16 +68,15 @@ models: auto
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `upstreamProxy` | Copilot 与 GitHub 调用（包括登录）使用的出站代理。留空（默认）表示直连；`env` 表示使用 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`；否则写绝对的 `http://` 或 `https://` 代理地址。需要重启。参见 [upstreamProxy 规则](#upstreamproxy-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
-| `codexSetup` | 为 `true` 时，如果 `$CODEX_HOME`（默认 `~/.codex`）存在，`start` 会为 Codex CLI 和 Codex app 完成配置：由暴露的模型组成的模型列表（见 `models`），以及指向本中继、无需登录 ChatGPT 的 `config.toml`。见 [Codex](ZH-Codex.md)。 |
+| `codexSetup` | 为 `true` 时，如果 `$CODEX_HOME`（默认 `~/.codex`）存在，`start` 会为 Codex CLI 和 Codex app 完成配置：由 `gptModel` 和 `opusModel` 组成的模型列表，以及指向本中继、无需登录 ChatGPT 的 `config.toml`。见 [Codex](ZH-Codex.md)。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
 | `logRetentionDays` | 普通 relay 日志与 debug 捕获保留的本地日历天数，包含今天；正整数，默认 `3`。活动/未知捕获受到保护，清理规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。 |
 | `thinkEffort` | 请求未指定时使用的默认推理强度：`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `claudeUpstreamApi` | Claude 上游协议：`chat-completions`（默认）、`auto` 或 `messages`。不改变非 Claude 模型的路由。 |
-| `gptModel` | Claude 请求的模型名既不是暴露的模型、也不含 `opus` 时使用的上游模型；Codex 请求的模型不在目录中时也使用它。 |
-| `opusModel` | Claude 请求的模型名不是暴露的模型、但包含 `opus` 时使用的上游模型。 |
-| `models` | 额外提供给客户端的模型：`auto`（默认，每个厂商最新的模型）、留空（只有 `gptModel` 和 `opusModel`），或逗号分隔的 Copilot ID。文件保留你写的值；无效值会使启动失败，热重载遇到无效值则保留正在运行的配置。支持热重载。见[为每个客户端选择模型](ZH-Models.md)。 |
+| `gptModel` | Claude 请求的模型名是这个槽位自己的名称、或不含 `opus` 时使用的上游模型；Codex 请求的模型不在目录中时也使用它。默认 `gpt-6.2-astra`。目录窗口至少为 1M 的 ID 在 Claude Code 中显示为 `<id>[1m]`。见[为每个客户端选择模型](ZH-Models.md)。 |
+| `opusModel` | Claude 请求的模型名是这个槽位自己的名称、或其他包含 `opus` 的名称时使用的上游模型。 |
 
 ## 选择 Claude 的上游协议
 
@@ -174,8 +188,9 @@ copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
 模型 ID 只显示一次；长 ID 换行而不静默截断。每次串行探测完成后立即显示一行。
 `*` 表示目录没有公布 effort 或接口元数据，不代表相关能力已被验证。
 
-TTY 输出中，PASS 为绿色、FAIL 为红色、INCOMPLETE 为黄色，SKIPPED/NOT_TESTED
-使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
+每个状态以不依赖颜色的标记开头：`✓ PASS`、`✗ FAIL`、`! INCOMPLETE`，以及
+`– SKIPPED` 或 `– NOT_TESTED`（终端无法显示时为 `ok`、`x`、`!` 和 `-`）。TTY 输出另外为
+PASS 使用绿色、FAIL 红色、INCOMPLETE 黄色，SKIPPED/NOT_TESTED 使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
 策略。文字状态始终是判断依据，颜色不会改变退出码。管道和 dumb 终端默认无颜色；
 `NO_COLOR` 或 `FORCE_COLOR=0` 禁用 ANSI；`FORCE_COLOR=1`（也接受 `2`、`3`、
 `true` 或空值）可明确启用。`NO_COLOR` 优先。`status --json` 始终不带颜色。
@@ -692,7 +707,6 @@ Upstream request failed without a response. HTTPS_PROXY or HTTP_PROXY is set, bu
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
-- `models`
 - `apiKey`
 
 需要重启：
@@ -722,8 +736,8 @@ relay 仍会每秒重试，但不会重复这一行。再次保存文件或原�
 每次尝试都会读取实时刷新的 token。
 
 改 `gptModel` 会改变新请求的上游路由，但不会重写 `~/.claude/settings.json` 中已有的模型或
-token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。改 `models` 会立即改变
-暴露的模型和 `GET /v1/models`，但 Codex 的模型列表在启动时写入，需要重启中继。
+token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。改 `gptModel` 或
+`opusModel` 会立即改变 `GET /v1/models`，但 Codex 的模型列表在启动时写入，需要重启中继。
 
 ## Claude Code 配置
 
@@ -775,7 +789,7 @@ CLAUDE_CODE_AUTO_MODE_SERVER=0
 只有在 `model` 和 `ANTHROPIC_MODEL` 都未设置时，`claudeSetup` 才把 `model` 设为 `gptModel` 的
 Claude Code ID。它保留你已有的模型设置，只按各模型自己的窗口调整其中的 `[1m]`，并且从不写入
 `availableModels` 或 `modelPicker`。要在
-`/model` 中选择 Opus、GPT 和其他暴露的模型，请按[为每个客户端选择模型](ZH-Models.md)的说明，
+`/model` 中按各自的名称显示两个槽位，请按[为每个客户端选择模型](ZH-Models.md)的说明，
 在用户级 `~/.claude/settings.json` 中添加 `modelPicker`；该页也解释了为什么 Claude Code 的
 网关模型发现不会列出非 Claude 模型。
 

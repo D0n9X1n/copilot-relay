@@ -328,12 +328,13 @@ const autoModeCases: Array<[string[] | undefined, boolean]> = [
 
 for (const [supportedEndpoints, adapted] of autoModeCases) {
   test(`auto mode with catalog endpoints ${String(supportedEndpoints)} ${adapted ? "adapts" : "keeps"} Claude chat history`, async () => {
-    const sent: Array<{ path: string; body: Record<string, unknown> }> = []
+    const sent: Array<{ path: string; body: Record<string, unknown>; apiVersion: string | null }> = []
     let status = 0
 
     await withRecordedTransport({
       fetch: async (request) => {
-        sent.push({ path: request.path, body: JSON.parse(request.body ?? "{}") })
+        const apiVersion = new Headers(request.headers).get("x-github-api-version")
+        sent.push({ path: request.path, body: JSON.parse(request.body ?? "{}"), apiVersion })
 
         if (request.path.endsWith("/responses")) {
           return Response.json({
@@ -386,6 +387,8 @@ for (const [supportedEndpoints, adapted] of autoModeCases) {
 
     assert.ok(chat?.path.endsWith("/chat/completions"))
     assert.deepEqual(chat.body.messages, expectedChat)
+    // Only the model catalog asks for a newer API version; inference and its retry keep the default.
+    assert.deepEqual(sent.map((request) => request.apiVersion), sent.map(() => "2025-04-01"))
 
     if (adapted) {
       // No retry is possible, so the adapted history never reaches /responses.

@@ -24,6 +24,7 @@ const { setupProxyAuth } = await import("../../src/lib/auth")
 const { fetchCopilot, getCopilotProviderContext } = await import("../../src/copilot/client")
 const { paths } = await import("../../src/lib/paths")
 const { HTTPError } = await import("../../src/lib/error")
+const { createUpstreamDeadline, withUpstreamDeadline } = await import("../../src/lib/deadline")
 const { log, flushLogs } = await import("../../src/lib/log")
 const { validateUpstream } = await import("../../src/lib/preflight")
 const { runtimeState } = await import("../../src/lib/state")
@@ -318,9 +319,12 @@ for (const timedOut of [false, true]) {
       const config = makeConfig(server.url)
       await setupProxyAuth(config)
 
+      // The caller owns the request's deadline and passes its signal with its own.
       const controller = new AbortController()
+      const deadline = createUpstreamDeadline(timedOut ? 50 : 3000)
+      t.after(deadline.dispose)
       const request = fetchCopilot(getCopilotProviderContext(config), "/models", {}, {
-        signal: controller.signal,
+        signal: AbortSignal.any([controller.signal, deadline.signal]),
         timeoutMs: timedOut ? 50 : 3000,
       })
       const rejected = assert.rejects(
@@ -576,7 +580,7 @@ test("incomplete forbidden body obeys original deadline without refreshing", asy
     throw new Error("unexpected refresh")
   })
   // The 403 body never ends, so it cannot be classified as an auth rejection;
-  // the request's own deadline has to end the wait.
+  // the deadline its caller owns has to end the wait.
   const server = await upstream((_req, res) => {
     res.writeHead(403)
     res.write("forbidden")
@@ -587,7 +591,7 @@ test("incomplete forbidden body obeys original deadline without refreshing", asy
     await setupProxyAuth(config)
 
     await assert.rejects(
-      fetchCopilot(getCopilotProviderContext(config), "/models", {}, { timeoutMs: 50 }),
+      withUpstreamDeadline(50, (signal) => fetchCopilot(getCopilotProviderContext(config), "/models", {}, { signal, timeoutMs: 50 })),
       (error: unknown) => error instanceof HTTPError && error.response.status === 504
     )
     assert.equal(count(), 0)

@@ -26,7 +26,6 @@ const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { appVersion } = await import("../../src/lib/version")
 const { flushLogs } = await import("../../src/lib/log")
-const { loadedTokenizers } = await import("../../src/lib/tokenizer")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 test.after(async () => {
@@ -1451,7 +1450,7 @@ const countTokens = async (app: ReturnType<typeof createTestProxy>, model: strin
 
 test("count_tokens counts with the routed model and calls no upstream", async () => {
   const mock = await startMockCopilot()
-  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: ["claude-sonnet-5"] }
+  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-sonnet-5" }
 
   try {
     const app = createTestProxy(mock.baseUrl)
@@ -1460,7 +1459,7 @@ test("count_tokens counts with the routed model and calls no upstream", async ()
 
     assert.equal(sonnet.status, 200)
     assert.equal(haiku.status, 200)
-    // claude-sonnet-5 routes to itself and gets the Claude multiplier; haiku routes to gpt-5.5.
+    // claude-sonnet-5 is the Opus slot and gets the Claude multiplier; haiku routes to gpt-5.5.
     assert.ok(sonnet.tokens > haiku.tokens, `${sonnet.tokens} > ${haiku.tokens}`)
     assert.equal(mock.requests.length, 0)
   } finally {
@@ -1468,33 +1467,10 @@ test("count_tokens counts with the routed model and calls no upstream", async ()
   }
 })
 
-test("an extra model's tokenizer loads at its first count", async () => {
+test("GET /v1/models lists the two slots with each model's limits and calls no upstream", async () => {
   const mock = await startMockCopilot()
-  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: ["grok-4.7"] }
-
-  try {
-    const app = createTestProxy(mock.baseUrl, {
-      modelCatalog: { baseUrl: mock.baseUrl, models: new Map([["grok-4.7", { tokenizer: "cl100k_base" }]]) },
-    })
-
-    assert.ok(!loadedTokenizers().includes("cl100k_base"))
-
-    const grok = await countTokens(app, "grok-4.7")
-
-    assert.equal(grok.status, 200)
-    assert.ok(loadedTokenizers().includes("cl100k_base"))
-    assert.equal(mock.requests.length, 0)
-  } finally {
-    await mock.close()
-  }
-})
-
-test("GET /v1/models lists the auto selection with each model's limits", async () => {
-  const mock = await startMockCopilot()
-  const windowed = (vendor: string, window?: number) => ({
+  const windowed = (window?: number) => ({
     type: "chat",
-    vendor,
-    pickerEnabled: true,
     ...(window !== undefined && {
       limits: { max_context_window_tokens: window, max_prompt_tokens: window - 1000, max_output_tokens: 1000 },
     }),
@@ -1502,14 +1478,13 @@ test("GET /v1/models lists the auto selection with each model's limits", async (
   const catalog = {
     baseUrl: mock.baseUrl,
     models: new Map([
-      ["gpt-5.5", windowed("OpenAI", 1_050_000)],
-      ["claude-opus-4.8", windowed("Anthropic")],
-      ["gpt-6.2-astra", windowed("OpenAI", 1_050_000)],
-      ["mai-code-2", windowed("Microsoft")],
-      ["grok-4.7", windowed("xAI", 500_000)],
+      ["gpt-5.5", windowed(1_050_000)],
+      ["claude-opus-4.8", windowed(200_000)],
+      ["gpt-6.2-astra", windowed(1_050_000)],
+      ["grok-4.7", windowed(500_000)],
     ]),
   }
-  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: "auto" }
+  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8" }
   runtimeState.upstreamBaseUrl = mock.baseUrl
   runtimeState.modelCatalog = catalog
 
@@ -1519,14 +1494,8 @@ test("GET /v1/models lists the auto selection with each model's limits", async (
     const body = await response.json() as { data: Array<{ id: string; context_window?: number }> }
 
     assert.equal(response.status, 200)
-    assert.deepEqual(body.data.map((model) => model.id), [
-      "gpt-5.5[1m]",
-      "claude-opus-4.8",
-      "gpt-6.2-astra[1m]",
-      "mai-code-2",
-      "grok-4.7",
-    ])
-    assert.equal(body.data.find((model) => model.id === "grok-4.7")?.context_window, 500_000)
+    assert.deepEqual(body.data.map((model) => model.id), ["gpt-5.5[1m]", "claude-opus-4.8"])
+    assert.equal(body.data.find((model) => model.id === "claude-opus-4.8")?.context_window, 200_000)
     assert.equal(mock.requests.length, 0)
   } finally {
     delete runtimeState.upstreamBaseUrl
@@ -1948,6 +1917,8 @@ test("POST /v1/messages reports only a typed prompt to Copilot as the person's",
         method: "POST",
       }))
       assert.equal(response.status, 200)
+      // Reading the body to its end settles the request and releases its upstream deadline.
+      await response.text()
       return mock.requests.slice(before).filter((request) => request.path !== "/models")
     }
 
@@ -2412,6 +2383,84 @@ test("POST /v1/messages maps invalid tool arguments to an error naming the tool"
     const streamed = await (await postNoopToolTurn(app, true)).text()
     assert.match(streamed, /Upstream returned tool input for \\"noop\\" that is not valid JSON\./)
   } finally {
+    await mock.close()
+  }
+})
+
+// Why: canonicalization is memoized per catalog, so a warm request on any route repeats none of it;
+// the counter sits inside canonicalModelId itself, not in the routing memo.
+test("warm requests repeat no model canonicalization on any route", async () => {
+  const { modelNormalizations, normalizeCopilotModelId } = await import("../../src/lib/models")
+  const mock = await startMockCopilot()
+  const catalog = {
+    baseUrl: mock.baseUrl,
+    models: new Map([
+      ["gpt-5.5", { type: "chat", supportedEndpoints: ["/responses"], limits: { max_context_window_tokens: 1_050_000, max_prompt_tokens: 1_000_000, max_output_tokens: 1000 } }],
+      ["claude-opus-4.8", { type: "chat", supportedEndpoints: ["/chat/completions"] }],
+    ]),
+  }
+  runtimeState.upstreamBaseUrl = mock.baseUrl
+  runtimeState.modelCatalog = catalog
+
+  const post = (app: ReturnType<typeof createTestProxy>, model: string, options: { webSearch?: boolean, stream?: boolean } = {}) =>
+    app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        max_tokens: 16,
+        stream: options.stream === true,
+        messages: [{ role: "user", content: options.webSearch ? "Search for Copilot documentation." : "hello" }],
+        ...(options.webSearch && { tools: [{ name: "WebSearch", input_schema: { type: "object" } }] }),
+      }),
+    }))
+
+  try {
+    const app = createTestProxy(mock.baseUrl, { modelCatalog: catalog, claudeUpstreamApi: "chat-completions" })
+    const cases: Array<[string, { webSearch?: boolean, stream?: boolean }]> = [
+      ["sonnet", {}],
+      ["opus", {}],
+      ["opus", { stream: true }],
+      ["sonnet", { stream: true }],
+      ["sonnet", { webSearch: true }],
+    ]
+    for (const [model, options] of cases) {
+      await (await post(app, model, options)).text()
+      const before = modelNormalizations()
+      for (let index = 0; index < 100; index++) {
+        const response = await post(app, model, options)
+        assert.equal(response.status, 200)
+        await response.text()
+      }
+
+      assert.equal(modelNormalizations() - before, 0, `${model} ${JSON.stringify(options)}`)
+    }
+
+    // Many other names churn the bounded memo; the slots' spellings stay pinned.
+    for (let index = 0; index < 300; index++) {
+      normalizeCopilotModelId(`churn-model-${index}`)
+    }
+
+    const beforeChurn = modelNormalizations()
+    const afterChurn = await post(app, "sonnet")
+    assert.equal(afterChurn.status, 200)
+    await afterChurn.text()
+    assert.equal(modelNormalizations() - beforeChurn, 0, "after churn")
+
+    // The known 1M slot still reaches Claude Code as its [1m] version.
+    const reply = await (await post(app, "sonnet")).json() as { model: string }
+    assert.equal(reply.model, "gpt-5.5[1m]")
+
+    await countTokens(app, "sonnet")
+    const beforeCount = modelNormalizations()
+    for (let index = 0; index < 100; index++) {
+      assert.equal((await countTokens(app, "sonnet")).status, 200)
+    }
+
+    assert.equal(modelNormalizations() - beforeCount, 0, "count_tokens")
+  } finally {
+    delete runtimeState.upstreamBaseUrl
+    delete runtimeState.modelCatalog
     await mock.close()
   }
 })

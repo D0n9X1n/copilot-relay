@@ -195,11 +195,12 @@ interface RelayProcess {
 }
 
 // The argv shape `status` recognizes for a source checkout: node --import tsx src/main.ts start.
-const spawnRelay = (home: RelayHome): RelayProcess => {
+// stdin "pipe" leaves an open stdin that nothing writes to, as a terminal nobody types in.
+const spawnRelay = (home: RelayHome, stdin: "ignore" | "pipe" = "ignore"): RelayProcess => {
   const child = spawn(process.execPath, ["--import", "tsx", entry, "start"], {
     cwd,
     env: home.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdin, "pipe", "pipe"],
   })
   let output = ""
   let spawnFailed = false
@@ -366,6 +367,20 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
 
   const logs = await readLogs(home.appDir)
   assert.match(logs, / -> 401 /)
+
+  // The preflight's per-model records go to the log file, where they are searched; the console
+  // keeps one short line per model, so startup reads within 80 columns.
+  const startup = relay.output().slice(0, relay.output().indexOf("copilot-relay listening"))
+  for (const record of ["Model token limits: model=gpt-fixture-chat", "Model request client=generic", "Preflight OK: model=gpt-fixture-chat"]) {
+    assert.ok(logs.includes(record), record)
+    assert.ok(!startup.includes(record), record)
+  }
+
+  assert.match(startup, /Preflight OK: gpt-fixture-chat, claude-opus-5\.5$/m)
+  for (const line of startup.split("\n").filter((line) => !line.includes(home.home))) {
+    assert.ok(line.length <= 80, `${line.length} columns: ${line}`)
+  }
+
   const modeWarnings = logs.split(`${home.configPath} holds the apiKey and has mode 0644`).length - 1
   assert.equal(modeWarnings, process.platform === "win32" ? 0 : 2)
   for (const secret of [firstKey, secondKey, githubToken, copilotToken]) {
@@ -384,6 +399,30 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
     const headers = JSON.stringify(request.headers)
     assert.ok(!headers.includes(firstKey) && !headers.includes(secondKey), `${request.method} ${request.url}`)
   }
+})
+
+// Why: startup must never wait for input. With an open stdin that nothing writes to, it reaches
+// listening on its own; nobody has to press Enter.
+test("start reaches listening with an open stdin that receives nothing", { timeout: 240_000 }, async (t) => {
+  const upstream = await fakeCopilot(t)
+  const port = await freePort()
+  const home = await relayHome({ tokens: true })
+  t.after(() => removeHome(home.home))
+
+  await fs.writeFile(home.configPath, [
+    "host: 127.0.0.1",
+    `port: ${port}`,
+    `copilotBaseUrl: ${upstream.baseUrl}`,
+    "claudeSetup: false",
+    "codexSetup: false",
+    "gptModel: gpt-fixture-chat",
+    "opusModel: claude-opus-5.5",
+    "",
+  ].join("\n"))
+
+  const relay = spawnRelay(home, "pipe")
+  t.after(() => stopRelay(relay))
+  await waitFor(relay, async () => /copilot-relay listening on/.test(relay.output()))
 })
 
 test("startup warns about a listener beyond loopback without an apiKey and never prints a key", { timeout: 240_000 }, async (t) => {

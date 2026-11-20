@@ -143,33 +143,37 @@ copilot-relay status
 ```
 
 ```text
-copilot-relay 0.2.5
-  process    running (pid 93744, up 1h 16m)
-  version    0.2.5
-  listening  http://127.0.0.1:4142
-  health     ok (9ms)
-  models     gpt-6-astra[1m], claude-opus-5
-  upstream   not checked (use --deep)
-  log        C:\Users\you\.copilot-relay\logs\copilot-relay.2026-07-25.log
-  config     C:\Users\you\.copilot-relay\config.yaml
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 93744, up 1h 16m)
+  ✓ health    ok (9ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-6-astra
-    opusModel               claude-opus-5
-    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.
+    gptModel                gpt-6.2-astra
+    opusModel               claude-opus-5.5
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
 ```
 
 The `config` block is abridged above; `status` prints every resolved key.
 See [Configuration](EN-Configuration.md).
 
-The `version` row is the build the running daemon reports about itself, which is
-not the same thing as the first line — that is the CLI you just invoked. After
-`npm i -g copilot-relay@latest` the two disagree until the service is actually
+The heading names the CLI you just invoked. A `version` row appears only when the
+running daemon reports another build, or none. After
+`npm i -g copilot-relay@latest` it appears until the service is actually
 restarted:
 
 ```text
-  version    0.2.6 — MISMATCH, 0.3.0 is installed
+  ! version   0.7.1 — MISMATCH, 0.8.0 is installed
 ```
 
 Restart the service and check again. A mismatch does not change the exit code —
@@ -216,7 +220,7 @@ socket is listening and nothing more. It never contacts GitHub Copilot.
 (Invoke-RestMethod http://127.0.0.1:4142/v1/models).data.id
 ```
 
-Expect your configured models, e.g. `gpt-6-astra[1m]` and `claude-opus-5`. Served
+Expect your configured models, e.g. `gpt-6.2-astra[1m]` and `claude-opus-5.5[1m]`. Served
 from config; **also never contacts upstream**. A relay whose Copilot token expired
 an hour ago passes layers 1 and 2.
 
@@ -224,7 +228,7 @@ an hour ago passes layers 1 and 2.
 
 ```powershell
 $body = @{
-  model      = "gpt-6-astra"
+  model      = "gpt-6.2-astra"
   max_tokens = 256
   messages   = @(@{ role = "user"; content = "Reply with the single word: ok" })
 } | ConvertTo-Json -Depth 5
@@ -331,6 +335,12 @@ or `powershell.exe`. Re-register with the `node.exe` action above.
 
 **`LastTaskResult` is `1`.** Preflight failed: expired auth or no network. Read
 today's log, then `copilot-relay auth`.
+
+**`copilot-relay auth` or `start` stops at the device code until you press
+Enter.** Most likely, though not yet confirmed, the console's QuickEdit mode
+paused output after a click in the window; press Esc or Enter to resume. Sign-in itself is bounded and never waits past the
+device code's expiry. See "Sign-in waits or seems stuck" in
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
 **`LastTaskResult` is `267009`.** Not an error — `SCHED_S_TASK_RUNNING`, the task
 is currently running.

@@ -12,7 +12,7 @@ import { applyClaudeAppSetup } from "~/lib/claude-app"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { getClaudeConfigPath, getCodexHome } from "~/lib/defaults"
 import { log } from "~/lib/log"
-import { parseModelSelection, resolveExposedModels } from "~/lib/models"
+import { canonicalModelId } from "~/lib/models"
 import { paths } from "~/lib/paths"
 
 export const setupTargets = ["claude-code-cli", "claude-code-app", "codex-cli", "codex-app"] as const
@@ -24,7 +24,7 @@ export const isSetupTarget = (value: string): value is SetupTarget =>
 export interface SetupOutcome {
   target: string
   path: string
-  // "updated", "already up to date", or "skipped: <reason>".
+  // "updated", "already up to date", "skipped: <reason>" or "failed: <reason>".
   status: string
 }
 
@@ -67,12 +67,12 @@ export const setupClaudeCodeCli = async (context: SetupContext): Promise<SetupOu
   return { target: "claude-code-cli", path: result.configPath, status: result.changed ? "updated" : "already up to date" }
 }
 
-/** Codex's models: the exposed upstream IDs without [1m], gptModel first as Codex's default. */
-export const codexModels = (appConfig: AppConfig, catalog: CopilotModelCatalog | undefined): Array<CatalogModel> =>
-  resolveExposedModels(
-    { gptModel: appConfig.gptModel, opusModel: appConfig.opusModel, models: parseModelSelection(appConfig.models) },
-    catalog?.models,
-  ).map((id) => ({ id, capabilities: catalog?.models.get(id) }))
+/** Codex's models: the two slots without [1m], gptModel first as Codex's default, one entry when equal. */
+export const codexModels = (appConfig: AppConfig, catalog: CopilotModelCatalog | undefined): Array<CatalogModel> => {
+  const ids = [appConfig.gptModel, appConfig.opusModel].map((id) => canonicalModelId(id, catalog?.models))
+  const unique = ids[1] === ids[0] ? [ids[0]] : ids
+  return unique.map((id) => ({ id, capabilities: catalog?.models.get(id) }))
+}
 
 // Codex CLI and the Codex app read the same $CODEX_HOME/config.toml.
 export const setupCodex = async (context: SetupContext, target: string): Promise<SetupOutcome> => {
@@ -138,24 +138,34 @@ export const setupClaudeCodeApp = async (context: SetupContext): Promise<SetupOu
   return { target: "claude-code-app", path: result.dataDir, status: result.changed ? "updated" : "already up to date" }
 }
 
+// A target's outcome, with an error reported as its failure rather than thrown.
+const outcomeOf = async (target: string, setUp: () => Promise<SetupOutcome>): Promise<SetupOutcome> => {
+  try {
+    return await setUp()
+  } catch (error) {
+    return { target, path: "", status: `failed: ${error instanceof Error ? error.message : String(error)}` }
+  }
+}
+
 /** Sets up each target once, in the order given; codex-cli and codex-app write one shared file. */
 export const runSetup = async (targets: Array<SetupTarget>, context: SetupContext): Promise<Array<SetupOutcome>> => {
   const outcomes: Array<SetupOutcome> = []
+  // The first Codex target's outcome, a failure included, which the other one reports instead of
+  // writing the same file again.
   let codex: SetupOutcome | undefined
   for (const target of new Set(targets)) {
-    try {
-      if (target === "claude-code-cli") {
-        outcomes.push(await setupClaudeCodeCli(context))
-      } else if (target === "claude-code-app") {
-        outcomes.push(await setupClaudeCodeApp(context))
-      } else if (codex === undefined) {
-        codex = await setupCodex(context, target)
-        outcomes.push(codex)
-      } else {
-        outcomes.push({ ...codex, target, status: "shares the Codex config above" })
-      }
-    } catch (error) {
-      outcomes.push({ target, path: "", status: `failed: ${error instanceof Error ? error.message : String(error)}` })
+    if (target === "claude-code-cli") {
+      outcomes.push(await outcomeOf(target, () => setupClaudeCodeCli(context)))
+    } else if (target === "claude-code-app") {
+      outcomes.push(await outcomeOf(target, () => setupClaudeCodeApp(context)))
+    } else if (codex === undefined) {
+      codex = await outcomeOf(target, () => setupCodex(context, target))
+      outcomes.push(codex)
+    } else if (/^(skipped|failed)\b/.test(codex.status)) {
+      // The Codex app has no config of its own: it was skipped or failed exactly as the first one.
+      outcomes.push({ ...codex, target })
+    } else {
+      outcomes.push({ ...codex, target, status: "shares the Codex config above" })
     }
   }
 

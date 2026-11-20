@@ -1,13 +1,15 @@
 import { defineCommand } from "citty"
 
 import { selectCopilotEndpoint } from "~/copilot/endpoint"
-import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
+import { loadStandaloneModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { readAppConfig, type AppConfig } from "~/lib/app-config"
-import { setupProxyAuth } from "~/lib/auth"
+import { setupProxyAuth, signInLines } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
+import { consola } from "consola"
+
 import { flushLogs, log, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
-import { terminalText } from "~/lib/terminal"
+import { colorEnabled, heading, printableCell, terminalText, withoutHiddenCharacters } from "~/lib/terminal"
 import { probeModels } from "~/lib/model-probe"
 import { probeReason } from "~/lib/model-probe-output"
 import {
@@ -17,10 +19,11 @@ import {
   searchModels,
   type ConfiguredModel,
   type ListedModel,
+  type ModelKey,
   type ModelSearch,
 } from "~/lib/model-listing"
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
-import { paths } from "~/lib/paths"
+import { homeRelative, paths } from "~/lib/paths"
 import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
@@ -34,28 +37,40 @@ class ModelsUsageError extends Error {}
 // two would escape the scrub that runs on each printed line.
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 
-// Catalog names are untrusted: control characters and secrets are removed and a long name is
-// shortened so it cannot take over a row.
+// Catalog names are untrusted: control characters, secrets and sensitive URLs are removed. The name
+// is kept whole, so a search sees every redaction marker intact; the table leaves NAME out rather
+// than cut it.
 const displayName = (name: string | undefined): string | undefined => {
-  const text = printable(name ?? "").trim()
+  const text = printableCell(name ?? "").trim()
 
-  if (text === "") {
-    return undefined
-  }
-
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text
+  return text === "" ? undefined : text
 }
 
 // Every advertised ID, with the reason request admission would refuse it as gptModel or opusModel.
-const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog): ListedModel[] =>
+// The config key whose value names this ID, matched the way routing matches a slot: by its
+// canonical spelling, ignoring case and [1m].
+const slotFor = (id: string, appConfig: AppConfig): ModelKey | undefined =>
+  (["opusModel", "gptModel"] as const).find((key) => normalizeCopilotModelId(appConfig[key]).toLowerCase() === id.toLowerCase())
+
+const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog, appConfig: AppConfig): ListedModel[] =>
   [...catalog.models.keys()].sort().map((id) => {
     const selection = selectCopilotEndpoint(config, id)
-    const name = displayName(catalog.models.get(id)?.name)
+    const model = catalog.models.get(id)
+    const name = displayName(model?.name)
+    const slot = slotFor(id, appConfig)
 
     return {
-      id: printable(id),
+      // The table scrubs the ID it prints in the same way, so a search never sees a hidden URL tail.
+      id: printableCell(id),
       ...(name !== undefined && { name }),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
+      chat: selection.endpoint !== undefined || selection.reason !== "unsupported-model-type",
+      ...(model?.limits?.max_context_window_tokens !== undefined && {
+        contextWindow: model.limits.max_context_window_tokens,
+      }),
+      ...(model?.price !== undefined && { price: { input: model.price.input, output: model.price.output } }),
+      ...(model?.multiplier !== undefined && { multiplier: model.multiplier }),
+      ...(slot !== undefined && { slot }),
     }
   })
 
@@ -77,13 +92,13 @@ const configuredModels = (
     }
   })
 
-const listingHeading = (search: string, result: ModelSearch): string => {
+const listingHeading = (search: string, result: ModelSearch, total: number, all: boolean): string => {
   if (search === "") {
-    if (result.models.length === 0) {
+    if (total === 0) {
       return "No models advertised by upstream."
     }
 
-    return `Upstream-advertised models (${result.models.length}):`
+    return all ? heading("Copilot models", String(total)) : heading("Copilot chat models", `${result.models.length} of ${total}`)
   }
 
   const label = printable(search)
@@ -93,7 +108,8 @@ const listingHeading = (search: string, result: ModelSearch): string => {
   }
 
   if (result.models.length === 0) {
-    return `No upstream model matches "${label}". List them all with copilot-relay models.`
+    // The hint takes its own line, so a long search term cannot push it past 80 columns.
+    return `No upstream model matches "${label}".\nList them all with copilot-relay models --all.`
   }
 
   return `No upstream model matches "${label}". Closest IDs (${result.models.length}):`
@@ -137,6 +153,10 @@ export const models = defineCommand({
     "total-timeout": {
       type: "string",
       description: "Positive timeout in seconds for all probes (default 300).",
+    },
+    all: {
+      type: "boolean",
+      description: "List every advertised model, including those that are not chat models.",
     },
   },
   async run({ args }) {
@@ -214,17 +234,22 @@ export const models = defineCommand({
         // --deep keeps setup logging off the console, which would also hide the
         // default sign-in prompt, so the device code is printed to stderr here.
         await setupProxyAuth(config, args.deep ? {
-          onDeviceCode: (url, code) => console.error(
-            `Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`,
-          ),
+          onDeviceCode: (url, code) => console.error(signInLines(url, code).join("\n")),
         } : undefined)
 
         failure = "Could not fetch upstream model catalog"
-        const catalog = await loadCopilotModelCatalog(config)
+        // The catalog load owns one upstream deadline, disposed before any --deep probe starts.
+        const catalog = await loadStandaloneModelCatalog(config)
         return { appConfig, config, catalog }
       }
 
-      const { appConfig, config, catalog } = args.deep ? await withoutConsoleLogging(prepare) : await prepare()
+      // Token-cache notices are diagnostics: they go to stderr, so stdout holds only the answer.
+      const stdout = consola.options.stdout
+      consola.options.stdout = process.stderr
+      const { appConfig, config, catalog } = await (args.deep ? withoutConsoleLogging(prepare) : prepare())
+        .finally(() => {
+          consola.options.stdout = stdout
+        })
 
       if (args.deep) {
         failure = "Selected model is not advertised by upstream"
@@ -248,21 +273,37 @@ export const models = defineCommand({
         return
       }
 
-      const listed = listedModels(config, catalog)
-      const result: ModelSearch = search === "" ? { found: true, models: listed } : searchModels(listed, search)
-      const lines = [listingHeading(search, result), ...renderModelRows(result.models)]
+      const listed = listedModels(config, catalog, appConfig)
+      // The plain listing shows chat models; --all and a search show every match.
+      const shown = search === "" && !args.all ? listed.filter((model) => model.chat !== false) : listed
+      const result: ModelSearch = search === "" ? { found: true, models: shown } : searchModels(listed, search)
+      const color = colorEnabled()
+      const lines = [listingHeading(search, result, listed.length, Boolean(args.all))]
+
+      if (result.models.length > 0) {
+        lines.push("", ...renderModelRows(result.models, color), "")
+      }
+
+      const hidden = listed.length - shown.length
+      if (search === "" && hidden > 0) {
+        lines.push(hidden === 1
+          ? "1 model that is not a chat model is hidden: copilot-relay models --all"
+          : `${hidden} models that are not chat models are hidden: copilot-relay models --all`, "")
+      }
 
       if (result.models.length > 0) {
         lines.push(
           "Inference, tool, and effort compatibility are not verified by this listing.",
-          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}; it consumes Copilot usage.`,
+          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}`,
+          "(a real request, so it consumes Copilot usage).",
         )
       }
 
-      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen))
-      // Each printed line is normalized and scrubbed again, as a backstop for any string that
-      // skipped printable.
-      console.log(lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(terminalText(line)))).join("\n"))
+      lines.push("", ...renderConfigGuide(homeRelative(paths.configPath), configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
+      // Table cells were made printable and scrubbed by the table before any cut, and every other
+      // line holding user, catalog or config text was built from printable strings. Each line is
+      // scrubbed once more as a backstop; hidden characters are removed but the table's color stays.
+      console.log(lines.map((line) => scrubLogSecrets(scrubSensitiveUrls(withoutHiddenCharacters(line)))).join("\n"))
 
       if (!result.found) {
         process.exitCode = 1

@@ -118,33 +118,37 @@ copilot-relay status
 ```
 
 ```text
-copilot-relay 0.2.5
-  process    running (pid 93744, up 1h 16m)
-  version    0.2.5
-  listening  http://127.0.0.1:4142
-  health     ok (9ms)
-  models     gpt-6-astra[1m], claude-opus-5
-  upstream   not checked (use --deep)
-  log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
-  config     ~/.copilot-relay/config.yaml
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 93744, up 1h 16m)
+  ✓ health    ok (9ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-6-astra
-    opusModel               claude-opus-5
-    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.
+    gptModel                gpt-6.2-astra
+    opusModel               claude-opus-5.5
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
 ```
 
 The `config` block is abridged above; `status` prints every resolved key.
 See [Configuration](EN-Configuration.md).
 
-The `version` row is the build the running daemon reports about itself, which is
-not the same thing as the first line — that is the CLI you just invoked. After
-`npm i -g copilot-relay@latest` the two disagree until the agent is actually
+The heading names the CLI you just invoked. A `version` row appears only when the
+running daemon reports another build, or none. After
+`npm i -g copilot-relay@latest` it appears until the agent is actually
 restarted:
 
 ```text
-  version    0.2.6 — MISMATCH, 0.3.0 is installed
+  ! version   0.7.1 — MISMATCH, 0.8.0 is installed
 ```
 
 This matters more under launchd than anywhere else: with `KeepAlive` set, the
@@ -163,7 +167,7 @@ copilot-relay status --deep
 ```
 
 ```text
-  upstream   ok (1191ms) — end-to-end Copilot round trip
+  ✓ upstream  ok (1191ms) — end-to-end Copilot round trip
 ```
 
 Exit codes, for scripting: `0` running and reachable, `1` not running, `2`
@@ -191,7 +195,7 @@ and nothing more. It never contacts GitHub Copilot.
 curl -s http://127.0.0.1:4142/v1/models
 ```
 
-Expect your configured models, e.g. `gpt-6-astra[1m]` and `claude-opus-5`. This
+Expect your configured models, e.g. `gpt-6.2-astra[1m]` and `claude-opus-5.5[1m]`. This
 is served from config and **also never contacts upstream**. A relay whose Copilot
 token expired an hour ago passes layers 1 and 2.
 
@@ -201,7 +205,7 @@ token expired an hour ago passes layers 1 and 2.
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-6-astra","max_tokens":256,
+  -d '{"model":"gpt-6.2-astra","max_tokens":256,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 
