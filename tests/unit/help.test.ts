@@ -45,6 +45,14 @@ test("a long usage line continues under the command", () => {
   assert.deepEqual(wrapHelp(`USAGE \`copilot-relay ${"a|".repeat(40)}z\``, 80).split("\n").map((line) => line.slice(0, 7)), ["USAGE `", "      a"])
 })
 
+test("a colored usage line continues under the command too", () => {
+  const colored = `\u001b[4m\u001b[1mUSAGE\u001b[22m\u001b[24m \`copilot-relay ${"a|".repeat(40)}z\``
+  const lines = wrapHelp(colored, 80).split("\n")
+
+  assert.equal(lines.length, 2)
+  assert.equal(lines[1].slice(0, 7), "      a")
+})
+
 test("a usage line loses the space citty leaves inside its closing backtick", () => {
   assert.equal(wrapHelp("USAGE `auth `"), "USAGE `auth`")
 })

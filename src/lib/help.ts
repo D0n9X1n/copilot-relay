@@ -51,9 +51,11 @@ const wrapLine = (line: string, width: number): string[] => {
     return wrapWords(prefix, line.slice(prefix.length).split(/ +/), " ".repeat(visibleWidth(prefix)), width)
   }
 
-  // A usage line continues under its first word, so the command it names stands out.
+  // A usage line continues under its first word, so the command it names stands out. citty colors
+  // USAGE when color is on, so the word is found without the escapes around it.
   const indent = /^\s*/.exec(line)?.[0] ?? ""
-  const hanging = line.trimStart().startsWith("USAGE ") ? indent + " ".repeat("USAGE ".length) : indent
+  const usage = stripVTControlCharacters(line).trimStart().startsWith("USAGE ")
+  const hanging = usage ? indent + " ".repeat("USAGE ".length) : indent
 
   return wrapWords(indent, line.trim().split(/ +/), hanging, width)
 }
