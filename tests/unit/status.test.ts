@@ -43,6 +43,7 @@ const { findRelayOnPort, readRelayPidFileEntry, writeRelayPidFile } =
   await import("../../src/lib/lifecycle")
 const { paths } = await import("../../src/lib/paths")
 const { appVersion } = await import("../../src/lib/version")
+const { displayWidth } = await import("../../src/lib/terminal")
 type RelayStatus = Awaited<
   ReturnType<typeof import("../../src/status").collectStatus>
 >
@@ -101,23 +102,22 @@ const render = (status: RelayStatus): string => renderStatus(status).join("\n")
 test("a running relay reads as a heading, marked state rows, files and config", () => {
   const lines = renderStatus({ ...runningStatus, deep: { ms: 890, ok: true } }, false, true)
 
-  assert.deepEqual(lines.slice(0, 9), [
+  assert.deepEqual(lines.slice(0, 8), [
     "copilot-relay 0.2.5 · http://127.0.0.1:4142",
     "",
     "  ✓ process   running (pid 93744, up 1h 30m)",
     "  ✓ health    ok (2ms)",
     "  ✓ upstream  ok (890ms) — end-to-end Copilot round trip",
-    "  ✓ version   0.2.5",
     "  ✓ models    gpt-5.6-sol[1m], claude-opus-5",
     "",
     "Files",
   ])
-  assert.deepEqual(lines.slice(9, 13), [
+  assert.deepEqual(lines.slice(8, 11), [
     "    log       /home/u/.copilot-relay/logs/copilot-relay.2026-07-25.log",
     "    config    /home/u/.copilot-relay/config.yaml",
     "",
-    "Config",
   ])
+  assert.equal(lines[11], "Config")
   assert.ok(lines.some((line) => /^ {4}gptModel {16}gpt-5\.6-sol$/.test(line)))
 })
 
@@ -486,14 +486,39 @@ test("keeps exit code 0 on a version mismatch", () => {
 
 // Why: the warning must fire only on a real difference. Warning when the
 // versions agree would train users to ignore it.
-test("stays quiet when daemon and CLI versions agree", () => {
+test("stays quiet when daemon and CLI versions agree: the heading carries the version", () => {
   const matched = { ...runningStatus, daemonVersion: "0.3.0", version: "0.3.0" }
   const out = render(matched)
 
   assert.equal(hasVersionMismatch(matched), false)
-  assert.match(out, /version\s+0\.3\.0/)
+  assert.match(out, /^copilot-relay 0\.3\.0 · /m)
+  assert.doesNotMatch(out, /^ {2}. version/m)
   assert.doesNotMatch(out, /MISMATCH/)
   assert.doesNotMatch(out, /is installed/)
+})
+
+test("home paths read from ~, the restart note fits, and every line of a normal status fits 80 columns", () => {
+  const home = os.homedir()
+  const status = {
+    ...runningStatus,
+    logPath: path.join(home, ".copilot-relay", "logs", "copilot-relay.2026-07-25.log"),
+    configPath: path.join(home, ".copilot-relay", "config.yaml"),
+  }
+  const lines = renderStatus(status, false, true)
+
+  assert.ok(lines.includes(`    log       ${path.join("~", ".copilot-relay", "logs", "copilot-relay.2026-07-25.log")}`), lines.join("\n"))
+  assert.ok(lines.includes(`    config    ${path.join("~", ".copilot-relay", "config.yaml")}`))
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
+test("a daemon version or model ID holding control sequences prints without them", () => {
+  const out = renderStatus({ ...runningStatus, daemonVersion: "0.2.6\u001b[31m", version: "0.3.0", models: ["evil\u001b[2Kmodel"] }, false, true).join("\n")
+
+  assert.doesNotMatch(out, /\u001b/)
+  assert.match(out, /0\.2\.6 — MISMATCH/)
+  assert.match(out, /evilmodel/)
 })
 
 // Why: a daemon older than v0.3.1 reports no version at all. Unknown is not a
@@ -656,7 +681,7 @@ test("prints upstreamProxy env as written", () => {
 test("flags the restart-only keys while running", () => {
   const out = render(runningStatus)
 
-  assert.match(out, /host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart/)
+  assert.match(out, /host, port, claudeSetup, codexSetup and upstreamProxy take effect\n {4}on restart; the rest hot-reload\./)
 })
 
 // Why: with nothing running every value applies at the next start, so the
