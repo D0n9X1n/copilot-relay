@@ -17,6 +17,44 @@ export const colorEnabled = (env: NodeJS.ProcessEnv = process.env, isTTY = Boole
 export type TerminalTone = "good" | "bad" | "warning" | "muted"
 const ansiColorCodes: Record<TerminalTone, number> = { good: 32, bad: 31, warning: 33, muted: 90 }
 
+// A named tone, or the SGR parameters of one shade on a ramp, such as "38;5;178".
+export type TerminalShade = TerminalTone | string
+
+// Colors a terminal can show: 0 when color is off, then 16, 256 and 16 million colors.
+export type ColorDepth = 0 | 4 | 8 | 24
+
+interface ColorStream {
+  isTTY?: boolean
+  getColorDepth?: (env?: NodeJS.ProcessEnv) => number
+}
+
+/**
+ * How many colors to write. colorEnabled decides whether there is any color; FORCE_COLOR=2 and 3
+ * ask for 256 and 16 million colors, as Node reads them; otherwise the stream's own depth, which a
+ * pipe does not have.
+ */
+export const colorDepth = (env: NodeJS.ProcessEnv = process.env, stream: ColorStream | undefined = process.stdout): ColorDepth => {
+  if (!colorEnabled(env, Boolean(stream?.isTTY))) {
+    return 0
+  }
+
+  if (env.FORCE_COLOR !== undefined) {
+    const forced: Record<string, ColorDepth> = { "2": 8, "3": 24 }
+    return forced[env.FORCE_COLOR] ?? 4
+  }
+
+  const depth = stream?.getColorDepth?.(env) ?? 1
+  if (depth >= 24) {
+    return 24
+  }
+
+  if (depth >= 8) {
+    return 8
+  }
+
+  return depth >= 4 ? 4 : 0
+}
+
 // C1 controls (U+009B alone starts an escape sequence in some terminals), invisible format
 // characters such as bidi overrides, and line and paragraph separators.
 const hiddenCharacters = /[\x80-\x9f]|\p{Cf}|\p{Zl}|\p{Zp}/gu
@@ -28,8 +66,77 @@ export const withoutHiddenCharacters = (value: string): string => value.replace(
 // On top of ANSI escapes and C0 controls, drops the hidden characters above.
 export const terminalText = (value: string): string => withoutHiddenCharacters(sanitizeTerminalString(value))
 
-export const colorText = (text: string, tone: TerminalTone, enabled: boolean): string =>
-  enabled ? `\u001b[${ansiColorCodes[tone]}m${text}\u001b[0m` : text
+const sgrOf = (shade: TerminalShade): string =>
+  shade in ansiColorCodes ? String(ansiColorCodes[shade as TerminalTone]) : shade
+
+export const colorText = (text: string, shade: TerminalShade, enabled: boolean): string =>
+  enabled ? `\u001b[${sgrOf(shade)}m${text}\u001b[0m` : text
+
+// Bold carries emphasis where color would add a meaning: titles, column names, a chosen ID. SGR 22
+// ends bold alone, so bold inside a colored line leaves that color on.
+export const boldText = (text: string, enabled: boolean): string =>
+  enabled ? `\u001b[1m${text}\u001b[22m` : text
+
+/**
+ * Where each price sits from cheapest (0) to dearest (1), for a ramp from green to red. Paid prices
+ * spread on a log scale between the cheapest and the dearest, because prices are compared as
+ * ratios: $5 sits halfway between $0.50 and $50. A free price sits at 0. With nothing to compare,
+ * fewer than two distinct prices or only free ones, every position is undefined and nothing is
+ * colored.
+ */
+export const priceRamp = (prices: Array<number>): ((price: number | undefined) => number | undefined) => {
+  const paid = prices.filter((price) => Number.isFinite(price) && price > 0)
+  const free = prices.some((price) => price === 0)
+  const low = Math.min(...paid)
+  const high = Math.max(...paid)
+
+  if (paid.length === 0 || (low === high && !free)) {
+    return () => undefined
+  }
+
+  return (price) => {
+    if (price === undefined || !Number.isFinite(price) || price < 0) {
+      return undefined
+    }
+
+    if (price === 0 || low === high) {
+      return price === 0 ? 0 : 1
+    }
+
+    const position = (Math.log(price) - Math.log(low)) / (Math.log(high) - Math.log(low))
+    return Math.min(1, Math.max(0, Math.round(position * 1000) / 1000))
+  }
+}
+
+// Green, amber, orange and red dark enough for 3:1 contrast on a white background and light enough
+// for 4.6:1 on a dark one, at every point between them.
+const rampAnchors = [[42, 157, 74], [167, 125, 0], [192, 101, 26], [229, 83, 75]]
+// The same ramp in the 256-color cube, each stop at least 3.3:1 on black and on white and each a
+// little warmer than the last: two greens, olive, amber, two oranges and red.
+const rampCube = [28, 64, 100, 136, 130, 166, 160]
+// Sixteen colors have no orange, so the ramp is three bands: green, yellow and red.
+const rampBands = ["32", "33", "31"]
+
+/** The SGR shade at a ramp position from 0 to 1 for a color depth. */
+export const rampShade = (position: number, depth: Exclude<ColorDepth, 0>): string => {
+  const at = Math.min(1, Math.max(0, position))
+
+  if (depth === 4) {
+    return rampBands[Math.min(2, Math.floor(at * 3))]
+  }
+
+  if (depth === 8) {
+    return `38;5;${rampCube[Math.min(rampCube.length - 1, Math.floor(at * rampCube.length))]}`
+  }
+
+  const span = at * (rampAnchors.length - 1)
+  const index = Math.min(rampAnchors.length - 2, Math.floor(span))
+  const fraction = span - index
+  const [red, green, blue] = rampAnchors[index].map((value, channel) =>
+    Math.round(value + (rampAnchors[index + 1][channel] - value) * fraction))
+
+  return `38;2;${red};${green};${blue}`
+}
 
 // A cell as it may be printed: controls and hidden characters go first, because one inside a
 // secret keeps it from matching, then registered secrets and secret-bearing URLs. Every cell passes
@@ -40,7 +147,9 @@ export interface TableColumn<Row> {
   header: string
   align: "left" | "right"
   cell: (row: Row) => string
-  tone?: (row: Row) => TerminalTone | undefined
+  tone?: (row: Row) => TerminalShade | undefined
+  // A cell without a tone shown in bold, such as the ID a config key names.
+  bold?: (row: Row) => boolean
   // A longer cell is cut to this many terminal columns, the last one an ellipsis.
   maxWidth?: number
   // Leave the cell blank when it repeats the row above, as an hour or a day does in a trend.
@@ -133,23 +242,39 @@ export const renderTable = <Row>(
 
   // Color wraps the text alone and padding stays outside it, so a reset never hides trailing spaces
   // and the plain text is the same with color on or off.
-  const line = (texts: Array<string>, tones: Array<TerminalTone | undefined>): string => {
+  // A cell is colored by its tone, else bold when chosen; never both, since a terminal can draw bold
+  // as a brighter color and shift the tone.
+  const line = (texts: Array<string>, tones: Array<TerminalShade | undefined>, bolds: Array<boolean>): string => {
     const padded = texts.map((text, index) => {
       const spaces = " ".repeat(Math.max(0, widths[index] - displayWidth(text)))
       const tone = tones[index]
-      const shown = tone === undefined || text === "" ? text : colorText(text, tone, color)
-      return columns[index].align === "right" ? spaces + shown : shown + spaces
+      let styled = text
+
+      if (text !== "" && tone !== undefined) {
+        styled = colorText(text, tone, color)
+      } else if (text !== "" && bolds[index]) {
+        styled = boldText(text, color)
+      }
+
+      return columns[index].align === "right" ? spaces + styled : styled + spaces
     })
     return `  ${padded.join("  ")}`.trimEnd()
   }
 
-  const header = line(columns.map((column) => column.header), [])
-  const body = shown.map((texts, rowIndex) => line(texts, columns.map((column) => column.tone?.(rows[rowIndex]))))
+  const header = line(columns.map((column) => column.header), [], columns.map(() => true))
+  const body = shown.map((texts, rowIndex) => line(
+    texts,
+    columns.map((column) => column.tone?.(rows[rowIndex])),
+    columns.map((column) => column.bold?.(rows[rowIndex]) === true),
+  ))
   return [header, ...body]
 }
 
-export const heading = (title: string, detail?: string): string =>
-  detail === undefined ? title : `${title} · ${detail}`
+// The title is bold so a reader finds it first; the detail after it stays plain.
+export const heading = (title: string, detail?: string, color = false): string => {
+  const shown = boldText(title, color)
+  return detail === undefined ? shown : `${shown} · ${detail}`
+}
 
 /**
  * Whether the terminal can show the marks below. The Windows console host shows them only inside
