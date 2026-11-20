@@ -11,7 +11,7 @@ const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-setup-view-"))
 process.env.HOME = home
 process.env.USERPROFILE = home
 
-const { renderSetupOutcomes } = await import("../../src/setup")
+const { renderSetupNotes, renderSetupOutcomes } = await import("../../src/setup")
 const { displayWidth } = await import("../../src/lib/terminal")
 
 test.after(async () => {
@@ -74,6 +74,18 @@ test("a failure reason gets the room the other columns leave, so its ASCII row f
   assert.equal(lines[3], "  claude-code-cli  ok up to date  /home/u/.claude/settings.json")
   assert.match(lines[4], /^ {2}codex-cli {8}x failed {7}y+…$/)
   for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
+test("the notes after an update fit 80 columns", () => {
+  const notes = renderSetupNotes([
+    { target: "claude-code-app", path: "/home/u/Claude-3p", status: "updated" },
+    { target: "codex-cli", path: "/home/u/.codex/config.toml", status: "updated" },
+  ])
+
+  assert.equal(notes.length, 3)
+  for (const line of notes) {
     assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
   }
 })

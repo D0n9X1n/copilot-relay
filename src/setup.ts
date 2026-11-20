@@ -83,6 +83,24 @@ export const renderSetupOutcomes = (
   ]
 }
 
+/** What to do after an update for the change to take effect, in lines of at most 80 columns. */
+export const renderSetupNotes = (outcomes: Array<SetupOutcome>): Array<string> => {
+  const notes: Array<string> = []
+
+  if (outcomes.some((outcome) => outcome.target === "claude-code-app" && outcome.status === "updated")) {
+    notes.push(
+      "Quit and reopen the Claude app; it reads this setup at launch",
+      "and may rewrite it while running.",
+    )
+  }
+
+  if (outcomes.some((outcome) => outcome.target.startsWith("codex") && outcome.status === "updated")) {
+    notes.push("Restart Codex and the Codex app to load the new config.")
+  }
+
+  return notes
+}
+
 /** The targets named on the command line, or every target when none is named. */
 export const parseSetupTargets = (names: Array<string>): Array<SetupTarget> => {
   if (names.length === 0) {
@@ -165,12 +183,8 @@ export const setup = defineCommand({
     console.log(renderSetupOutcomes(outcomes, printable(baseUrl), colorEnabled()).join("\n"))
     console.log("")
 
-    if (outcomes.some((outcome) => outcome.target === "claude-code-app" && outcome.status === "updated")) {
-      console.log("Quit and reopen the Claude app; it reads this setup at launch and may rewrite it while running.")
-    }
-
-    if (outcomes.some((outcome) => outcome.target.startsWith("codex") && outcome.status === "updated")) {
-      console.log("Restart Codex and the Codex app to load the new config.")
+    for (const note of renderSetupNotes(outcomes)) {
+      console.log(note)
     }
 
     if (outcomes.some((outcome) => outcome.status.startsWith("failed"))) {
