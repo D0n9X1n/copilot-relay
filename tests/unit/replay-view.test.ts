@@ -74,11 +74,15 @@ test("a missing capture has no summary, so it prints the verdict and its reason 
   ])
 })
 
-test("a long list of differences is cut, and every line fits 80 columns", () => {
+test("every difference is listed, and every line fits 80 columns", () => {
   const differences = Array.from({ length: 45 }, (_, index) => ({ path: `client.body[${index}].data`, reason: "Value differs" }))
   const lines = renderReplay({ ...matched, verdict: "DIFF", exitCode: 2, differences }, true, true)
 
-  assert.equal(stripVTControlCharacters(lines.at(-1)!), "  … and 15 more")
+  for (const { path } of differences) {
+    assert.ok(lines.some((line) => line.includes(`${path} `)), path)
+  }
+
+  assert.equal(stripVTControlCharacters(lines.at(-1)!), "  client.body[44].data  Value differs")
   for (const line of lines) {
     assert.ok(displayWidth(stripVTControlCharacters(line)) <= 80, line)
   }
@@ -108,13 +112,6 @@ test("a difference path is never cut; one too long to sit beside its reason gets
   for (const line of lines) {
     assert.ok(displayWidth(line) <= 80 || line.trim() === nested, `${displayWidth(line)}: ${line}`)
   }
-})
-
-test("without Unicode the count of differences not listed ends in ASCII dots", () => {
-  const differences = Array.from({ length: 45 }, (_, index) => ({ path: `client.body[${index}].data`, reason: "Value differs" }))
-  const lines = renderReplay({ ...matched, verdict: "DIFF", exitCode: 2, differences }, false, false)
-
-  assert.equal(lines.at(-1), "  ... and 15 more")
 })
 
 test("a refusal with its category and token counts fits 80 columns, the category kept", () => {

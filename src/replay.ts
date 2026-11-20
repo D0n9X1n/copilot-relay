@@ -1007,8 +1007,6 @@ const verdictViews: Record<ReplayResult["verdict"], { state: MarkState; tone: Te
 
 // The label column: a mark and INCOMPLETE, the longest verdict, then a two-space gutter.
 const labelWidth = 14
-// Differences after this many are counted rather than listed, so a large diff stays readable.
-const shownDifferences = 30
 // A line's budget: a two-space indent and a two-space gutter between columns.
 const lineWidth = 80
 const indent = 2
@@ -1144,10 +1142,11 @@ const describeRequest = (summary: NonNullable<ReplayResult["summary"]>): string[
 /**
  * The differences, each path beside its fixed reason. A path is the field's identity, so it is never
  * cut: one too long to sit beside its reason on an 80-column line prints on its own line, with the
- * reason indented under it. After the first shownDifferences, the rest are counted.
+ * reason indented under it. Every difference is listed: the comparison already stops at 100, and a
+ * path left out could not be found any other way.
  */
-const renderDifferences = (differences: ReplayResult["differences"], unicode: boolean): string[] => {
-  const shown = differences.slice(0, shownDifferences).map((difference) => ({
+const renderDifferences = (differences: ReplayResult["differences"]): string[] => {
+  const shown = differences.map((difference) => ({
     path: printableCell(difference.path),
     reason: printableCell(difference.reason),
   }))
@@ -1163,10 +1162,6 @@ const renderDifferences = (differences: ReplayResult["differences"], unicode: bo
     } else {
       lines.push(`  ${path}`, `    ${reason}`)
     }
-  }
-
-  if (differences.length > shownDifferences) {
-    lines.push(`  ${unicode ? "…" : "..."} and ${formatCount(differences.length - shownDifferences)} more`)
   }
 
   return lines
@@ -1203,7 +1198,7 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
   }
 
   if (result.differences.length > 0) {
-    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "", ...renderDifferences(result.differences, unicode))
+    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "", ...renderDifferences(result.differences))
   }
 
   // Every untrusted part was made printable before it was placed. As a backstop each line is
