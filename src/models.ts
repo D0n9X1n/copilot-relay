@@ -37,16 +37,13 @@ class ModelsUsageError extends Error {}
 // two would escape the scrub that runs on each printed line.
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 
-// Catalog names are untrusted: control characters, secrets and sensitive URLs are removed before a
-// long name is shortened, so a cut can never leave part of one behind.
+// Catalog names are untrusted: control characters, secrets and sensitive URLs are removed. The name
+// is kept whole, so a search sees every redaction marker intact; the table leaves NAME out rather
+// than cut it.
 const displayName = (name: string | undefined): string | undefined => {
   const text = printableCell(name ?? "").trim()
 
-  if (text === "") {
-    return undefined
-  }
-
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text
+  return text === "" ? undefined : text
 }
 
 // Every advertised ID, with the reason request admission would refuse it as gptModel or opusModel.
@@ -63,7 +60,8 @@ const listedModels = (config: ProxyConfig, catalog: CopilotModelCatalog, appConf
     const slot = slotFor(id, appConfig)
 
     return {
-      id: printable(id),
+      // The table scrubs the ID it prints in the same way, so a search never sees a hidden URL tail.
+      id: printableCell(id),
       ...(name !== undefined && { name }),
       ...(!selection.endpoint && { unusable: probeReason(selection.reason) }),
       chat: selection.endpoint !== undefined || selection.reason !== "unsupported-model-type",

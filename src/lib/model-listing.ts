@@ -60,13 +60,14 @@ export interface ModelSearch {
 export const normalizeModelSearch = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9]/g, "")
 
-// IDs and names arrive with secrets and sensitive URLs already replaced by the redaction marker.
-// A search drops the marker, so neither the hidden text nor the word "redacted" can match it.
-const searchable = (text: string): string => normalizeModelSearch(text.replaceAll(redactedMarker, " "))
+// IDs and names arrive whole, with secrets and sensitive URLs already replaced by the redaction
+// marker. The text on each side of a marker is searched on its own, so neither the hidden text, the
+// word "redacted", nor the two sides joined together can match.
+const segments = (text: string): string[] =>
+  text.split(redactedMarker).map(normalizeModelSearch).filter((segment) => segment !== "")
 
 const contains = (model: ListedModel, fragment: string): boolean =>
-  searchable(model.id).includes(fragment)
-  || searchable(model.name ?? "").includes(fragment)
+  [...segments(model.id), ...segments(model.name ?? "")].some((segment) => segment.includes(fragment))
 
 // Shorter fragments, such as "gpt", match most of a catalog and narrow nothing down.
 const minimumFragment = 4
@@ -109,7 +110,7 @@ export const searchModels = (models: ListedModel[], search: string): ModelSearch
 
   const usable = matches.filter((model) => model.unusable === undefined)
   // An exact ID wins over the longer IDs that contain it.
-  const exact = usable.find((model) => searchable(model.id) === wanted)
+  const exact = usable.find((model) => !model.id.includes(redactedMarker) && normalizeModelSearch(model.id) === wanted)
   const chosen = exact ?? (usable.length === 1 ? usable[0] : undefined)
 
   return { found: true, models: matches, chosen }

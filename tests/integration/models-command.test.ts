@@ -470,6 +470,30 @@ test("a search never matches the marker that hides a URL in a display name, and 
   assert.ok(!named.stdout.includes(secretPath.slice(0, 6)), named.stdout)
 })
 
+test("a search never matches a cut marker, text joined across a redacted span, or a hidden ID suffix", async (t) => {
+  const relayKey = "relay-fixture-key-0001"
+  const harness = await fixture(t, (request, response) => respond(response, { data: [
+    { id: "long-key-model", name: `${"a".repeat(72)}${relayKey}` },
+    { id: "joined-model", name: `prefix-${relayKey}-suffix` },
+    { id: `http://${request.headers.host}${secretPath}/model` },
+  ] }), { apiKey: relayKey })
+
+  for (const search of ["reda", "redacted", "prefixsuffix", "private gateway sentinel", relayKey]) {
+    const result = await harness.run(["models", search])
+
+    assert.equal(result.code, 1, `${search}: ${result.stdout}`)
+    assert.ok(!result.stdout.includes("long-key-model"), `${search}: ${result.stdout}`)
+    // The heading echoes the search itself, but never the hidden path.
+    assert.ok(!result.output.includes(secretPath), `${search}: ${result.output}`)
+  }
+
+  // Each side of a redacted span is still searched on its own.
+  const prefix = await harness.run(["models", "prefix"])
+
+  assert.equal(prefix.code, 0, prefix.stdout)
+  assert.match(prefix.stdout, /^ {2}joined-model\b/m)
+})
+
 test("models search prints the config line for one match and suggests the closest IDs for none", async (t) => {
   const harness = await fixture(t, (_request, response) => respond(response, { data: [
     { id: "claude-opus-5.5", name: "Claude Opus 5.5" },
