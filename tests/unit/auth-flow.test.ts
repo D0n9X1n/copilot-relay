@@ -245,6 +245,19 @@ test("auth names the signed-in user, or says the lookup failed without failing a
   assert.equal(authOutcomeLine(undefined), "Logged in; GitHub user unavailable")
 })
 
+const { signInWithDeviceCode } = await import("../../src/lib/auth")
+
+test("the device code's expiry is fixed when the code arrives, so a slow prompt cannot extend it", async () => {
+  const { clock, advance } = fakeClock()
+  const { fetch, calls } = scriptedFetch([json({ ...deviceCode, expires_in: 1 })])
+
+  // Printing the prompt takes longer than the code lives, as a paused console write can.
+  const flow = signInWithDeviceCode(() => advance(1200), clock, fetch)
+
+  await assert.rejects(flow, /did not finish|expired/)
+  assert.equal(calls.length, 1, "only the device code was requested; no poll was sent")
+})
+
 test("access_denied and expired_token on an error status stop the flow at once", async () => {
   for (const error of ["access_denied", "expired_token"]) {
     const { clock, sleeps } = fakeClock()

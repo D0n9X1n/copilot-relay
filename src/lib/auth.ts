@@ -281,6 +281,15 @@ export const getDeviceCode = (clock: AuthClock = realClock, fetch: AuthFetch = f
     }),
   }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get device code")
 
+// When the device code expires, read once, as soon as the code arrives: time spent printing the
+// prompt, which a paused console can stretch, counts against it.
+export const deviceFlowEndsAt = (deviceCode: DeviceCodeResponse, clock: AuthClock = realClock): number => {
+  const expiresIn = Number.isFinite(deviceCode.expires_in) && deviceCode.expires_in > 0 ?
+      deviceCode.expires_in
+    : defaultDeviceFlowSeconds
+  return clock.now() + expiresIn * 1000
+}
+
 // One poll's answer. GitHub reports pending, slow_down, access_denied and expired_token in the body,
 // whatever the status, so every body is decoded except a 5xx's, which is retried. Undefined means
 // there is no answer to act on: a network failure, a 5xx, or a body that is not JSON or stalls.
@@ -311,7 +320,7 @@ const pollOnce = async (
   }
 }
 
-// Polls until the user authorizes in the browser or the device code expires. Each poll
+// Polls until the user authorizes in the browser or the device code expires at `endsAt`. Each poll
 // and each wait is cut to the time left, so the flow never outlives the code. A pending answer waits
 // the interval; slow_down adds five seconds to it for good; a denied or expired code stops at once;
 // a network failure, a 5xx or an unreadable answer is retried at the current interval.
@@ -319,11 +328,8 @@ export const pollAccessToken = async (
   deviceCode: DeviceCodeResponse,
   clock: AuthClock = realClock,
   fetch: AuthFetch = fetchUpstream,
+  endsAt: number = deviceFlowEndsAt(deviceCode, clock),
 ): Promise<string> => {
-  const expiresIn = Number.isFinite(deviceCode.expires_in) && deviceCode.expires_in > 0 ?
-      deviceCode.expires_in
-    : defaultDeviceFlowSeconds
-  const endsAt = clock.now() + expiresIn * 1000
   let intervalMs = (Number.isFinite(deviceCode.interval) && deviceCode.interval > 0 ? deviceCode.interval : 5) * 1000
   const timeLeft = () => endsAt - clock.now()
 
@@ -354,6 +360,19 @@ export const pollAccessToken = async (
   }
 
   throw new Error("GitHub sign-in did not finish before the device code expired. Run copilot-relay auth to try again.")
+}
+
+// The device flow: request a code, fix its expiry, show it with `announce`, then poll until it is
+// used or expires.
+export const signInWithDeviceCode = async (
+  announce: (deviceCode: DeviceCodeResponse) => void,
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
+): Promise<string> => {
+  const deviceCode = await getDeviceCode(clock, fetch)
+  const endsAt = deviceFlowEndsAt(deviceCode, clock)
+  announce(deviceCode)
+  return pollAccessToken(deviceCode, clock, fetch, endsAt)
 }
 
 export const getGitHubUser = (
@@ -418,10 +437,12 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
     return existingToken
   }
 
-  const deviceCode = await getDeviceCode()
-  if (options.onDeviceCode) {
-    options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
-  } else {
+  const githubToken = await signInWithDeviceCode((deviceCode) => {
+    if (options.onDeviceCode) {
+      options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
+      return
+    }
+
     // The logger writes this prompt to stdout, so stdout decides whether the tip is shown.
     const tip = quickEditTip(process.stdout)
     if (tip !== undefined) {
@@ -431,9 +452,7 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
     log.info(
       `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
     )
-  }
-
-  const githubToken = await pollAccessToken(deviceCode)
+  })
   await writeGitHubToken(githubToken)
   log.info(`GitHub token synced to ${paths.githubTokenPath}`)
 
