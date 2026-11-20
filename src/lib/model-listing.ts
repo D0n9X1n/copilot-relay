@@ -118,13 +118,11 @@ const contextOf = (model: ListedModel): string => {
   return model.contextWindow >= 1_000_000 ? `${size} [1m]` : size
 }
 
-// The table's line budget: a two-space indent, a two-space gutter between columns, and NAME's range.
+// The table's line budget: a two-space indent and a two-space gutter between columns.
 const lineWidth = 80
 const indent = 2
 const gutter = 2
 const nameColumn = 1
-const nameMinimum = 10
-const nameMaximum = 18
 
 // The last column: the config key that names this ID, then why it cannot be one, if it cannot.
 const noteOf = (model: ListedModel, unicode: boolean): string => {
@@ -143,7 +141,9 @@ const noteOf = (model: ListedModel, unicode: boolean): string => {
 
 /**
  * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
- * it can be copied; a long display name is cut instead. The last column shares one place for the
+ * it can be copied. NAME is shown only when every name fits whole on an 80-column line: a cut name
+ * such as "Claude Op…" loses what tells two models apart, and MODEL already names each one. The
+ * last column shares one place for the
  * slot an ID fills and the mark on an ID that cannot be gptModel or opusModel, so a listing with
  * both stays within 80 columns; the mark does not rely on color.
  */
@@ -166,11 +166,14 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
     })
   }
 
-  // NAME takes the columns the others leave on an 80-column line, between nameMinimum and
-  // nameMaximum; only a long ID pushes a row past 80, since an ID is never cut.
-  const others = columnWidths(columns, models).filter((_width, index) => index !== nameColumn)
+  // NAME stays only when the longest name fits in the columns the others leave; an ID is never cut,
+  // so a long one can still push a row past 80.
+  const widths = columnWidths(columns, models)
+  const others = widths.filter((_width, index) => index !== nameColumn)
   const room = lineWidth - indent - gutter * (columns.length - 1) - others.reduce((sum, width) => sum + width, 0)
-  columns[nameColumn].maxWidth = Math.min(nameMaximum, Math.max(nameMinimum, room))
+  if (widths[nameColumn] > room) {
+    columns.splice(nameColumn, 1)
+  }
 
   const lines = renderTable(columns, models, color)
   // NOTE keeps the reason short so the row fits; this line says what the mark means.

@@ -270,7 +270,7 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 `–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
 `gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
 计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
-该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内；过长的显示名称也会因此收窄。
+该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内。
 列表不验证模型能否工作。
 令牌缓存提示输出到 stderr，因此 stdout 只有结果。
 
@@ -286,7 +286,8 @@ Copilot chat models · 4 of 6
 2 models that are not chat models are hidden: copilot-relay models --all
 ```
 
-过长的显示名称以 `…` 截断；ID 从不截断，便于复制。不加引号的
+只有每个显示名称都能在 80 列内完整显示时才有 NAME 列；否则表格省略这一列，因为截断后的名称（如 `Claude Op…`）
+会丢掉区分两个模型的部分，而 MODEL 已经标明每个模型。ID 从不截断，便于复制。不加引号的
 多个词组成一个搜索；搜索会打印匹配的模型，以及选择其中一个的 `config.yaml` 行。没有匹配时，搜索打印最接近
 的 ID；没有接近的 ID 时，提示使用 `copilot-relay models --all`。每次列出之后，配置指引显示当前的
 `gptModel` 和 `opusModel` 行，并对启动检查会拒绝的值给出警告。`--deep` 检查

@@ -91,17 +91,39 @@ test("the listing shows each model's cost and which slot uses it", () => {
   ])
 })
 
-test("a long name is cut but an ID never is", () => {
+test("NAME shows every name whole or is left out; an ID is never cut", () => {
   const longId = "x".repeat(70)
-  const lines = renderModelRows([
+  const withLongId = renderModelRows([
     { id: longId, name: "Long", chat: true },
-    { id: "short", name: "A display name far longer than the name column allows", chat: true },
+    { id: "short", name: "Short", chat: true },
   ], false, true)
 
-  assert.ok(lines[1].startsWith(`  ${longId}  Long`))
-  // The long ID leaves NAME its narrowest width.
-  assert.match(lines[2], /^ {2}short +A display… +– +–$/)
-  assert.match(renderModelRows([{ id: "short", name: "A display name far longer than the name column allows", chat: true }], false, true)[1], /^ {2}short {2}A display name fa… +– +–$/)
+  // A 70-column ID leaves no room for NAME, so the column is left out rather than cut.
+  assert.ok(withLongId[0].startsWith("  MODEL "))
+  assert.ok(!withLongId[0].includes("NAME"))
+  assert.match(withLongId[1], new RegExp(`^ {2}${longId} +– +–$`))
+
+  const withLongName = renderModelRows([
+    { id: "short", name: "A display name far longer than any eighty-column line could show beside it", chat: true },
+  ], false, true)
+  assert.ok(!withLongName[0].includes("NAME"))
+  assert.ok(!withLongName.some((line) => line.includes("…")), "no name is shown cut")
+})
+
+test("NAME is left out when Opus names would lose what tells them apart", () => {
+  const lines = renderModelRows([
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5", chat: true, contextWindow: 200_000, price: { input: 5, output: 25 }, slot: "opusModel" },
+    { id: "claude-opus-5.5-1m", name: "Claude Opus 5.5 (1M)", chat: true, contextWindow: 1_000_000, price: { input: 10, output: 37.5 }, unusable: "Protocol policy conflict" },
+    { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 400_000, price: { input: 1.25, output: 10 }, slot: "gptModel" },
+  ], false, true)
+
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+    assert.ok(!line.includes("…"), `cut cell: ${line}`)
+  }
+
+  assert.equal(lines[0], "  MODEL               COST       CONTEXT  NOTE")
+  assert.equal(lines[2], "  claude-opus-5.5-1m  $10/$37.5  1M [1m]  ! protocol policy conflict")
 })
 
 test("slots and marks share the last column, so a listing with both fits 80 columns", () => {
@@ -115,9 +137,10 @@ test("slots and marks share the last column, so a listing with both fits 80 colu
     assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
   }
 
-  assert.equal(lines[0], "  MODEL                   NAME             COST      CONTEXT  NOTE")
-  assert.equal(lines[1], "  claude-opus-5.5         Claude Opus 5.5  $4/$20    1M [1m]  ◀ opusModel")
-  assert.equal(lines[3], "  text-embedding-ada-002  Embedding V2 A…  –               –  ! not a chat model")
+  // Whole, the names would need 82 columns here, so NAME is left out rather than cut.
+  assert.equal(lines[0], "  MODEL                   COST      CONTEXT  NOTE")
+  assert.equal(lines[1], "  claude-opus-5.5         $4/$20    1M [1m]  ◀ opusModel")
+  assert.equal(lines[3], "  text-embedding-ada-002  –               –  ! not a chat model")
   // A configured ID that cannot be used shows its slot and its mark.
   assert.match(renderModelRows([{ id: "ada", chat: false, unusable: "Not a chat model", slot: "gptModel" }], false, true)[1], /◀ gptModel {2}! not a chat model$/)
 })

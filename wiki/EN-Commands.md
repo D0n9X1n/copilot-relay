@@ -329,8 +329,7 @@ suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
 embeddings, are left out and counted under the table; `--all` lists them too, marked
 `!` in that same column, headed NOTE once it holds a mark, and a line under the
 table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
-one column keeps the table within 80 columns; a long display name is narrowed for
-the same reason. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the
+one column keeps the table within 80 columns. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the
 answer.
 
 ```text
@@ -345,7 +344,9 @@ Copilot chat models · 4 of 6
 2 models that are not chat models are hidden: copilot-relay models --all
 ```
 
-A long display name is cut with `…`; an ID never is, so it can be copied. Unquoted words form one search,
+NAME appears only when every name fits whole on an 80-column line; otherwise the table leaves it out, because
+a cut name such as `Claude Op…` loses what tells two models apart and MODEL already names each one. An ID is
+never cut, so it can be copied. Unquoted words form one search,
 and a search prints the matching models and the `config.yaml` line that selects one.
 A search that matches nothing prints the closest IDs, or, when none is close, points
 to `copilot-relay models --all`. Under every listing, the config guide shows the
