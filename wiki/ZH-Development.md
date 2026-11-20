@@ -205,6 +205,10 @@ issues、可选的 Manually closed issues (unverified release linkage)、Changes
 API 查询失败时，会在输出任何说明之前失败。`PREVIOUS_TAG` 可指定祖先基准；
 `RELEASE_FIRST=1` 显式允许首次发布，不能与 `PREVIOUS_TAG` 同时使用。
 
+一个发布可以在 `release-notes/<tag>.md` 中加入手写的章节，例如不兼容变更或测量结果。生成器
+从打 tag 的提交读取该文件，从不读取工作区，并把它追加在 Verification 之后，所以 workflow 每次
+重跑都得到相同的内容。在功能 PR 中提交它，像其他文件一样接受评审。
+
 发布 workflow 会先生成说明，再创建或更新 GitHub Release。这不会阻止并行的 npm 和
 GitHub Packages job，因此必须验证所有发布 job，而不能只看包是否可用。单独运行生成器
 不会创建 tag 或发布包。它的离线测试包含在 `npm run test:unit` 中。

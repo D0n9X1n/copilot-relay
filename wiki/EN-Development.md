@@ -239,6 +239,12 @@ lookups fail before any notes are emitted. `PREVIOUS_TAG` may select an explicit
 ancestor base; `RELEASE_FIRST=1` is the explicit first-release opt-in and cannot be
 combined with `PREVIOUS_TAG`.
 
+A release can add hand-written sections, such as breaking changes or measurements,
+in `release-notes/<tag>.md`. The generator reads that file from the tagged commit,
+never the checkout, and appends it after Verification, so every rerun of the
+workflow reproduces the same body. Commit it in the feature PR, where it is
+reviewed like any other file.
+
 The publish workflow generates notes before creating or updating the GitHub
 Release. This does not gate the parallel npm/GitHub Packages jobs: verify all
 publish jobs, not just package availability. Running the generator alone never

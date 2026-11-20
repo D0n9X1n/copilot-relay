@@ -62,7 +62,7 @@ src/
     defaults.ts               shipped defaults
     paths.ts                  ~/.copilot-relay layout, resolved at import time
     auth.ts                   token storage and refresh scheduling
-    models.ts                 routing + thinkEffort validation
+    models.ts                 two-slot routing, 1M IDs, thinkEffort validation
     preflight.ts              startup upstream verification
     lifecycle.ts              pid file, findRelayOnPort, findRelayProcessIds
     log.ts                    formatLogValue, rotation, retention
@@ -72,7 +72,8 @@ src/
     upstream-diagnostics.ts   upstream error context capture
     upstream-dispatcher.ts    one undici dispatcher for Copilot and GitHub calls, upstreamProxy
     error.ts                  error shaping
-    state.ts                  runtime state
+    state.ts                  runtime state, request snapshots, routing generations
+    terminal.ts               shared view kit: tables, marks, widths, color
     version.ts                build version
 ```
 
@@ -1432,6 +1433,40 @@ property names. `MATCH` is local transformation agreement, not a new model run,
 a cache benchmark, or proof of a historical refusal's cause. Incomplete/aborted
 captures cannot produce a match; see the CLI verdict table in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+
+## Terminal views
+
+Every command's human output is built from `src/lib/terminal.ts`, so all views share
+one look and one set of rules. JSON output never passes through it.
+
+- `printableCell(text)` runs before a cell is measured, cut or padded: controls and
+  hidden characters go first (one inside a secret would keep it from matching), then
+  registered secrets (`scrubLogSecrets`) and secret-bearing URLs
+  (`scrubSensitiveUrls`). A secret cut in two would escape the scrub, so nothing is
+  cut before this runs.
+- `displayWidth(text)` counts terminal columns per grapheme (`Intl.Segmenter`): East
+  Asian wide and fullwidth characters, the supplementary ideograph planes and emoji
+  in emoji presentation take two; a combining mark or zero-width character takes
+  none; a symbol in text presentation, such as `®` or `✓`, takes one.
+- `renderTable(columns, rows, color, minimumWidths)` gives a two-space indent and
+  gutter, and every column as wide as its widest cell, so an ID is never cut.
+  `columnWidths` computes the same widths ahead of time for a table printed one row
+  at a time. Color wraps each cell's text and padding stays outside it, so the plain
+  text is the same with color on or off and no line ends in spaces.
+- `mark(state)` gives `✓` `✗` `!` `–`, or `ok` `x` `!` `-` where
+  `unicodeEnabled()` says the terminal cannot show them: on Windows only Windows
+  Terminal or an editor's terminal, elsewhere a UTF-8 locale. A state always carries
+  a mark, so it never depends on color alone. `colorEnabled()` decides color from
+  the TTY and `NO_COLOR`/`FORCE_COLOR`.
+- `heading(title, detail)` is a view's first line: the command, then ` · ` and its
+  subject.
+
+The views keep to 80 columns and at most five table columns. When a table would
+pass 80, the view moves detail to a line under its row or leaves out an optional
+column, such as `models`' NAME; an exact value, such as a model ID or a quota
+amount, is never cut.
+`tests/unit/terminal.test.ts` pins the width rules; each command's own test pins
+its view.
 
 ## Logging invariants
 

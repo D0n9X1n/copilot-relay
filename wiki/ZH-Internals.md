@@ -59,7 +59,7 @@ src/
     defaults.ts               发布默认值
     paths.ts                  ~/.copilot-relay 布局，import 时解析
     auth.ts                   token 存储与刷新调度
-    models.ts                 路由 + thinkEffort 校验
+    models.ts                 双槽位路由、1M ID、thinkEffort 校验
     preflight.ts              启动期上游验证
     lifecycle.ts              pid 文件、findRelayOnPort、findRelayProcessIds
     log.ts                    formatLogValue、轮转、保留
@@ -69,7 +69,8 @@ src/
     upstream-diagnostics.ts   上游错误上下文采集
     upstream-dispatcher.ts    Copilot 与 GitHub 调用共用的 undici dispatcher、upstreamProxy
     error.ts                  错误整形
-    state.ts                  运行期状态
+    state.ts                  运行期状态、请求快照、路由代次
+    terminal.ts               共享视图工具：表格、标记、宽度、颜色
     version.ts                构建版本
 ```
 
@@ -1176,6 +1177,30 @@ recorded transport 传入，以准确复现本地错误关联文本；客户端 
 内容。Diff 只输出结构路径和固定原因，不输出值或来自 payload 的属性名。`MATCH` 表示
 本地转换一致，不是新的模型执行、缓存基准，也不能证明历史拒答的原因。未完成/中止
 捕获不能得到匹配；CLI 结果表见[日志与问题排查](ZH-Logging-Troubleshooting.md)。
+
+## 终端视图
+
+每个命令面向人的输出都由 `src/lib/terminal.ts` 构建，因此所有视图外观一致、遵守同一套规则。
+JSON 输出从不经过它。
+
+- `printableCell(text)` 在单元格被测量、截断或填充之前执行：先去掉控制字符和隐藏字符（藏在
+  密钥中间的这类字符会让密钥无法匹配），再清除已登记的密钥（`scrubLogSecrets`）和带密钥的
+  URL（`scrubSensitiveUrls`）。被截成两半的密钥会逃过清除，所以在这一步之前什么都不截断。
+- `displayWidth(text)` 按字素（`Intl.Segmenter`）计算终端列数：东亚宽字符和全角字符、补充
+  表意文字平面以及以 emoji 形式呈现的 emoji 占两列；组合标记和零宽字符不占列；以文本形式
+  呈现的符号（例如 `®` 或 `✓`）占一列。
+- `renderTable(columns, rows, color, minimumWidths)` 使用两个空格的缩进和列间距，每列宽度为
+  其最宽单元格的宽度，因此 ID 永远不会被截断。`columnWidths` 为逐行打印的表格预先算出同样的
+  宽度。颜色只包裹单元格文字，填充在颜色之外，所以开关颜色时纯文本相同，且没有行以空格结尾。
+- `mark(state)` 给出 `✓` `✗` `!` `–`；当 `unicodeEnabled()` 判断终端无法显示时给出
+  `ok` `x` `!` `-`：Windows 上只有 Windows Terminal 或编辑器内置终端可以显示，其他平台需要
+  UTF-8 locale。每个状态都带标记，所以从不只靠颜色区分。`colorEnabled()` 根据 TTY 和
+  `NO_COLOR`/`FORCE_COLOR` 决定是否着色。
+- `heading(title, detail)` 是视图的第一行：命令名，然后是 ` · ` 和它的对象。
+
+视图保持在 80 列以内，表格最多五列。表格会超过 80 列时，视图把细节移到所在行下方的一行，或者
+省略一个可选列（例如 `models` 的 NAME 列）；精确值（例如模型 ID 或配额数量）永远不截断。`tests/unit/terminal.test.ts` 固定宽度
+规则；每个命令自己的测试固定它的视图。
 
 ## 日志不变量
 
