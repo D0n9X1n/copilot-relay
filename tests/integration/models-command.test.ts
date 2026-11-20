@@ -506,6 +506,7 @@ test("models search prints the config line for one match and suggests the closes
   for (const line of nothing.stdout.split("\n")) {
     assert.ok(line.length <= 80, `${line.length} columns: ${line}`)
   }
+
   assert.equal(harness.requests.length, 4)
 })
 
