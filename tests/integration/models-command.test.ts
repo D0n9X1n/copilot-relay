@@ -454,6 +454,22 @@ test("a search term and its hint never print a registered sensitive URL", async 
   assert.match(result.stdout, /No upstream model matches "http:\/\/127\.0\.0\.1:\d+\[redacted\]"/)
 })
 
+test("a search never matches the marker that hides a URL in a display name, and still matches the rest", async (t) => {
+  const harness = await fixture(t, (request, response) => respond(response, { data: [
+    { id: "mock-model", name: `Example model http://${request.headers.host}${secretPath}/mock-tenant` },
+  ] }))
+
+  const marker = await harness.run(["models", "redacted"])
+  const named = await harness.run(["models", "example model"])
+
+  assert.equal(marker.code, 1)
+  assert.match(marker.stdout, /No upstream model matches "redacted"/)
+  // The rest of the name is still searched, and the URL is still hidden in what is printed.
+  assert.equal(named.code, 0)
+  assert.match(named.stdout, /^ {2}mock-model\b/m)
+  assert.ok(!named.stdout.includes(secretPath.slice(0, 6)), named.stdout)
+})
+
 test("models search prints the config line for one match and suggests the closest IDs for none", async (t) => {
   const harness = await fixture(t, (_request, response) => respond(response, { data: [
     { id: "claude-opus-5.5", name: "Claude Opus 5.5" },

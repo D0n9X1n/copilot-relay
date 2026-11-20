@@ -1,6 +1,7 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
 import { columnWidths, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import { redactedMarker } from "./redact"
 
 export interface ListedModel {
   // The exact upstream ID, which is the value gptModel or opusModel takes.
@@ -54,9 +55,13 @@ export interface ModelSearch {
 export const normalizeModelSearch = (text: string): string =>
   text.toLowerCase().replace(/[^a-z0-9]/g, "")
 
+// IDs and names arrive with secrets and sensitive URLs already replaced by the redaction marker.
+// A search drops the marker, so neither the hidden text nor the word "redacted" can match it.
+const searchable = (text: string): string => normalizeModelSearch(text.replaceAll(redactedMarker, " "))
+
 const contains = (model: ListedModel, fragment: string): boolean =>
-  normalizeModelSearch(model.id).includes(fragment)
-  || normalizeModelSearch(model.name ?? "").includes(fragment)
+  searchable(model.id).includes(fragment)
+  || searchable(model.name ?? "").includes(fragment)
 
 // Shorter fragments, such as "gpt", match most of a catalog and narrow nothing down.
 const minimumFragment = 4
@@ -99,7 +104,7 @@ export const searchModels = (models: ListedModel[], search: string): ModelSearch
 
   const usable = matches.filter((model) => model.unusable === undefined)
   // An exact ID wins over the longer IDs that contain it.
-  const exact = usable.find((model) => normalizeModelSearch(model.id) === wanted)
+  const exact = usable.find((model) => searchable(model.id) === wanted)
   const chosen = exact ?? (usable.length === 1 ? usable[0] : undefined)
 
   return { found: true, models: matches, chosen }
