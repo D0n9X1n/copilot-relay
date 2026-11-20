@@ -206,6 +206,29 @@ test("when the shared Codex config is skipped, the Codex app is reported skipped
   await assert.rejects(fs.stat(codexHome))
 })
 
+test("when the shared Codex config fails, the Codex app is reported failed too, without a second attempt", async (t) => {
+  const { runSetup } = await import("../../src/lib/client-setup")
+  await useCodexHome(t)
+  // Only the first write fails, so a second attempt would succeed and hide the failure.
+  const mkdir = t.mock.method(fs, "mkdir", async () => {
+    throw new Error("disk briefly unavailable")
+  }, { times: 1 })
+  const context = {
+    appConfig: { apiKey: "", gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" } as never,
+    baseUrl: "http://127.0.0.1:4142",
+    catalog: undefined,
+    force: false,
+  }
+
+  const outcomes = await runSetup(["codex-cli", "codex-app"], context)
+
+  assert.deepEqual(outcomes.map((outcome) => [outcome.target, outcome.status]), [
+    ["codex-cli", "failed: disk briefly unavailable"],
+    ["codex-app", "failed: disk briefly unavailable"],
+  ])
+  assert.equal(mkdir.mock.callCount(), 1)
+})
+
 test("a model the app would refuse is listed under a Claude route name for its tier", () => {
   assert.equal(appModelName({ id: "claude-opus-5.5", tier: "opus" }), "claude-opus-5.5")
   assert.equal(appModelName({ id: "gpt-6-astra", tier: "sonnet" }), "claude-sonnet-relay")
