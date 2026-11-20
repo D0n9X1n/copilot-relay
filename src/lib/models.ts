@@ -88,7 +88,7 @@ export const resolveReasoningEffort = (
   requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
 // A catalog fetched before a reload switched upstreams does not describe this one's models.
-const currentCatalog = (): Map<string, CopilotModel> | undefined => {
+const currentCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
   const state = getRuntimeState()
   return state.modelCatalog?.baseUrl === state.upstreamBaseUrl ? state.modelCatalog?.models : undefined
 }
@@ -126,18 +126,70 @@ export const getModelRouting = (): ModelRoutingConfig => {
   }
 }
 
-export const getExposedUpstreamModelIds = (): Array<string> =>
-  resolveExposedModels(getConfiguredModelRouting(), currentCatalog())
+interface ExposedModels {
+  catalog: ReadonlyMap<string, CopilotModel> | undefined
+  gptModel: string
+  opusModel: string
+  models: ModelSelection | undefined
+  upstream: Array<string>
+  claude: Array<string>
+  // Each upstream ID by its lowercase form; the list is deduplicated case-insensitively.
+  byLowercase: Map<string, string>
+}
 
-// A slot keeps its configured spelling here, so a configured [1m] survives while the window is unknown.
-export const getExposedModelIds = (): Array<string> => {
+// The last computed exposed lists. They depend only on the catalog Map and the three routing values,
+// so those are the key: a published catalog is replaced rather than changed, and the routing object
+// is not the key because every request's runtime snapshot copies it.
+let exposedCache: ExposedModels | undefined
+
+const sameSelection = (left: ModelSelection | undefined, right: ModelSelection | undefined): boolean => {
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((id, index) => id === right[index])
+  }
+
+  return left === right
+}
+
+const exposedModels = (): ExposedModels => {
+  const catalog = currentCatalog()
   const routing = getConfiguredModelRouting()
+  const cached = exposedCache
+  if (
+    cached !== undefined
+    && cached.catalog === catalog
+    && cached.gptModel === routing.gptModel
+    && cached.opusModel === routing.opusModel
+    && sameSelection(cached.models, routing.models)
+  ) {
+    return cached
+  }
+
+  const upstream = resolveExposedModels(routing, catalog)
+
+  // A slot keeps its configured spelling here, so a configured [1m] survives while the window is unknown.
   const slots = [routing.gptModel, routing.opusModel]
-  return getExposedUpstreamModelIds().map((id) => {
-    const slot = slots.find((configured) => normalizeCopilotModelId(configured).toLowerCase() === id.toLowerCase())
+  const claude = upstream.map((id) => {
+    const slot = slots.find((configured) => canonicalModelId(configured, catalog).toLowerCase() === id.toLowerCase())
     return normalizeClaudeModelId(slot ?? id)
   })
+
+  // The selection is copied, so changing the configured list in place still misses the cache.
+  exposedCache = {
+    catalog,
+    gptModel: routing.gptModel,
+    opusModel: routing.opusModel,
+    models: Array.isArray(routing.models) ? [...routing.models] : routing.models,
+    upstream,
+    claude,
+    byLowercase: new Map(upstream.map((id) => [id.toLowerCase(), id])),
+  }
+  return exposedCache
 }
+
+// Copies, so a caller cannot change the cached lists.
+export const getExposedUpstreamModelIds = (): Array<string> => [...exposedModels().upstream]
+
+export const getExposedModelIds = (): Array<string> => [...exposedModels().claude]
 
 // Preflight and the tokenizer preload cover only the two slots; extra models load on first use.
 export const getUpstreamModelIds = (): Array<string> => {
@@ -148,8 +200,9 @@ export const getUpstreamModelIds = (): Array<string> => {
 // An exposed ID goes to itself. Any other name with "opus" goes to opusModel and the rest to
 // gptModel, so Claude Code's picker aliases keep a predictable route.
 export const routeModelId = (model: string): string => {
-  const requested = normalizeCopilotModelId(model.trim()).toLowerCase()
-  const exposed = getExposedUpstreamModelIds().find((id) => id.toLowerCase() === requested)
+  const exposedSet = exposedModels()
+  const requested = canonicalModelId(model.trim(), exposedSet.catalog).toLowerCase()
+  const exposed = exposedSet.byLowercase.get(requested)
   if (exposed !== undefined) {
     return exposed
   }
@@ -180,17 +233,38 @@ export const parseModelSelection = (value: string): ModelSelection => {
   return ids
 }
 
-// Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
-// IDs are lowercase, so an ID the catalog does not list is lowercased.
-export const canonicalModelId = (id: string, catalog: Map<string, CopilotModel> | undefined): string => {
-  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
-  for (const key of catalog?.keys() ?? []) {
-    if (key.toLowerCase() === lower) {
-      return key
+// Each catalog's keys by their lowercase form, built on first use. A published catalog is never
+// changed in place, so an index stays valid for as long as its catalog lives.
+const catalogIndexes = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
+
+const catalogIndex = (catalog: ReadonlyMap<string, CopilotModel>): Map<string, string> => {
+  const known = catalogIndexes.get(catalog)
+  if (known !== undefined) {
+    return known
+  }
+
+  // Keys that differ only in case resolve to the first one in catalog order.
+  const index = new Map<string, string>()
+  for (const key of catalog.keys()) {
+    const lower = key.toLowerCase()
+    if (!index.has(lower)) {
+      index.set(lower, key)
     }
   }
 
-  return lower
+  catalogIndexes.set(catalog, index)
+  return index
+}
+
+// Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
+// IDs are lowercase, so an ID the catalog does not list is lowercased.
+export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
+  if (catalog === undefined) {
+    return lower
+  }
+
+  return catalogIndex(catalog).get(lower) ?? lower
 }
 
 interface Candidate {
@@ -233,7 +307,7 @@ const isBetterPick = (left: Candidate, right: Candidate): boolean => {
 }
 
 /** The newest picker-enabled chat model of each vendor except Experimental, in catalog order. */
-export const selectNewestPerVendor = (catalog: Map<string, CopilotModel>): Array<string> => {
+export const selectNewestPerVendor = (catalog: ReadonlyMap<string, CopilotModel>): Array<string> => {
   const best = new Map<string, Candidate>()
   for (const [id, model] of catalog) {
     const vendor = model.vendor
@@ -259,7 +333,7 @@ export const selectNewestPerVendor = (catalog: Map<string, CopilotModel>): Array
  * case-insensitively in catalog casing. A listed ID the catalog lacks is skipped; without a
  * catalog, auto adds nothing and every listed ID is kept, lowercased.
  */
-export const resolveExposedModels = (routing: ModelRoutingConfig, catalog: Map<string, CopilotModel> | undefined): Array<string> => {
+export const resolveExposedModels = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel> | undefined): Array<string> => {
   const selected = routing.models === "auto" ? selectNewestPerVendor(catalog ?? new Map()) : routing.models ?? []
   const present = selected.filter((id) => catalog === undefined || catalog.has(canonicalModelId(id, catalog)))
   const exposed: Array<string> = []
@@ -273,7 +347,7 @@ export const resolveExposedModels = (routing: ModelRoutingConfig, catalog: Map<s
   return exposed
 }
 
-export const findMissingModels = (routing: ModelRoutingConfig, catalog: Map<string, CopilotModel>): Array<string> => {
+export const findMissingModels = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel>): Array<string> => {
   if (!Array.isArray(routing.models)) {
     return []
   }
