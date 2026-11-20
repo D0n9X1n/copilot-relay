@@ -6,3 +6,4 @@ dist
 .tmp-live/
 .venv/
 *.tgz
+__pycache__/
