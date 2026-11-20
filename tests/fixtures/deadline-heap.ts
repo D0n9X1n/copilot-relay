@@ -17,6 +17,7 @@ const { createServer } = await import("../../src/server")
 const { withRecordedTransport, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
+const { upstreamDeadlineCounts } = await import("../../src/lib/deadline")
 
 const gc = (globalThis as { gc?: () => void }).gc
 if (gc === undefined) {
@@ -135,6 +136,7 @@ const settle = async () => {
 // the code it adds later grows the heap by about 0.3 MB that no request holds; after 500 of each
 // kind it has settled, so the samples below compare what requests leave behind.
 const warmUp = 500
+const startCounts = upstreamDeadlineCounts()
 await run(warmUp, false, false)
 await run(warmUp, true, false)
 await settle()
@@ -145,12 +147,19 @@ await run(total, false, true)
 await run(total, true, true)
 await settle()
 const after = process.memoryUsage().heapUsed
+const endCounts = upstreamDeadlineCounts()
 
 await flushLogs()
 process.stdout.write(`${JSON.stringify({
   growthBytes: after - before,
   sampled: sampled.length,
   reachable: sampled.filter((ref) => ref.deref() !== undefined).length,
+  // Over the whole run, warm-up included, so a timer a finished response failed to release is seen
+  // even when it retains no sampled trace.
+  deadlines: {
+    created: endCounts.created - startCounts.created,
+    disposed: endCounts.disposed - startCounts.disposed,
+  },
 })}\n`)
 await fs.rm(home, { recursive: true, force: true })
 process.exit(0)
