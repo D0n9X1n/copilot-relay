@@ -812,6 +812,29 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 `config.yaml` 那一行不给出原因，因为这个文件可能含有凭据，例如 `upstreamProxy` 的密码。
 规则见[配置说明](ZH-Configuration.md)。
 
+## 登录一直等待或看起来卡住
+
+`copilot-relay auth`，以及没有已保存 GitHub token 时的 `start`、`setup`、`models`，
+会打印一个设备码，然后等你在给出的网址里输入。每次调用 GitHub（包括读取响应体）最多
+30 秒。整个等待在设备码过期时结束：以 GitHub 返回的 `expires_in` 为准，没有返回时为
+15 分钟。在浏览器里拒绝登录或设备码过期时，会立刻停止并给出说明；网络错误或 GitHub
+返回错误状态时，按轮询间隔重试。所以登录不会无限等待。
+
+**Windows：输出停住，按 Enter 才继续。** 这是 Windows 控制台的“快速编辑模式”
+（QuickEdit），不是中转本身的问题。在窗口里点一下（比如为了选中设备码），会开始一次
+选择，并暂停所有向这个控制台写输出的程序，直到选择结束。按 **Esc** 或 **Enter**
+即可恢复输出。在 Windows 终端里，中转会在设备码上方打印这条提示：
+
+```text
+Tip: a click in this window pauses output; press Esc or Enter to resume.
+```
+
+要彻底避免，可以在控制台“属性”里关闭快速编辑模式，或改用 Windows Terminal——它的
+选择不会暂停输出。
+
+**登录结果。** `copilot-relay auth` 最后打印 `Logged in as <login>`。如果 token 已保存
+但查询 GitHub 用户失败，则打印 `Logged in; GitHub user unavailable`；token 依然可用。
+
 ## Token 缓存问题
 
 ```text
