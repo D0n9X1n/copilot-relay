@@ -7,6 +7,7 @@ import {
   configurableReasoningEfforts,
   defaultReasoningEffort,
   isConfiguredReasoningEffort,
+  parseModelSelection,
   type ConfiguredReasoningEffort,
 } from "~/lib/models"
 import {
@@ -32,6 +33,8 @@ export interface AppConfig {
   logLevel: LogLevelName
   logRetentionDays: number
   opusModel: string
+  // Extra models offered to clients, as written: auto, empty, or comma-separated Copilot IDs.
+  models: string
   port: number
   thinkEffort: ConfiguredReasoningEffort
   upstreamTimeoutSeconds: number
@@ -58,6 +61,7 @@ const defaultConfig: AppConfig = {
   logLevel: "info",
   logRetentionDays: 3,
   opusModel: "claude-opus-5.5",
+  models: "auto",
   port: 4142,
   thinkEffort: defaultReasoningEffort,
   upstreamTimeoutSeconds: 180,
@@ -152,6 +156,20 @@ const normalizeInteger = (
   }
 
   return candidate
+}
+
+// Kept as written so readAppConfig writes the literal back; parseModelSelection validates it.
+const normalizeModels = (value: unknown): string | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+
+  if (typeof value !== "string") {
+    throw new Error("Invalid models: expected auto, empty, or comma-separated Copilot model IDs")
+  }
+
+  parseModelSelection(value)
+  return value.trim()
 }
 
 const normalizeString = (value: unknown): string | undefined =>
@@ -622,6 +640,9 @@ const serializeConfig = (config: AppConfig): string =>
     "# Upstream Copilot model used for requests containing \"opus\".",
     `opusModel: ${config.opusModel}`,
     "",
+    "# Extra models offered to clients: auto (newest model of each vendor), empty, or comma-separated Copilot IDs.",
+    `models: ${config.models}`,
+    "",
   ].join("\n")
 
 const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
@@ -637,6 +658,7 @@ const resolveConfig = (raw: Record<string, unknown>): AppConfig => ({
   logRetentionDays: normalizeInteger(raw.logRetentionDays, "logRetentionDays", 1)
     ?? defaultConfig.logRetentionDays,
   opusModel: normalizeRequiredString(raw.opusModel, "opusModel") ?? defaultConfig.opusModel,
+  models: normalizeModels(raw.models) ?? defaultConfig.models,
   port: normalizeInteger(raw.port, "port", 1, 65_535) ?? defaultConfig.port,
   thinkEffort: normalizeThinkEffort(raw.thinkEffort) ?? defaultConfig.thinkEffort,
   upstreamTimeoutSeconds: normalizeUpstreamTimeoutSeconds(raw.upstreamTimeoutSeconds)

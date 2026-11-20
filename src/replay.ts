@@ -261,7 +261,12 @@ const validateManifest = (value: unknown): CaptureManifest => {
     requireValid(
       record(runtime.modelRouting)
       && text(runtime.modelRouting.gptModel)
-      && text(runtime.modelRouting.opusModel),
+      && text(runtime.modelRouting.opusModel)
+      && (
+        runtime.modelRouting.models === undefined
+        || runtime.modelRouting.models === "auto"
+        || Array.isArray(runtime.modelRouting.models) && runtime.modelRouting.models.every((id: unknown) => text(id))
+      ),
     )
   }
 

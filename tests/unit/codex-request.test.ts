@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
+import { clampReasoningEffort } from "../../src/copilot/models"
 import {
-  clampReasoningEffort,
   contextOverflowStream,
   getCodexInitiator,
   includesImage,

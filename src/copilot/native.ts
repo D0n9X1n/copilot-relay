@@ -5,6 +5,7 @@ import type {
   ClaudeMessagesPayload,
   ClaudeResponse,
   ClaudeStreamEventData,
+  ClaudeSystemMessage,
   ClaudeTool,
 } from "~/claude/types"
 import { validateClaudeMessages } from "~/claude/translate"
@@ -24,6 +25,7 @@ import { sanitizeTerminalString } from "~/lib/redact"
 import {
   advertisesNoReasoningEffort,
   boundModelOutputTokens,
+  clampReasoningEffort,
   getCachedCopilotModel,
   resolveModelReasoningEffort,
 } from "./models"
@@ -194,6 +196,24 @@ function normalizeNativeHistory(messages: ClaudeMessage[]): ClaudeMessage[] {
   return combined
 }
 
+// A system message as sent upstream: its effort is clamped, so it can be a level only Copilot uses.
+type NativeWireMessage = ClaudeMessage | (Omit<ClaudeSystemMessage, "output_config"> & { output_config: { effort: string } })
+
+// Native history forwards each system message's own effort, which gets the same clamp as the turn's.
+const clampSystemEfforts = (config: ProxyConfig, model: string, messages: Array<ClaudeMessage>): Array<NativeWireMessage> =>
+  messages.map((message) => {
+    if (message.role !== "system" || message.output_config?.effort === undefined) {
+      return message
+    }
+
+    const effort = resolveModelReasoningEffort(config, model, message.output_config.effort)
+    if (effort === undefined) {
+      return message
+    }
+
+    return { ...message, output_config: { ...message.output_config, effort } }
+  })
+
 export function shouldUseNativeMessages(config: ProxyConfig, model: string): boolean {
   return selectCopilotEndpoint(config, model).endpoint === "/v1/messages"
 }
@@ -277,7 +297,7 @@ export async function createNativeMessages(
 
   const body = {
     ...payload,
-    messages: normalizeNativeHistory(payload.messages),
+    messages: clampSystemEfforts(config, payload.model, normalizeNativeHistory(payload.messages)),
     max_tokens: maxTokens,
     stream: Boolean(payload.stream || exceedsNonStreamingLimit),
     output_config: outputConfig,
@@ -296,7 +316,13 @@ export async function createNativeMessages(
     headers["anthropic-beta"] = beta
   }
 
-  const effortLabel = effort === undefined ? "omitted" : getClaudeTurnEffort(body).effective
+  // The turn's effort comes from the client's payload, where an inline system control can change
+  // it, and is clamped as the body's efforts were. The body itself can hold wire-only levels such
+  // as minimal, which the client-input validator rejects, so it is never read back here.
+  const advertised = getCachedCopilotModel(config, payload.model)?.reasoningEfforts
+  const effortLabel = effort === undefined
+    ? "omitted"
+    : clampReasoningEffort(getClaudeTurnEffort(payload).effective, advertised) ?? "omitted"
   const initiator = options.initiator ?? "agent"
 
   log.info(sanitizeTerminalString(

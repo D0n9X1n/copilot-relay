@@ -1,11 +1,28 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import test, { type TestContext } from "node:test"
 
 import {
   translateToClaude,
   translateToOpenAI,
 } from "../../src/claude/translate"
 import type { ChatCompletionResponse } from "../../src/copilot/types"
+import { runtimeState } from "../../src/lib/state"
+
+// The [1m] identity comes from each model's catalog window, so these runs record one.
+const useWindows = (t: TestContext, windows: Record<string, number>): void => {
+  runtimeState.upstreamBaseUrl = "https://fixture.invalid"
+  runtimeState.modelCatalog = {
+    baseUrl: "https://fixture.invalid",
+    models: new Map(Object.entries(windows).map(([id, window]) => [
+      id,
+      { limits: { max_context_window_tokens: window, max_prompt_tokens: 1000, max_output_tokens: 1000 } },
+    ])),
+  }
+  t.after(() => {
+    delete runtimeState.modelCatalog
+    delete runtimeState.upstreamBaseUrl
+  })
+}
 
 const createChatResponse = (model: string): ChatCompletionResponse => ({
   id: "chat_test",
@@ -35,7 +52,8 @@ test("filtered chat output is a refusal, not normal completion", () => {
 // Why: completed Copilot responses carry canonical upstream IDs. Claude Code
 // must receive the client-facing context identity without rewriting unrelated
 // model names.
-test("normalizes completed response model metadata for Claude", () => {
+test("normalizes completed response model metadata for Claude", (t) => {
+  useWindows(t, { "gpt-6-astra": 1_000_000, "gpt-5.6-sol": 1_050_000 })
   assert.equal(
     translateToClaude(createChatResponse("gpt-6-astra")).model,
     "gpt-6-astra[1m]",

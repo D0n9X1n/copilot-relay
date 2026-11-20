@@ -4,6 +4,7 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { getModelRouting, isClaudeModelId, normalizeCopilotModelId } from "~/lib/models"
 import {
+  clampReasoningEffort,
   ensureCopilotModelCatalog,
   getCachedCopilotModel,
   pinCopilotModelCatalog,
@@ -20,14 +21,6 @@ export interface PreparedCodexRequest {
   requestedEffort?: string
   effectiveEffort?: string
 }
-
-// The levels Copilot's /responses accepts, as its own error for an unknown level lists them. Used
-// when the catalog does not say which levels a model takes.
-const copilotReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-
-// Every level Codex can send, lowest first. Codex offers "ultra" for several models; Copilot
-// answers it with HTTP 400.
-const effortOrder = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -120,36 +113,6 @@ export const resolveCodexModel = async (config: ProxyConfig, requested: string):
   }
 
   return { model, api: "responses" }
-}
-
-const effortRank = (effort: string): number => effortOrder.indexOf(effort)
-
-/**
- * The reasoning effort to send for a requested one.
- *
- * A level the model advertises, or one this relay does not know, is sent as requested. Any other
- * level becomes the highest advertised level below it, or the lowest advertised level when none is
- * below it. A model that advertises no levels gets none, since Copilot rejects the field for it.
- */
-export const clampReasoningEffort = (
-  requested: string,
-  advertised: Array<string> | undefined,
-): string | undefined => {
-  if (advertised?.length === 0) {
-    return undefined
-  }
-
-  const accepted = advertised ?? copilotReasoningEfforts
-  if (accepted.includes(requested) || effortRank(requested) === -1) {
-    return requested
-  }
-
-  const ranked = accepted
-    .filter((effort) => effortRank(effort) !== -1)
-    .sort((left, right) => effortRank(left) - effortRank(right))
-  const below = ranked.filter((effort) => effortRank(effort) <= effortRank(requested))
-
-  return below.at(-1) ?? ranked[0]
 }
 
 /**

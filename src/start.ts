@@ -8,14 +8,14 @@ import { getRelayBaseUrl, isLoopbackHost } from "~/lib/address"
 import { setupProxyAuth } from "~/lib/auth"
 import { normalizeThinkEffort, readAppConfig, watchAppConfig, type AppConfig } from "~/lib/app-config"
 import { applyClaudeConfig } from "~/lib/claude-settings"
-import { applyCodexSetup } from "~/codex/setup"
 import { readProxyConfig } from "~/lib/config"
-import { getClaudeConfigPath, getCodexHome } from "~/lib/defaults"
+import { startupCodexSetup } from "~/lib/client-setup"
+import { getClaudeConfigPath } from "~/lib/defaults"
 import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
-import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds } from "~/lib/models"
+import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds, parseModelSelection } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUpstreamProxyForDisplay, formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
@@ -154,6 +154,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     runtimeState.modelRouting = {
       gptModel: nextConfig.gptModel,
       opusModel: nextConfig.opusModel,
+      models: parseModelSelection(nextConfig.models),
     }
   }
 
@@ -228,6 +229,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
         configPath: claudeConfigPath,
         gptModel: appConfig.gptModel,
         gptLimits,
+        contextWindowOf: (model) => getCachedCopilotModel(config, model)?.limits?.max_context_window_tokens,
         maxOutputTokens: gptLimits && opusLimits ?
             Math.max(gptLimits.max_output_tokens, opusLimits.max_output_tokens)
           : undefined,
@@ -259,30 +261,9 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
   }
 
   if (appConfig.codexSetup) {
-    const codexHome = getCodexHome()
-    try {
-      // The same two models Claude Code offers; gptModel first, as Codex's default.
-      const codexResult = await applyCodexSetup({
-        apiKey: appConfig.apiKey,
-        baseUrl,
-        catalogPath: paths.codexCatalogPath,
-        codexHome,
-        models: [appConfig.gptModel, appConfig.opusModel].map((id) => ({
-          id,
-          capabilities: getCachedCopilotModel(config, id),
-        })),
-      })
-
-      if (codexResult.skipped) {
-        log.info(`codex setup skipped: ${codexHome} does not exist`)
-      } else if (codexResult.changed) {
-        log.info(`codex settings updated: ${codexResult.configPath}`)
-      } else {
-        log.info(`codex settings already up to date: ${codexResult.configPath}`)
-      }
-    } catch (error) {
-      log.error(`Could not update codex settings (${codexHome}):`, error)
-    }
+    // Capabilities come only from a catalog fetched from the configured Copilot base URL.
+    const catalog = config.modelCatalog?.baseUrl === config.copilotBaseUrl ? config.modelCatalog : undefined
+    await startupCodexSetup(appConfig, catalog, baseUrl)
   }
 
   const configWatcher = watchAppConfig((nextConfig) => {

@@ -200,7 +200,8 @@ test("effort resolution distinguishes implicit default, explicit none, and unsup
   runtimeState.thinkEffort = "high"
 
   assert.equal(resolveModelReasoningEffort(configFor(id), id), "high")
-  assert.equal(resolveModelReasoningEffort(configFor(id, { reasoningEfforts: ["low"] }), id), "high")
+  // The implicit default is clamped to the advertised levels, not dropped.
+  assert.equal(resolveModelReasoningEffort(configFor(id, { reasoningEfforts: ["low"] }), id), "low")
   assert.equal(resolveModelReasoningEffort(configFor(id), id, "none"), "none")
   assert.equal(resolveModelReasoningEffort(noEffortConfig, id), undefined)
 

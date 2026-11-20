@@ -269,6 +269,80 @@ test("first auto request after provider reload discovers native support before v
   })
 })
 
+test("a model the refreshed catalog exposes is admitted and executed as one routed model", async () => {
+  const root = configFor(providerB)
+  const stale = () => ({ baseUrl: providerA, models: new Map() })
+  root.modelCatalog = stale()
+  runtimeState.modelCatalog = root.modelCatalog
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5", models: "auto" }
+  runtimeState.upstreamBaseUrl = providerB
+  const app = createServer(root)
+  const listed = (id: string, vendor: string, endpoints: Array<string>, supports: Record<string, unknown>) => ({
+    id,
+    vendor,
+    model_picker_enabled: true,
+    supported_endpoints: endpoints,
+    capabilities: { type: "chat", supports },
+  })
+
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+  const post = (body: unknown) => app.fetch(new Request("http://127.0.0.1/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }))
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} })
+      if (request.path === "/models") {
+        return Response.json({ data: [
+          listed(model, "OpenAI", ["/responses"], { reasoning_effort: ["low", "medium", "high"] }),
+          listed("claude-opus-5.5", "Anthropic", ["/v1/messages"], { reasoning_effort: ["low", "medium", "high"] }),
+          // A well-formed supports object without reasoning_effort: the model takes no effort.
+          listed("grok-4.7", "xAI", ["/responses"], { streaming: true }),
+        ] })
+      }
+
+      return Response.json({
+        id: "resp_grok",
+        model: "grok-4.7",
+        created_at: 1,
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      })
+    },
+    refresh: async () => {
+      throw new Error("Unexpected credential refresh")
+    },
+  }, async () => {
+    const refused = await post({
+      model: "grok-4.7",
+      max_tokens: 64,
+      stream: true,
+      output_config: { effort: "high" },
+      messages: [{ role: "user", content: "hello" }],
+    })
+    const refusal = await refused.json() as { error: { code: string } }
+
+    assert.equal(refused.status, 400)
+    assert.doesNotMatch(refused.headers.get("content-type") ?? "", /text\/event-stream/)
+    assert.equal(refusal.error.code, "relay_unsupported_effort")
+    assert.deepEqual(requests.map((request) => request.path), ["/models"])
+
+    // Stale again, so the next admission also routes before and after discovery.
+    root.modelCatalog = stale()
+    runtimeState.modelCatalog = root.modelCatalog
+
+    const response = await post({ model: "grok-4.7", max_tokens: 64, messages: [{ role: "user", content: "hello" }] })
+
+    assert.equal(response.status, 200, await response.clone().text())
+    assert.deepEqual(requests.map((request) => request.path), ["/models", "/models", "/responses"])
+    assert.equal(requests.at(-1)?.body.model, "grok-4.7")
+  })
+})
+
 test("late provider A discovery updates its admitted request without overwriting provider B policy or catalog", { timeout: 5000 }, async () => {
   const root = configFor(providerA)
   root.modelCatalog = { baseUrl: providerA, models: new Map() }

@@ -3,8 +3,8 @@
 // Messages and Chat Completions, so Codex reaches them through this translation.
 import type { ClaudeMessagesPayload } from "~/claude/types"
 import type { NativeEvent } from "~/copilot/native"
-import type { CopilotModel } from "~/copilot/models"
-import { clampReasoningEffort, type CodexPayload } from "./request"
+import { clampReasoningEffort, type CopilotModel } from "~/copilot/models"
+import type { CodexPayload } from "./request"
 import { decodeThinking, encodeThinking } from "./thinking"
 
 export { decodeThinking }

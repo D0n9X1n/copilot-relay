@@ -40,6 +40,7 @@ webSearchBackend:
 claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
+models: auto
 ```
 
 ## 字段说明
@@ -52,15 +53,16 @@ opusModel: claude-opus-5.5
 | `copilotBaseUrl` | GitHub Copilot API 地址。必须是绝对的 `http://` 或 `https://` 地址，且不能包含账号密码。一般不要改。参见 [copilotBaseUrl 规则](#copilotbaseurl-规则)。 |
 | `upstreamProxy` | Copilot 与 GitHub 调用（包括登录）使用的出站代理。留空（默认）表示直连；`env` 表示使用 `HTTPS_PROXY`、`HTTP_PROXY` 和 `NO_PROXY`；否则写绝对的 `http://` 或 `https://` 代理地址。需要重启。参见 [upstreamProxy 规则](#upstreamproxy-规则)。 |
 | `claudeSetup` | 为 `true` 时，`start` 会自动更新 `~/.claude/settings.json`。 |
-| `codexSetup` | 为 `true` 时，如果 `$CODEX_HOME`（默认 `~/.codex`）存在，`start` 会为 Codex CLI 和 Codex app 完成配置：只含 `gptModel` 和 `opusModel` 的模型列表，以及指向本中继、无需登录 ChatGPT 的 `config.toml`。见 [Codex](ZH-Codex.md)。 |
+| `codexSetup` | 为 `true` 时，如果 `$CODEX_HOME`（默认 `~/.codex`）存在，`start` 会为 Codex CLI 和 Codex app 完成配置：由暴露的模型组成的模型列表（见 `models`），以及指向本中继、无需登录 ChatGPT 的 `config.toml`。见 [Codex](ZH-Codex.md)。 |
 | `logLevel` | 只能是 `error`、`info`、`debug`。`debug` 除有界日志外还会自动捕获完整的已观察请求/响应正文；启用前先看[日志与问题排查](ZH-Logging-Troubleshooting.md)。其他值会导致启动失败。 |
 | `logRetentionDays` | 普通 relay 日志与 debug 捕获保留的本地日历天数，包含今天；正整数，默认 `3`。活动/未知捕获受到保护，清理规则见[日志与问题排查](ZH-Logging-Troubleshooting.md)。 |
 | `thinkEffort` | 请求未指定时使用的默认推理强度：`low`、`medium`、`high`、`xhigh`、`max`。 |
 | `upstreamTimeoutSeconds` | 单个 Claude 请求等待上游 Copilot 调用的最长秒数，默认 `180`；`0` 禁用 relay 的总超时。 |
 | `webSearchBackend` | bridge-managed WebSearch 使用的 Copilot Responses 模型；留空使用 `gptModel`。 |
 | `claudeUpstreamApi` | Claude 上游协议：`chat-completions`（默认）、`auto` 或 `messages`。不改变非 Claude 模型的路由。 |
-| `gptModel` | 非 Opus 请求使用的上游模型；Codex 请求的模型不在目录中时也使用它。 |
-| `opusModel` | 请求模型名包含 `opus` 时使用的上游模型。 |
+| `gptModel` | Claude 请求的模型名既不是暴露的模型、也不含 `opus` 时使用的上游模型；Codex 请求的模型不在目录中时也使用它。 |
+| `opusModel` | Claude 请求的模型名不是暴露的模型、但包含 `opus` 时使用的上游模型。 |
+| `models` | 额外提供给客户端的模型：`auto`（默认，每个厂商最新的模型）、留空（只有 `gptModel` 和 `opusModel`），或逗号分隔的 Copilot ID。文件保留你写的值；无效值会使启动失败，热重载遇到无效值则保留正在运行的配置。支持热重载。见[为每个客户端选择模型](ZH-Models.md)。 |
 
 ## 选择 Claude 的上游协议
 
@@ -250,8 +252,8 @@ ID `claude-opus-5.5` 时，还接受已观察到的 provider 拼写 `claude-opus
 包括从另一模型保留下来的工具 ID；也不代表缓存命中率保持不变。
 
 原生 Messages 的跨协议迁移不在这组测试覆盖范围内。应选择目标模型支持的 effort；
-认证、限流、网络故障、上下文上限和上游拒绝仍可能使请求失败。relay 不会静默替换
-模型或 effort 来掩盖这些失败。合并或构建修复不会更新已运行的安装版 relay；
+认证、限流、网络故障、上下文上限和上游拒绝仍可能使请求失败。relay 不会替换模型
+来掩盖这些失败；它只改动模型未公布的 effort 等级，见下文。合并或构建修复不会更新已运行的安装版 relay；
 需要另外更新并重启该运行时。
 
 ### 选择兼容的 effort
@@ -274,7 +276,9 @@ effort 返回 `400`，不会静默改用默认值。若
 原生历史会转发控制字段，因此待生效或带 `clear_at` 的 effort 控制同样被拒绝，
 不会静默丢弃。缺少 `supports` 对象，或 `reasoning_effort` 为 true、null 或格式错误时
 表示未知，而不是不支持。
-档位列表非空时，普通请求仍保留选定档位，上游拒绝仍是错误；relay 不会替换档位。
+档位列表非空时，公布的档位按所选发送；其他档位（无论是显式请求还是配置的默认值）
+改为不高于它的最高公布档位，没有更低档位时改为最低的公布档位。例如 `grok-4.7` 公布
+`low` 到 `xhigh`，所以 `max` 以 `xhigh` 发送。上游拒绝所发送的档位仍是错误。
 
 可以在 Claude Code 会话中途切换 effort，无需清空历史。消息级 system `output_config`
 的唯一键为 `effort` 时，可使用 `low`、`medium`、`high`、`xhigh` 或 `max`。
@@ -328,7 +332,7 @@ Invalid thinkEffort. Valid values: low, medium, high, xhigh, max. "none" is not 
 可用性仍然适用。2026-09-23 的认证目录查询及隔离 relay 验证确认了准确 ID
 `claude-opus-5.5`，以及 JSON/SSE、自动工具调用及工具结果续接、对话续接、
 `low`/`max` effort 和 WebSearch 最终回答重组。目录公布了全部五种配置 effort；
-relay 不会为该 Opus ID 添加 `[1m]` 后缀。WebSearch 检索仍使用 `webSearchBackend`
+它的窗口为 1,000,000 token，所以 Claude Code 看到的是该 Opus ID 的 1M 版本 `claude-opus-5.5[1m]`。WebSearch 检索仍使用 `webSearchBackend`
 或 `gptModel`。
 
 **2026-09-23 的验证使用翻译路径：** 该模型的 `tool_choice` 类型 `tool` 和 `any`
@@ -385,16 +389,26 @@ thinkEffort: max
 
 Relay 配置保留规范 ID `gpt-6-astra`。Relay 向 Claude Code 暴露
 `gpt-6-astra[1m]`，向 Copilot 只发送 `gpt-6-astra`。`[1m]` 控制 Claude Code 的
-context 计数，不能扩大上游容量。2026-09-09 查询的实时目录公布了：
+context 计数，不能扩大上游容量。任何 ID（无论是否为 Claude），只要它自己在目录中的窗口
+至少为 1,000,000 token，relay 就加上 `[1m]`；已知窗口更小时显示不带后缀的 ID；见
+[为每个客户端选择模型](ZH-Models.md)。2026-11-19 查询的实时目录公布了这些总窗口：
+
+| 模型 | 总 context | Claude Code ID |
+| --- | ---: | --- |
+| `gpt-6.2-astra` | 1,050,000 | `gpt-6.2-astra[1m]` |
+| `gpt-6.2-sol` | 1,050,000 | `gpt-6.2-sol[1m]` |
+| `gpt-6-astra` | 1,050,000 | `gpt-6-astra[1m]` |
+| `mai-code-2` | 1,050,000 | `mai-code-2[1m]` |
+| `claude-opus-5.5` | 1,000,000 | `claude-opus-5.5[1m]` |
+| `grok-4.7` | 500,000 | `grok-4.7` |
+
+2026-09-23 验证的 Opus 5.5 prompt 与输出上限：
 
 | 模型 | 总 context | 最大 prompt | 最大输出 |
 | --- | ---: | ---: | ---: |
-| `gpt-6-astra` | 1,000,000 | 872,000 | 128,000 |
-| `claude-opus-5` | 1,000,000 | 936,000 | 64,000 |
 | `claude-opus-5.5`（2026-09-23 验证） | 1,000,000 | 1,000,000 | 128,000 |
-| `gpt-5.6-sol` | 1,050,000 | 922,000 | 128,000 |
 
-这些值来自模型发现，并非运行时代码写死的限制，也不是通过生产环境中的百万 token
+启动时会在 `Model token limits` 行记录 `gptModel` 和 `opusModel` 的上限。这些值来自模型发现，并非运行时代码写死的限制，也不是通过生产环境中的百万 token
 请求测得。应在总窗口内为输出（包括推理）预留空间。Relay 不会截短输入，也不会扩大
 客户端明确指定的较小输出预算。Prompt 是否真正符合限制，仍由上游判定。
 本地 `/v1/messages/count_tokens` 仅供预算参考，不是计费。文本使用可用 tokenizer，
@@ -418,13 +432,12 @@ CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 claude --model 'gpt-6-astra[1m]'
 固定了其他 `--model`，也需要修改。
 应使用配置模型的准确身份，不要假设内置别名具有相同的客户端 context 预算。
 
-如果发现的 GPT 窗口并非恰好 1M，自动设置会使用不带后缀的模型 ID，并将
+如果发现的窗口小于 1M，自动设置会使用不带后缀的模型 ID，并在未设置时将
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` 初始化为实际窗口。否则 Claude 的 `[1m]` 后缀会覆盖
-该数值设置。以上述目录为例，手动配置 Sol 时可运行：
+该数值设置。以上述目录为例，手动配置 Grok 4.7 时可运行：
 
 ```sh
-CLAUDE_CODE_MAX_CONTEXT_TOKENS=1050000 CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 \
-  claude --model gpt-5.6-sol
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=500000 claude --model grok-4.7
 ```
 
 PowerShell 中用 `$env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "128000"` 赋值；需要时同样设置
@@ -446,7 +459,7 @@ upstreamTimeoutSeconds: 0
 
 对于文档中的 **1M 上下文 Opus 5.5 / GPT-6 Astra 模型对**，建议先使用保守的
 **800K 自动压缩窗口**，并保持自动压缩启用。这是留有余量的 relay 建议，不是实测
-最优值，也不能保证消除 API 错误。上方注明日期的目录给 Astra 872K prompt 上限和
+最优值，也不能保证消除 API 错误。2026-09-09 查询的目录给 Astra 872K prompt 上限和
 128K 最大输出；从 1M 总窗口预留 128K 后同样剩余 872K。800K 目标再留约 72K，
 用于工具输出、压缩和 token 估算误差。客户端扣除自身输出/缓冲预留后，可能更早压缩。
 
@@ -679,6 +692,7 @@ Upstream request failed without a response. HTTPS_PROXY or HTTP_PROXY is set, bu
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
+- `models`
 - `apiKey`
 
 需要重启：
@@ -708,7 +722,8 @@ relay 仍会每秒重试，但不会重复这一行。再次保存文件或原�
 每次尝试都会读取实时刷新的 token。
 
 改 `gptModel` 会改变新请求的上游路由，但不会重写 `~/.claude/settings.json` 中已有的模型或
-token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。
+token 设置。切换模型时应检查这些设置；自动设置只补充缺失的预算值。改 `models` 会立即改变
+暴露的模型和 `GET /v1/models`，但 Codex 的模型列表在启动时写入，需要重启中继。
 
 ## Claude Code 配置
 
@@ -755,53 +770,14 @@ CLAUDE_CODE_AUTO_MODE_SERVER=0
 来源滥用，不能阻止任意网络客户端。请保持 loopback 监听，或在绑定到 loopback 以外的
 地址前设置 `apiKey`；见[要求客户端密钥](#要求客户端密钥)和[架构](ZH-Architecture.md)。
 
-### 模型选择器只保留 Opus 和 GPT-6 Astra
+### 在模型选择器中选择模型
 
-使用 Claude Code **2.1.242 或更新版本**时，将以下示例合并到用户级
-`~/.claude/settings.json`，保留已有 relay 连接、预算、权限、hooks 及其他设置：
-
-```json
-{
-  "model": "gpt-6-astra[1m]",
-  "availableModels": ["opus", "gpt-6-astra[1m]"],
-  "modelPicker": {
-    "options": [
-      { "model": "opus", "label": "Opus" },
-      { "model": "gpt-6-astra[1m]", "label": "GPT-6 Astra" }
-    ],
-    "replaceBuiltInOptions": true
-  },
-  "env": {
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5.5"
-  }
-}
-```
-
-示例使用 relay 默认模型对：`opusModel: claude-opus-5.5` 与 `gptModel: gpt-6-astra`。
-请让 Opus 覆盖值与实际配置的上游 ID 保持一致。Astra 的客户端 ID 使用 `[1m]` 表示
-发现的一百万 token 窗口；如果网关公布其他窗口，应在 `model`、`availableModels`
-和 `modelPicker.options` 中统一使用 relay 暴露的不带后缀 ID。后缀只影响客户端
-上下文计算，不能扩大上游容量。
-
-`modelPicker` 用这两个具名选项替换内置列表，避免继续推荐实际没有独立路由的 Sonnet、
-Haiku 或 Fable。Claude Code 仍可能显示 **Default** 和当前会话模型，因此不能保证界面
-恰好只有两行。`availableModels` 是选择允许列表，也会过滤 picker 项；`model` 只决定
-启动默认值。使用 `/model` 选择 Opus 或 GPT-6 Astra，也可用 `/model gpt-6-astra[1m]`
-明确选择 Astra。
-
-Picker 设置应放在用户级、托管设置或 `--settings` 中，不能放在项目/本地设置中。
-此示例不能扩展托管允许列表；没有托管列表时，用户/项目/本地的 `availableModels`
-数组可能合并。若希望有效模型对保持精确，应清理你有权修改的设置中的旧条目，并检查
-托管限制。普通前缀匹配下，仅设置允许列表不会限制 **Default**；组织级强制限制还需
-在托管设置中使用 `enforceAvailableModels`。见官方
-[模型配置](https://code.claude.com/docs/en/model-config)与
-[modelPicker 参考](https://code.claude.com/docs/en/settings-reference#modelpicker)。
-
-显式 `--model`、导出的 `ANTHROPIC_MODEL` 或恢复会话中保存的模型都可能覆盖启动选择；
-若模型没有变化，请检查 shell wrapper 和更高优先级的设置。`claudeSetup` 保留已有
-`model`、`availableModels` 和 `modelPicker`，不会安装或重置这个列表。Claude Code 可能
-将被排除的别名替换为允许的模型，因此应核对实际选择的模型，而不能假定被排除的别名
-一定报错。示例为手动选择，不会改变正在运行的 relay。
+只有在 `model` 和 `ANTHROPIC_MODEL` 都未设置时，`claudeSetup` 才把 `model` 设为 `gptModel` 的
+Claude Code ID。它保留你已有的模型设置，只按各模型自己的窗口调整其中的 `[1m]`，并且从不写入
+`availableModels` 或 `modelPicker`。要在
+`/model` 中选择 Opus、GPT 和其他暴露的模型，请按[为每个客户端选择模型](ZH-Models.md)的说明，
+在用户级 `~/.claude/settings.json` 中添加 `modelPicker`；该页也解释了为什么 Claude Code 的
+网关模型发现不会列出非 Claude 模型。
 
 ## 运行时文件
 

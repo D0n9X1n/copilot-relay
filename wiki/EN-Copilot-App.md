@@ -2,7 +2,8 @@
 
 The GitHub Copilot app and Copilot CLI can use a custom model provider, a preview
 feature GitHub calls bring your own key. Pointed at the relay, they reach the same
-two models Claude Code and Codex use, `gptModel` and `opusModel`, and their usage
+exposed models Claude Code and Codex use, `gptModel`, `opusModel` and the models the
+`models` key selects (see [Models](EN-Models.md)), and their usage
 shows up in the relay's logs and in `copilot-relay cache`.
 
 The app already talks to GitHub Copilot directly, with the same models. Route it
@@ -21,8 +22,8 @@ The relay serves two of the wire formats these clients speak. Pick one row:
 
 | Provider type | Base URL | Relay route | Result |
 | --- | --- | --- | --- |
-| OpenAI-compatible, wire API **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | Works for both models. Recommended. |
-| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | Works for both models. Copilot CLI warns that it knows no token multiplier for an Anthropic `gpt-6-astra`, so its token estimates for that model are approximate. |
+| OpenAI-compatible, wire API **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | Works for an exposed model that Copilot serves on the endpoint the relay needs: `/v1/messages` for a Claude model, `/responses` for any other. Another model gets HTTP 400 `relay_unsupported_endpoint`. Recommended. |
+| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | Works for an exposed model that Copilot serves on an endpoint the relay can use for it: `/chat/completions` or `/responses` for most models, and for a Claude model the one `claudeUpstreamApi` selects. Copilot CLI warns that it knows no token multiplier for an Anthropic `gpt-6-astra`, so its token estimates for that model are approximate. |
 | OpenAI-compatible, wire API **Chat completions** (the default) | `http://127.0.0.1:4142/v1` | `POST /v1/chat/completions` | Fails. The relay does not serve this route and answers `500 Unsupported Claude API route`. |
 
 Use the port from your `config.yaml` if it is not `4142`. The Responses base URL
@@ -45,15 +46,16 @@ Open **Settings → Model providers**, add a provider, and fill it in:
 | Wire API | Responses |
 | API key | your relay `apiKey` |
 
-Then add the two models:
+Then add the exposed models, one entry per model:
 
 | Model ID | Display name |
 | --- | --- |
 | `gpt-6-astra` | `GPT-6 Astra · Relay` |
 | `claude-opus-5.5` | `Claude Opus 5.5 · Relay` |
+| each other exposed ID, such as `gpt-6.2-astra`, `mai-code-2` or `grok-4.7` | Copilot's name for it, followed by `· Relay` |
 
 The display names keep Copilot's own model names and add `· Relay`, so the
-picker does not show a relay model and a built-in one under the same label. Use the model IDs from your `gptModel` and `opusModel`.
+picker does not show a relay model and a built-in one under the same label. Use the IDs the relay logs at startup on its `Exposed models:` line, without `[1m]`.
 
 If the form offers no Responses choice, use the Anthropic type with base URL
 `http://127.0.0.1:4142` and the same key and models instead.
@@ -94,8 +96,8 @@ $env:COPILOT_PROVIDER_API_KEY = "<your relay apiKey>"
 $env:COPILOT_MODEL = "gpt-6-astra"
 ```
 
-Set `COPILOT_MODEL` to `claude-opus-5.5` for Opus, or switch with `/model` in a
-session. For the Anthropic type, set `COPILOT_PROVIDER_TYPE=anthropic`, use base
+Set `COPILOT_MODEL` to `claude-opus-5.5` for Opus, or to another exposed ID such as
+`grok-4.7`, or switch with `/model` in a session. For the Anthropic type, set `COPILOT_PROVIDER_TYPE=anthropic`, use base
 URL `http://127.0.0.1:4142`, and leave `COPILOT_PROVIDER_WIRE_API` unset.
 
 ## Check it works
@@ -134,4 +136,4 @@ URL `http://127.0.0.1:4142`, and leave `COPILOT_PROVIDER_WIRE_API` unset.
 | `500 Unsupported Claude API route` on another path, such as `/v1/v1/messages` or `/responses` | The base URL has the wrong ending: `/v1` for Responses, none for Anthropic. |
 | `401` with `authentication_error` | The key does not match `apiKey`. Copy it again from `config.yaml`. |
 | Connection refused | The relay is not running, or listens on another port. Run `copilot-relay status`. |
-| A model is missing from the picker | Add it to the provider by hand; model IDs must match `gptModel` and `opusModel`. |
+| A model is missing from the picker | Add it to the provider by hand, with an ID from the relay's `Exposed models:` line, without `[1m]`. |

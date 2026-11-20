@@ -1,8 +1,8 @@
 # GitHub Copilot app 与 Copilot CLI
 
 GitHub Copilot app 和 Copilot CLI 可以使用自定义模型提供方，GitHub 称之为 bring your own
-key，目前是预览功能。把它指向中继后，它们使用的就是 Claude Code 和 Codex 所用的两个模型，
-即 `gptModel` 和 `opusModel`，其用量也会出现在中继的日志和 `copilot-relay cache` 中。
+key，目前是预览功能。把它指向中继后，它们使用的就是 Claude Code 和 Codex 所用的暴露模型，
+即 `gptModel`、`opusModel` 和 `models` 键选出的模型（见[为每个客户端选择模型](ZH-Models.md)），其用量也会出现在中继的日志和 `copilot-relay cache` 中。
 
 app 本身已经直接连接 GitHub Copilot，模型也相同。如果你想在一个地方查看所有客户端的日志和
 prompt 缓存命中率，就让它经过中继；否则内置提供方也能完成同样的工作，还少一跳。经过中继的
@@ -17,8 +17,8 @@ GPT-6 Astra 和 Claude Opus 5.5 上，一次普通回复和一次五步工具调
 
 | 提供方类型 | Base URL | 中继路由 | 结果 |
 | --- | --- | --- | --- |
-| OpenAI-compatible，wire API 选 **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | 两个模型都可用。推荐。 |
-| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | 两个模型都可用。Copilot CLI 会提示它不知道 Anthropic 类型下 `gpt-6-astra` 的 token 倍率，所以该模型的 token 估算只是近似值。 |
+| OpenAI-compatible，wire API 选 **Responses** | `http://127.0.0.1:4142/v1` | `POST /v1/responses` | 适用于 Copilot 在中继所需端点上提供的暴露模型：Claude 模型需要 `/v1/messages`，其他模型需要 `/responses`。其他模型会得到 HTTP 400 `relay_unsupported_endpoint`。推荐。 |
+| **Anthropic** | `http://127.0.0.1:4142` | `POST /v1/messages` | 适用于 Copilot 在中继可用端点上提供的暴露模型：大多数模型为 `/chat/completions` 或 `/responses`，Claude 模型为 `claudeUpstreamApi` 所选的端点。Copilot CLI 会提示它不知道 Anthropic 类型下 `gpt-6-astra` 的 token 倍率，所以该模型的 token 估算只是近似值。 |
 | OpenAI-compatible，wire API 选 **Chat completions**（默认） | `http://127.0.0.1:4142/v1` | `POST /v1/chat/completions` | 不可用。中继不提供这个路由，会返回 `500 Unsupported Claude API route`。 |
 
 如果 `config.yaml` 中的端口不是 `4142`，请改用你的端口。Responses 的 base URL 以 `/v1`
@@ -40,15 +40,16 @@ GPT-6 Astra 和 Claude Opus 5.5 上，一次普通回复和一次五步工具调
 | Wire API | Responses |
 | API key | 你的中继 `apiKey` |
 
-然后添加两个模型：
+然后添加暴露的模型，每个模型一个条目：
 
 | 模型 ID | 显示名称 |
 | --- | --- |
 | `gpt-6-astra` | `GPT-6 Astra · Relay` |
 | `claude-opus-5.5` | `Claude Opus 5.5 · Relay` |
+| 其他每个暴露的 ID，例如 `gpt-6.2-astra`、`mai-code-2` 或 `grok-4.7` | Copilot 给它的名称，后接 `· Relay` |
 
 显示名称保留 Copilot 自己的模型名并加上 `· Relay`，这样模型选择器里中继模型和内置模型
-不会显示为同一个名称。模型 ID 请使用你的 `gptModel` 和 `opusModel`。
+不会显示为同一个名称。模型 ID 请使用中继启动时 `Exposed models:` 行中的 ID，去掉 `[1m]`。
 
 如果表单没有 Responses 选项，改用 Anthropic 类型，base URL 填 `http://127.0.0.1:4142`，
 密钥和模型不变。
@@ -85,7 +86,8 @@ $env:COPILOT_PROVIDER_API_KEY = "<你的中继 apiKey>"
 $env:COPILOT_MODEL = "gpt-6-astra"
 ```
 
-要用 Opus，把 `COPILOT_MODEL` 设为 `claude-opus-5.5`，或在会话中用 `/model` 切换。使用
+要用 Opus，把 `COPILOT_MODEL` 设为 `claude-opus-5.5`，也可以设为其他暴露的 ID，例如
+`grok-4.7`，或在会话中用 `/model` 切换。使用
 Anthropic 类型时，设置 `COPILOT_PROVIDER_TYPE=anthropic`，base URL 用
 `http://127.0.0.1:4142`，并且不要设置 `COPILOT_PROVIDER_WIRE_API`。
 
@@ -120,4 +122,4 @@ Anthropic 类型时，设置 `COPILOT_PROVIDER_TYPE=anthropic`，base URL 用
 | 其他路径上的 `500 Unsupported Claude API route`，例如 `/v1/v1/messages` 或 `/responses` | base URL 结尾不对：Responses 要以 `/v1` 结尾，Anthropic 不带。 |
 | `401` 和 `authentication_error` | 密钥与 `apiKey` 不一致。从 `config.yaml` 重新复制。 |
 | 连接被拒绝 | 中继没有运行，或监听在其他端口。运行 `copilot-relay status`。 |
-| 模型选择器里缺少某个模型 | 手动把它添加到提供方；模型 ID 必须与 `gptModel` 和 `opusModel` 一致。 |
+| 模型选择器里缺少某个模型 | 手动把它添加到提供方，使用中继 `Exposed models:` 行中的 ID，去掉 `[1m]`。 |

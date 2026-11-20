@@ -1,5 +1,5 @@
-// The model catalog Codex gets from copilot-relay: exactly gptModel and opusModel, so the Codex CLI
-// and app list the same two models Claude Code does. Codex reads it from model_catalog_json as its
+// The model catalog Codex gets from copilot-relay: every model the relay exposes, as upstream IDs
+// without [1m], gptModel first as Codex's default. Codex reads it from model_catalog_json as its
 // whole model list.
 import fs from "node:fs/promises"
 import { dirname, resolve } from "node:path"

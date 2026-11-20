@@ -84,6 +84,16 @@ test("uses shipped defaults for a fresh install", async () => {
 
   assert.equal(config.opusModel, "claude-opus-5.5")
   assert.equal(config.gptModel, "gpt-6-astra")
+  assert.equal(config.models, "auto")
+})
+
+// Why: models is stored as the user wrote it; the exposed list is computed from it at runtime.
+test("models keeps its literal through repeated reads", async () => {
+  await writeConfigFile("models: grok-4.7, MAI-CODE-2\n")
+
+  assert.equal((await readAppConfig()).models, "grok-4.7, MAI-CODE-2")
+  assert.equal((await readAppConfig()).models, "grok-4.7, MAI-CODE-2")
+  assert.match(await readConfigFile(), /^models: grok-4\.7, MAI-CODE-2$/m)
 })
 
 test("preserves an existing Opus 5 selection after the default changes", async () => {

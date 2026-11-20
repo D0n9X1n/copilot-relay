@@ -26,7 +26,7 @@ src/
     request.ts                Codex 模型选择、Copilot 字段改写、x-initiator
     messages.ts               Claude 模型的 Responses <-> Claude Messages 翻译
     item-ids.ts               流式 GPT 回答中每个输出项使用同一个 id
-    catalog.ts                Codex 读取的两个模型的目录（model_catalog_json）
+    catalog.ts                Codex 读取的暴露模型目录（model_catalog_json）
     setup.ts                  codexSetup：start 时写目录文件并修改 config.toml
     thinking.ts               reasoning 项 encrypted_content 中携带的 Claude 思考
 
@@ -101,7 +101,8 @@ src/
 热重载 —— 对改动之后开始的工作生效：
 
 `logLevel`、`logRetentionDays`、`thinkEffort`、`upstreamTimeoutSeconds`、
-`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、`gptModel`、`opusModel`
+`copilotBaseUrl`、`webSearchBackend`、`claudeUpstreamApi`、`gptModel`、`opusModel`、
+`models`
 
 需要重启：
 
@@ -306,6 +307,51 @@ WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直�
 `src/claude/types.ts` 只定义代理需要的那部分 Claude Messages API 类型。它刻意不是
 完整的 Claude SDK —— 一个用不到的类型就是没有测试覆盖的维护成本。
 
+## 模型路由
+
+`src/lib/models.ts` 决定客户端能看到哪些 Copilot 模型，以及 Claude 请求发往哪里。
+`parseModelSelection` 把 `models` 键解析为 `"auto"`、空列表或 ID 列表；`readAppConfig` 保留
+原文，`start` 在启动和每次重载时把解析结果连同 `gptModel`、`opusModel` 存入运行时路由状态。
+
+- `selectNewestPerVendor(catalog)` 实现 `auto`：在带有 `model_picker_enabled`、类型为
+  `chat`、厂商不是 `Experimental`、ID 中有数字（第一段 `\d+(\.\d+)*`）的目录模型中，每个
+  厂商保留一个：版本按数字元组取最高，其次选择器类别 `powerful` > `versatile` >
+  `lightweight`，再次 ID 较小者。结果按目录顺序返回。
+- `resolveExposedModels(routing, catalog)` 依次返回 `gptModel`、`opusModel` 和选出的模型，
+  每个都经过 `canonicalModelId`（去掉所有 `[1m]`，使用目录中的大小写），并不区分大小写地去重。
+  目录中没有的列出 ID 会被跳过；没有目录时 `auto` 不添加任何模型，列出的 ID 保留。
+  `findMissingModels` 给出被跳过的 ID。守护进程（`getExposedUpstreamModelIds`）和独立运行的
+  `setup` 调用同一个函数；它每次调用都重新计算而不是保存结果，所以目录刷新或重载会立即生效。
+- `routeModelId`（由 `src/claude/translate.ts` 的 `translateModelName` 调用）把与某个暴露 ID
+  匹配的名称（不区分大小写，带任意 `[1m]`）发往该 ID；其他包含 `opus` 的名称发往
+  `opusModel`；其余发往 `gptModel`。未暴露的目录 ID 在 Claude 路由上不会被透传。Codex 路由
+  单独解析模型（`resolveCodexModel`，见下文）。
+- `normalizeClaudeModelId(model, contextWindowTokens?)` 给出 Claude Code 看到的 ID：任何 ID
+  （无论是否为 Claude）自己的目录窗口至少为 1,000,000 时加 `[1m]`（即该模型的 1M 版本，目录中
+  没有单独的 `-1m` ID）；已知窗口更小时为不带后缀的 ID；窗口未知时保留传入的 ID。`getExposedModelIds` 为 `GET /v1/models` 和启动时的
+  `Exposed models:` 行使用它；`src/lib/claude-settings.ts` 中的 `applyClaudeConfig` 用每个已保存
+  模型自己的窗口（`contextWindowOf`）对它使用。因此没有目录时（例如独立 setup 取不到目录），
+  ID 保持配置中的写法。
+- 预检和 tokenizer 预加载只覆盖 `gptModel` 和 `opusModel`（`getUpstreamModelIds`）；额外
+  模型的 tokenizer 在首次使用时加载。
+
+`src/copilot/models.ts` 中的 `clampReasoningEffort(requested, advertised)` 对公布的等级和中继
+不认识的等级按原样发送，其他等级改为不高于它的最高公布等级，没有更低等级时改为最低的公布
+等级。空列表表示不发送 effort。没有列表时使用 Copilot 自身错误信息列出的等级，即 `none` 到
+`max`。`resolveModelReasoningEffort` 为每个 Claude 适配器对请求或配置的 effort 执行这一限制，
+`src/copilot/native.ts` 中的 `createNativeMessages` 也同样限制每条转发的 system 消息的
+`output_config.effort`。目录条目不公布任何等级的模型，仍以 HTTP 400
+`relay_unsupported_effort` 拒绝明确指定的 effort。Codex 路由使用同一个函数。
+
+`src/copilot/chat.ts` 中的 `createChatCompletions` 在端点选择允许时（`responsesFallback`，
+由 `src/copilot/endpoint.ts` 的 `selectCopilotEndpoint` 在选中 Chat 且模型同时列出
+`/responses` 时设置），且 HTTP 400 错误码属于 `responsesRetryCodes`，即
+`unsupported_api_for_model` 或 `no_available_model_endpoints` 时，把失败的
+`/chat/completions` 调用在 `/responses` 上重试一次。尽管目录为 `mai-code-2` 列出了 Chat，
+Copilot 在 Chat 上仍以第二个错误码答复它。第二次失败会返回给客户端，不会有第三次尝试。
+
+面向用户的行为和各客户端的配置见[为每个客户端选择模型](ZH-Models.md)。
+
 ## 原生 Messages、chat 与 Responses
 
 `src/copilot/chat.ts` 为 routes 与启动 preflight 发送已解析好的上游 ID。
@@ -420,7 +466,7 @@ Claude Code 把工具返回的图片（例如 `Read` 打开一张 PNG）放在 `
   在 #150 中验证过的形状也没有。caozhiyuan/copilot-api 的 issue 361 和 362 报告 Copilot
   在工具输出中拒绝 `low`、`high` 以外的 `detail`，也拒绝空文本 part。
   其他工具消息仍使用 `stringifyToolOutput` 的纯字符串，因此已有历史发送相同的字节，
-  保留其 prompt 缓存前缀。从 `/chat/completions` 发起的 `unsupported_api_for_model`
+  保留其 prompt 缓存前缀。从 `/chat/completions` 改到 `/responses` 的
   重试重新发送未适配的 payload，走同一路径。
 - **`/chat/completions`，非 Claude 模型。** Copilot 接受工具消息中的 `image_url` part，
   但在 #150 中 gpt-5-mini 回复 `NO IMAGE`，gemini-3.8-flash 说出了它从未看到的颜色。
@@ -602,7 +648,7 @@ URL，或 `EnvHttpProxyAgent` 读取的每个代理变量）的凭据注册到 `
 **改写。** `prepareCodexPayload` 只改动 2026-10-23 用 Codex 形态的请求体探测时
 （`gpt-5.4-nano`、`gpt-6-astra`、`gpt-5.6-sol`）Copilot 返回 HTTP 400 的部分：
 `service_tier`（任何取值）、类型为 `image_generation` 的工具，以及 `reasoning.effort`
-为 `ultra`。`clampReasoningEffort` 发送目录列出的、不高于请求值的最高等级；没有更低的
+为 `ultra`。`clampReasoningEffort`（见上文“模型路由”）发送目录列出的、不高于请求值的最高等级；没有更低的
 等级时发送最低的列出等级；模型一个等级都没列出时不发送 effort。目录未列出等级时，使用
 Copilot 自身错误信息列出的等级，即 `none` 到 `max`。同样的探测接受了 `store: false`、
 `include`、`client_metadata`、`prompt_cache_key`、`parallel_tool_calls`、`text.verbosity`、
@@ -656,11 +702,11 @@ Claude 的上限。返回时，usage 把 Claude 的缓存读取和写入计入 `
 
 **Codex 配置。** 启用 `codexSetup` 时，如果 `$CODEX_HOME` 存在，`start` 会调用
 `applyCodexSetup`（`src/codex/setup.ts`）。它用 `buildCodexCatalog`（`src/codex/catalog.ts`）
-写出 `~/.copilot-relay/codex-models.json`：先 `gptModel` 后 `opusModel`；Codex 自带的模型保留
+写出 `~/.copilot-relay/codex-models.json`：`resolveExposedModels` 给出的暴露模型，使用不带后缀的 ID，`gptModel` 在前；Codex 自带的模型保留
 随包复制的 `vendor/codex/models.json` 中 Codex 自己的条目，其他模型围绕
 `vendor/codex/prompt.md` 生成。Codex 0.164 把 `model_catalog_json` 文件当作完整列表
-（`StaticModelsManager`），所以它的选择器只显示这两个模型。随后 `editCodexConfig` 设置顶层的
-`model_provider`、`model_catalog_json`，并在 `model` 不是这两个模型之一时设置 `model`，再重写
+（`StaticModelsManager`），所以它的选择器只显示这些模型。随后 `editCodexConfig` 设置顶层的
+`model_provider`、`model_catalog_json`，并在 `model` 不是列表中的模型时设置 `model`，再重写
 `[model_providers.copilot-relay]` 表。它逐行编辑，所以注释和排版保持不变：表头和键按带引号的
 部分读取，多行字符串内的行被跳过。用点分键或内联表定义的 provider，以及内联的
 `model_providers` 表，会被拒绝。之后它用 `smol-toml` 解析结果（超出 JavaScript 安全范围的整数解析为
@@ -924,7 +970,7 @@ system 回合，会把缓存读取限制在工具加原始 system prompt；只�
 发送为包含 `<system-reminder>…</system-reminder>` 的 `role: "user"` 回合，即 Claude Code
 传递大部分 harness 上下文所用的形式。`src/routes/claude.ts` 中的 `translationEndpoint` 在
 请求和 token 计数中都把该端点传给 `translateToOpenAI`。若 `createChatCompletions` 可能把
-`unsupported_api_for_model` 失败改在 `/responses` 上重试，它就不传端点，因为重试会重新发送
+`responsesRetryCodes` 中的失败改在 `/responses` 上重试，它就不传端点，因为重试会重新发送
 同一份翻译后的 payload。这只发生在 `auto` 模式下：模型目录中没有端点元数据的 Claude 模型，
 或目录条目列出 `/chat/completions` 和 `/responses` 但没有 `/v1/messages` 的 Claude 模型。
 这些请求与 v0.4.4 一样保留 `role: "system"`，也不带缓存标记。在默认的

@@ -22,7 +22,7 @@ export type EndpointSelection =
   | {
     endpoint: CopilotEndpoint
     source: EndpointSource
-    // Whether an exact unsupported_api_for_model Chat failure may retry once on Responses.
+    // Whether a Chat failure with a refusal code may retry once on Responses.
     responsesFallback: boolean
   }
   | {

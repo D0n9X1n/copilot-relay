@@ -92,7 +92,8 @@ export interface ChatCompletionsPayload {
   output_config?: {
     effort?: "low" | "medium" | "high" | "xhigh" | "max"
   } | null
-  reasoning_effort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | null
+  // Sent as the clamp resolved it, which can be a level only Copilot uses, such as minimal.
+  reasoning_effort?: string | null
   stop?: string | Array<string> | null
   n?: number | null
   stream?: boolean | null

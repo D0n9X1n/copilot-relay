@@ -1,6 +1,6 @@
 // Optional writer for Claude Code settings so it points at the local proxy.
 import { readFileSnapshot, writeFileSnapshot } from "~/lib/atomic-file"
-import { normalizeClaudeModelId, type ModelTokenLimits } from "~/lib/models"
+import { normalizeClaudeModelId, normalizeCopilotModelId, type ModelTokenLimits } from "~/lib/models"
 
 interface ApplyClaudeConfigInput {
   // The relay's inbound apiKey. Empty or absent keeps an existing token and writes the dummy
@@ -10,6 +10,8 @@ interface ApplyClaudeConfigInput {
   configPath: string
   gptModel: string
   gptLimits?: ModelTokenLimits
+  // A model's catalog window; unknown leaves its ID as written.
+  contextWindowOf?: (model: string) => number | undefined
   maxOutputTokens?: number
 }
 
@@ -110,18 +112,19 @@ export async function applyClaudeConfig(
 
   const hadPrimaryModelOverride = hasPrimaryModelOverride(parsed, env)
   const contextWindow = input.gptLimits?.max_context_window_tokens
-  const claudeGptModel = normalizeClaudeModelId(gptModel, contextWindow)
+  const windowOf = (model: string): number | undefined => input.contextWindowOf?.(normalizeCopilotModelId(model))
+  const claudeGptModel = normalizeClaudeModelId(gptModel, windowOf(gptModel) ?? contextWindow)
   const shouldSeedTopLevelModel = !hadPrimaryModelOverride
   const nextModel =
     typeof parsed.model === "string"
-      ? normalizeClaudeModelId(parsed.model, contextWindow)
+      ? normalizeClaudeModelId(parsed.model, windowOf(parsed.model))
       : undefined
 
   // ANTHROPIC_MODEL outranks the saved model setting, so only normalize it
   // when the user already set it; managed defaults belong in `model`.
   for (const key of knownModelEnvKeys) {
     if (typeof env[key] === "string") {
-      env[key] = normalizeClaudeModelId(env[key], contextWindow)
+      env[key] = normalizeClaudeModelId(env[key], windowOf(env[key]))
     }
   }
 

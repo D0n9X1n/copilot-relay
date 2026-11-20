@@ -36,7 +36,7 @@ const readSettings = async (
 test("seeds actual context and maximum output budgets from model discovery", async () => {
   for (const [gptModel, gptLimits, expectedModel] of [
     ["gpt-6-astra", astraLimits, "gpt-6-astra[1m]"],
-    ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol"],
+    ["gpt-5.6-sol[1m]", solLimits, "gpt-5.6-sol[1m]"],
   ] as const) {
     await withTemporarySettings(async (configPath) => {
       const input = {
@@ -125,6 +125,7 @@ test("creates Claude settings with Astra's 1M identity", async () => {
       baseUrl: "http://127.0.0.1:4142",
       configPath,
       gptModel: "GPT-6-ASTRA[1M][1m]",
+      contextWindowOf: () => 1_000_000,
     })
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
@@ -140,6 +141,30 @@ test("creates Claude settings with Astra's 1M identity", async () => {
     assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:4142")
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, "dummy")
   })
+})
+
+// Why: a saved model may be any exposed model, so each one gets [1m] from its own
+// catalog window rather than from gptModel's; an unknown window leaves it as written.
+test("normalizes each saved model by its own window", async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "relay-claude-windows-"))
+  t.after(() => fs.rm(dir, { recursive: true, force: true }))
+  const configPath = path.join(dir, "settings.json")
+  await fs.writeFile(configPath, JSON.stringify({
+    model: "mai-code-2",
+    env: { ANTHROPIC_DEFAULT_SONNET_MODEL: "grok-4.7[1m]", ANTHROPIC_DEFAULT_HAIKU_MODEL: "unknown-model" },
+  }))
+  const windows: Record<string, number> = { "gpt-6.2-astra": 1_050_000, "mai-code-2": 1_050_000, "grok-4.7": 500_000 }
+  await applyClaudeConfig({
+    baseUrl: "http://127.0.0.1:4142",
+    configPath,
+    gptModel: "gpt-6.2-astra",
+    contextWindowOf: (model) => windows[model],
+  })
+  const settings = JSON.parse(await fs.readFile(configPath, "utf8"))
+
+  assert.equal(settings.model, "mai-code-2[1m]")
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, "grok-4.7")
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "unknown-model")
 })
 
 // Why: normalization is exact-model-only. A new file may still select another
@@ -186,6 +211,7 @@ test("normalizes known GPT overrides and preserves unrelated settings", async ()
       baseUrl: "http://127.0.0.1:5151",
       configPath,
       gptModel: "gpt-5.6-sol",
+      contextWindowOf: () => 1_000_000,
     })
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
@@ -227,7 +253,7 @@ test("seeds the GPT default when existing settings have no primary override", as
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
 
-    assert.equal(settings.model, "gpt-5.6-sol[1m]")
+    assert.equal(settings.model, "gpt-5.6-sol")
     assert.equal(env.ANTHROPIC_MODEL, undefined)
     assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined)
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined)
@@ -312,7 +338,7 @@ test("preserves availableModels while seeding the managed default", async () => 
     const settings = await readSettings(configPath)
     const env = settings.env as Record<string, unknown>
 
-    assert.equal(settings.model, "gpt-5.6-sol[1m]")
+    assert.equal(settings.model, "gpt-5.6-sol")
     assert.deepEqual(settings.availableModels, availableModels)
     assert.deepEqual(settings.permissions, { allow: ["Read"] })
     assert.equal(env.ANTHROPIC_MODEL, undefined)

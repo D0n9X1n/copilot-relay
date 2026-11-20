@@ -32,6 +32,7 @@ const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names
 const { HTTPError } = await import("../../src/lib/error")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
+const { runtimeState } = await import("../../src/lib/state")
 
 test.after(async () => {
   await flushLogs()
@@ -529,7 +530,16 @@ test("canonicalizes the configured WebSearch backend model", () => {
 
 // Why: WebSearch response metadata returns to Claude Code, so the canonical
 // Copilot ID must be restored to the Claude-facing context-selector identity.
-test("exposes the 1M identity in Claude WebSearch responses", () => {
+test("exposes the 1M identity in Claude WebSearch responses", (t) => {
+  runtimeState.upstreamBaseUrl = "https://fixture.invalid"
+  runtimeState.modelCatalog = {
+    baseUrl: "https://fixture.invalid",
+    models: new Map([["gpt-5.6-sol", { limits: { max_context_window_tokens: 1_050_000, max_prompt_tokens: 1000, max_output_tokens: 1000 } }]]),
+  }
+  t.after(() => {
+    delete runtimeState.modelCatalog
+    delete runtimeState.upstreamBaseUrl
+  })
   const response = createClaudeWebSearchResponse([{
     id: "resp_web_search",
     inputTokens: 1,

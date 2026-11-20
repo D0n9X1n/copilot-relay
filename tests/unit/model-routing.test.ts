@@ -17,7 +17,21 @@ import { runtimeState } from "../../src/lib/state"
 
 test.afterEach(() => {
   delete runtimeState.modelRouting
+  delete runtimeState.modelCatalog
+  delete runtimeState.upstreamBaseUrl
 })
+
+// A runtime catalog for the current upstream; an undefined window leaves the model without limits.
+const useCatalog = (entries: Array<[string, number | undefined]>) => {
+  runtimeState.upstreamBaseUrl = "https://fixture.invalid"
+  runtimeState.modelCatalog = {
+    baseUrl: "https://fixture.invalid",
+    models: new Map(entries.map(([id, window]) => [
+      id,
+      window === undefined ? {} : { limits: { max_context_window_tokens: window, max_prompt_tokens: 1000, max_output_tokens: 1000 } },
+    ])),
+  }
+}
 
 test("configured effort choices exclude none without removing request-level support", () => {
   assert.deepEqual([...configurableReasoningEfforts], ["low", "medium", "high", "xhigh", "max"])
@@ -30,43 +44,40 @@ test("configured effort choices exclude none without removing request-level supp
   assert.equal(isReasoningEffort("none"), true)
 })
 
-// Why: the context selector is a Claude-facing identity only. Normalize exact
-// one-million-context GPT IDs idempotently while leaving near-matches untouched.
-test("normalizes exact 1M GPT identities at each boundary", () => {
-  for (const [input, canonical] of [
-    ["gpt-5.6-sol", "gpt-5.6-sol"],
-    ["GPT-5.6-SOL[1M][1m]", "gpt-5.6-sol"],
-    ["gpt-6-astra", "gpt-6-astra"],
-    ["GPT-6-ASTRA[1M][1m]", "gpt-6-astra"],
-  ] as const) {
-    assert.equal(normalizeClaudeModelId(input), `${canonical}[1m]`)
-    assert.equal(normalizeCopilotModelId(input), canonical)
-    assert.equal(
-      normalizeClaudeModelId(normalizeClaudeModelId(input)),
-      `${canonical}[1m]`,
-    )
-    assert.equal(
-      normalizeCopilotModelId(normalizeCopilotModelId(input)),
-      canonical,
-    )
-  }
+// Why: a model whose own catalog window reaches 1M is offered only as its 1M version, Claude
+// models included; Copilot always receives the plain catalog ID.
+test("offers a model with a known 1M window only as its [1m] version", () => {
+  useCatalog([
+    ["gpt-6.2-astra", 1_050_000],
+    ["grok-4.7", 500_000],
+    ["mai-code-2", undefined],
+    ["claude-opus-5.5", 1_000_000],
+    ["claude-haiku-4.5", 200_000],
+  ])
 
-  for (const model of [
-    "gpt-5.6-sol-preview",
-    "gpt-5.6-sol[2m]",
-    "prefix-gpt-5.6-sol",
-    "gpt-5.6-luna[1m]",
-    "gpt-6-astra-preview",
-    "gpt-6-astra[2m]",
-    "prefix-gpt-6-astra",
-    " gpt-6-astra",
-    "gpt-6-astra ",
-    "gpt-6-astra\n",
-    "gpt-test",
-  ]) {
-    assert.equal(normalizeClaudeModelId(model), model)
-    assert.equal(normalizeCopilotModelId(model), model)
+  assert.equal(normalizeClaudeModelId("GPT-6.2-ASTRA[1M][1m]"), "gpt-6.2-astra[1m]")
+  assert.equal(normalizeClaudeModelId("grok-4.7[1m]"), "grok-4.7")
+  assert.equal(normalizeClaudeModelId("mai-code-2"), "mai-code-2")
+  assert.equal(normalizeClaudeModelId("not-listed[1m]"), "not-listed[1m]")
+  assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5[1m]")
+  assert.equal(normalizeClaudeModelId("claude-haiku-4.5[1m]"), "claude-haiku-4.5")
+  assert.equal(normalizeCopilotModelId("GROK-4.7[1M][1m]"), "grok-4.7")
+  assert.equal(normalizeCopilotModelId("gpt-6-astra[2m]"), "gpt-6-astra[2m]")
+
+  for (const model of ["GPT-6.2-ASTRA[1M][1m]", "grok-4.7[1m]", "mai-code-2", "not-listed[1m]", "claude-opus-5.5"]) {
+    assert.equal(normalizeClaudeModelId(normalizeClaudeModelId(model)), normalizeClaudeModelId(model))
   }
+})
+
+// Why: Copilot catalog IDs are lowercase, so a Copilot ID is stripped of every [1m] and takes
+// the catalog's casing, or is lowercased when no catalog lists it.
+test("canonicalizes Copilot IDs with and without a catalog", () => {
+  assert.equal(normalizeCopilotModelId("GPT-5.6-SOL[1M][1m]"), "gpt-5.6-sol")
+  assert.equal(normalizeCopilotModelId("GROK-4.7[1m]"), "grok-4.7")
+
+  useCatalog([["gpt-5.6-sol", 1_050_000]])
+  assert.equal(normalizeCopilotModelId("GPT-5.6-SOL[1M][1m]"), "gpt-5.6-sol")
+  assert.equal(normalizeCopilotModelId("GROK-4.7[1m]"), "grok-4.7")
 })
 
 test("keeps the verified Opus 5.5 upstream ID without context aliases", () => {
@@ -81,8 +92,27 @@ test("defaults to Astra and keeps the Opus lane separate", () => {
     gptModel: "gpt-6-astra",
     opusModel: "claude-opus-5.5",
   })
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+
+  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]"])
+})
+
+// Why: a configured [1m] is the user's statement about the window, so it survives while the
+// catalog does not know the window; a known window below 1M still removes it.
+test("keeps a configured [1m] until the catalog reports the window", () => {
+  runtimeState.modelRouting = {
+    gptModel: "gpt-6-astra[1m]",
+    opusModel: "claude-opus-5.5",
+    models: [],
+  }
+
   assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5"])
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+
+  useCatalog([["gpt-6-astra", 500_000], ["claude-opus-5.5", 1_000_000]])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5[1m]"])
 })
 
 // Why: model discovery is consumed by Claude Code while availability checks are
@@ -93,6 +123,7 @@ test("splits Claude-facing and upstream configured model ids", () => {
     gptModel: "GPT-5.6-SOL[1M][1m]",
     opusModel: "claude-opus-4.8",
   }
+  useCatalog([["gpt-5.6-sol", 1_000_000], ["claude-opus-4.8", 200_000]])
 
   assert.deepEqual(getExposedModelIds(), [
     "gpt-5.6-sol[1m]",
@@ -147,6 +178,45 @@ test("routes Claude picker aliases through the configured model pair", () => {
   }
 
   assert.deepEqual(getExposedModelIds(), ["gpt-test", "opus-test"])
+})
+
+// Why: an exposed model is a real choice in the picker, so it reaches Copilot as itself;
+// a catalog model nobody exposed still follows the opus/gpt split.
+test("routes exposed IDs to themselves and strips every [1m]", () => {
+  runtimeState.modelRouting = {
+    gptModel: "gpt-6-astra",
+    opusModel: "claude-opus-5.5",
+    models: ["grok-4.7"],
+  }
+  useCatalog([
+    ["gpt-6-astra", 1_050_000],
+    ["claude-opus-5.5", 1_000_000],
+    ["grok-4.7", 500_000],
+    ["claude-sonnet-5", 200_000],
+  ])
+
+  assert.equal(routeModelId("grok-4.7"), "grok-4.7")
+  assert.equal(routeModelId("GROK-4.7[1M][1m]"), "grok-4.7")
+  assert.equal(routeModelId("claude-sonnet-5"), "gpt-6-astra")
+  assert.equal(routeModelId("opus[1m]"), "claude-opus-5.5")
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]", "grok-4.7"])
+  // Startup preflight and the tokenizer preload read this list: the two slots, never the extras.
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+})
+
+// Why: with no extra models the opus/gpt split is unchanged, except that a slot's own
+// name always reaches that slot even when it contains "opus".
+test("an empty selection routes as before except exact slot names", () => {
+  runtimeState.modelRouting = {
+    gptModel: "gpt-opus-lab",
+    opusModel: "claude-opus-5.5",
+    models: [],
+  }
+
+  assert.equal(routeModelId("gpt-opus-lab"), "gpt-opus-lab")
+  assert.equal(routeModelId("opus"), "claude-opus-5.5")
+  assert.equal(routeModelId("haiku"), "gpt-opus-lab")
+  assert.deepEqual(getExposedModelIds(), ["gpt-opus-lab", "claude-opus-5.5"])
 })
 
 // Why: /v1/models is a user-visible Claude Code discovery endpoint. This
