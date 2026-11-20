@@ -68,10 +68,18 @@ const trailingSpaces = /\s+((?:\u001b\[[0-9;]*m|`)*)$/
 export const wrapHelp = (text: string, width = helpWidth): string =>
   text.split("\n").flatMap((line) => wrapLine(line.replace(trailingSpaces, "$1"), width)).join("\n")
 
-/** citty's showUsage, with the text wrapped. */
+// citty's backtick spans, which consola's fancy reporter turns into color and its basic reporter
+// prints as is. Help is written without them, so it reads the same in a terminal, a pipe and CI.
+const backtickSpan = /`([^`\n]*)`/g
+
+/**
+ * citty's showUsage, wrapped and written straight to stdout rather than through consola, whose basic
+ * reporter, used in CI and some pipes, would add a "[log]" prefix to the first line.
+ */
 export const showHelp = async <T extends ArgsDef = ArgsDef>(command: CommandDef<T>, parent?: CommandDef<T>): Promise<void> => {
   try {
-    consola.log(wrapHelp(await renderUsage(command, parent)) + "\n")
+    const usage = await renderUsage(command, parent)
+    process.stdout.write(`${wrapHelp(usage.replace(backtickSpan, "$1"))}\n\n`)
   } catch (error) {
     consola.error(error)
   }

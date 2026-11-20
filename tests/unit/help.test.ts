@@ -65,19 +65,25 @@ test("a word longer than the line stays whole", () => {
 
 const commands = ["auth", "cache", "completion", "models", "replay", "restart", "setup", "start", "status", "stop", "usage"]
 
-test("every command's --help fits 80 columns", () => {
-  for (const args of [["--help"], ...commands.map((command) => [command, "--help"])]) {
-    const result = spawnSync(process.execPath, ["--import", "tsx", "src/main.ts", ...args], {
-      cwd: new URL("../..", import.meta.url),
-      encoding: "utf8",
-      env: { ...process.env, NO_COLOR: "1", CONSOLA_LEVEL: "3" },
-    })
+// CI makes consola choose its basic reporter, which prints backticks and a "[log]" prefix; help must
+// read the same with or without it.
+test("every command's --help fits 80 columns, in CI or not, with no backticks or reporter prefix", () => {
+  for (const ci of ["", "true"]) {
+    for (const args of [["--help"], ...commands.map((command) => [command, "--help"])]) {
+      const result = spawnSync(process.execPath, ["--import", "tsx", "src/main.ts", ...args], {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+        env: { ...process.env, NO_COLOR: "1", CONSOLA_LEVEL: "3", CI: ci },
+      })
+      const label = `CI=${ci} ${args.join(" ")}`
 
-    assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`)
-    assert.match(result.stdout, /USAGE/, args.join(" "))
-    for (const line of result.stdout.split("\n")) {
-      assert.ok(displayWidth(line) <= 80, `${args.join(" ")}: ${displayWidth(line)} columns: ${line}`)
-      assert.doesNotMatch(line, / $/, `${args.join(" ")}: trailing space: ${line}`)
+      assert.equal(result.status, 0, `${label}: ${result.stderr}`)
+      assert.match(result.stdout, /USAGE copilot-relay/, label)
+      assert.doesNotMatch(result.stdout, /`|\[log\]/, label)
+      for (const line of result.stdout.split("\n")) {
+        assert.ok(displayWidth(line) <= 80, `${label}: ${displayWidth(line)} columns: ${line}`)
+        assert.doesNotMatch(line, / $/, `${label}: trailing space: ${line}`)
+      }
     }
   }
 })
