@@ -366,6 +366,20 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
 
   const logs = await readLogs(home.appDir)
   assert.match(logs, / -> 401 /)
+
+  // The preflight's per-model records go to the log file, where they are searched; the console
+  // keeps one short line per model, so startup reads within 80 columns.
+  const startup = relay.output().slice(0, relay.output().indexOf("copilot-relay listening"))
+  for (const record of ["Model token limits: model=gpt-fixture-chat", "Model request client=generic", "Preflight OK: model=gpt-fixture-chat"]) {
+    assert.ok(logs.includes(record), record)
+    assert.ok(!startup.includes(record), record)
+  }
+
+  assert.match(startup, /Preflight OK: gpt-fixture-chat, claude-opus-5\.5$/m)
+  for (const line of startup.split("\n").filter((line) => !line.includes(home.home))) {
+    assert.ok(line.length <= 80, `${line.length} columns: ${line}`)
+  }
+
   const modeWarnings = logs.split(`${home.configPath} holds the apiKey and has mode 0644`).length - 1
   assert.equal(modeWarnings, process.platform === "win32" ? 0 : 2)
   for (const secret of [firstKey, secondKey, githubToken, copilotToken]) {

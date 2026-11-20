@@ -329,15 +329,21 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ### Startup
 
-At `info`, startup logs confirm the active config and preflight:
+At `info`, startup logs confirm the active config and preflight. The log file holds
+every line below; the console leaves out the per-model records (`Model token limits`,
+the preflight's `Model request` lines and `Preflight OK: model=…`) and prints the
+one-line `Preflight OK: <models>` summary in their place, so startup fits a
+terminal:
 
 ```text
 info Log level: info
 info Default think effort: xhigh
 info Running upstream preflight
 info Upstream models available: gpt-6-astra, claude-opus-5
+info Model token limits: model=gpt-6-astra context=1050000 input=922000 output=128000 non_streaming_output=128000
 info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
+info Preflight OK: gpt-6-astra, claude-opus-5
 info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```

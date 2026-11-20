@@ -278,15 +278,19 @@ grep -h "request_id=<id>" ~/.copilot-relay/logs/copilot-relay.*.log | sort
 
 ### 启动
 
-在 `info` 级别，启动日志会确认生效的配置和 preflight：
+在 `info` 级别，启动日志会确认生效的配置和 preflight。日志文件包含下面每一行；控制台省略逐个模型的记录
+（`Model token limits`、preflight 的 `Model request` 行和 `Preflight OK: model=…`），改为打印一行
+`Preflight OK: <models>` 摘要，使启动输出适合终端宽度：
 
 ```text
 info Log level: info
 info Default think effort: xhigh
 info Running upstream preflight
 info Upstream models available: gpt-6-astra, claude-opus-5
+info Model token limits: model=gpt-6-astra context=1050000 input=922000 output=128000 non_streaming_output=128000
 info Preflight OK: model=gpt-6-astra think_effort=xhigh
 info Preflight OK: model=claude-opus-5 think_effort=xhigh
+info Preflight OK: gpt-6-astra, claude-opus-5
 info Models: gpt-6.2-astra[1m] (gptModel), claude-opus-5.5[1m] (opusModel)
 info copilot-relay listening on http://127.0.0.1:4142
 ```
