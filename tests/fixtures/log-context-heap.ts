@@ -20,14 +20,16 @@ if (gc === undefined) {
 }
 
 const storage = new AsyncLocalStorage<object>()
-let reference: WeakRef<object> | undefined
-await (async () => {
+// Only a WeakRef to the store outlives the function that logs inside it.
+const logInside = async (): Promise<WeakRef<object>> => {
   const store = { request: "finished" }
-  reference = new WeakRef(store)
   await storage.run(store, async () => {
     log.info("log-context-heap-marker")
   })
-})()
+  return new WeakRef(store)
+}
+
+const reference = await logInside()
 
 // The drain writes the entry, then arms the one-second idle close; sample well inside that second.
 await new Promise((resolve) => setTimeout(resolve, 200))
