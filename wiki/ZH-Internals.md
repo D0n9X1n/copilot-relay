@@ -321,7 +321,21 @@ WebSearch 检索使用这个当前值，翻译路径的最终回答 payload 直�
   每个都经过 `canonicalModelId`（去掉所有 `[1m]`，使用目录中的大小写），并不区分大小写地去重。
   目录中没有的列出 ID 会被跳过；没有目录时 `auto` 不添加任何模型，列出的 ID 保留。
   `findMissingModels` 给出被跳过的 ID。守护进程（`getExposedUpstreamModelIds`）和独立运行的
-  `setup` 调用同一个函数；它每次调用都重新计算而不是保存结果，所以目录刷新或重载会立即生效。
+  `setup` 调用同一个函数。
+- 守护进程把上一次算出的暴露列表保存在 `exposedCache` 中：上游 ID
+  （`getExposedUpstreamModelIds`）、Claude Code 看到的 ID（`getExposedModelIds`），以及
+  `routeModelId` 用来匹配的小写到 ID 的映射。缓存键是当前目录的 `models` Map 本身（按对象
+  身份比较），或"无目录"，再加上 `gptModel`、`opusModel` 和 `models` 的值（`"auto"` 或
+  逐项比较的列表）。路由对象本身不作为键，因为 `snapshotRuntimeState` 为每个请求复制它。
+  `currentCatalog()` 仍在每次调用时比较目录的 `baseUrl` 与 `upstreamBaseUrl`，所以重载到另一个
+  上游、目录刷新、修改选择，或模型探测临时设置的 `{ gptModel: id, opusModel: id }` 都不会命中
+  缓存而是重新计算；恢复保存的路由后会再次得到原来的列表。两个 getter 都返回副本，调用方无法
+  修改缓存中的列表。
+- `canonicalModelId` 在每个目录的索引中查找 ID（`catalogIndexes`，一个从目录 Map 到其小写键
+  的 `WeakMap`），索引在首次使用时建立。两个键只有大小写不同时，取目录顺序中的第一个。两个
+  缓存都依赖已发布的目录不会被原地修改：`src/copilot/models.ts` 中的
+  `CopilotModelCatalog.models` 类型为 `ReadonlyMap`，原地修改无法通过类型检查；发现新模型时
+  发布的是一个新目录。
 - `routeModelId`（由 `src/claude/translate.ts` 的 `translateModelName` 调用）把与某个暴露 ID
   匹配的名称（不区分大小写，带任意 `[1m]`）发往该 ID；其他包含 `opus` 的名称发往
   `opusModel`；其余发往 `gptModel`。未暴露的目录 ID 在 Claude 路由上不会被透传。Codex 路由
@@ -1114,6 +1128,10 @@ Code 的检查，因为 `/healthz` 和 `/v1/models` 都不访问上游。它是�
 上游/下游流，不另开独立 tee。`recordedFetch` 与 `recordedRefresh` 保留有序尝试、
 为重试丢弃的响应及刷新结果。Manifest 记录请求的策略/目录快照、chunk 长度、观察到的
 字节数、正文状态和 handler 是否结束；等正文写入队列完成后，原子替换 `meta.json`。
+只有进行捕获的 trace 才持有目录副本：`RequestTrace.create` 在决定捕获之后、第一次文件系统
+写入之前，用请求开始时的目录（`runtime.modelCatalog`，否则为 `config.modelCatalog`）填充
+`manifest.runtime.models`。不捕获的请求不设置 `models`，也从不复制目录；`catalogCurrent` 和
+`catalogAgeMs` 无论是否捕获都会记录。
 私有文件 handle 保持追加目标；目录/文件身份与单链接检查拒绝已观察到的路径替换。
 这不能防御同一用户下所有可能的文件系统竞争。传输/正文失败与语义上的拒答不是同一件事。
 

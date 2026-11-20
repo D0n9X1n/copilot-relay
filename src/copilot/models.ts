@@ -31,7 +31,8 @@ export interface CopilotModel {
 
 export interface CopilotModelCatalog {
   baseUrl: string
-  models: Map<string, CopilotModel>
+  // Never changed in place: routing caches what it derives from a catalog by the Map's identity.
+  models: ReadonlyMap<string, CopilotModel>
   // When the relay fetched this catalog, in epoch milliseconds; absent for a catalog built any other
   // way. A catalog this recent that does not list a model is trusted to mean it is not listed.
   fetchedAt?: number
