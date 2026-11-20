@@ -173,6 +173,9 @@ test("a native model advertising only minimal receives minimal", async () => {
 })
 
 test("native logs the clamped effort of the system control that governs the turn", async () => {
+  // Earlier tests in this file log native requests too, so only lines written after this point count.
+  await flushLogs()
+  const logLengthBefore = (await readLogs()).length
   const { status, sent } = await send(catalogWith(["low"], ["low", "high"]), {
     model: "opus",
     output_config: { effort: "low" },
@@ -190,7 +193,7 @@ test("native logs the clamped effort of the system control that governs the turn
   let summary: string | undefined
   for (let attempt = 0; attempt < 100 && summary === undefined; attempt++) {
     await flushLogs()
-    summary = (await readLogs()).split("\n").find((line) => line.includes("upstream_api=messages"))
+    summary = (await readLogs()).slice(logLengthBefore).split("\n").find((line) => line.includes("upstream_api=messages"))
     if (summary === undefined) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
