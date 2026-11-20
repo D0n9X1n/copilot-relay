@@ -2,9 +2,8 @@
 
 中继在 `POST /v1/responses` 提供 OpenAI Responses API，这是 Codex 唯一使用的接口。
 Codex CLI、Codex app 和 IDE 扩展读取同一个 `~/.codex/config.toml`，运行同一个
-`codex app-server`，所以一次配置就覆盖这三者。Codex 提供的模型与 Claude Code 相同，
-即暴露的模型：`gptModel`、`opusModel`，以及 `models` 键选出的模型（见
-[为每个客户端选择模型](ZH-Models.md)），并且不需要登录 ChatGPT。
+`codex app-server`，所以一次配置就覆盖这三者。Codex 提供的两个模型与 Claude Code 相同，
+即 `gptModel` 和 `opusModel`（见[为每个客户端选择模型](ZH-Models.md)），并且不需要登录 ChatGPT。
 
 这已用 Codex CLI 0.164.0 对一个真实运行的中继验证：在 GPT-6 Astra 和 Claude Opus 5.5 上的
 `codex exec` 对话，各自用 `apply_patch` 创建了文件、执行了 shell 命令并正常结束；app server
@@ -18,14 +17,14 @@ Codex CLI、Codex app 和 IDE 扩展读取同一个 `~/.codex/config.toml`，运
 
 `start` 会写入两处：
 
-- `~/.copilot-relay/codex-models.json`：Codex 显示的模型列表，包含暴露的模型，
-  使用不带 `[1m]` 的 Copilot ID，`gptModel` 排在第一位作为默认。
+- `~/.copilot-relay/codex-models.json`：Codex 显示的模型列表，包含 `gptModel` 和
+  `opusModel`，使用不带 `[1m]` 的 Copilot ID，`gptModel` 排在第一位作为默认。
 - `~/.codex/config.toml` 中的：
 
 ```toml
 model_provider = "copilot-relay"
 model_catalog_json = "/Users/you/.copilot-relay/codex-models.json"
-model = "gpt-6-astra"
+model = "gpt-6.2-astra"
 
 [model_providers.copilot-relay]
 # Written by copilot-relay start (codexSetup); edits in this table are replaced on the next start.
@@ -61,9 +60,10 @@ supports_websockets = false
 
 ## 模型
 
-列表包含暴露的模型：`config.yaml` 中的 `gptModel` 和 `opusModel`，再加上 `models` 键选出的
-模型，使用不带后缀的 Copilot ID。修改其中任何一项后重启中继，列表就会随之改变；见
-[为每个客户端选择模型](ZH-Models.md)。
+列表包含 `config.yaml` 中的 `gptModel` 和 `opusModel`，使用不带后缀的 Copilot ID；两者是同一个
+模型时只列一项。修改其中任何一项后重启中继，列表就会随之改变；见
+[为每个客户端选择模型](ZH-Models.md)。Codex 的 `model` 设置如果是其中之一，会被保留；否则改为
+`gptModel`。
 
 - Codex 自带的模型（例如 `gpt-6-astra`）保留 Codex 自己的条目：它调校过的指令、`apply_patch`
   工具和推理等级。
