@@ -12,6 +12,7 @@ import { loadCopilotModelCatalog, resolveModelReasoningEffort } from "~/copilot/
 import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { createChatCompletions } from "~/copilot/chat"
 import { handleNativeMessages } from "~/copilot/native"
+import { withOwnedUpstreamDeadline } from "~/lib/deadline"
 
 const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
   const catalog = await loadCopilotModelCatalog(config)
@@ -90,18 +91,20 @@ const validateModelRequest = async (
   }
 }
 
+// Preflight owns one upstream deadline per call it makes: the catalog load, then each model's
+// check. Each is disposed when that call settles.
 export const validateUpstream = async (
   config: ProxyConfig,
   thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   log.info("Running upstream preflight")
-  await ensureRequiredModels(config)
+  await withOwnedUpstreamDeadline(config.upstreamTimeoutMs, () => ensureRequiredModels(config))
 
   // Scope the configured default as this check's fallback rather than an explicit
   // client control, so a model that advertises no effort support receives none.
   await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
     for (const model of getUpstreamModelIds()) {
-      await validateModelRequest(config, model)
+      await withOwnedUpstreamDeadline(config.upstreamTimeoutMs, () => validateModelRequest(config, model))
     }
   })
 }

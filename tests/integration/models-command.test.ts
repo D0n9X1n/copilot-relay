@@ -132,17 +132,19 @@ async function fixture(
         });
       ` : ''}
       ${options.controlledProbeTimeout ? `
-        const timeout = AbortSignal.timeout;
+        // Each probe arms its own upstream deadline with setTimeout. The 10-second ones are held
+        // here and fired on cue; a real, unref'd timer stands in so clearTimeout still works.
+        const timeout = globalThis.setTimeout;
         const probes = [];
-        AbortSignal.timeout = (ms) => {
-          if (ms !== 10000) return timeout(ms);
-          const controller = new AbortController();
-          probes.push(controller);
-          return controller.signal;
+        globalThis.setTimeout = (callback, ms, ...rest) => {
+          if (ms !== 10000) return timeout(callback, ms, ...rest);
+          probes.push({ fire: () => callback(...rest), fired: false });
+          return timeout(() => {}, ms).unref();
         };
         process.stdin.once("data", () => {
           if (probes.length !== 1) throw new Error("PROBE_DEADLINE_NOT_READY");
-          probes[0].abort(new DOMException("Controlled probe deadline", "TimeoutError"));
+          probes[0].fired = true;
+          probes[0].fire();
           console.log("PROBE_DEADLINE_DELIVERED");
           process.stdin.pause();
         });
@@ -151,13 +153,13 @@ async function fixture(
       try {
         await import(${JSON.stringify(entry.href)});
         ${options.controlledProbeTimeout ? `
-          if (probes.length !== 2 || !probes[0].signal.aborted || probes[1].signal.aborted) {
+          if (probes.length !== 2 || !probes[0].fired || probes[1].fired) {
             throw new Error("PROBE_DEADLINES_NOT_INDEPENDENT");
           }
           console.log("PROBE_DEADLINES_INDEPENDENT");
         ` : ''}
       } finally {
-        ${options.controlledProbeTimeout ? 'AbortSignal.timeout = timeout;' : ''}
+        ${options.controlledProbeTimeout ? 'globalThis.setTimeout = timeout;' : ''}
       }
     `
     const result = await new Promise<{ code: number; rawStdout: string; stdout: string; stderr: string; output: string }>((resolve, reject) => {

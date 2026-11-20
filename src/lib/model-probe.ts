@@ -1,4 +1,5 @@
 import { advertisesNoReasoningEffort, type CopilotModel } from "~/copilot/models"
+import { createUpstreamDeadline } from "~/lib/deadline"
 import type { ProxyConfig } from "~/lib/config"
 import { log, scrubLogSecrets, withoutConsoleLogging, withoutLogging } from "~/lib/log"
 import { RequestTrace, withTraceObserver, type RequestDiagnostic } from "~/lib/request-trace"
@@ -264,7 +265,11 @@ export async function probeModels(
         row.status = "SKIPPED"
         row.detail = "unsupported-effort"
       } else {
-        const signal = AbortSignal.any([controller.signal, totalDeadline, AbortSignal.timeout(timeoutMs)])
+        // The probe owns one upstream deadline. It reaches the relay through the in-process binding,
+        // never as the request's signal, so a timeout ends the upstream call without aborting the
+        // client trace; the request's own signal stays the command-wide cancellation cap.
+        const probeDeadline = createUpstreamDeadline(timeoutMs)
+        const signal = AbortSignal.any([controller.signal, totalDeadline, probeDeadline.signal])
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
         const started = performance.now()
         row.sent = true
@@ -295,7 +300,7 @@ export async function probeModels(
                 messages: [{ role: "user", content: "Reply with OK only." }],
               }),
             }),
-            { relayProbe: true },
+            { relayProbe: true, upstreamDeadline: probeDeadline.signal },
           )
           const body: unknown = await response.json().catch(() => undefined)
           return { response, body }
@@ -386,6 +391,8 @@ export async function probeModels(
             row.status = "FAIL"
             row.detail = signal.aborted ? "probe-timeout" : "network-or-invalid-response"
           }
+        } finally {
+          probeDeadline.dispose()
         }
 
         row.latency = Math.round(performance.now() - started)

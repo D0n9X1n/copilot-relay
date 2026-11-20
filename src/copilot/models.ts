@@ -1,4 +1,5 @@
 import { publishCopilotModelCatalog, type ProxyConfig } from "~/lib/config"
+import { getUpstreamDeadline, withOwnedUpstreamDeadline } from "~/lib/deadline"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import {
@@ -7,6 +8,7 @@ import {
   type ModelTokenLimits,
   type ReasoningEffort,
 } from "~/lib/models"
+import { getRequestTrace } from "~/lib/request-trace"
 import { getRuntimeState, runtimeState } from "~/lib/state"
 import {
   createCopilotRequestSignal,
@@ -247,8 +249,12 @@ const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): s
 // The x-github-api-version the /models request sends.
 const catalogApiVersion = "2026-06-01"
 
+// The catalog request runs under its caller's deadline: a relay request's, or the one a command or
+// preflight owns. Called outside both, it owns one deadline for the request and its body, and
+// disposes it when the load settles.
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
+  callerSignal?: AbortSignal,
 ): Promise<CopilotModelCatalog> {
   const provider = getCopilotProviderContext(config)
   const pending = pendingCatalogs.get(config)
@@ -256,8 +262,8 @@ export async function loadCopilotModelCatalog(
     return pending.promise
   }
 
-  const promise = (async () => {
-    const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
+  const load = async () => {
+    const signal = createCopilotRequestSignal(callerSignal, config.upstreamTimeoutMs)
     const response = await fetchCopilot(
       provider,
       "/models",
@@ -318,7 +324,10 @@ export async function loadCopilotModelCatalog(
     }
 
     return catalog
-  })()
+  }
+
+  const hasDeadline = getRequestTrace()?.upstreamDeadline !== undefined || getUpstreamDeadline() !== undefined
+  const promise = hasDeadline ? load() : withOwnedUpstreamDeadline(config.upstreamTimeoutMs, load)
   pendingCatalogs.set(config, { baseUrl: provider.baseUrl, promise })
 
   try {

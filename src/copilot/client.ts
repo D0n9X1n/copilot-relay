@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto"
 import type { ProxyConfig } from "~/lib/config"
 import { HTTPError, PromptTooLongError, ProxyNotImplementedError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
+import { getUpstreamDeadline } from "~/lib/deadline"
 import { getRequestTrace, markDiscardedResponse, recordedFetch, recordedRefresh } from "~/lib/request-trace"
 import { fetchUpstream } from "~/lib/upstream-dispatcher"
 
@@ -58,14 +59,25 @@ const shouldRetryResponse = (response: Response): boolean =>
   // signals, such as "unsupported_api_for_model", that callers need to inspect.
   response.status >= 500 && response.status <= 599
 
+export { createUpstreamDeadline, upstreamDeadlineCounts } from "~/lib/deadline"
+
+// The signal a Copilot call uses: its caller's signal, the traced request's, and the deadline of
+// the operation it runs in, which owns the timer and disposes it (see ~/lib/deadline). Only a call
+// outside any request or operation gets a timer of its own; it holds no trace, so it pins nothing.
 export const createCopilotRequestSignal = (
   signal?: AbortSignal,
   timeoutMs = copilotRequestTimeoutMs,
 ): AbortSignal | undefined => {
+  const trace = getRequestTrace()
+  let deadline = trace?.upstreamDeadline ?? getUpstreamDeadline()
+  if (deadline === undefined && timeoutMs > 0) {
+    deadline = AbortSignal.timeout(timeoutMs)
+  }
+
   const signals = [
     signal,
-    getRequestTrace()?.signal,
-    timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+    trace?.signal,
+    deadline,
   ].filter((value): value is AbortSignal => value !== undefined)
 
   if (signals.length === 0) {

@@ -30,6 +30,8 @@ export interface ProxyEnv {
   // Set only by the relay's own in-process calls, such as the model probe; no client can set it.
   Bindings: {
     relayProbe?: boolean
+    // The probe's own upstream deadline, used instead of one armed at admission.
+    upstreamDeadline?: AbortSignal
   }
   Variables: {
     config: ProxyConfig
