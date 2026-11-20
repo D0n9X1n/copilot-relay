@@ -8,6 +8,7 @@ import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 
+import { displayWidth } from "../../src/lib/terminal"
 import { replyJson, startFakeGitHub, withoutProxyVariables } from "../fixtures/network"
 
 const entry = new URL("../../src/main.ts", import.meta.url)
@@ -307,7 +308,7 @@ test("models never prints the relay apiKey from gptModel, a catalog ID, a displa
 
   assert.equal(unadvertised.code, 0, unadvertised.output)
   assert.match(unadvertised.stdout, /^ {2}gptModel: \[redacted\] +# requests without "opus" in the model name$/m)
-  assert.match(unadvertised.stdout, /Warning: gptModel \[redacted\] is not advertised by upstream; the startup check rejects it\./)
+  assert.match(unadvertised.stdout, /Warning: gptModel \[redacted\] is not advertised by upstream\./)
 
   // The key as a catalog ID, inside a display name, and ending a name that would have been
   // shortened through the key had it not been replaced first.
@@ -368,13 +369,13 @@ test("models shows display names, marks IDs that cannot be configured, and expla
 
   assert.equal(result.code, 0, result.output)
   assert.match(result.stdout, /^Copilot chat models · 2 of 3\n\n {2}MODEL +NAME +COST +CONTEXT\n {2}gpt-6-astra +GPT-6 Astra +– +–\n {2}unnamed-chat +– +–\n\n1 model that is not a chat model is hidden: copilot-relay models --all$/m)
-  assert.ok(result.stdout.includes(`Config file: ${path.join(harness.home, ".copilot-relay", "config.yaml")}`))
+  assert.ok(result.stdout.includes(`Config file: ${path.join("~", ".copilot-relay", "config.yaml")}`), result.stdout)
   assert.match(result.stdout, /^ {2}gptModel: missing-gpt-model {4}# requests without "opus" in the model name$/m)
   assert.match(result.stdout, /^ {2}opusModel: missing-opus-model {2}# requests with "opus" in the model name$/m)
-  assert.match(result.stdout, /Warning: gptModel missing-gpt-model is not advertised by upstream; the startup check rejects it\./)
-  assert.match(result.stdout, /Warning: opusModel missing-opus-model is not advertised by upstream; the startup check rejects it\./)
+  assert.match(result.stdout, /Warning: gptModel missing-gpt-model is not advertised by upstream\./)
+  assert.match(result.stdout, /Warning: opusModel missing-opus-model is not advertised by upstream\./)
   assert.match(result.stdout, /Set gptModel or opusModel to a chat model ID exactly as listed\./)
-  assert.match(result.stdout, /A running relay applies the change to new requests; restarting reruns the startup check\./)
+  assert.match(result.stdout, /A running relay uses the change for new requests; a restart rechecks it\./)
   assert.equal(harness.requests.length, 1)
 })
 
@@ -400,7 +401,13 @@ test("models hides non-chat models from the plain listing, shows them with --all
 
   assert.equal(all.code, 0, all.output)
   assert.match(all.stdout, /^Copilot models · 2$/m)
-  assert.match(all.stdout, /^ {2}text-embedding-ada-002 +Embedding V2 Ada +– +– {2}! cannot be gptModel or opusModel: not a chat model$/m)
+  assert.match(all.stdout, /^ {2}text-embedding-ada-002 +Embedding V2 Ada +– +– {2}! not a chat model$/m)
+  assert.match(all.stdout, /^! marks a model that cannot be gptModel or opusModel\.$/m)
+  // The test's home is a long temporary path; under a real home the config line reads from ~.
+  for (const line of all.stdout.split("\n").filter((text) => !text.startsWith("Config file:"))) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+
   assert.doesNotMatch(all.stdout, /hidden/)
 
   // An explicit search still finds a non-chat model and explains why it cannot be configured.
@@ -408,7 +415,8 @@ test("models hides non-chat models from the plain listing, shows them with --all
 
   assert.equal(searched.code, 0, searched.output)
   assert.match(searched.stdout, /^Upstream models matching "ada" \(1\):$/m)
-  assert.match(searched.stdout, /text-embedding-ada-002 .*cannot be gptModel or opusModel: not a chat model/)
+  assert.match(searched.stdout, /text-embedding-ada-002 .*! not a chat model/)
+  assert.match(searched.stdout, /^! marks a model that cannot be gptModel or opusModel\.$/m)
 
   // Forced color reaches stdout, NO_COLOR removes it.
   const colored = await harness.run(["models", "--all"], { NO_COLOR: undefined, FORCE_COLOR: "1" })

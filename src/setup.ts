@@ -13,6 +13,7 @@ import { registerSensitiveOrigin } from "~/lib/redact"
 import { colorEnabled, heading, mark, renderTable, terminalText, unicodeEnabled } from "~/lib/terminal"
 import type { MarkState, TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
+import { homeRelative } from "~/status"
 
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 
@@ -27,22 +28,23 @@ interface SetupRow {
 // or a note such as "shares the Codex config above". The table keeps the verdict short and moves the
 // reason, or else the file written, to DETAIL.
 const setupRow = (outcome: SetupOutcome): SetupRow => {
+  const where = homeRelative(outcome.path)
   const [verdict, ...reason] = outcome.status.split(": ")
   const because = reason.join(": ")
   if (verdict === "failed") {
-    return { client: outcome.target, state: "fail", result: "failed", detail: because || outcome.path }
+    return { client: outcome.target, state: "fail", result: "failed", detail: because || where }
   }
 
   if (verdict === "skipped") {
-    return { client: outcome.target, state: "off", result: "skipped", detail: because || outcome.path }
+    return { client: outcome.target, state: "off", result: "skipped", detail: because || where }
   }
 
   if (outcome.status === "updated") {
-    return { client: outcome.target, state: "ok", result: "updated", detail: outcome.path }
+    return { client: outcome.target, state: "ok", result: "updated", detail: where }
   }
 
   if (outcome.status === "already up to date") {
-    return { client: outcome.target, state: "ok", result: "up to date", detail: outcome.path }
+    return { client: outcome.target, state: "ok", result: "up to date", detail: where }
   }
 
   return { client: outcome.target, state: "ok", result: "up to date", detail: outcome.status }

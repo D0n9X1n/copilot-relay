@@ -139,12 +139,18 @@ export const renderModelRows = (models: ListedModel[], color = false, unicode = 
     columns.push({
       header: "NOTE",
       align: "left",
-      cell: (model) => model.unusable === undefined ? "" : `${mark("warn", unicode)} cannot be gptModel or opusModel: ${lowerFirst(model.unusable)}`,
+      cell: (model) => model.unusable === undefined ? "" : `${mark("warn", unicode)} ${lowerFirst(model.unusable)}`,
       tone: (model) => model.unusable === undefined ? undefined : "warning",
     })
   }
 
-  return renderTable(columns, models, color)
+  const lines = renderTable(columns, models, color)
+  // NOTE keeps the reason short so the row fits; this line says what the mark means.
+  if (models.some((model) => model.unusable !== undefined)) {
+    lines.push("", `${mark("warn", unicode)} marks a model that cannot be gptModel or opusModel.`)
+  }
+
+  return lines
 }
 
 const routes: Record<ModelKey, string> = {
@@ -152,7 +158,7 @@ const routes: Record<ModelKey, string> = {
   opusModel: "requests with \"opus\" in the model name",
 }
 
-const applyNote = "A running relay applies the change to new requests; restarting reruns the startup check."
+const applyNote = "A running relay uses the change for new requests; a restart rechecks it."
 
 // Requests whose model name contains "opus" go to opusModel, so an Opus ID is offered there.
 const keyFor = (id: string): ModelKey => id.toLowerCase().includes("opus") ? "opusModel" : "gptModel"
@@ -184,12 +190,19 @@ export const renderConfigGuide = (
     lines.push(`  ${settingOf(model).padEnd(width)}  # ${routes[model.key]}`)
   }
 
+  let rejected = false
   for (const model of configured) {
     const problem = problemOf(model)
 
     if (problem !== undefined) {
-      lines.push(`  Warning: ${model.key} ${model.value} ${problem}; the startup check rejects it.`)
+      lines.push(`  Warning: ${model.key} ${model.value} ${problem}.`)
+      rejected = true
     }
+  }
+
+  // Said once under the warnings, so each warning stays one short line.
+  if (rejected) {
+    lines.push("  The startup check rejects these values.")
   }
 
   if (chosen === undefined) {

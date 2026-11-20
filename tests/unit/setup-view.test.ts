@@ -37,6 +37,21 @@ test("setup prints a heading and one marked row per client with its result and w
   ])
 })
 
+test("setup prints paths under the home directory from ~, so a normal row fits 80 columns", () => {
+  const userHome = os.homedir()
+  const real = [
+    { target: "claude-code-cli", path: path.join(userHome, ".claude", "settings.json"), status: "updated" },
+    { target: "claude-code-app", path: path.join(userHome, "Library", "Application Support", "Claude-3p"), status: "already up to date" },
+    { target: "codex-cli", path: path.join(userHome, ".codex", "config.toml"), status: "already up to date" },
+  ]
+  const lines = renderSetupOutcomes(real, "http://127.0.0.1:4142", false, false)
+
+  assert.match(lines[3], new RegExp(`ok updated +${path.join("~", ".claude", "settings.json").replace(/[\\.]/g, "\\$&")}$`))
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
+})
+
 test("a failed client is marked without relying on color, and a long detail is cut", () => {
   const failed = [{ target: "codex-cli", path: "", status: `failed: ${"x".repeat(80)}` }]
   const lines = renderSetupOutcomes(failed, "http://127.0.0.1:4142", false, false)

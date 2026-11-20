@@ -67,7 +67,9 @@ test("the listing is a table of exact IDs, names, costs, context windows and not
     "  bare-model                                 –             –",
     "  gpt-6-astra             GPT-6 Astra        –     1.1M [1m]",
     "  claude-sonnet-5.5       Claude Sonnet 5.5  –          200K",
-    "  text-embedding-ada-002                     –             –  ! cannot be gptModel or opusModel: not a chat model",
+    "  text-embedding-ada-002                     –             –  ! not a chat model",
+    "",
+    "! marks a model that cannot be gptModel or opusModel.",
   ])
 })
 
@@ -109,16 +111,17 @@ test("the config guide shows the current routes and warns about values the start
     "Config file: /home/me/.copilot-relay/config.yaml",
     `  gptModel: gpt-6-astra-fast${" ".repeat(9)}# requests without "opus" in the model name`,
     "  opusModel: text-embedding-ada-002  # requests with \"opus\" in the model name",
-    "  Warning: gptModel gpt-6-astra-fast is not advertised by upstream; the startup check rejects it.",
-    "  Warning: opusModel text-embedding-ada-002 cannot be used (not a chat model); the startup check rejects it.",
+    "  Warning: gptModel gpt-6-astra-fast is not advertised by upstream.",
+    "  Warning: opusModel text-embedding-ada-002 cannot be used (not a chat model).",
+    "  The startup check rejects these values.",
     "Set gptModel or opusModel to a chat model ID exactly as listed.",
-    "A running relay applies the change to new requests; restarting reruns the startup check.",
+    "A running relay uses the change for new requests; a restart rechecks it.",
   ])
 
   assert.deepEqual(renderConfigGuide("config.yaml", configured, { id: "gpt-5.6-sol-fast" }).slice(-3), [
     "To use gpt-5.6-sol-fast, set this line in the config file:",
     "  gptModel: gpt-5.6-sol-fast",
-    "A running relay applies the change to new requests; restarting reruns the startup check.",
+    "A running relay uses the change for new requests; a restart rechecks it.",
   ])
 
   // An ID containing "opus" is offered as opusModel, matching how requests are routed.

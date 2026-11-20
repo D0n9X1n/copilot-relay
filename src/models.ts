@@ -26,6 +26,7 @@ import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
 import { paths } from "~/lib/paths"
 import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
+import { homeRelative } from "~/status"
 
 // A mistake in how the command was called. Its message replaces the generic connectivity advice.
 class ModelsUsageError extends Error {}
@@ -296,11 +297,12 @@ export const models = defineCommand({
       if (result.models.length > 0) {
         lines.push(
           "Inference, tool, and effort compatibility are not verified by this listing.",
-          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}; it consumes Copilot usage.`,
+          `Test one with copilot-relay models --deep --model ${result.chosen?.id ?? "<id>"}`,
+          "(a real request, so it consumes Copilot usage).",
         )
       }
 
-      lines.push("", ...renderConfigGuide(paths.configPath, configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
+      lines.push("", ...renderConfigGuide(homeRelative(paths.configPath), configuredModels(appConfig, config, catalog), result.chosen).map(printableCell))
       // Table cells were made printable and scrubbed by the table before any cut, and every other
       // line holding user, catalog or config text was built from printable strings. Each line is
       // scrubbed once more as a backstop; hidden characters are removed but the table's color stays.
