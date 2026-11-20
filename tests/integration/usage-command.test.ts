@@ -235,7 +235,8 @@ test("usage without a stored token suggests copilot-relay auth and creates nothi
 
   assert.equal(result.code, 1)
   assert.equal(result.stdout, "")
-  assert.match(result.stderr, /^No GitHub token is stored at .+github_token\. Sign in with copilot-relay auth\.$/m)
+  // The path from ~, so the line fits 80 columns.
+  assert.match(result.stderr, /^No GitHub token at ~[\\/]\.copilot-relay[\\/]github_token\. Run copilot-relay auth\.$/m)
   assert.deepEqual(result.requests, [])
 })
 

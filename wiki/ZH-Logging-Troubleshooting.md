@@ -797,7 +797,7 @@ GitHub 的回答和网络错误的原因，在打印任何内容之前都会检�
 
 | 情况 | 消息 |
 | --- | --- |
-| 没有保存的 token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| 没有保存的 token | `No GitHub token at <path>. Run copilot-relay auth.` |
 | token 文件无法读取 | `Could not read the GitHub token at <path>: <code>.` |
 | `config.yaml` 无法读取或无效 | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
 | `upstreamProxy: env` 且 `HTTPS_PROXY` 或 `HTTP_PROXY` 格式错误 | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |

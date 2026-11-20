@@ -26,7 +26,7 @@ const {
   resolveCacheOptions,
 } = await import("../../src/lib/cache-report")
 const { flushLogs } = await import("../../src/lib/log")
-const { paths } = await import("../../src/lib/paths")
+const { homeRelative, paths } = await import("../../src/lib/paths")
 const { displayWidth } = await import("../../src/lib/terminal")
 const { RequestTrace, recordedFetch, withRequestTrace } = await import("../../src/lib/request-trace")
 type CacheArguments = import("../../src/lib/cache-report").CacheArguments
@@ -812,7 +812,8 @@ test("an empty window says there is no data and where the data would come from",
   assert.deepEqual(rows, [])
   assert.deepEqual(renderCacheReport(rows, options), [
     "No prompt-cache data in the last 24 h, models matching \"opus\".",
-    `The report reads upstream completion entries in ${paths.logsDir}, written at logLevel info or debug and kept for logRetentionDays.`,
+    `The report reads upstream completion entries in ${homeRelative(paths.logsDir)},`,
+    "written at logLevel info or debug and kept for logRetentionDays.",
   ])
 })
 

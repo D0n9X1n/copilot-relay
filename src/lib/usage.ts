@@ -12,7 +12,7 @@ import { getCopilotUsage, readStoredGitHubToken } from "~/lib/auth"
 import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { withoutLogging } from "~/lib/log"
-import { paths } from "~/lib/paths"
+import { homeRelative, paths } from "~/lib/paths"
 import { colorText, columnWidths, heading, mark, printableCell, renderTable, terminalText, unicodeEnabled, type TableColumn, type TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher, InvalidProxyEnvironmentError } from "~/lib/upstream-dispatcher"
 
@@ -375,12 +375,13 @@ const readToken = async (): Promise<string> => {
     const code = (error as NodeJS.ErrnoException | undefined)?.code
     const reason = typeof code === "string" ? `: ${code}` : ""
 
-    throw new CopilotUsageError(terminalText(`Could not read the GitHub token at ${paths.githubTokenPath}${reason}.`))
+    throw new CopilotUsageError(terminalText(`Could not read the GitHub token at ${homeRelative(paths.githubTokenPath)}${reason}.`))
   }
 
   if (token === undefined) {
     throw new CopilotUsageError(
-      terminalText(`No GitHub token is stored at ${paths.githubTokenPath}. Sign in with copilot-relay auth.`),
+      // One line within 80 columns: the path from ~ and the command to run.
+      terminalText(`No GitHub token at ${homeRelative(paths.githubTokenPath)}. Run copilot-relay auth.`),
     )
   }
 

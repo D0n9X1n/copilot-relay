@@ -912,7 +912,7 @@ another case or encoding, is not found.
 
 | Case | Message |
 | --- | --- |
-| No stored token | `No GitHub token is stored at <path>. Sign in with copilot-relay auth.` |
+| No stored token | `No GitHub token at <path>. Run copilot-relay auth.` |
 | The token file cannot be read | `Could not read the GitHub token at <path>: <code>.` |
 | `config.yaml` cannot be read or is invalid | `Could not read the config at <path>; fix it, then run copilot-relay usage again.` |
 | `upstreamProxy: env` with a malformed `HTTPS_PROXY` or `HTTP_PROXY` | `Invalid HTTPS_PROXY or HTTP_PROXY: with upstreamProxy: env, each one that is set must be an absolute http(s) proxy URL` |
