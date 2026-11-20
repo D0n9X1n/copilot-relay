@@ -166,20 +166,22 @@ const formatLeft = (snapshot: QuotaSnapshot, unicode: boolean): string => {
   return state === undefined ? left : `${mark(state, unicode)} ${left}`
 }
 
-const formatOverage = (snapshot: QuotaSnapshot): string => {
-  let permitted = "?"
-
+const formatPermitted = (snapshot: QuotaSnapshot): string => {
   if (snapshot.overage_permitted === true) {
-    permitted = "permitted"
-  } else if (snapshot.overage_permitted === false) {
-    permitted = "not permitted"
+    return "permitted"
   }
 
-  if (snapshot.overage_count === null || snapshot.overage_count === 0) {
-    return permitted
-  }
+  return snapshot.overage_permitted === false ? "not permitted" : "?"
+}
 
-  return `${permitted}, ${formatNumber(snapshot.overage_count)} used`
+// The overage count GitHub reports, or nothing when it reports none.
+const formatOverageUsed = (snapshot: QuotaSnapshot): string =>
+  snapshot.overage_count === null || snapshot.overage_count === 0 ? "" : `${formatNumber(snapshot.overage_count)} used`
+
+// A quota without a second line keeps its overage count beside the permission.
+const formatOverage = (snapshot: QuotaSnapshot): string => {
+  const used = formatOverageUsed(snapshot)
+  return used === "" ? formatPermitted(snapshot) : `${formatPermitted(snapshot)}, ${used}`
 }
 
 interface QuotaRow {
@@ -228,7 +230,22 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
         return state === undefined ? undefined : lowTones[state]
       },
     },
-    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null || row.continuation === true ? "" : formatOverage(row.snapshot) },
+    {
+      header: "OVERAGE",
+      align: "left",
+      cell: (row) => {
+        if (row.snapshot === null) {
+          return ""
+        }
+
+        // A limited quota has a second line, which carries the overage count so the row stays narrow.
+        if (hasPercentLine(row.snapshot)) {
+          return row.continuation === true ? formatOverageUsed(row.snapshot) : formatPermitted(row.snapshot)
+        }
+
+        return formatOverage(row.snapshot)
+      },
+    },
   ]
 
   // Only a token-billed quota reports credits, so the column appears only when one does.

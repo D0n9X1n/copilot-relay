@@ -124,8 +124,8 @@ test("the report heads with the plan and reset date, then a table of quotas", ()
 test("numbers get thousands separators and keep every decimal GitHub sent", () => {
   const text = report(premiumOnly({ unlimited: false, entitlement: 1000000, remaining: 919253, percent_remaining: 91.92531, overage_permitted: true, overage_count: 1234 }))
 
-  assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 {2}permitted, 1,234 used$/m)
-  assert.match(text, /^ {24}91\.92531% left$/m)
+  assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 {2}permitted$/m)
+  assert.match(text, /^ {24}91\.92531% left {8}1,234 used$/m)
 })
 
 test("a tiny nonzero number prints as GitHub sent it, never rounded to zero", () => {
@@ -151,8 +151,20 @@ test("a quota with credits and an overage count fits 80 columns, its percent on 
     assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
   }
 
-  assert.ok(lines.includes("  premium_interactions  919,253 of 1,000,000  permitted, 1,234 used  12,345.6789"))
-  assert.ok(lines.includes("                        91.92531% left"))
+  assert.ok(lines.includes("  premium_interactions  919,253 of 1,000,000  permitted      12,345.6789"))
+  assert.ok(lines.includes("                        91.92531% left        1,234 used"))
+})
+
+test("a low quota with its mark, credits and an overage count still fits 80 columns", () => {
+  const usage = parseCopilotUsage({
+    quota_snapshots: {
+      premium_interactions: { unlimited: false, remaining: 119253, entitlement: 1000000, percent_remaining: 11.92531, overage_permitted: true, overage_count: 1234, credits_used: 12345.6789 },
+    },
+  })
+
+  for (const line of renderCopilotUsage(usage, false, true)) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+  }
 })
 
 test("a quota running low is marked, and the mark does not rely on color", () => {
@@ -176,8 +188,8 @@ test("an unlimited quota prints unlimited and its overage state", () => {
 test("a limited quota prints remaining of entitlement, GitHub's percent and the overage state", () => {
   const text = report(premiumOnly({ unlimited: false, entitlement: 300, remaining: 0, percent_remaining: 0, overage_permitted: true, overage_count: 25 }))
 
-  assert.match(text, /^ {2}premium_interactions {2}✗ 0 of 300 {2,}permitted, 25 used$/m)
-  assert.match(text, /^ {24}0% left$/m)
+  assert.match(text, /^ {2}premium_interactions {2}✗ 0 of 300 {2,}permitted$/m)
+  assert.match(text, /^ {24}0% left {2,}25 used$/m)
 })
 
 test("a token-billed quota adds credits_used", () => {
