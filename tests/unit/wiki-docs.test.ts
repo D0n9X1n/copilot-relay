@@ -95,6 +95,8 @@ test("the consolidated documentation pages exist in both languages", () => {
     "ZH-Codex.md",
     "EN-Copilot-App.md",
     "ZH-Copilot-App.md",
+    "EN-Models.md",
+    "ZH-Models.md",
     "README.md",
   ]) {
     assert.ok(pages.has(required), `wiki/${required} must exist`)
@@ -525,27 +527,32 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
   }
 })
 
-// Why: Copilot availability and effort tiers are account-specific. The local
-// relay endpoint only echoes config, so both language guides must preserve the
-// live picker workflow and a direct, token-safe way to update all model knobs.
-test("Claude Code picker examples expose the same Opus and Astra choices in both languages", () => {
-  const examples = ["EN-Configuration.md", "ZH-Configuration.md"].map((name) => {
+// Why: Claude Code's gateway discovery keeps only Claude IDs, so a non-Claude
+// model reaches /model only through a user-written modelPicker. Both language
+// guides must give the same complete picker, one row per model `models: auto`
+// exposes against the dated catalog, each non-Claude row naming a model Claude
+// Code already knows in behavesAs.
+test("Models guides give the same Claude Code picker in both languages", () => {
+  const examples = ["EN-Models.md", "ZH-Models.md"].map((name) => {
     const page = readPage(name)
     const snippets = [...page.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)]
       .map((match) => JSON.parse(match[1]) as Record<string, any>)
     const settings = snippets.find((value) => value.modelPicker)
 
     assert(settings, `${name} needs a complete model-picker settings example`)
-    assert.equal(settings.model, "gpt-6-astra[1m]")
-    assert.deepEqual(settings.availableModels, ["opus", "gpt-6-astra[1m]"])
     assert.equal(settings.modelPicker.replaceBuiltInOptions, true)
-    assert.deepEqual(settings.modelPicker.options, [
-      { model: "opus", label: "Opus" },
-      { model: "gpt-6-astra[1m]", label: "GPT-6 Astra" },
-    ])
-    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "claude-opus-5.5")
-    assert.match(page, /2\.1\.242/)
+
+    const options = settings.modelPicker.options as Record<string, unknown>[]
+
+    assert.deepEqual(options.map((option) => option.model), ["opus[1m]", "gpt-6.2-astra[1m]", "mai-code-2[1m]", "grok-4.7"])
+    for (const option of options.filter((entry) => entry.model !== "opus[1m]")) {
+      assert.equal(typeof option.behavesAs, "string", `${name}: ${String(option.model)} needs behavesAs`)
+    }
+
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "claude-opus-5.5[1m]")
+
     assert.match(page, /https:\/\/code\.claude\.com\/docs\/en\/settings-reference#modelpicker/)
+    assert.match(page, /^models: auto$/m)
     return settings
   })
 

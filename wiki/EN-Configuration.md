@@ -45,6 +45,7 @@ webSearchBackend:
 claudeUpstreamApi: chat-completions
 gptModel: gpt-6-astra
 opusModel: claude-opus-5.5
+models: auto
 ```
 
 ## Keys
@@ -57,15 +58,16 @@ opusModel: claude-opus-5.5
 | `copilotBaseUrl` | GitHub Copilot API base URL. Must be an absolute `http://` or `https://` URL, and may not contain credentials. Keep the default unless you know you need a tenant-specific endpoint. See [copilotBaseUrl rules](#copilotbaseurl-rules). |
 | `upstreamProxy` | Outbound proxy for Copilot and GitHub calls, sign-in included. Empty (the default) connects directly; `env` uses `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`; otherwise an absolute `http://` or `https://` proxy URL. Requires restart. See [upstreamProxy rules](#upstreamproxy-rules). |
 | `claudeSetup` | When `true`, `start` updates `~/.claude/settings.json` with the local relay endpoint. |
-| `codexSetup` | When `true`, `start` sets up Codex CLI and the Codex app when `$CODEX_HOME` (default `~/.codex`) exists: a model list of only `gptModel` and `opusModel`, and `config.toml` pointed at this relay with no ChatGPT sign-in. See [Codex](EN-Codex.md). |
+| `codexSetup` | When `true`, `start` sets up Codex CLI and the Codex app when `$CODEX_HOME` (default `~/.codex`) exists: a model list of the exposed models (see `models`), and `config.toml` pointed at this relay with no ChatGPT sign-in. See [Codex](EN-Codex.md). |
 | `logLevel` | One of `error`, `info`, `debug`. `debug` automatically captures full observed request/response bodies as well as bounded logs; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) before enabling it. Any other value fails startup. |
 | `logRetentionDays` | Local calendar days to retain normal relay logs and debug captures, including today; positive integer, default `3`. Active/unknown captures are protected; see [Logs and troubleshooting](EN-Logging-Troubleshooting.md) for cleanup rules. |
 | `thinkEffort` | Fallback reasoning effort when the request omits it: `low`, `medium`, `high`, `xhigh`, `max`. |
 | `upstreamTimeoutSeconds` | Max seconds one Claude request can wait for upstream Copilot calls. Default: `180`; `0` disables the relay deadline. |
 | `webSearchBackend` | Optional Copilot Responses model for bridge-managed WebSearch. Empty uses `gptModel`. |
 | `claudeUpstreamApi` | Claude upstream protocol: `chat-completions` (default), `auto`, or `messages`. Does not change non-Claude routing. |
-| `gptModel` | Upstream model for non-Opus requests, and for a Codex request whose model the catalog does not list. |
-| `opusModel` | Upstream model for requested models containing `opus`. |
+| `gptModel` | Upstream model for a Claude request that names no exposed model and no `opus`, and for a Codex request whose model the catalog does not list. |
+| `opusModel` | Upstream model for a Claude request that names no exposed model but contains `opus`. |
+| `models` | Extra models offered to clients: `auto` (default, the newest model of each vendor), empty (only `gptModel` and `opusModel`), or comma-separated Copilot IDs. The file keeps what you wrote; an invalid value stops startup, and a hot reload with one keeps the running config. Hot-reloads. See [Models](EN-Models.md). |
 
 ## Choose Claude's upstream protocol
 
@@ -303,7 +305,8 @@ unchanged cache hit rates.
 Native Messages protocol migration remains outside this coverage. Choose an
 effort supported by the destination model; authentication, rate limits, network
 failures, context limits and upstream rejection can still fail a request. The
-relay does not silently substitute a model or effort to conceal those failures.
+relay does not substitute a model to conceal those failures; it changes only an
+effort level the model does not advertise, as described below.
 Merging or building a fix does not update an already running installed relay;
 that runtime must be updated and restarted separately.
 
@@ -329,9 +332,11 @@ SSE. Copilot lists older chat models such as `gpt-4o`, `gpt-4.1` and
 Native history forwards controls, so its pending or `clear_at` effort controls
 are rejected too rather than silently discarded. A missing `supports` object, or
 a `reasoning_effort` that is `true`, `null` or malformed, means unknown, not no
-support. With a nonempty tier list,
-normal requests keep the chosen level and upstream rejection remains an error;
-the relay does not substitute another level.
+support. With a nonempty tier list, an advertised level is sent as chosen; any
+other level, explicit or the configured default, becomes the highest advertised
+level at or below it, or the lowest advertised level when none is below. For
+example, `grok-4.7` advertises `low` through `xhigh`, so `max` is sent as `xhigh`.
+Upstream rejection of the sent level remains an error.
 
 You can change effort during a Claude Code conversation without clearing its
 history. An in-message system `output_config` whose sole key is `effort` may use
@@ -396,8 +401,8 @@ it: account entitlement, organization policy, and gateway availability still app
 The authenticated catalog and isolated relay checks on 2026-09-23 verified the
 exact `claude-opus-5.5` ID, JSON/SSE, automatic tool use and tool-result continuation,
 conversation continuation, `low`/`max` effort, and WebSearch final-answer recomposition.
-The catalog advertises all five configured efforts; no `[1m]` suffix is added to
-this Opus ID. WebSearch retrieval remains on `webSearchBackend` or `gptModel`.
+The catalog advertises all five configured efforts. Its 1,000,000-token window
+means Claude Code sees this Opus ID as `claude-opus-5.5[1m]`, its 1M version. WebSearch retrieval remains on `webSearchBackend` or `gptModel`.
 
 **The 2026-09-23 checks used the translated path:** `tool_choice` types `tool`
 and `any` returned HTTP 400 for this model, while automatic selection worked.
@@ -460,16 +465,27 @@ falling back. Restore `config.yaml.bak` if you need to undo the edit.
 Keep the canonical `gpt-6-astra` in relay config. The relay exposes
 `gpt-6-astra[1m]` to Claude Code and sends only `gpt-6-astra` to Copilot. `[1m]`
 controls Claude Code's context accounting; it does not enlarge upstream capacity.
-The live catalog checked on 2026-09-09 reported:
+The relay adds `[1m]` to every ID, Claude or not, whose own catalog window is at
+least 1,000,000 tokens, and shows the plain ID for a smaller known window; see
+[Models](EN-Models.md). The live catalog checked on 2026-11-19
+reported these total windows:
+
+| Model | Total context | Claude Code ID |
+| --- | ---: | --- |
+| `gpt-6.2-astra` | 1,050,000 | `gpt-6.2-astra[1m]` |
+| `gpt-6.2-sol` | 1,050,000 | `gpt-6.2-sol[1m]` |
+| `gpt-6-astra` | 1,050,000 | `gpt-6-astra[1m]` |
+| `mai-code-2` | 1,050,000 | `mai-code-2[1m]` |
+| `claude-opus-5.5` | 1,000,000 | `claude-opus-5.5[1m]` |
+| `grok-4.7` | 500,000 | `grok-4.7` |
+
+The prompt and output limits of Opus 5.5, checked on 2026-09-23:
 
 | Model | Total context | Maximum prompt | Maximum output |
 | --- | ---: | ---: | ---: |
-| `gpt-6-astra` | 1,000,000 | 872,000 | 128,000 |
-| `claude-opus-5` | 1,000,000 | 936,000 | 64,000 |
 | `claude-opus-5.5` (checked 2026-09-23) | 1,000,000 | 1,000,000 | 128,000 |
-| `gpt-5.6-sol` | 1,050,000 | 922,000 | 128,000 |
 
-These are discovered values, not hardcoded runtime limits or results of a
+Startup logs the limits of `gptModel` and `opusModel` on its `Model token limits` lines. These are discovered values, not hardcoded runtime limits or results of a
 million-token production request. Leave room for output, including reasoning,
 within the total window. The relay never truncates input or expands an explicit
 smaller output budget. Upstream remains the authority on whether a prompt fits.
@@ -496,14 +512,13 @@ and shell wrappers. Update a wrapper that pins a different `--model` if necessar
 Use the configured model identity rather than assuming a built-in alias has the
 same client-side context budget.
 
-For a discovered GPT window other than exactly 1M, managed setup uses the plain
-model ID and seeds `CLAUDE_CODE_MAX_CONTEXT_TOKENS` with the actual window.
-Claude's `[1m]` suffix would otherwise override that numeric setting. For example,
-manual Sol setup with the catalog above is:
+For a discovered window below 1M, managed setup uses the plain model ID and seeds
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` with the actual window when it is absent. Claude's
+`[1m]` suffix would otherwise override that numeric setting. For example, manual
+Grok 4.7 setup with the catalog above is:
 
 ```sh
-CLAUDE_CODE_MAX_CONTEXT_TOKENS=1050000 CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 \
-  claude --model gpt-5.6-sol
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=500000 claude --model grok-4.7
 ```
 
 On PowerShell, assign each value with `$env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "128000"`
@@ -528,8 +543,8 @@ remains `180`, and existing saved values are never migrated.
 For the documented **1M-context Opus 5.5 / GPT-6 Astra pair**, start conservatively
 with an **800K auto-compact window**, keeping auto-compaction enabled. This is a
 relay recommendation with headroom, not a measured optimum or a guarantee against
-API errors. The dated catalog above gives Astra an 872K prompt limit and 128K
-maximum output; reserving 128K from a 1M total also leaves 872K. An 800K target
+API errors. The catalog checked on 2026-09-09 gave Astra an 872K prompt limit and
+128K maximum output; reserving 128K from a 1M total also leaves 872K. An 800K target
 keeps roughly 72K additional room for tool output, compaction and token-estimation
 error. The client can compact earlier after its own output/buffer reservations.
 
@@ -804,6 +819,7 @@ Hot-reloaded, applying to work that starts after the change:
 - `claudeUpstreamApi`
 - `gptModel`
 - `opusModel`
+- `models`
 - `apiKey`
 
 Requires restart:
@@ -838,7 +854,9 @@ exception: each attempt reads the live refreshed token.
 
 Changing `gptModel` reroutes new upstream requests, but does not rewrite the model
 or token settings already saved in `~/.claude/settings.json`. Check those settings
-when switching models; managed setup only seeds absent budgets.
+when switching models; managed setup only seeds absent budgets. Changing `models`
+changes the exposed models and `GET /v1/models` at once, but the Codex model list
+is written at start, so it needs a restart.
 
 ## Claude Code settings
 
@@ -893,60 +911,13 @@ network client. Keep the listener on loopback, or set `apiKey` before binding
 beyond it; see [Require a client key](#require-a-client-key) and
 [Architecture](EN-Architecture.md).
 
-### Keep the picker focused on Opus and GPT-6 Astra
+### Choose models in the picker
 
-For Claude Code **2.1.242 or newer**, merge this example into your user
-`~/.claude/settings.json`, keeping the existing relay connection, budgets,
-permissions, hooks, and other settings:
-
-```json
-{
-  "model": "gpt-6-astra[1m]",
-  "availableModels": ["opus", "gpt-6-astra[1m]"],
-  "modelPicker": {
-    "options": [
-      { "model": "opus", "label": "Opus" },
-      { "model": "gpt-6-astra[1m]", "label": "GPT-6 Astra" }
-    ],
-    "replaceBuiltInOptions": true
-  },
-  "env": {
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5.5"
-  }
-}
-```
-
-This uses the default relay pair, `opusModel: claude-opus-5.5` and
-`gptModel: gpt-6-astra`. Keep the Opus override aligned with your configured
-upstream ID. The Astra client ID carries `[1m]` for a discovered one-million-token
-window; if your gateway reports a different window, use the relay's exposed plain
-ID consistently in `model`, `availableModels`, and `modelPicker.options` instead.
-The suffix is client context accounting, not a way to enlarge upstream capacity.
-
-`modelPicker` replaces the built-in lineup with these two named choices instead
-of suggesting unrelated Sonnet, Haiku, or Fable routes. Claude Code may still show
-**Default** and a row for the current session's model; it does not guarantee exactly
-two visible rows. `availableModels` is the selection allowlist and also filters
-picker entries. `model` only selects the startup default. Use `/model` to select
-Opus or GPT-6 Astra, or `/model gpt-6-astra[1m]` to select Astra explicitly.
-
-This picker setting belongs in user or managed settings (or `--settings`), not
-project/local settings. Managed allowlists cannot be expanded by this example;
-without a managed list, user/project/local `availableModels` arrays can merge.
-For an exact effective pair, remove stale entries in settings you control and
-check any managed restrictions. With normal prefix matching, **Default** is not
-constrained by the allowlist alone; organizational enforcement additionally uses
-`enforceAvailableModels` in managed settings. See the official
-[model configuration](https://code.claude.com/docs/en/model-config) and
-[modelPicker reference](https://code.claude.com/docs/en/settings-reference#modelpicker).
-
-An explicit `--model`, an exported `ANTHROPIC_MODEL`, or a saved resumed-session
-model can override the startup selection; inspect shell wrappers and higher-priority
-settings if the chosen model does not change. `claudeSetup` preserves existing
-`model`, `availableModels`, and `modelPicker` choices; it does not install or reset
-this lineup. Claude Code can substitute an allowed model for an excluded alias,
-so verify the selected identity instead of assuming a disallowed alias must error.
-This example is opt-in and does not change your running relay.
+`claudeSetup` does not write `model`, `availableModels` or `modelPicker`, and
+preserves the ones you set. To pick between Opus, GPT and the other exposed models
+in `/model`, add a `modelPicker` to your user `~/.claude/settings.json` as
+[Models](EN-Models.md) shows; it also explains why Claude Code's gateway model
+discovery does not list the non-Claude models.
 
 ## Runtime files
 

@@ -29,7 +29,7 @@ src/
     request.ts                Codex model choice, Copilot field rewrites, x-initiator
     messages.ts               Responses <-> Claude Messages translation for Claude models
     item-ids.ts               one id per output item in a streamed GPT reply
-    catalog.ts                the two-model catalog Codex reads (model_catalog_json)
+    catalog.ts                the exposed-model catalog Codex reads (model_catalog_json)
     setup.ts                  codexSetup: catalog file and config.toml edits at start
     thinking.ts               Claude thinking carried in a reasoning item's encrypted_content
 
@@ -110,7 +110,8 @@ No default migration is added. A user's pin belongs to the user; the old
 Hot-reloaded — applies to work that starts after the change:
 
 `logLevel`, `logRetentionDays`, `thinkEffort`, `upstreamTimeoutSeconds`,
-`copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`, `gptModel`, `opusModel`
+`copilotBaseUrl`, `webSearchBackend`, `claudeUpstreamApi`, `gptModel`, `opusModel`,
+`models`
 
 Requires restart:
 
@@ -361,6 +362,63 @@ left intact for the provider's cache-preserving semantics.
 proxy needs. It is intentionally not a full Claude SDK — an unused type is a
 maintenance cost with no test covering it.
 
+## Model routing
+
+`src/lib/models.ts` decides which Copilot models clients see and where a Claude
+request goes. `parseModelSelection` reads the `models` key into `"auto"`, an empty
+list, or a list of IDs; `readAppConfig` keeps the literal, and `start` stores the
+parsed value with `gptModel` and `opusModel` in the runtime routing state on start
+and on every reload.
+
+- `selectNewestPerVendor(catalog)` implements `auto`: among catalog models with
+  `model_picker_enabled`, type `chat`, a vendor other than `Experimental`, and a
+  number in the ID (the first `\d+(\.\d+)*`), it keeps one per vendor, the highest
+  version compared as a number tuple, then picker category `powerful` > `versatile` >
+  `lightweight`, then the lower ID. It returns the winners in catalog order.
+- `resolveExposedModels(routing, catalog)` returns `gptModel`, `opusModel`, then the
+  selection, each through `canonicalModelId` (every `[1m]` stripped, the catalog's
+  casing), deduplicated case-insensitively. A listed ID the catalog lacks is skipped;
+  without a catalog `auto` adds nothing and a listed ID is kept. `findMissingModels`
+  names the skipped IDs. The daemon (`getExposedUpstreamModelIds`) and standalone
+  `setup` call the same function, and it runs on every call rather than being stored,
+  so a catalog refresh or reload is seen at once.
+- `routeModelId`, which `translateModelName` in `src/claude/translate.ts` calls, sends
+  a name matching an exposed ID, in any case and with any `[1m]`, to that ID; any other
+  name containing `opus` to `opusModel`; and the rest to `gptModel`. A catalog ID that
+  is not exposed is not passed through on the Claude route. Codex's route resolves
+  models separately (`resolveCodexModel`, below).
+- `normalizeClaudeModelId(model, contextWindowTokens?)` gives the ID Claude Code sees:
+  any ID, Claude or not, whose own catalog window is at least 1,000,000 gets `[1m]`
+  (the model's 1M version; the catalog has no separate `-1m` IDs), a smaller known
+  window gives the plain ID, and an unknown window leaves the ID as given. `getExposedModelIds` applies it for `GET /v1/models`
+  and the startup `Exposed models:` line; `applyClaudeConfig` in
+  `src/lib/claude-settings.ts` applies it to each saved model with that model's own
+  window (`contextWindowOf`). Without a catalog, as when standalone setup cannot fetch
+  one, an ID therefore stays as configured.
+- Preflight and the tokenizer preload cover only `gptModel` and `opusModel`
+  (`getUpstreamModelIds`); an extra model's tokenizer loads on first use.
+
+`clampReasoningEffort(requested, advertised)` in `src/copilot/models.ts` sends an
+advertised level as is, a level the relay does not know as is, and any other level as
+the highest advertised level at or below it, or the lowest advertised level when none
+is below. An empty list gives no effort. With no list it uses the levels Copilot's own
+error names, `none` through `max`. `resolveModelReasoningEffort` clamps the requested
+or configured effort for every Claude adapter, and `createNativeMessages` in
+`src/copilot/native.ts` clamps each forwarded system message's `output_config.effort`
+the same way. A model whose catalog entry advertises no levels still answers an
+explicit effort with HTTP 400 `relay_unsupported_effort`. The Codex route uses the
+same function.
+
+`createChatCompletions` in `src/copilot/chat.ts` retries a failed `/chat/completions`
+call once on `/responses` when the endpoint selection allows it (`responsesFallback`,
+set by `selectCopilotEndpoint` in `src/copilot/endpoint.ts` when Chat was chosen and
+the model also lists `/responses`) and the HTTP 400 error code is in
+`responsesRetryCodes`: `unsupported_api_for_model` or `no_available_model_endpoints`.
+Copilot answers `mai-code-2` with the second code on Chat although the catalog lists
+Chat for it. A second failure is returned to the client; there is no third attempt.
+
+User-facing behavior and per-client setup are in [Models](EN-Models.md).
+
 ## Native Messages, chat and Responses
 
 `src/copilot/chat.ts` sends already-resolved upstream IDs for routes and startup
@@ -499,7 +557,7 @@ block inside a `tool_result`. `mapContent` and `handleUserMessage` in
   output, a `detail` other than `low` or `high`, and an empty text part. Every other
   tool message keeps the plain `stringifyToolOutput` string, so an existing history
   sends the same bytes and keeps its prompt-cache prefix. The
-  `unsupported_api_for_model` retry from `/chat/completions` resends the unadapted
+  retry from `/chat/completions` to `/responses` resends the unadapted
   payload and takes the same path.
 - **`/chat/completions`, non-Claude models.** Copilot accepts `image_url` parts in a tool
   message, but in #150 gpt-5-mini replied `NO IMAGE` and gemini-3.8-flash named colors
@@ -725,7 +783,7 @@ Without a catalog the ID is forwarded unchanged.
 **Rewrites.** `prepareCodexPayload` changes only what Copilot answered with HTTP 400
 when probed with Codex-shaped bodies on 2026-10-23 (`gpt-5.4-nano`, `gpt-6-astra`,
 `gpt-5.6-sol`): `service_tier` (any value), a tool of type `image_generation`, and
-`reasoning.effort` `ultra`. `clampReasoningEffort` sends the highest level the
+`reasoning.effort` `ultra`. `clampReasoningEffort` (see Model routing above) sends the highest level the
 catalog lists at or below the request, the lowest listed level when none is below,
 and no effort for a model that lists none. When the catalog lists no levels it uses
 the ones Copilot's own error names, `none` through `max`. The same probes accepted
@@ -796,12 +854,13 @@ a GPT request (`isRelayThinking`, `src/codex/thinking.ts`).
 **Codex setup.** With `codexSetup`, `start` calls `applyCodexSetup`
 (`src/codex/setup.ts`) when `$CODEX_HOME` exists. It writes
 `~/.copilot-relay/codex-models.json` from `buildCodexCatalog` (`src/codex/catalog.ts`):
-`gptModel` then `opusModel`, a model Codex ships keeping Codex's own entry from the
+the exposed models from `resolveExposedModels`, as plain IDs with `gptModel` first, a
+model Codex ships keeping Codex's own entry from the
 vendored `vendor/codex/models.json`, any other built around `vendor/codex/prompt.md`.
 Codex 0.164 treats a `model_catalog_json` file as its whole list
 (`StaticModelsManager`), so its picker shows exactly these. `editCodexConfig` then
-sets the top-level `model_provider`, `model_catalog_json` and, when it names neither
-model, `model`, and rewrites the `[model_providers.copilot-relay]` table. It edits
+sets the top-level `model_provider`, `model_catalog_json` and, when it names no
+listed model, `model`, and rewrites the `[model_providers.copilot-relay]` table. It edits
 line by line, so comments and layout stay: headers and keys are read with quoted
 parts, and lines inside multi-line strings are skipped. It refuses a provider defined
 by dotted keys or an inline table, and an inline `model_providers` table. Then it
@@ -1116,7 +1175,7 @@ sends each mid-conversation system message as a `role: "user"` turn holding
 `<system-reminder>…</system-reminder>` in its original position, the form Claude Code uses for
 most harness context. `translationEndpoint` in `src/routes/claude.ts` passes that endpoint to
 `translateToOpenAI` for both requests and token counts. It passes none when
-`createChatCompletions` may retry an `unsupported_api_for_model` failure on `/responses`,
+`createChatCompletions` may retry a `responsesRetryCodes` failure on `/responses`,
 because the retry resends the same translated payload. That happens only in `auto` mode, for a
 Claude model with no endpoint metadata in the model catalog, or whose catalog entry lists
 `/chat/completions` and `/responses` but not `/v1/messages`. Those requests keep

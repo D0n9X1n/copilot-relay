@@ -3,7 +3,8 @@
 中继在 `POST /v1/responses` 提供 OpenAI Responses API，这是 Codex 唯一使用的接口。
 Codex CLI、Codex app 和 IDE 扩展读取同一个 `~/.codex/config.toml`，运行同一个
 `codex app-server`，所以一次配置就覆盖这三者。Codex 提供的模型与 Claude Code 相同，
-即 `gptModel` 和 `opusModel`，并且不需要登录 ChatGPT。
+即暴露的模型：`gptModel`、`opusModel`，以及 `models` 键选出的模型（见
+[为每个客户端选择模型](ZH-Models.md)），并且不需要登录 ChatGPT。
 
 这已用 Codex CLI 0.164.0 对一个真实运行的中继验证：在 GPT-6 Astra 和 Claude Opus 5.5 上的
 `codex exec` 对话，各自用 `apply_patch` 创建了文件、执行了 shell 命令并正常结束；app server
@@ -17,8 +18,8 @@ Codex CLI、Codex app 和 IDE 扩展读取同一个 `~/.codex/config.toml`，运
 
 `start` 会写入两处：
 
-- `~/.copilot-relay/codex-models.json`：Codex 显示的模型列表，只包含 `gptModel` 和
-  `opusModel`，`gptModel` 排在第一位作为默认。
+- `~/.copilot-relay/codex-models.json`：Codex 显示的模型列表，包含暴露的模型，
+  使用不带 `[1m]` 的 Copilot ID，`gptModel` 排在第一位作为默认。
 - `~/.codex/config.toml` 中的：
 
 ```toml
@@ -35,14 +36,14 @@ requires_openai_auth = false
 supports_websockets = false
 ```
 
-只有当 `model` 不是这两个模型之一时才会被改写。设置了 `apiKey` 时，表中还会加上
+只有当 `model` 不是列表中的模型时才会被改写。设置了 `apiKey` 时，表中还会加上
 `http_headers = { "x-api-key" = "…" }`，文件也会以仅所有者可读的方式发布。其他键、表和注释
 都保持不变。`start` 会记录 `codex settings updated`、`codex settings already up to date`，
 或在 Codex 未安装时记录 `codex setup skipped`。
 
 | 键 | 原因 |
 | --- | --- |
-| `model_catalog_json` | Codex 把这个文件当作完整的模型列表，所以 CLI 和 app 的模型选择器只显示这两个模型。 |
+| `model_catalog_json` | Codex 把这个文件当作完整的模型列表，所以 CLI 和 app 的模型选择器只显示这些模型。 |
 | `base_url` | 中继地址加 `/v1`，Codex 会再拼上 `/responses`。 |
 | `wire_api = "responses"` | Codex 只接受这个值。 |
 | `requires_openai_auth = false` | Codex 跳过 ChatGPT 登录，也不会把 OpenAI 凭据发给中继。 |
@@ -60,8 +61,9 @@ supports_websockets = false
 
 ## 模型
 
-列表包含 `config.yaml` 中的 `gptModel` 和 `opusModel`，与 Claude Code 的模型选择器一致。
-修改其中任何一个后重启中继，列表就会随之改变。
+列表包含暴露的模型：`config.yaml` 中的 `gptModel` 和 `opusModel`，再加上 `models` 键选出的
+模型，使用不带后缀的 Copilot ID。修改其中任何一项后重启中继，列表就会随之改变；见
+[为每个客户端选择模型](ZH-Models.md)。
 
 - Codex 自带的模型（例如 `gpt-6-astra`）保留 Codex 自己的条目：它调校过的指令、`apply_patch`
   工具和推理等级。

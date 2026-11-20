@@ -21,6 +21,7 @@ a service, and working on it. Every page exists in English and 中文.
 
 - [How copilot-relay works](EN-How-It-Works.md) — the short version
 - [Configuration](EN-Configuration.md) — every key, hot reload vs restart
+- [Choose models for each agent](EN-Models.md) — the `models` key, the auto rule, and per-client recipes
 - [Commands](EN-Commands.md) — every command, its options and exit codes
 - [Prompt caching](EN-Prompt-Caching.md) — what Copilot caches, what the relay sends, measuring the hit rate
 - [Codex CLI and the Codex app](EN-Codex.md) — point Codex at the relay, model choice, limits
@@ -50,6 +51,7 @@ the platform's own restart policy.
 
 - [运行原理](ZH-How-It-Works.md) —— 简版说明
 - [配置说明](ZH-Configuration.md) —— 每个配置键、热重载与需要重启
+- [为每个客户端选择模型](ZH-Models.md) —— `models` 键、auto 规则与各客户端的配置方法
 - [命令](ZH-Commands.md) —— 每个命令、它的选项与退出码
 - [Prompt 缓存](ZH-Prompt-Caching.md) —— Copilot 缓存什么、中继发送什么、如何测量命中率
 - [Codex CLI 与 Codex app](ZH-Codex.md) —— 让 Codex 使用中继、选择模型、限制

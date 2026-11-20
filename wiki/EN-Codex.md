@@ -3,8 +3,9 @@
 The relay serves the OpenAI Responses API at `POST /v1/responses`, the only wire
 API Codex speaks. Codex CLI, the Codex app, and the IDE extension read the same
 `~/.codex/config.toml` and run the same `codex app-server`, so one setup covers all
-three. Codex offers the same two models Claude Code does, `gptModel` and
-`opusModel`, and needs no ChatGPT sign-in.
+three. Codex offers the same exposed models Claude Code does, `gptModel`,
+`opusModel` and the models the `models` key selects (see [Models](EN-Models.md)),
+and needs no ChatGPT sign-in.
 
 This was checked with Codex CLI 0.164.0 against a live relay: `codex exec` turns on
 GPT-6 Astra and on Claude Opus 5.5 each created a file with `apply_patch`, ran a
@@ -20,8 +21,9 @@ has run here.
 
 `start` writes two things:
 
-- `~/.copilot-relay/codex-models.json`: the model list Codex shows, holding only
-  `gptModel` and `opusModel`, with `gptModel` first as the default.
+- `~/.copilot-relay/codex-models.json`: the model list Codex shows, holding the
+  exposed models as plain Copilot IDs without `[1m]`, with `gptModel` first as the
+  default.
 - In `~/.codex/config.toml`:
 
 ```toml
@@ -38,7 +40,7 @@ requires_openai_auth = false
 supports_websockets = false
 ```
 
-`model` is changed only when it is not already one of the two models. With an
+`model` is changed only when it is not already one of the listed models. With an
 `apiKey` set, the table also gets `http_headers = { "x-api-key" = "…" }`, and the
 file is published owner-only. Every other key, table and comment is left as it is.
 `start` logs `codex settings updated`, `codex settings already up to date`, or
@@ -46,7 +48,7 @@ file is published owner-only. Every other key, table and comment is left as it i
 
 | Key | Why |
 | --- | --- |
-| `model_catalog_json` | Codex takes this file as its whole model list, so the CLI and the app picker show only these two models. |
+| `model_catalog_json` | Codex takes this file as its whole model list, so the CLI and the app picker show only these models. |
 | `base_url` | The relay's address with `/v1`. Codex appends `/responses`. |
 | `wire_api = "responses"` | The only value Codex accepts. |
 | `requires_openai_auth = false` | Codex skips the ChatGPT sign-in and sends no OpenAI credential to the relay. |
@@ -67,8 +69,9 @@ work.
 
 ## Models
 
-The list holds `gptModel` and `opusModel` from `config.yaml`, as Claude Code's
-picker does. Change either and restart the relay to change the list.
+The list holds the exposed models: `gptModel` and `opusModel` from `config.yaml`,
+then the models the `models` key selects, as plain Copilot IDs. Change any of them
+and restart the relay to change the list; see [Models](EN-Models.md).
 
 - A model Codex ships itself, such as `gpt-6-astra`, keeps Codex's own entry: its
   tuned instructions, `apply_patch` tool and reasoning levels.
