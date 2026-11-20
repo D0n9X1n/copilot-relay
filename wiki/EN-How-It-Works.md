@@ -121,7 +121,7 @@ Routing is simple by design:
 Preferred fresh-install upstream models:
 
 ```yaml
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 

@@ -129,7 +129,7 @@ Messages/token 计数/Responses的非空 POST 正文必须使用 `application/js
 全新安装的首选值：
 
 ```yaml
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 
@@ -285,7 +285,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 claudeUpstreamApi: chat-completions
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 

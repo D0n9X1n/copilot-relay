@@ -104,32 +104,36 @@ copilot-relay status
 ```
 
 ```text
-copilot-relay 0.2.5
-  process    running (pid 93744, up 1h 16m)
-  version    0.2.5
-  listening  http://127.0.0.1:4142
-  health     ok (9ms)
-  models     gpt-6-astra[1m], claude-opus-5
-  upstream   not checked (use --deep)
-  log        ~/.copilot-relay/logs/copilot-relay.2026-07-25.log
-  config     ~/.copilot-relay/config.yaml
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 93744, up 1h 16m)
+  ✓ health    ok (9ms)
+  – upstream  not checked (use --deep)
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
     host                    127.0.0.1
     port                    4142
     …
-    gptModel                gpt-6-astra
-    opusModel               claude-opus-5
-    host, port, claudeSetup, codexSetup and upstreamProxy take effect on restart; the rest hot-reload.
+    gptModel                gpt-6.2-astra
+    opusModel               claude-opus-5.5
+    host, port, claudeSetup, codexSetup and upstreamProxy take effect
+    on restart; the rest hot-reload.
 ```
 
 上面的 `config` 块是节选；`status` 会打印全部解析后的配置项。参见
 [配置说明](ZH-Configuration.md)。
 
-`version` 这一行是**正在运行的守护进程**自己报告的版本，和第一行不是一回事 —— 第一行
-是你刚刚调用的那个 CLI。执行 `npm i -g copilot-relay@latest` 之后，在服务真正重启之前，
-两者会不一致：
+标题行给出你刚刚调用的那个 CLI 的版本。只有当**正在运行的守护进程**报告了另一个版本，或者
+没有报告版本时，才会出现 `version` 这一行。执行 `npm i -g copilot-relay@latest` 之后，在服务
+真正重启之前，它会一直出现：
 
 ```text
-  version    0.2.6 — MISMATCH, 0.3.0 is installed
+  ! version   0.7.1 — MISMATCH, 0.8.0 is installed
 ```
 
 在 systemd 下，这通常意味着 unit 从未被重新加载。执行 `systemctl --user restart
@@ -144,7 +148,7 @@ copilot-relay status --deep
 ```
 
 ```text
-  upstream   ok (1191ms) — end-to-end Copilot round trip
+  ✓ upstream  ok (1191ms) — end-to-end Copilot round trip
 ```
 
 退出码便于脚本使用：`0` 运行中且可达，`1` 未运行，`2` 运行中但不可用（健康检查失败，或 `--deep` 失败）。`--json` 输出
@@ -175,7 +179,7 @@ curl -s http://127.0.0.1:4142/healthz
 curl -s http://127.0.0.1:4142/v1/models
 ```
 
-期望看到你配置的模型，例如 `gpt-6-astra[1m]` 和 `claude-opus-5`。结果直接来自配置，
+期望看到你配置的模型，例如 `gpt-6.2-astra[1m]` 和 `claude-opus-5.5[1m]`。结果直接来自配置，
 **同样不访问上游**。一个 Copilot 令牌一小时前就过期的 relay，前两层照样通过。
 
 ### 第三层 —— 端到端
@@ -184,7 +188,7 @@ curl -s http://127.0.0.1:4142/v1/models
 curl -s -X POST http://127.0.0.1:4142/v1/messages \
   -H "content-type: application/json" \
   -H "anthropic-version: 2023-06-01" \
-  -d '{"model":"gpt-6-astra","max_tokens":256,
+  -d '{"model":"gpt-6.2-astra","max_tokens":256,
        "messages":[{"role":"user","content":"Reply with the single word: ok"}]}'
 ```
 

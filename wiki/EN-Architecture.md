@@ -143,7 +143,7 @@ Routing is deliberately simple and entirely config-driven:
 Preferred fresh-install defaults:
 
 ```yaml
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 
@@ -312,7 +312,7 @@ thinkEffort: max
 upstreamTimeoutSeconds: 180
 webSearchBackend:
 claudeUpstreamApi: chat-completions
-gptModel: gpt-6-astra
+gptModel: gpt-6.2-astra
 opusModel: claude-opus-5.5
 ```
 
