@@ -119,6 +119,8 @@ interface PreparedSlots {
   opusModel: string
   gptKey: string
   opusKey: string
+  // The slots' configured and wire spellings, with their [1m] forms, each mapped to its canonical ID.
+  pins: Map<string, string>
 }
 
 interface GenerationSlots {
@@ -137,9 +139,17 @@ export const slotPreparations = (): number => preparations
 
 const prepareSlots = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel> | undefined): PreparedSlots => {
   preparations++
-  const gptModel = pinSlotSpelling(routing.gptModel, catalog)
-  const opusModel = pinSlotSpelling(routing.opusModel, catalog)
-  return { gptModel, opusModel, gptKey: gptModel.toLowerCase(), opusKey: opusModel.toLowerCase() }
+  const pins = new Map<string, string>()
+  const gptModel = pinSlotSpelling(pins, routing.gptModel, catalog)
+  const opusModel = pinSlotSpelling(pins, routing.opusModel, catalog)
+  return { gptModel, opusModel, gptKey: gptModel.toLowerCase(), opusKey: opusModel.toLowerCase(), pins }
+}
+
+// The prepared slots of the current routing generation for this catalog, when they exist; nothing is
+// prepared here, so a lookup never creates work.
+const preparedFor = (catalog: ReadonlyMap<string, CopilotModel> | undefined): PreparedSlots | undefined => {
+  const slots = preparedSlots.get(routingGeneration(getConfiguredModelRouting()))
+  return catalog === undefined ? slots?.withoutCatalog : slots?.byCatalog.get(catalog)
 }
 
 const getPreparedSlots = (): PreparedSlots => {
@@ -236,13 +246,11 @@ const catalogIndex = (catalog: ReadonlyMap<string, CopilotModel>): Map<string, s
   return index
 }
 
-// The slots' spellings are pinned per catalog when the slots are prepared, so the names every request
-// uses are canonicalized once. canonicalModelId depends only on its input and the catalog Map, and a
-// published catalog is replaced rather than changed, so a pin stays valid for as long as its catalog
-// lives. Any other name is canonicalized each time and never kept: a client-supplied name must not
-// outlive its request.
-const pinnedByCatalog = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
-const pinnedWithoutCatalog = new Map<string, string>()
+// The slots' spellings are pinned with the slots prepared for one routing generation and catalog, so
+// the names every request uses are canonicalized once, and a retired slot's pins go with its
+// generation. A pin is read only for the catalog it was prepared with: canonicalModelId depends only on
+// its input and the catalog Map, and a published catalog is replaced rather than changed. Any other
+// name is canonicalized each time and never kept: a client-supplied name must not outlive its request.
 let normalizations = 0
 
 // Test hook: how many IDs have been canonicalized without a pin.
@@ -256,20 +264,11 @@ const computeCanonicalModelId = (id: string, catalog: ReadonlyMap<string, Copilo
 
 // Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
 // IDs are lowercase, so an ID the catalog does not list is lowercased.
-export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  const pinned = (catalog === undefined ? pinnedWithoutCatalog : pinnedByCatalog.get(catalog))?.get(id)
-  return pinned ?? computeCanonicalModelId(id, catalog)
-}
+export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string =>
+  preparedFor(catalog)?.pins.get(id) ?? computeCanonicalModelId(id, catalog)
 
-// Pins a slot's configured spelling, its wire spelling and their [1m] forms for this catalog, so other
-// names cannot evict them. Only a catalog's own pins are read, so a refreshed catalog computes afresh.
-const pinSlotSpelling = (configured: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  let pins = pinnedWithoutCatalog
-  if (catalog !== undefined) {
-    pins = pinnedByCatalog.get(catalog) ?? new Map()
-    pinnedByCatalog.set(catalog, pins)
-  }
-
+// Pins a slot's configured spelling, its wire spelling and their [1m] forms in this preparation's pins.
+const pinSlotSpelling = (pins: Map<string, string>, configured: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
   const canonical = pins.get(configured) ?? computeCanonicalModelId(configured, catalog)
   for (const spelling of [configured, canonical, `${configured}[1m]`, `${canonical}[1m]`]) {
     pins.set(spelling, canonical)

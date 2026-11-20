@@ -1,7 +1,8 @@
 # 为每个客户端选择模型
 
-中继提供两个 Copilot 模型：`gptModel` 和 `opusModel`。每个客户端请求都会到达其中之一，所以
-Claude Code、Codex 和 Copilot CLI 共用同一对可预测的模型。本页说明路由规则、如何选择这两个
+中继提供两个 Copilot 模型：`gptModel` 和 `opusModel`。每个 Claude 请求都会到达其中之一，所以
+Claude Code 始终使用同一对可预测的模型；Codex 和 Copilot 应用也会看到这两个模型，并且还可以请求
+模型目录列出的其他模型。本页说明路由规则、如何选择这两个
 模型、1M context 窗口、费用，以及每个客户端需要怎样设置。其他配置键见
 [配置说明](ZH-Configuration.md)。
 

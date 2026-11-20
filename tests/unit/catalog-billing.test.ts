@@ -106,6 +106,52 @@ test("a model whose prices are all zero, with batch_size 0, costs nothing rather
   assert.deepEqual(models.get("gpt-4.1")?.price, { input: 0, output: 0, cache: 0 })
 })
 
+test("a price that converts to infinity is dropped, and a valid multiplier is used instead", async () => {
+  const models = await loadCatalog([
+    entry("huge-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 1, default: { input_price: 1e308, output_price: 1 } } }),
+    entry("huge-alone", { token_prices: { batch_size: 1, default: { input_price: 1e308, output_price: 1 } } }),
+    entry("huge-cache", { token_prices: { batch_size: 1, default: { input_price: 0.0008, output_price: 0.004, cache_price: 1e308 } } }),
+  ])
+
+  assert.equal(models.get("huge-with-multiplier")?.price, undefined)
+  assert.equal(models.get("huge-with-multiplier")?.multiplier, 0.33)
+  assert.equal(models.get("huge-alone")?.price, undefined)
+  assert.equal(models.get("huge-alone")?.multiplier, undefined)
+  const huge = models.get("huge-cache")?.price
+  assert.ok(huge !== undefined && Number.isFinite(huge.input) && Number.isFinite(huge.output))
+  assert.equal(huge.cache, undefined)
+})
+
+test("batch_size 0 is free only when every reported price is 0", async () => {
+  const zeros = { input_price: 0, output_price: 0 }
+  const models = await loadCatalog([
+    entry("cache-charged", { token_prices: { batch_size: 0, default: { ...zeros, cache_price: 12 } } }),
+    entry("malformed-cache", { multiplier: 0.33, token_prices: { batch_size: 0, default: { ...zeros, cache_price: "12" } } }),
+    entry("write-charged", { token_prices: { batch_size: 0, default: { ...zeros, cache_price: 0, cache_write_price: 5 } } }),
+  ])
+
+  assert.equal(models.get("cache-charged")?.price, undefined)
+  assert.equal(models.get("malformed-cache")?.price, undefined)
+  assert.equal(models.get("malformed-cache")?.multiplier, 0.33)
+  assert.equal(models.get("write-charged")?.price, undefined)
+})
+
+test("batch_size 0 with a missing input or output price is not free", async () => {
+  const models = await loadCatalog([
+    entry("empty", { token_prices: { batch_size: 0, default: {} } }),
+    entry("input-only", { token_prices: { batch_size: 0, default: { input_price: 0 } } }),
+    entry("empty-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 0, default: {} } }),
+    entry("input-only-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 0, default: { input_price: 0 } } }),
+  ])
+
+  for (const id of ["empty", "input-only", "empty-with-multiplier", "input-only-with-multiplier"]) {
+    assert.equal(models.get(id)?.price, undefined, id)
+  }
+
+  assert.equal(models.get("empty-with-multiplier")?.multiplier, 0.33)
+  assert.equal(models.get("input-only-with-multiplier")?.multiplier, 0.33)
+})
+
 test("missing or malformed billing leaves cost absent, never zero", async () => {
   const models = await loadCatalog([
     entry("none"),
