@@ -2388,7 +2388,7 @@ test("POST /v1/messages maps invalid tool arguments to an error naming the tool"
 // Why: canonicalization is memoized per catalog, so a warm request on any route repeats none of it;
 // the counter sits inside canonicalModelId itself, not in the routing memo.
 test("warm requests repeat no model canonicalization on any route", async () => {
-  const { modelNormalizations } = await import("../../src/lib/models")
+  const { modelNormalizations, normalizeCopilotModelId } = await import("../../src/lib/models")
   const mock = await startMockCopilot()
   const catalog = {
     baseUrl: mock.baseUrl,
@@ -2433,6 +2433,17 @@ test("warm requests repeat no model canonicalization on any route", async () => 
 
       assert.equal(modelNormalizations() - before, 0, `${model} ${JSON.stringify(options)}`)
     }
+
+    // Many other names churn the bounded memo; the slots' spellings stay pinned.
+    for (let index = 0; index < 300; index++) {
+      normalizeCopilotModelId(`churn-model-${index}`)
+    }
+
+    const beforeChurn = modelNormalizations()
+    const afterChurn = await post(app, "sonnet")
+    assert.equal(afterChurn.status, 200)
+    await afterChurn.text()
+    assert.equal(modelNormalizations() - beforeChurn, 0, "after churn")
 
     // The known 1M slot still reaches Claude Code as its [1m] version.
     const reply = await (await post(app, "sonnet")).json() as { model: string }

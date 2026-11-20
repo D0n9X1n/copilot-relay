@@ -298,6 +298,17 @@ test("a slot the warm catalog omits is normalized once per generation and catalo
   }
 
   assert.equal(modelNormalizations() - before, 0)
+
+  // Without a catalog, the same: the slot is computed once for this generation, then never again.
+  delete runtimeState.modelCatalog
+  runtimeState.modelRouting = { gptModel: "GPT-NO-CATALOG[1m]", opusModel: "claude-opus-5.5" }
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  const beforeWithout = modelNormalizations()
+  for (let index = 0; index < 100; index++) {
+    assert.equal(withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet")), "gpt-no-catalog")
+  }
+
+  assert.equal(modelNormalizations() - beforeWithout, 0)
 })
 
 test("canonicalization is memoized per catalog and bounded at 256 names", () => {

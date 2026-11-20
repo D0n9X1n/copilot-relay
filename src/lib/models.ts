@@ -137,8 +137,8 @@ export const slotPreparations = (): number => preparations
 
 const prepareSlots = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel> | undefined): PreparedSlots => {
   preparations++
-  const gptModel = canonicalModelId(routing.gptModel, catalog)
-  const opusModel = canonicalModelId(routing.opusModel, catalog)
+  const gptModel = pinSlotSpelling(routing.gptModel, catalog)
+  const opusModel = pinSlotSpelling(routing.opusModel, catalog)
   return { gptModel, opusModel, gptKey: gptModel.toLowerCase(), opusKey: opusModel.toLowerCase() }
 }
 
@@ -240,7 +240,11 @@ const catalogIndex = (catalog: ReadonlyMap<string, CopilotModel>): Map<string, s
 const canonicalMemoLimit = 256
 
 // canonicalModelId depends only on the input and the catalog Map, and a published catalog is
-// replaced rather than changed, so results are memoized per catalog and for the no-catalog case.
+// replaced rather than changed, so results are memoized per catalog and for the no-catalog case, in
+// two tiers. The slots' spellings are pinned when the slots are prepared and never evicted; every other
+// name goes in a bounded memo that many distinct names can churn.
+const pinnedByCatalog = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
+const pinnedWithoutCatalog = new Map<string, string>()
 const canonicalByCatalog = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
 const canonicalWithoutCatalog = new Map<string, string>()
 let normalizations = 0
@@ -265,22 +269,48 @@ const canonicalMemo = (catalog: ReadonlyMap<string, CopilotModel> | undefined): 
   return memo
 }
 
+const computeCanonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  normalizations++
+  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
+  return catalog === undefined ? lower : catalogIndex(catalog).get(lower) ?? lower
+}
+
 // Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
 // IDs are lowercase, so an ID the catalog does not list is lowercased.
 export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  const pinned = (catalog === undefined ? pinnedWithoutCatalog : pinnedByCatalog.get(catalog))?.get(id)
+  if (pinned !== undefined) {
+    return pinned
+  }
+
   const memo = canonicalMemo(catalog)
   const known = memo.get(id)
   if (known !== undefined) {
     return known
   }
 
-  normalizations++
-  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
-  const canonical = catalog === undefined ? lower : catalogIndex(catalog).get(lower) ?? lower
+  const canonical = computeCanonicalModelId(id, catalog)
   if (memo.size >= canonicalMemoLimit) {
     memo.clear()
   }
 
   memo.set(id, canonical)
+  return canonical
+}
+
+// Pins a slot's configured spelling, its wire spelling and their [1m] forms for this catalog, so other
+// names cannot evict them. Only a catalog's own pins are read, so a refreshed catalog computes afresh.
+const pinSlotSpelling = (configured: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  let pins = pinnedWithoutCatalog
+  if (catalog !== undefined) {
+    pins = pinnedByCatalog.get(catalog) ?? new Map()
+    pinnedByCatalog.set(catalog, pins)
+  }
+
+  const canonical = pins.get(configured) ?? computeCanonicalModelId(configured, catalog)
+  for (const spelling of [configured, canonical, `${configured}[1m]`, `${canonical}[1m]`]) {
+    pins.set(spelling, canonical)
+  }
+
   return canonical
 }
