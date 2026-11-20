@@ -242,6 +242,41 @@ test("routing walks a catalog only on its first use with a routing", () => {
   assert.equal(catalog.walks, firstUse)
 })
 
+// Each request runs under its own snapshot of the runtime state, so the routing object, and a
+// `models` list inside it, is a fresh copy every time. Equal values must still reuse the cache.
+test("requests with fresh copies of equal routing reuse the cached lists", async () => {
+  const { snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
+  const catalog = new CountingMap([
+    ["gpt-6-astra", pick("OpenAI", window(1_050_000))],
+    ["claude-opus-5.5", pick("Anthropic", window(1_000_000))],
+    ["grok-4.7", pick("xAI")],
+  ])
+  runtimeState.upstreamBaseUrl = baseUrl
+  runtimeState.modelCatalog = { baseUrl, models: catalog }
+
+  for (const selection of ["auto", ["grok-4.7"]] as const) {
+    const configured = (): ModelRoutingConfig => ({
+      gptModel: "gpt-6-astra",
+      opusModel: "claude-opus-5.5",
+      models: selection === "auto" ? "auto" : [...selection],
+    })
+    const request = () => {
+      runtimeState.modelRouting = configured()
+      withRuntimeState(snapshotRuntimeState(), () => {
+        models.getExposedModelIds()
+        models.routeModelId("grok-4.7")
+      })
+    }
+
+    request()
+    const firstUse = catalog.walks
+    request()
+    request()
+
+    assert.equal(catalog.walks, firstUse, `models: ${JSON.stringify(selection)}`)
+  }
+})
+
 const useRouting = (catalog: Map<string, CopilotModel>, routing: ModelRoutingConfig) => {
   runtimeState.upstreamBaseUrl = baseUrl
   runtimeState.modelCatalog = { baseUrl, models: catalog }
