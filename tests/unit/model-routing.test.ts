@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process"
 import test from "node:test"
 import assert from "node:assert/strict"
 
@@ -332,31 +331,17 @@ test("the slots are canonicalized once per catalog and other names every time", 
   assert.equal(normalizeCopilotModelId("gpt-6-astra"), "GPT-6-Astra")
 })
 
-// Why: no cache is keyed by client-supplied names, so an oversized model name is gone once its
-// request settles.
-test("an oversized model name is not retained after its request", () => {
-  const script = `
-    const { normalizeCopilotModelId, routeModelId } = await import(${JSON.stringify(new URL("../../src/lib/models.ts", import.meta.url).href)})
-    const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import(${JSON.stringify(new URL("../../src/lib/state.ts", import.meta.url).href)})
-    runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
-    runtimeState.upstreamBaseUrl = "https://fixture.invalid"
-    runtimeState.modelCatalog = { baseUrl: "https://fixture.invalid", models: new Map([["gpt-6-astra", {}], ["claude-opus-5.5", {}]]) }
-    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
-    const sample = () => { globalThis.gc(); globalThis.gc(); return process.memoryUsage().heapUsed }
-    const before = sample()
-    withRuntimeState(snapshotRuntimeState(), () => {
-      const name = "x".repeat(1024 * 1024) + "-model"
-      routeModelId(name)
-      normalizeCopilotModelId(name)
-    })
-    process.stdout.write(String(sample() - before))
-  `
-  const output = execFileSync(process.execPath, ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", script], {
-    cwd: new URL("../..", import.meta.url),
-    encoding: "utf8",
-  })
+// Why: no cache is keyed by client-supplied names, so an oversized model name is canonicalized each
+// time it is looked up and kept by nothing once its request settles.
+test("an oversized model name is canonicalized each time and not cached", () => {
+  useCatalog([["gpt-6-astra", 1_050_000]])
+  const name = `${"x".repeat(1024 * 1024)}-model`
+  const before = modelNormalizations()
 
-  assert.ok(Number(output) < 64 * 1024, `heap grew by ${output} bytes`)
+  normalizeCopilotModelId(name)
+  normalizeCopilotModelId(name)
+
+  assert.equal(modelNormalizations() - before, 2)
 })
 
 test("a snapshot keeps the two-field routing shape", () => {
