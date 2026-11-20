@@ -31,14 +31,31 @@ for (const [env, tty, expected] of [
   })
 }
 
-test("probe table has stable plain text beneath status colors", () => {
+test("probe table has stable plain text beneath status colors, and a mark on every status", () => {
   const width = probeColumnWidth([row.id], 80)
-  const plain = renderProbeRow(row, width, false).join("\n")
+  const plain = renderProbeRow(row, width, false, 80, true).join("\n")
 
-  assert.equal(plain, "claude-opus-5.5  PASS          1.2s  Ready")
-  assert.equal(stripVTControlCharacters(renderProbeRow(row, width, true).join("\n")), plain)
-  assert.match(renderProbeRow(row, width, true).join("\n"), /\u001b\[32mPASS\u001b\[0m/)
-  assert.match(renderProbeHeader(width), /MODEL\s+STATUS\s+TIME\s+RESULT/)
+  assert.equal(renderProbeHeader(width), "  MODEL            STATUS          TIME  RESULT")
+  assert.equal(plain, "  claude-opus-5.5  ✓ PASS          1.2s  Ready")
+  assert.equal(stripVTControlCharacters(renderProbeRow(row, width, true, 80, true).join("\n")), plain)
+  assert.match(renderProbeRow(row, width, true, 80, true).join("\n"), /\u001b\[32m✓ PASS\u001b\[0m/)
+
+  const marks = (["FAIL", "INCOMPLETE", "SKIPPED", "NOT_TESTED"] as const)
+    .map((status) => renderProbeRow({ ...row, status }, width, false, 80, true)[0].slice(2 + width + 2, 2 + width + 2 + 12).trimEnd())
+  assert.deepEqual(marks, ["✗ FAIL", "! INCOMPLETE", "– SKIPPED", "– NOT_TESTED"])
+  assert.match(renderProbeRow({ ...row, status: "FAIL" }, width, false, 80, false)[0], /^ {2}claude-opus-5\.5 {2}x FAIL /)
+})
+
+test("two rows printed one at a time line up under the header", () => {
+  const second = { ...row, id: "gpt-6.2-astra", latency: 15_300 }
+  const width = probeColumnWidth([row.id, second.id], 80)
+  const header = renderProbeHeader(width)
+  const first = renderProbeRow(row, width, false, 80, true)[0]
+  const next = renderProbeRow(second, width, false, 80, true)[0]
+
+  assert.equal(header.indexOf("STATUS"), first.indexOf("✓"))
+  assert.equal(first.indexOf("✓"), next.indexOf("✓"))
+  assert.equal(header.indexOf("RESULT"), next.indexOf("Ready"))
 })
 
 for (const columns of [60, 80, 120]) {
@@ -49,7 +66,8 @@ for (const columns of [60, 80, 120]) {
 
     assert(lines.every((line) => line.length <= columns), JSON.stringify(lines))
     // The ID wraps within its column rather than being truncated.
-    assert.equal(lines.map((line) => line.slice(0, width).trimEnd()).join(""), longRow.id)
+    // After the two-space indent.
+    assert.equal(lines.map((line) => line.slice(2, 2 + width).trimEnd()).join(""), longRow.id)
   })
 }
 

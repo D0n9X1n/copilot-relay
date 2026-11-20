@@ -6,14 +6,69 @@ import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/mod
 import { getRelayBaseUrl } from "~/lib/address"
 import { readAppConfig } from "~/lib/app-config"
 import { setupProxyAuth } from "~/lib/auth"
-import { isSetupTarget, runSetup, setupTargets, type SetupTarget } from "~/lib/client-setup"
+import { isSetupTarget, runSetup, setupTargets, type SetupOutcome, type SetupTarget } from "~/lib/client-setup"
 import { readProxyConfig } from "~/lib/config"
 import { flushLogs, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
 import { registerSensitiveOrigin } from "~/lib/redact"
-import { terminalText } from "~/lib/terminal"
+import { colorEnabled, heading, mark, renderTable, terminalText, unicodeEnabled } from "~/lib/terminal"
+import type { MarkState, TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
 
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
+
+interface SetupRow {
+  client: string
+  state: MarkState
+  result: string
+  detail: string
+}
+
+// An outcome's status is "updated", "already up to date", "skipped: <reason>", "failed: <reason>"
+// or a note such as "shares the Codex config above". The table keeps the verdict short and moves the
+// reason, or else the file written, to DETAIL.
+const setupRow = (outcome: SetupOutcome): SetupRow => {
+  const [verdict, ...reason] = outcome.status.split(": ")
+  const because = reason.join(": ")
+  if (verdict === "failed") {
+    return { client: outcome.target, state: "fail", result: "failed", detail: because || outcome.path }
+  }
+
+  if (verdict === "skipped") {
+    return { client: outcome.target, state: "off", result: "skipped", detail: because || outcome.path }
+  }
+
+  if (outcome.status === "updated") {
+    return { client: outcome.target, state: "ok", result: "updated", detail: outcome.path }
+  }
+
+  if (outcome.status === "already up to date") {
+    return { client: outcome.target, state: "ok", result: "up to date", detail: outcome.path }
+  }
+
+  return { client: outcome.target, state: "ok", result: "up to date", detail: outcome.status }
+}
+
+const resultTones: Record<MarkState, TerminalTone> = { ok: "good", fail: "bad", warn: "warning", off: "muted" }
+
+/** The outcome of each client as a heading and a table. Kept free of IO, so it is tested directly. */
+export const renderSetupOutcomes = (
+  outcomes: Array<SetupOutcome>,
+  baseUrl: string,
+  color = false,
+  unicode = unicodeEnabled(),
+): Array<string> => {
+  const rows = outcomes.map(setupRow)
+
+  return [
+    heading("Client setup", baseUrl),
+    "",
+    ...renderTable([
+      { header: "CLIENT", align: "left", cell: (row: SetupRow) => row.client },
+      { header: "RESULT", align: "left", cell: (row) => `${mark(row.state, unicode)} ${row.result}`, tone: (row) => resultTones[row.state] },
+      { header: "DETAIL", align: "left", cell: (row) => row.detail, maxWidth: 48 },
+    ], rows, color),
+  ]
+}
 
 /** The targets named on the command line, or every target when none is named. */
 export const parseSetupTargets = (names: Array<string>): Array<SetupTarget> => {
@@ -85,17 +140,17 @@ export const setup = defineCommand({
       console.error("Could not read Copilot's model catalog; writing model IDs without names or context sizes.")
     }
 
+    const baseUrl = getRelayBaseUrl(appConfig.host, appConfig.port)
     const outcomes = await runSetup(targets, {
       appConfig,
-      baseUrl: getRelayBaseUrl(appConfig.host, appConfig.port),
+      baseUrl,
       catalog,
       force: Boolean(args.force),
     })
 
-    for (const outcome of outcomes) {
-      const where = outcome.path ? ` (${outcome.path})` : ""
-      console.log(printable(`${outcome.target}: ${outcome.status}${where}`))
-    }
+    // Every cell is made printable and scrubbed by the table before it is cut.
+    console.log(renderSetupOutcomes(outcomes, printable(baseUrl), colorEnabled()).join("\n"))
+    console.log("")
 
     if (outcomes.some((outcome) => outcome.target === "claude-code-app" && outcome.status === "updated")) {
       console.log("Quit and reopen the Claude app; it reads this setup at launch and may rewrite it while running.")

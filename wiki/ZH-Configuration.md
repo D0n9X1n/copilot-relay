@@ -188,8 +188,9 @@ copilot-relay models --deep --model gpt-6-astra --effort low --max-tokens 4096
 模型 ID 只显示一次；长 ID 换行而不静默截断。每次串行探测完成后立即显示一行。
 `*` 表示目录没有公布 effort 或接口元数据，不代表相关能力已被验证。
 
-TTY 输出中，PASS 为绿色、FAIL 为红色、INCOMPLETE 为黄色，SKIPPED/NOT_TESTED
-使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
+每个状态以不依赖颜色的标记开头：`✓ PASS`、`✗ FAIL`、`! INCOMPLETE`，以及
+`– SKIPPED` 或 `– NOT_TESTED`（终端无法显示时为 `ok`、`x`、`!` 和 `-`）。TTY 输出另外为
+PASS 使用绿色、FAIL 红色、INCOMPLETE 黄色，SKIPPED/NOT_TESTED 使用弱化颜色。`status` 和 `status --deep` 对健康状态、上游检查和版本不匹配使用相同
 策略。文字状态始终是判断依据，颜色不会改变退出码。管道和 dumb 终端默认无颜色；
 `NO_COLOR` 或 `FORCE_COLOR=0` 禁用 ANSI；`FORCE_COLOR=1`（也接受 `2`、`3`、
 `true` 或空值）可明确启用。`NO_COLOR` 优先。`status --json` 始终不带颜色。

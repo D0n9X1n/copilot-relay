@@ -1,5 +1,6 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
+import { formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
 
 export interface ListedModel {
   // The exact upstream ID, which is the value gptModel or opusModel takes.
@@ -8,6 +9,10 @@ export interface ListedModel {
   name?: string
   // Why request admission refuses this ID, as a probe result label; absent when it is routable.
   unusable?: string
+  // False for a model the catalog says is not a chat model; the plain listing hides those.
+  chat?: boolean
+  // The catalog's context window in tokens, when it reports one.
+  contextWindow?: number
 }
 
 export type ModelKey = "gptModel" | "opusModel"
@@ -82,39 +87,41 @@ export const searchModels = (models: ListedModel[], search: string): ModelSearch
   return { found: true, models: matches, chosen }
 }
 
-// A very long ID keeps its own width instead of pushing every other name to the right.
-const maximumIdWidth = 40
-
 const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text.slice(1)
 
-const detailsOf = (model: ListedModel): string => {
-  const details: string[] = []
-
-  if (model.name !== undefined) {
-    details.push(model.name)
+// The window the relay offers: a known window of at least 1M carries [1m], the suffix Claude Code
+// reads as a 1M model.
+const contextOf = (model: ListedModel): string => {
+  if (model.contextWindow === undefined) {
+    return "–"
   }
 
-  if (model.unusable !== undefined) {
-    details.push(`cannot be gptModel or opusModel: ${lowerFirst(model.unusable)}`)
-  }
-
-  return details.join(" · ")
+  const size = formatTokens(model.contextWindow)
+  return model.contextWindow >= 1_000_000 ? `${size} [1m]` : size
 }
 
-// Each row starts with the exact ID, the value config.yaml takes, so it can be copied as is.
-export const renderModelRows = (models: ListedModel[]): string[] => {
-  const described = models.filter((model) => detailsOf(model) !== "")
-  const width = Math.min(maximumIdWidth, Math.max(0, ...described.map((model) => model.id.length)))
+/**
+ * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
+ * it can be copied; a long display name is cut instead. NOTE marks an ID that cannot be gptModel or
+ * opusModel, and the mark does not rely on color.
+ */
+export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
+  const columns: Array<TableColumn<ListedModel>> = [
+    { header: "MODEL", align: "left", cell: (model) => model.id },
+    { header: "NAME", align: "left", cell: (model) => model.name ?? "", maxWidth: 18 },
+    { header: "CONTEXT", align: "right", cell: contextOf },
+  ]
 
-  return models.map((model) => {
-    const details = detailsOf(model)
+  if (models.some((model) => model.unusable !== undefined)) {
+    columns.push({
+      header: "NOTE",
+      align: "left",
+      cell: (model) => model.unusable === undefined ? "" : `${mark("warn", unicode)} cannot be gptModel or opusModel: ${lowerFirst(model.unusable)}`,
+      tone: (model) => model.unusable === undefined ? undefined : "warning",
+    })
+  }
 
-    if (details === "") {
-      return model.id
-    }
-
-    return `${model.id.padEnd(width)}  ${details}`
-  })
+  return renderTable(columns, models, color)
 }
 
 const routes: Record<ModelKey, string> = {

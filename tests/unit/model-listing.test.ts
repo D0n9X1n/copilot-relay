@@ -56,29 +56,30 @@ test("a config line is offered only for an exact ID or the one usable match", ()
   assert.equal(searchModels(catalog, "ada").chosen, undefined)
 })
 
-test("rows start with the exact ID and align the display name or route note after it", () => {
+test("the listing is a table of exact IDs, names, context windows and notes", () => {
   assert.deepEqual(renderModelRows([
-    { id: "bare-model" },
-    { id: "gpt-6-astra", name: "GPT-6 Astra" },
-    { id: "text-embedding-ada-002", unusable: "Not a chat model" },
-  ]), [
-    "bare-model",
-    `gpt-6-astra${" ".repeat(13)}GPT-6 Astra`,
-    "text-embedding-ada-002  cannot be gptModel or opusModel: not a chat model",
+    { id: "bare-model", chat: true },
+    { id: "gpt-6-astra", name: "GPT-6 Astra", chat: true, contextWindow: 1_050_000 },
+    { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", chat: true, contextWindow: 200_000 },
+    { id: "text-embedding-ada-002", chat: false, unusable: "Not a chat model" },
+  ], false, true), [
+    "  MODEL                   NAME                 CONTEXT  NOTE",
+    "  bare-model                                         –",
+    "  gpt-6-astra             GPT-6 Astra        1.1M [1m]",
+    "  claude-sonnet-5.5       Claude Sonnet 5.5       200K",
+    "  text-embedding-ada-002                             –  ! cannot be gptModel or opusModel: not a chat model",
   ])
+})
 
-  assert.deepEqual(
-    renderModelRows([{ id: "completion", name: "Completion", unusable: "Not a chat model" }]),
-    ["completion  Completion · cannot be gptModel or opusModel: not a chat model"],
-  )
+test("a long name is cut but an ID never is", () => {
+  const longId = "x".repeat(70)
+  const lines = renderModelRows([
+    { id: longId, name: "Long", chat: true },
+    { id: "short", name: "A display name far longer than the name column allows", chat: true },
+  ], false, true)
 
-  // An ID wider than the column moves only its own details.
-  const longId = "x".repeat(45)
-
-  assert.deepEqual(renderModelRows([{ id: longId, name: "Long" }, { id: "short", name: "Short" }]), [
-    `${longId}  Long`,
-    `short${" ".repeat(37)}Short`,
-  ])
+  assert.ok(lines[1].startsWith(`  ${longId}  Long`))
+  assert.match(lines[2], /^ {2}short +A display name fa… +–$/)
 })
 
 test("the config guide shows the current routes and warns about values the startup check rejects", () => {

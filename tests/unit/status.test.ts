@@ -95,6 +95,65 @@ const runningStatus: RelayStatus = {
 
 const render = (status: RelayStatus): string => renderStatus(status).join("\n")
 
+// Why: status answers "is it up and usable" first. A heading names the build and address, state
+// rows lead with a mark so they read without color, and the paths and config follow under their own
+// headings because they are reference, not the answer.
+test("a running relay reads as a heading, marked state rows, files and config", () => {
+  const lines = renderStatus({ ...runningStatus, deep: { ms: 890, ok: true } }, false, true)
+
+  assert.deepEqual(lines.slice(0, 9), [
+    "copilot-relay 0.2.5 · http://127.0.0.1:4142",
+    "",
+    "  ✓ process   running (pid 93744, up 1h 30m)",
+    "  ✓ health    ok (2ms)",
+    "  ✓ upstream  ok (890ms) — end-to-end Copilot round trip",
+    "  ✓ version   0.2.5",
+    "  ✓ models    gpt-5.6-sol[1m], claude-opus-5",
+    "",
+    "Files",
+  ])
+  assert.deepEqual(lines.slice(9, 13), [
+    "    log       /home/u/.copilot-relay/logs/copilot-relay.2026-07-25.log",
+    "    config    /home/u/.copilot-relay/config.yaml",
+    "",
+    "Config",
+  ])
+  assert.ok(lines.some((line) => /^ {4}gptModel {16}gpt-5\.6-sol$/.test(line)))
+})
+
+test("state rows mark failure, warning and not-checked without relying on color", () => {
+  const broken = renderStatus({
+    ...runningStatus,
+    daemonVersion: "0.2.6",
+    version: "0.3.0",
+    health: { detail: "timed out", ok: false },
+    models: [],
+  }, false, true).join("\n")
+
+  assert.match(broken, /^ {2}✗ health {4}FAILED — timed out$/m)
+  assert.match(broken, /^ {2}! version {3}0\.2\.6 — MISMATCH, 0\.3\.0 is installed$/m)
+  assert.match(broken, /^ {2}! models {4}unavailable$/m)
+  assert.match(renderStatus(runningStatus, false, true).join("\n"), /^ {2}– upstream {2}not checked \(use --deep\)$/m)
+  assert.match(renderStatus(runningStatus, false, false).join("\n"), /^ {2}- upstream {2}not checked \(use --deep\)$/m)
+})
+
+test("a stopped relay reads as a heading, one marked row, files, config and the next step", () => {
+  const lines = renderStatus(baseStatus, false, true)
+
+  assert.deepEqual(lines.slice(0, 8), [
+    "copilot-relay 0.2.5",
+    "",
+    "  – process   not running",
+    "",
+    "Files",
+    "    log       /home/u/.copilot-relay/logs/copilot-relay.2026-07-25.log",
+    "    config    /home/u/.copilot-relay/config.yaml",
+    "",
+  ])
+  assert.equal(lines[8], "Config")
+  assert.deepEqual(lines.slice(-2), ["", "Start it with: copilot-relay start"])
+})
+
 // Why: scripts parse `status --json`, so forced color must never put escape
 // codes into it.
 test("status JSON command stays uncolored even when color is forced", async (t) => {

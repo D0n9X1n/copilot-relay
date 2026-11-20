@@ -157,10 +157,33 @@ relay it requests `/healthz` and, when that passes, `/v1/models`; with `--deep` 
 also sends a short `POST /v1/messages`, which goes through the relay to Copilot.
 `/healthz` and `/v1/models` never contact Copilot.
 
-The first line shows the version of the CLI that ran `status`. For a running relay,
+The heading names the CLI that ran `status` and, when a relay runs, its address.
+Each row under it answers one question and starts with a mark that does not need
+color: `✓` yes, `✗` failed, `!` needs attention, `–` not checked or not running
+(`ok`, `x`, `!` and `-` where the terminal cannot show them). For a running relay
 the `version` row shows the version the relay reports, `unknown` for a relay that
 does not report one, or a mismatch with the installed version together with the
-command to restart it.
+command to restart it. The log and config paths follow under `Files`, and every
+resolved key under `Config`.
+
+```text
+copilot-relay 0.8.0 · http://127.0.0.1:4142
+
+  ✓ process   running (pid 65686, up 2d 21h)
+  ✓ health    ok (3ms)
+  – upstream  not checked (use --deep)
+  ✓ version   0.8.0
+  ✓ models    gpt-6.2-astra[1m], claude-opus-5.5[1m]
+
+Files
+    log       ~/.copilot-relay/logs/copilot-relay.2026-11-20.log
+    config    ~/.copilot-relay/config.yaml
+
+Config
+    host                    127.0.0.1
+    port                    4142
+    …
+```
 
 | Exit | Meaning |
 | --- | --- |
@@ -259,10 +282,24 @@ type, or a Claude app file that is not a JSON object, is left unchanged and
 reported as a failure. It exits `1` for an unknown
 target or a `config.yaml` it cannot read, `2` when any target fails, and `0` otherwise.
 
+The result is a table with one marked row per client: what setup did, and the file
+it wrote or the reason it skipped or failed. A long reason is cut with `…`.
+
+```text
+Client setup · http://127.0.0.1:4142
+
+  CLIENT           RESULT        DETAIL
+  claude-code-cli  ✓ updated     ~/.claude/settings.json
+  claude-code-app  – skipped     the app has not run here
+  codex-cli        ✓ up to date  ~/.codex/config.toml
+  codex-app        ✓ up to date  shares the Codex config above
+```
+
 ## `models`
 
 ```sh
-copilot-relay models                                   # list
+copilot-relay models                                   # list chat models
+copilot-relay models --all                             # list every model
 copilot-relay models opus                              # search by ID or display name
 copilot-relay models --deep --model claude-opus-5.5    # test one model
 ```
@@ -277,9 +314,29 @@ copilot-relay models --deep --model claude-opus-5.5    # test one model
 | `--max-tokens` | Output budget per probe (default 4096; bounded by catalog limits). |
 | `--timeout` | Positive per-probe timeout in seconds (default 30; bounded by configured timeout). |
 | `--total-timeout` | Positive timeout in seconds for all probes (default 300). |
+| `--all` | List every advertised model, including those that are not chat models. |
 
-Lists the model IDs Copilot's catalog advertises, marking the ones the relay cannot
-use; the listing does not verify that a model works. Unquoted words form one search,
+Lists the chat models Copilot's catalog advertises as a table of exact IDs, display
+names and context windows. A window of at least 1M is marked `[1m]`, the ID suffix
+Claude Code reads as a 1M model. Models that are not chat models, such as
+embeddings, are left out and counted under the table; `--all` lists them too, with
+a note that they cannot be `gptModel` or `opusModel`. The listing does not verify
+that a model works. The token-cache notices go to stderr, so stdout holds only the
+answer.
+
+```text
+Copilot chat models · 4 of 6
+
+  MODEL              NAME                 CONTEXT
+  claude-opus-5.5    Claude Opus 5.5      1M [1m]
+  claude-sonnet-5.5  Claude Sonnet 5.5       200K
+  gpt-6.2-astra      GPT-6.2 Astra      1.1M [1m]
+  grok-4.7           Grok 4.7                256K
+
+2 models that are not chat models are hidden: copilot-relay models --all
+```
+
+A long display name is cut with `…`; an ID never is, so it can be copied. Unquoted words form one search,
 and a search prints the matching models and the `config.yaml` line that selects one.
 `--deep` checks the `--model` ID, or every entry in the catalog. It sends a real
 request only to an entry it can probe before the total timeout; the other entries
