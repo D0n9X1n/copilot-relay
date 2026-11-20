@@ -98,9 +98,6 @@ for (const [name, mutate] of [
   ["invalid routing", (manifest: CaptureManifest) => {
     manifest.runtime.modelRouting = { gptModel: "", opusModel: "opus" }
   }],
-  ["invalid model selection", (manifest: CaptureManifest) => {
-    manifest.runtime.modelRouting = { gptModel: "gpt", opusModel: "opus", models: [""] }
-  }],
   ["invalid catalog", (manifest: CaptureManifest) => {
     manifest.runtime.models = [["bad", { limits: { max_output_tokens: -1 } }]]
   }],

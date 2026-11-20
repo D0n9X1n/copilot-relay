@@ -45,7 +45,7 @@ claudeSetup: true
 
 # When true, start sets up Codex CLI and the Codex app when Codex is installed
 # ($CODEX_HOME, default ~/.codex, exists). It writes ~/.copilot-relay/codex-models.json,
-# a model list holding the exposed models (gptModel, opusModel, then models), and points
+# a model list holding gptModel and opusModel, and points
 # config.toml at this relay: model_provider, model_catalog_json, model (kept when listed),
 # and the [model_providers.copilot-relay] table, with apiKey sent as x-api-key when
 # set. Codex then needs no ChatGPT sign-in. Other keys and tables are left as they are.
@@ -90,6 +90,3 @@ gptModel: gpt-6-astra
 
 # Upstream Copilot model used for requests containing "opus".
 opusModel: claude-opus-5.5
-
-# Extra models offered to clients: auto (newest model of each vendor), empty, or comma-separated Copilot IDs.
-models: auto

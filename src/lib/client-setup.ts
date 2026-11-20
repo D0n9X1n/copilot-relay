@@ -12,7 +12,7 @@ import { applyClaudeAppSetup } from "~/lib/claude-app"
 import { applyClaudeConfig } from "~/lib/claude-settings"
 import { getClaudeConfigPath, getCodexHome } from "~/lib/defaults"
 import { log } from "~/lib/log"
-import { parseModelSelection, resolveExposedModels } from "~/lib/models"
+import { canonicalModelId } from "~/lib/models"
 import { paths } from "~/lib/paths"
 
 export const setupTargets = ["claude-code-cli", "claude-code-app", "codex-cli", "codex-app"] as const
@@ -67,12 +67,12 @@ export const setupClaudeCodeCli = async (context: SetupContext): Promise<SetupOu
   return { target: "claude-code-cli", path: result.configPath, status: result.changed ? "updated" : "already up to date" }
 }
 
-/** Codex's models: the exposed upstream IDs without [1m], gptModel first as Codex's default. */
-export const codexModels = (appConfig: AppConfig, catalog: CopilotModelCatalog | undefined): Array<CatalogModel> =>
-  resolveExposedModels(
-    { gptModel: appConfig.gptModel, opusModel: appConfig.opusModel, models: parseModelSelection(appConfig.models) },
-    catalog?.models,
-  ).map((id) => ({ id, capabilities: catalog?.models.get(id) }))
+/** Codex's models: the two slots without [1m], gptModel first as Codex's default, one entry when equal. */
+export const codexModels = (appConfig: AppConfig, catalog: CopilotModelCatalog | undefined): Array<CatalogModel> => {
+  const ids = [appConfig.gptModel, appConfig.opusModel].map((id) => canonicalModelId(id, catalog?.models))
+  const unique = ids[1] === ids[0] ? [ids[0]] : ids
+  return unique.map((id) => ({ id, capabilities: catalog?.models.get(id) }))
+}
 
 // Codex CLI and the Codex app read the same $CODEX_HOME/config.toml.
 export const setupCodex = async (context: SetupContext, target: string): Promise<SetupOutcome> => {

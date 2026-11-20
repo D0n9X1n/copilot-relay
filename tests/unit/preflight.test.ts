@@ -179,13 +179,12 @@ test("preflight uses canonical upstream model ids", async () => {
   }
 })
 
-test("preflight probes the two slots and names selected IDs the catalog lacks", async (t) => {
+test("preflight probes only the two slots, even when the catalog lists more", async (t) => {
   const { log } = await import("../../src/lib/log")
   const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-4.8", "grok-4.7"])
   runtimeState.modelRouting = {
     gptModel: "gpt-6-astra",
     opusModel: "claude-opus-4.8",
-    models: ["grok-4.7", "not-in-catalog"],
   }
   runtimeState.upstreamBaseUrl = mock.baseUrl
   runtimeState.thinkEffort = "max"
@@ -207,8 +206,7 @@ test("preflight probes the two slots and names selected IDs the catalog lacks", 
       request.path === "/models" ? [] : [(request.body as { model?: string }).model]
     )
     assert.deepEqual(probedModels, ["gpt-6-astra", "claude-opus-4.8"])
-    assert.ok(logged.some((line) => /Selected models not in Copilot's catalog, skipped: not-in-catalog$/.test(line)), logged.join("\n"))
-    assert.equal(logged.some((line) => /grok-4\.7/.test(line) && /skipped/.test(line)), false)
+    assert.equal(logged.some((line) => /grok-4\.7/.test(line)), false)
     assert.equal(logged.some((line) => line.includes("test-token")), false)
   } finally {
     delete runtimeState.upstreamBaseUrl
