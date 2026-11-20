@@ -287,10 +287,11 @@ test("a model the refreshed catalog lists still routes to its slot, chosen once"
     capabilities: { type: "chat", supports },
   })
 
-  const requests: Array<{ path: string; body: Record<string, unknown> }> = []
+  const requests: Array<{ path: string; body: Record<string, unknown>; apiVersion: string | null }> = []
   await withRecordedTransport({
     fetch: async (request) => {
-      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {} })
+      const apiVersion = new Headers(request.headers).get("x-github-api-version")
+      requests.push({ path: request.path, body: request.body ? JSON.parse(request.body) : {}, apiVersion })
       if (request.path === "/models") {
         return Response.json({ data: [
           listed(model, "OpenAI", ["/responses"], { reasoning_effort: ["low", "medium", "high"] }),
@@ -321,6 +322,8 @@ test("a model the refreshed catalog lists still routes to its slot, chosen once"
     assert.equal(response.status, 200, await response.clone().text())
     assert.deepEqual(requests.map((request) => request.path), ["/models", "/responses"])
     assert.equal(requests.at(-1)?.body.model, model)
+    // The catalog asks for the API version that reports prices; inference keeps the default one.
+    assert.deepEqual(requests.map((request) => request.apiVersion), ["2026-06-01", "2025-04-01"])
   })
 })
 

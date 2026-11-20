@@ -239,6 +239,9 @@ const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): s
   return parseStringArray(supports.reasoning_effort)
 }
 
+// The x-github-api-version the /models request sends.
+const catalogApiVersion = "2026-06-01"
+
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
 ): Promise<CopilotModelCatalog> {
@@ -257,7 +260,8 @@ export async function loadCopilotModelCatalog(
         method: "GET",
         headers: { accept: "application/json" },
       },
-      { signal, timeoutMs: config.upstreamTimeoutMs },
+      // Only this API version reports each model's token prices; inference keeps the default one.
+      { signal, timeoutMs: config.upstreamTimeoutMs, apiVersion: catalogApiVersion },
     )
     if (!response.ok) {
       throw new HTTPError("Failed to validate upstream models", response)
