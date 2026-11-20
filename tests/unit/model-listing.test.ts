@@ -277,6 +277,7 @@ test("COST is colored by output price from green to red, a log scale with free a
 
   assert.equal(shade("gpt-4o"), "38;5;28")
   assert.equal(shade("claude-haiku-5.5"), "38;5;28")
+  // $10 is amber, $20 orange and $50 red, so a mid, a dear and the dearest price read apart.
   assert.equal(shade("claude-sonnet-5.5"), "38;5;130")
   assert.equal(shade("claude-opus-5.5"), "38;5;166")
   assert.equal(shade("gpt-6-astra"), "38;5;160")

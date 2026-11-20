@@ -108,12 +108,27 @@ export const priceRamp = (prices: Array<number>): ((price: number | undefined) =
   }
 }
 
-// Green, amber, orange and red dark enough for 3:1 contrast on a white background and light enough
-// for 4.6:1 on a dark one, at every point between them.
-const rampAnchors = [[42, 157, 74], [167, 125, 0], [192, 101, 26], [229, 83, 75]]
-// The same ramp in the 256-color cube, each stop at least 3.3:1 on black and on white and each a
-// little warmer than the last: two greens, olive, amber, two oranges and red.
-const rampCube = [28, 64, 100, 136, 130, 166, 160]
+// Green, amber, orange and red, each at the position where it is pure. Amber sits at 65% and
+// orange at 80%, so a mid price, a dear one and the dearest read as three colors rather than one
+// orange. Each anchor and every blend between them has at least 3:1 contrast on a white background
+// and on a dark one.
+const rampAnchors: Array<{ at: number; rgb: [number, number, number] }> = [
+  { at: 0, rgb: [42, 157, 74] },
+  { at: 0.65, rgb: [167, 125, 0] },
+  { at: 0.8, rgb: [192, 101, 26] },
+  { at: 1, rgb: [215, 58, 58] },
+]
+// The same ramp in the 256-color cube, each stop at least 3.3:1 on black and on white, from the
+// position where it starts: two greens, olive, amber, two oranges and red.
+const rampCube: Array<{ at: number; index: number }> = [
+  { at: 0, index: 28 },
+  { at: 0.2, index: 64 },
+  { at: 0.35, index: 100 },
+  { at: 0.5, index: 136 },
+  { at: 0.65, index: 130 },
+  { at: 0.8, index: 166 },
+  { at: 0.9, index: 160 },
+]
 // Sixteen colors have no orange, so the ramp is three bands: green, yellow and red.
 const rampBands = ["32", "33", "31"]
 
@@ -126,14 +141,15 @@ export const rampShade = (position: number, depth: Exclude<ColorDepth, 0>): stri
   }
 
   if (depth === 8) {
-    return `38;5;${rampCube[Math.min(rampCube.length - 1, Math.floor(at * rampCube.length))]}`
+    const stop = rampCube.findLast((candidate) => candidate.at <= at) ?? rampCube[0]
+    return `38;5;${stop.index}`
   }
 
-  const span = at * (rampAnchors.length - 1)
-  const index = Math.min(rampAnchors.length - 2, Math.floor(span))
-  const fraction = span - index
-  const [red, green, blue] = rampAnchors[index].map((value, channel) =>
-    Math.round(value + (rampAnchors[index + 1][channel] - value) * fraction))
+  const upper = Math.max(1, rampAnchors.findIndex((anchor) => anchor.at >= at))
+  const from = rampAnchors[upper - 1]
+  const to = rampAnchors[upper]
+  const fraction = (at - from.at) / (to.at - from.at)
+  const [red, green, blue] = from.rgb.map((value, channel) => Math.round(value + (to.rgb[channel] - value) * fraction))
 
   return `38;2;${red};${green};${blue}`
 }

@@ -43,11 +43,17 @@ test("priceRamp places paid prices on a log scale, free ones at 0, and leaves no
 
 test("rampShade runs green to red: thirds on 16 colors, eight cube stops on 256, interpolated RGB on 24-bit", () => {
   assert.deepEqual([0, 0.32, 0.5, 0.67, 1].map((position) => rampShade(position, 4)), ["32", "32", "33", "31", "31"])
-  // Seven equal steps: 0.2 is the second green, 0.3 olive, 0.5 amber, 0.8 orange.
-  assert.deepEqual([0, 0.2, 0.3, 0.5, 0.8, 1].map((position) => rampShade(position, 8)), ["38;5;28", "38;5;64", "38;5;100", "38;5;136", "38;5;166", "38;5;160"])
+  // Each cube stop starts at its position: green, olive, amber at 0.65, orange at 0.8, red at 0.9.
+  assert.deepEqual(
+    [0, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1].map((position) => rampShade(position, 8)),
+    ["38;5;28", "38;5;64", "38;5;100", "38;5;136", "38;5;130", "38;5;166", "38;5;160", "38;5;160"],
+  )
+  // On 24-bit each anchor is pure at its own position, and colors between them blend.
   assert.equal(rampShade(0, 24), "38;2;42;157;74")
-  assert.equal(rampShade(1, 24), "38;2;229;83;75")
-  assert.match(rampShade(0.5, 24), /^38;2;\d+;\d+;\d+$/)
+  assert.equal(rampShade(0.65, 24), "38;2;167;125;0")
+  assert.equal(rampShade(0.8, 24), "38;2;192;101;26")
+  assert.equal(rampShade(1, 24), "38;2;215;58;58")
+  assert.equal(rampShade(0.9, 24), "38;2;204;80;42")
 })
 
 test("colorText takes a tone or a shade and writes nothing extra with color off", () => {
