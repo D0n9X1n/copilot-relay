@@ -32,10 +32,9 @@ import { getCachedCopilotModel, resolveModelReasoningEffort } from "~/copilot/mo
 import { log } from "~/lib/log"
 import { sanitizeTerminalString, scrubSensitiveUrls } from "~/lib/redact"
 import {
-  canonicalModelId,
-  currentCopilotCatalog,
   getModelRouting,
   normalizeClaudeModelId,
+  normalizeCopilotModelId,
 } from "~/lib/models"
 
 const anthropicWebSearchToolPattern = /^web_search_\d{8}$/
@@ -105,10 +104,10 @@ export const hasClaudeWebSearch = (payload: ClaudeMessagesPayload): boolean =>
 export const isClaudeWebSearchToolName = (name: string): boolean =>
   name === "web_search" || name === claudeCodeWebSearchToolName
 
-// An explicit backend is looked up as written; without one, the GPT slot is already prepared.
+// Without an explicit backend, the GPT slot, which routing has already normalized.
 export const getWebSearchBackendModel = (config: ProxyConfig): string => {
   const backend = config.webSearchBackend?.trim()
-  return backend ? canonicalModelId(backend, currentCopilotCatalog()) : getModelRouting().gptModel
+  return backend ? normalizeCopilotModelId(backend) : getModelRouting().gptModel
 }
 
 export const prepareClaudeWebSearchDecisionPayload = (

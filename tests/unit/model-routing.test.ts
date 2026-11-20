@@ -11,6 +11,7 @@ import {
   isConfiguredReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
+  canonicalMemoSize,
   modelNormalizations,
   routeModelId,
   slotPreparations,
@@ -297,6 +298,27 @@ test("a slot the warm catalog omits is normalized once per generation and catalo
   }
 
   assert.equal(modelNormalizations() - before, 0)
+})
+
+test("canonicalization is memoized per catalog and bounded at 256 names", () => {
+  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  const catalog = runtimeState.modelCatalog?.models
+  normalizeCopilotModelId("GPT-6-ASTRA[1m]")
+  const before = modelNormalizations()
+
+  assert.equal(normalizeCopilotModelId("GPT-6-ASTRA[1m]"), "gpt-6-astra")
+  assert.equal(modelNormalizations() - before, 0)
+
+  for (let index = 0; index < 300; index++) {
+    normalizeCopilotModelId(`unknown-model-${index}`)
+  }
+
+  assert.ok(canonicalMemoSize(catalog) <= 256, String(canonicalMemoSize(catalog)))
+  assert.equal(normalizeCopilotModelId("Unknown-Model-299[1m]"), "unknown-model-299")
+
+  // A refreshed catalog is a new map, so its spelling is computed afresh.
+  useCatalog([["GPT-6-Astra", 1_050_000]])
+  assert.equal(normalizeCopilotModelId("gpt-6-astra"), "GPT-6-Astra")
 })
 
 test("a snapshot keeps the two-field routing shape", () => {

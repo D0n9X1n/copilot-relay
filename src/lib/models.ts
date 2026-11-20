@@ -84,23 +84,13 @@ export const resolveReasoningEffort = (
   requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
 // A catalog fetched before a reload switched upstreams does not describe this one's models.
-export const currentCopilotCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
+const currentCopilotCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
   const state = getRuntimeState()
   return state.modelCatalog?.baseUrl === state.upstreamBaseUrl ? state.modelCatalog?.models : undefined
 }
 
-// The ID Copilot receives: every [1m] stripped, in the current catalog's casing. A slot this request
-// admitted is already in that spelling, so for the catalog that admitted it the ID is returned as is.
-const canonicalInCurrentCatalog = (model: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  const admitted = getRuntimeState().admitted
-  if (admitted !== undefined && admitted.catalog === catalog && admitted.ids.has(model)) {
-    return model
-  }
-
-  return canonicalModelId(model, catalog)
-}
-
-export const normalizeCopilotModelId = (model: string): string => canonicalInCurrentCatalog(model, currentCopilotCatalog())
+// The ID Copilot receives: every [1m] stripped, in the current catalog's casing.
+export const normalizeCopilotModelId = (model: string): string => canonicalModelId(model, currentCopilotCatalog())
 
 export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
 
@@ -111,7 +101,7 @@ export const isClaudeModelId = (model: string): boolean => model.startsWith("cla
  */
 export const normalizeClaudeModelId = (model: string, contextWindowTokens?: number): string => {
   const catalog = currentCopilotCatalog()
-  const canonical = canonicalInCurrentCatalog(model, catalog)
+  const canonical = canonicalModelId(model, catalog)
   const contextWindow = contextWindowTokens ?? catalog?.get(canonical)?.limits?.max_context_window_tokens
   if (contextWindow === undefined) {
     return model
@@ -223,17 +213,6 @@ export const slotModelId = (slot: ModelSlot): string => getPreparedSlots()[slot]
 
 export const routeModelId = (model: string): string => slotModelId(routeModelSlot(model))
 
-/**
- * Records a slot this request admitted, with the default WebSearch backend (the GPT slot), for the
- * current catalog, so later lookups within the request take them as already normalized. Called again
- * after discovery replaces the catalog. Only the request's own runtime snapshot is changed.
- */
-export const admitSlot = (slot: ModelSlot): string => {
-  const prepared = getPreparedSlots()
-  getRuntimeState().admitted = { catalog: currentCopilotCatalog(), ids: new Set([prepared[slot], prepared.gptModel]) }
-  return prepared[slot]
-}
-
 // Each catalog's keys by their lowercase form, built on first use. A published catalog is never
 // changed in place, so an index stays valid for as long as its catalog lives.
 const catalogIndexes = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
@@ -257,19 +236,51 @@ const catalogIndex = (catalog: ReadonlyMap<string, CopilotModel>): Map<string, s
   return index
 }
 
+// A client can send any number of distinct names, so each memo is cleared when it reaches this size.
+const canonicalMemoLimit = 256
+
+// canonicalModelId depends only on the input and the catalog Map, and a published catalog is
+// replaced rather than changed, so results are memoized per catalog and for the no-catalog case.
+const canonicalByCatalog = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
+const canonicalWithoutCatalog = new Map<string, string>()
 let normalizations = 0
 
-// Test hook: how many IDs have been normalized by stripping [1m] and matching case.
+// Test hooks: how many IDs were canonicalized without a memo hit, and the largest memo's size.
 export const modelNormalizations = (): number => normalizations
+
+export const canonicalMemoSize = (catalog?: ReadonlyMap<string, CopilotModel>): number =>
+  (catalog === undefined ? canonicalWithoutCatalog : canonicalByCatalog.get(catalog))?.size ?? 0
+
+const canonicalMemo = (catalog: ReadonlyMap<string, CopilotModel> | undefined): Map<string, string> => {
+  if (catalog === undefined) {
+    return canonicalWithoutCatalog
+  }
+
+  let memo = canonicalByCatalog.get(catalog)
+  if (memo === undefined) {
+    memo = new Map()
+    canonicalByCatalog.set(catalog, memo)
+  }
+
+  return memo
+}
 
 // Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
 // IDs are lowercase, so an ID the catalog does not list is lowercased.
 export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  normalizations++
-  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
-  if (catalog === undefined) {
-    return lower
+  const memo = canonicalMemo(catalog)
+  const known = memo.get(id)
+  if (known !== undefined) {
+    return known
   }
 
-  return catalogIndex(catalog).get(lower) ?? lower
+  normalizations++
+  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
+  const canonical = catalog === undefined ? lower : catalogIndex(catalog).get(lower) ?? lower
+  if (memo.size >= canonicalMemoLimit) {
+    memo.clear()
+  }
+
+  memo.set(id, canonical)
+  return canonical
 }

@@ -2385,46 +2385,58 @@ test("POST /v1/messages maps invalid tool arguments to an error naming the tool"
   }
 })
 
-// Why: an admitted ID is already in wire spelling, so a warm request on any route must not normalize
-// it again; the counter sits inside the normalization itself, not in the routing memo.
-test("warm requests do not normalize the admitted model again", async () => {
+// Why: canonicalization is memoized per catalog, so a warm request on any route repeats none of it;
+// the counter sits inside canonicalModelId itself, not in the routing memo.
+test("warm requests repeat no model canonicalization on any route", async () => {
   const { modelNormalizations } = await import("../../src/lib/models")
   const mock = await startMockCopilot()
   const catalog = {
     baseUrl: mock.baseUrl,
     models: new Map([
-      ["gpt-5.5", { type: "chat", supported_endpoints: ["/responses"], supportedEndpoints: ["/responses"] }],
+      ["gpt-5.5", { type: "chat", supportedEndpoints: ["/responses"], limits: { max_context_window_tokens: 1_050_000, max_prompt_tokens: 1_000_000, max_output_tokens: 1000 } }],
       ["claude-opus-4.8", { type: "chat", supportedEndpoints: ["/chat/completions"] }],
     ]),
   }
   runtimeState.upstreamBaseUrl = mock.baseUrl
   runtimeState.modelCatalog = catalog
 
-  const post = (app: ReturnType<typeof createTestProxy>, model: string, webSearch: boolean) =>
+  const post = (app: ReturnType<typeof createTestProxy>, model: string, options: { webSearch?: boolean, stream?: boolean } = {}) =>
     app.fetch(new Request("http://localhost/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model,
         max_tokens: 16,
-        messages: [{ role: "user", content: webSearch ? "Search for Copilot documentation." : "hello" }],
-        ...(webSearch && { tools: [{ name: "WebSearch", input_schema: { type: "object" } }] }),
+        stream: options.stream === true,
+        messages: [{ role: "user", content: options.webSearch ? "Search for Copilot documentation." : "hello" }],
+        ...(options.webSearch && { tools: [{ name: "WebSearch", input_schema: { type: "object" } }] }),
       }),
     }))
 
   try {
     const app = createTestProxy(mock.baseUrl, { modelCatalog: catalog, claudeUpstreamApi: "chat-completions" })
-    for (const [model, webSearch] of [["sonnet", false], ["opus", false], ["sonnet", true]] as const) {
-      await (await post(app, model, webSearch)).text()
+    const cases: Array<[string, { webSearch?: boolean, stream?: boolean }]> = [
+      ["sonnet", {}],
+      ["opus", {}],
+      ["opus", { stream: true }],
+      ["sonnet", { stream: true }],
+      ["sonnet", { webSearch: true }],
+    ]
+    for (const [model, options] of cases) {
+      await (await post(app, model, options)).text()
       const before = modelNormalizations()
       for (let index = 0; index < 100; index++) {
-        const response = await post(app, model, webSearch)
+        const response = await post(app, model, options)
         assert.equal(response.status, 200)
         await response.text()
       }
 
-      assert.equal(modelNormalizations() - before, 0, `${model}${webSearch ? " with WebSearch" : ""}`)
+      assert.equal(modelNormalizations() - before, 0, `${model} ${JSON.stringify(options)}`)
     }
+
+    // The known 1M slot still reaches Claude Code as its [1m] version.
+    const reply = await (await post(app, "sonnet")).json() as { model: string }
+    assert.equal(reply.model, "gpt-5.5[1m]")
 
     await countTokens(app, "sonnet")
     const beforeCount = modelNormalizations()
@@ -2433,18 +2445,6 @@ test("warm requests do not normalize the admitted model again", async () => {
     }
 
     assert.equal(modelNormalizations() - beforeCount, 0, "count_tokens")
-
-    // An explicit webSearchBackend is raw text, not an admitted slot, even spelled like one.
-    const explicit = createTestProxy(mock.baseUrl, {
-      modelCatalog: catalog,
-      claudeUpstreamApi: "chat-completions",
-      webSearchBackend: "gpt-5.5",
-    })
-    await (await post(explicit, "sonnet", true)).text()
-    const beforeExplicit = modelNormalizations()
-    await (await post(explicit, "sonnet", true)).text()
-
-    assert.ok(modelNormalizations() - beforeExplicit > 0, "explicit webSearchBackend is normalized")
   } finally {
     delete runtimeState.upstreamBaseUrl
     delete runtimeState.modelCatalog
