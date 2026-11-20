@@ -24,7 +24,9 @@ const configFor = (fields: Partial<ProxyConfig> = {}): ProxyConfig => ({
   port: 0,
   copilotBaseUrl: "http://127.0.0.1:1",
   copilotToken: "test-token",
-  upstreamTimeoutMs: 1_000,
+  // One deadline covers a request's whole upstream operation, catalog discovery included. These
+  // tests check admission, not timeouts, so the budget leaves room for a cold, loaded CI runner.
+  upstreamTimeoutMs: 30_000,
   vsCodeVersion: "1.99.3",
   ...fields,
 })
