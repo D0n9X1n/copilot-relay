@@ -21,7 +21,7 @@ import {
 } from "~/lib/redact"
 import { loadUndici } from "~/lib/undici"
 import { appVersion } from "~/lib/version"
-import { colorEnabled, colorText, heading, mark, printableCell, unicodeEnabled, withoutHiddenCharacters } from "~/lib/terminal"
+import { boldText, colorEnabled, colorText, heading, mark, printableCell, unicodeEnabled, withoutHiddenCharacters } from "~/lib/terminal"
 import type { MarkState, TerminalTone } from "~/lib/terminal"
 
 /**
@@ -238,22 +238,25 @@ const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
 const renderConfig = (
   config: StatusConfig,
   running: boolean,
+  color = false,
 ): Array<string> => {
   const lines = configRowKeys.map((key) => {
     const value = config[key]
     const unset = value === null || value === "" ? unsetConfigText[key] : undefined
-    const rendered = unset ?? String(value)
 
     // Every value is user-supplied and lands on a terminal unescaped. Raw
     // control bytes could clear the line and paint status rows the relay never
-    // produced, so no config value is trusted to be printable.
-    return `    ${key.padEnd(24)}${sanitizeTerminalString(rendered)}`
+    // produced, so no config value is trusted to be printable. An unset key's
+    // fixed text is the relay's own and muted, so set values stand out.
+    const rendered = unset === undefined ? sanitizeTerminalString(String(value)) : colorText(unset, "muted", color)
+    return `    ${key.padEnd(24)}${rendered}`
   })
 
+  // A footnote, muted so the values above it stay what the eye lands on.
   if (running) {
     lines.push(
-      "    host, port, claudeSetup, codexSetup and upstreamProxy take effect",
-      "    on restart; the rest hot-reload.",
+      `    ${colorText("host, port, claudeSetup, codexSetup and upstreamProxy take effect", "muted", color)}`,
+      `    ${colorText("on restart; the rest hot-reload.", "muted", color)}`,
     )
   }
 
@@ -270,12 +273,16 @@ const stateRow = (
   tone: TerminalTone,
   color: boolean,
   unicode: boolean,
-): string => `  ${mark(state, unicode)} ${label.padEnd(9)} ${colorText(word, tone, color)}${rest}`
+): string => {
+  // A detail in parentheses, such as a pid or a latency, is muted so the state word leads.
+  const detail = /^ \([^()]*\)$/.test(rest) ? ` ${colorText(rest.slice(1), "muted", color)}` : rest
+  return `  ${mark(state, unicode)} ${label.padEnd(9)} ${colorText(word, tone, color)}${detail}`
+}
 
 // Paths and versions come from a pid file and config another process wrote, so each is cleaned of
 // controls, secrets and sensitive URLs before it is laid out. JSON keeps the full paths.
-const filesBlock = (status: RelayStatus): Array<string> => [
-  "Files",
+const filesBlock = (status: RelayStatus, color: boolean): Array<string> => [
+  boldText("Files", color),
   `    ${"log".padEnd(10)}${printableCell(homeRelative(status.logPath))}`,
   `    ${"config".padEnd(10)}${printableCell(homeRelative(status.configPath))}`,
 ]
@@ -291,21 +298,21 @@ const filesBlock = (status: RelayStatus): Array<string> => [
 export const renderStatus = (status: RelayStatus, color = false, unicode = unicodeEnabled()): Array<string> => {
   if (!status.running) {
     return [
-      heading(`copilot-relay ${status.version}`),
+      heading(`copilot-relay ${status.version}`, undefined, color),
       "",
       stateRow("off", "process", "not running", "", "warning", color, unicode),
       "",
-      ...filesBlock(status),
+      ...filesBlock(status, color),
       "",
-      "Config",
-      ...renderConfig(status.config, false),
+      boldText("Config", color),
+      ...renderConfig(status.config, false, color),
       "",
-      "Start it with: copilot-relay start",
+      `Start it with: ${boldText("copilot-relay start", color)}`,
     ]
   }
 
   const lines = [
-    heading(`copilot-relay ${status.version}`, status.baseUrl),
+    heading(`copilot-relay ${status.version}`, status.baseUrl, color),
     "",
     stateRow("ok", "process", "running", ` (pid ${status.pid}, up ${formatUptime(status.startedAt)})`, "good", color, unicode),
   ]
@@ -343,13 +350,13 @@ export const renderStatus = (status: RelayStatus, color = false, unicode = unico
     : stateRow("warn", "models", "unavailable", "", "warning", color, unicode),
   )
 
-  lines.push("", ...filesBlock(status), "", "Config", ...renderConfig(status.config, true))
+  lines.push("", ...filesBlock(status, color), "", boldText("Config", color), ...renderConfig(status.config, true, color))
 
   if (status.health?.ok && status.deep && !status.deep.ok) {
     lines.push(
       "",
       "The relay is listening but cannot reach Copilot.",
-      "Try: copilot-relay auth",
+      `Try: ${boldText("copilot-relay auth", color)}`,
     )
   }
 
@@ -359,7 +366,7 @@ export const renderStatus = (status: RelayStatus, color = false, unicode = unico
     lines.push(
       "",
       `The running relay is ${printableCell(status.daemonVersion ?? "")}; ${status.version} is installed.`,
-      "Restart it to serve the installed version: copilot-relay restart",
+      `Restart it to serve the installed version: ${boldText("copilot-relay restart", color)}`,
     )
   }
 

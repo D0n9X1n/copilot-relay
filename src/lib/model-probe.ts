@@ -197,7 +197,7 @@ export async function probeModels(
   const color = colorEnabled()
 
   if (entries.length) {
-    printLine(renderProbeHeader(width))
+    printLine(renderProbeHeader(width, color))
   }
 
   try {
@@ -460,7 +460,7 @@ export async function probeModels(
     process.off("SIGTERM", interrupt)
   }
 
-  printLine(`\n${renderProbeSummary(results)}`)
+  printLine(`\n${renderProbeSummary(results, color)}`)
   if (results.some((row) => row.unverified)) {
     printLine("* Effort or endpoint metadata is unverified.")
   }

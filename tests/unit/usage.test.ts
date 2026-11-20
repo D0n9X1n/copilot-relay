@@ -342,8 +342,9 @@ test("only a value that was not reported is colored", () => {
 
   const colored = renderCopilotUsage(usage, true).join("\n")
 
-  assert.match(colored, /^Copilot plan · \u001b\[90mnot reported\u001b\[0m · resets 2026-11-01$/m)
-  assert.equal(colored.match(/\u001b\[/g)?.length, 2)
+  // The title and the column names are bold; the only color is the value that was not reported.
+  assert.match(colored, /^\u001b\[1mCopilot plan\u001b\[22m · \u001b\[90mnot reported\u001b\[0m · resets 2026-11-01$/m)
+  assert.equal(colored.match(/\u001b\[(?!1m|22m)/g)?.length, 2)
   assert.doesNotMatch(renderCopilotUsage(usage).join("\n"), /\u001b\[/)
 })
 

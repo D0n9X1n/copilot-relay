@@ -74,7 +74,7 @@ export const renderSetupOutcomes = (
   const detailWidth = Math.max(lineWidth - indent - gutter * leading.length - used, displayWidth("DETAIL"))
 
   return [
-    heading("Client setup", baseUrl),
+    heading("Client setup", baseUrl, color),
     "",
     ...renderTable([
       ...leading,

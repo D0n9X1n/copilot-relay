@@ -1,4 +1,4 @@
-import { displayWidth, mark, printableCell, renderTable, unicodeEnabled, type MarkState, type TableColumn, type TerminalTone } from "./terminal"
+import { boldText, displayWidth, mark, printableCell, renderTable, unicodeEnabled, type MarkState, type TableColumn, type TerminalTone } from "./terminal"
 import type { RequestDiagnostic } from "./request-trace"
 
 export type ProbeStatus = "PASS" | "FAIL" | "INCOMPLETE" | "SKIPPED" | "NOT_TESTED"
@@ -127,16 +127,18 @@ const probeColumns: Array<TableColumn<ProbeCells>> = [
   },
 ]
 
-export const renderProbeHeader = (width: number): string =>
-  renderTable(probeColumns, [], false, [width, statusWidth, timeWidth])[0]
+export const renderProbeHeader = (width: number, color = false): string =>
+  renderTable(probeColumns, [], color, [width, statusWidth, timeWidth])[0]
 
 // One row, at the widths the header was printed with.
 export const renderProbeRow = (row: ProbeRow, width: number, color: boolean, unicode = unicodeEnabled()): string[] =>
   [renderTable(probeColumns, [{ row, unicode }], color, [width, statusWidth, timeWidth])[1]]
 
-export const renderProbeSummary = (rows: ProbeRow[]): string => {
+export const renderProbeSummary = (rows: ProbeRow[], color = false): string => {
+  const label = boldText("Summary:", color)
+
   if (!rows.length) {
-    return "Summary: no models to test"
+    return `${label} no models to test`
   }
 
   // The summary lists statuses in this key order and leaves out any with no rows.
@@ -148,7 +150,7 @@ export const renderProbeSummary = (rows: ProbeRow[]): string => {
     NOT_TESTED: "not tested",
   }
 
-  return "Summary: "
+  return `${label} `
     + (Object.keys(labels) as ProbeStatus[])
       .flatMap((status) => {
         const count = rows.filter((row) => row.status === status).length

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { stripVTControlCharacters } from "node:util"
 
 import {
   renderConfigGuide,
@@ -256,4 +257,48 @@ test("the config guide shows the current routes and warns about values the start
   const current: ConfiguredModel[] = [{ key: "gptModel", value: "gpt-6-astra", advertised: true }]
 
   assert.ok(renderConfigGuide("config.yaml", current, { id: "gpt-6-astra" }).includes("gptModel already uses gpt-6-astra."))
+})
+
+// The live catalog's spread: free legacy models, then paid output prices from $0.5 to $50 per 1M.
+const priced: ListedModel[] = [
+  { id: "gpt-4o", name: "GPT-4o", chat: true, price: { input: 0, output: 0 } },
+  { id: "claude-haiku-5.5", name: "Claude Haiku 5.5", chat: true, price: { input: 0.1, output: 0.5 } },
+  { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", chat: true, price: { input: 2, output: 10 } },
+  { id: "claude-opus-5.5", name: "Claude Opus 5.5", chat: true, price: { input: 4, output: 20 }, slot: "opusModel" },
+  { id: "gpt-6-astra", name: "GPT-6 Astra", chat: true, price: { input: 10, output: 50 } },
+  { id: "grok-4.7", name: "Grok 4.7", chat: true, multiplier: 1 },
+]
+
+const costShade = (line: string): string | undefined => /\u001b\[([\d;]+)m\$/.exec(line)?.[1]
+
+test("COST is colored by output price from green to red, a log scale with free at the green end", () => {
+  const lines = renderModelRows(priced, 8, true)
+  const shade = (id: string) => costShade(lines.find((line) => stripVTControlCharacters(line).includes(` ${id} `))!)
+
+  assert.equal(shade("gpt-4o"), "38;5;28")
+  assert.equal(shade("claude-haiku-5.5"), "38;5;28")
+  assert.equal(shade("claude-sonnet-5.5"), "38;5;130")
+  assert.equal(shade("claude-opus-5.5"), "38;5;166")
+  assert.equal(shade("gpt-6-astra"), "38;5;160")
+  // A multiplier is another unit, so it is not placed on the dollar scale.
+  assert.doesNotMatch(lines.find((line) => line.includes("grok-4.7"))!, /\u001b\[[\d;]+m1/)
+})
+
+test("COST falls back to three bands on 16 colors and is plain with color off", () => {
+  const sixteen = renderModelRows(priced, true, true)
+
+  assert.deepEqual(
+    ["gpt-4o", "claude-sonnet-5.5", "gpt-6-astra"].map((id) => costShade(sixteen.find((line) => stripVTControlCharacters(line).includes(` ${id} `))!)),
+    ["32", "33", "31"],
+  )
+  assert.deepEqual(sixteen.map((line) => stripVTControlCharacters(line)), renderModelRows(priced, false, true))
+  assert.ok(renderModelRows(priced, false, true).every((line) => !line.includes("\u001b")))
+})
+
+test("the configured model's ID is bold and the header names are bold", () => {
+  const lines = renderModelRows(priced, 24, true)
+
+  assert.match(lines[0], /^ {2}\u001b\[1mMODEL\u001b\[22m/)
+  assert.ok(lines.some((line) => line.startsWith("  \u001b[1mclaude-opus-5.5\u001b[22m")))
+  assert.ok(lines.some((line) => line.startsWith("  claude-sonnet-5.5 ")))
 })
