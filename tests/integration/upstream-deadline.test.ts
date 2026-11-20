@@ -357,10 +357,10 @@ test("finished requests leave no trace reachable and barely grow the heap", asyn
   const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as { growthBytes: number; sampled: number; reachable: number }
 
   // A request that kept its trace until a 180-second timer fired held about 11 KB each: 2,000
-  // requests grew the heap by over 20 MiB. Freed traces leave only runtime bookkeeping.
+  // requests grew the heap by over 20 MiB. Freed traces leave at most 1 MiB.
   assert.equal(result.sampled, 20)
   assert.equal(result.reachable, 0, "no finished request's trace is still reachable")
-  assert.ok(result.growthBytes < 8 * 1024 * 1024, `heap grew ${result.growthBytes} bytes over 2,000 requests`)
+  assert.ok(result.growthBytes <= 1024 * 1024, `heap grew ${result.growthBytes} bytes over 2,000 requests`)
 })
 
 const { probeModels } = await import("../../src/lib/model-probe")

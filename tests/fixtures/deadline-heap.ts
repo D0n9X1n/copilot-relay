@@ -14,7 +14,7 @@ process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
 
 const { createServer } = await import("../../src/server")
-const { getRequestTrace, withRecordedTransport } = await import("../../src/lib/request-trace")
+const { withRecordedTransport, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
 
@@ -65,25 +65,40 @@ const events = (): Response => {
 const sampled: Array<WeakRef<object>> = []
 const sampleEvery = 100
 
+// Every request's trace finishes once its response is consumed and its capture work is done. The
+// run waits for each one, then lets go of it, so the samples below hold only what the relay kept.
+const finishing: Array<Promise<void>> = []
+
+const transport = {
+  fetch: async (request: { path: string }, stream: boolean) => {
+    if (request.path === "/models") {
+      return catalog()
+    }
+
+    return stream ? events() : Response.json(result)
+  },
+}
+
 const run = async (count: number, stream: boolean, sample: boolean) => {
   for (let index = 0; index < count; index++) {
+    // A server reads each request from a socket, so the event loop turns between requests. That
+    // turn is when Node runs the cleanup its AbortSignal and fetch registries schedule after GC;
+    // a loop that never yields starves it, and those tables grow with the run, not the relay.
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const observe = (trace: { finished: Promise<void> }) => {
+      finishing.push(trace.finished)
+      if (sample && index % sampleEvery === 0) {
+        sampled.push(new WeakRef(trace))
+      }
+    }
+
     await withRecordedTransport({
-      fetch: async (request) => {
-        if (request.path === "/models") {
-          return catalog()
-        }
-
-        const trace = getRequestTrace()
-        if (sample && trace !== undefined && index % sampleEvery === 0) {
-          sampled.push(new WeakRef(trace))
-        }
-
-        return stream ? events() : Response.json(result)
-      },
+      fetch: (request) => transport.fetch(request, stream),
       refresh: async () => {
         throw new Error("Unexpected credential refresh")
       },
-    }, async () => {
+    }, () => withTraceObserver(observe, async () => {
       const response = await app.fetch(new Request("http://127.0.0.1/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -93,21 +108,35 @@ const run = async (count: number, stream: boolean, sample: boolean) => {
       if (response.status !== 200) {
         throw new Error(`Relay answered ${response.status}: ${text.slice(0, 300)}`)
       }
-    })
+    }))
   }
 }
 
-// Log entries are written asynchronously; flush them so the heap holds only what the requests kept.
+// Each sample follows the same drain: every trace finished and released, log entries (written
+// asynchronously) flushed, then garbage collected.
 const settle = async () => {
+  await Promise.all(finishing.splice(0))
   await flushLogs()
-  for (let round = 0; round < 4; round++) {
+  // Collect until the heap stops shrinking, so each sample is taken at the same settled point.
+  let previous = Number.POSITIVE_INFINITY
+  for (let round = 0; round < 20; round++) {
     await new Promise((resolve) => setImmediate(resolve))
     gc()
+    const used = process.memoryUsage().heapUsed
+    if (Math.abs(previous - used) < 4096) {
+      break
+    }
+
+    previous = used
   }
 }
 
-await run(50, false, false)
-await run(50, true, false)
+// V8 compiles the request path in tiers as it runs hot. After 50 requests it is still compiling, and
+// the code it adds later grows the heap by about 0.3 MB that no request holds; after 500 of each
+// kind it has settled, so the samples below compare what requests leave behind.
+const warmUp = 500
+await run(warmUp, false, false)
+await run(warmUp, true, false)
 await settle()
 const before = process.memoryUsage().heapUsed
 
