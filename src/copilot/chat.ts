@@ -510,20 +510,22 @@ function getUpstreamErrorDetail(
   }
 }
 
+// Copilot can list an endpoint for a model and still refuse it there; only these explicit upstream
+// codes are treated as a signal to retry once via /responses.
+const responsesRetryCodes = new Set(["unsupported_api_for_model", "no_available_model_endpoints"])
+
 async function shouldRetryWithResponses(
   response: Response,
   signal?: AbortSignal,
   timeoutMs?: number,
 ): Promise<boolean> {
-  // Copilot can list a model but reject the chat endpoint for it; only this
-  // explicit upstream code is treated as a signal to retry via /responses.
   try {
     const errorBody = await readCopilotJson<{
       error?: {
         code?: string
       }
     }>(response.clone(), signal, timeoutMs)
-    return errorBody.error?.code === "unsupported_api_for_model"
+    return responsesRetryCodes.has(errorBody.error?.code ?? "")
   } catch {
     return false
   }

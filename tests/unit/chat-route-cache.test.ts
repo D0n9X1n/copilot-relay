@@ -467,3 +467,55 @@ test("a retry keeps the initiator of the attempt it replaces", async () => {
   assert.deepEqual(initiators, ["user", "user", "user", "user"])
   assert.ok(lastPath.endsWith("/responses"))
 })
+
+for (const responsesStatus of [200, 400]) {
+  test(`no_available_model_endpoints retries once on /responses (responses ${responsesStatus})`, async () => {
+    const sent: Array<{ path: string }> = []
+    const refusal = () => Response.json({ error: { code: "no_available_model_endpoints" } }, { status: 400 })
+    runtimeState.modelRouting = { gptModel: "mai-code-2", opusModel: "claude-opus-5.5" }
+    let status = 0
+
+    await withRecordedTransport({
+      fetch: async (request) => {
+        sent.push({ path: request.path })
+        if (request.path.endsWith("/responses") && responsesStatus === 200) {
+          return Response.json({
+            id: "resp_fixture",
+            model: "mai-code-2",
+            created_at: 1,
+            status: "completed",
+            output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          })
+        }
+
+        return refusal()
+      },
+      refresh: async () => {},
+    }, async () => {
+      const app = createRelay({
+        host: "localhost",
+        port: 0,
+        copilotBaseUrl: "https://fixture.invalid",
+        copilotToken: "fixture",
+        vsCodeVersion: "test",
+        upstreamTimeoutMs: 1000,
+        claudeUpstreamApi: "auto",
+        modelCatalog: {
+          baseUrl: "https://fixture.invalid",
+          models: new Map([["mai-code-2", { type: "chat", supportedEndpoints: ["/chat/completions", "/responses"] }]]),
+        },
+      })
+      const response = await withoutConsoleLogging(() => app.fetch(new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mai-code-2", max_tokens: 32, messages: [{ role: "user", content: "Hi" }] }),
+      })))
+      await response.text()
+      status = response.status
+    })
+
+    assert.deepEqual(sent.map((request) => request.path.split("/").pop()), ["completions", "responses"])
+    assert.equal(status, responsesStatus)
+  })
+}
