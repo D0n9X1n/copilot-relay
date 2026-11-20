@@ -16,6 +16,7 @@ import {
   refuseExternalConnections,
   startEchoingProxy,
   startRecordingProxy,
+  unicodeTerminal,
   withProxyEnvironment,
   withoutProxyVariables,
 } from "../fixtures/network"
@@ -321,6 +322,7 @@ const runRelay = async (
       cwd,
       env: {
         ...withoutProxyVariables(process.env),
+        ...unicodeTerminal,
         ...env,
         CONSOLA_LEVEL: undefined,
         HOME: childHome,

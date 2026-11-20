@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { stripVTControlCharacters } from "node:util"
 
 import { displayWidth } from "../../src/lib/terminal"
-import { replyJson, startFakeGitHub, withoutProxyVariables } from "../fixtures/network"
+import { replyJson, startFakeGitHub, unicodeTerminal, withoutProxyVariables } from "../fixtures/network"
 
 const entry = new URL("../../src/main.ts", import.meta.url)
 const networkFixture = new URL("../fixtures/network.ts", import.meta.url)
@@ -176,7 +176,7 @@ async function fixture(
         "--import", "tsx", "--input-type=module", "--eval", script,
       ], {
         cwd, timeout: 15_000,
-        env: { ...withoutProxyVariables(process.env), NO_COLOR: "1", ...env, HOME: home, USERPROFILE: home },
+        env: { ...withoutProxyVariables(process.env), NO_COLOR: "1", ...unicodeTerminal, ...env, HOME: home, USERPROFILE: home },
       }, (error, stdout, stderr) => {
         const code = error ? error.code : 0
         if (error?.killed || typeof code !== "number") {
@@ -1062,7 +1062,7 @@ for (const logLevel of ["info", "debug"] as const) {
       const replayed = await harness.run(["replay", id])
 
       assert.equal(replayed.code, 0, replayed.output)
-      assert.match(replayed.stdout, /^ {2}(?:✓|ok) MATCH {7}the relay reproduces the recording$/m)
+      assert.match(replayed.stdout, /^ {2}(?:✓|ok) MATCH +the relay reproduces the recording$/m)
     } else {
       assert.match(result.stdout, /capture=off/)
       assert.doesNotMatch(result.stdout, /Offline replay:/)

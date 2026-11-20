@@ -126,6 +126,10 @@ export const startFakeGitHub = async (handle: FakeGitHubHandler): Promise<FakeGi
   }
 }
 
+// A terminal that shows Unicode marks on every platform: a UTF-8 locale, and on Windows the variable
+// Windows Terminal sets. Without it, Windows CI correctly gets the ASCII marks.
+export const unicodeTerminal: NodeJS.ProcessEnv = { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8", WT_SESSION: "test" }
+
 /** Resolves once a server has no open connection, checking every 10 ms, or rejects after 5 s. */
 export const waitForNoConnections = async (server: Server): Promise<void> => {
   const deadline = Date.now() + 5_000
