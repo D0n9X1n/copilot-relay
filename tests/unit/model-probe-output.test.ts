@@ -3,9 +3,10 @@ import test from "node:test"
 import { stripVTControlCharacters } from "node:util"
 
 import { registerLogSecret } from "../../src/lib/log"
-import { colorEnabled, terminalText } from "../../src/lib/terminal"
+import { colorEnabled, displayWidth, terminalText } from "../../src/lib/terminal"
 import {
   probeColumnWidth,
+  probeHint,
   renderProbeDetails,
   renderProbeHeader,
   renderProbeRow,
@@ -139,4 +140,21 @@ test("summaries distinguish all outcomes without zero-filled boilerplate", () =>
 
   const rows = ["PASS", "FAIL", "INCOMPLETE", "SKIPPED", "NOT_TESTED"].map((status) => ({ ...row, status } as ProbeRow))
   assert.equal(renderProbeSummary(rows), "Summary: 1 passed · 1 failed · 1 incomplete · 1 skipped · 1 not tested")
+})
+
+test("every probe hint fits 80 columns", () => {
+  const codes = [
+    "protocol-policy-conflict", "unsupported-relay-endpoint", "no-advertised-endpoint", "probe-timeout",
+    "upstream-timeout-or-HTTP-504", "authentication-rejected", "refresh-failed", "access-denied", "rate-limited",
+    "refusal", "output-budget-exhausted", "model-mismatch", "model-not-supported", "unknown-error", "HTTP-502",
+  ]
+
+  for (const code of codes) {
+    const hint = probeHint(code)
+    assert.ok(hint !== undefined, code)
+
+    for (const line of hint.split("\n")) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+    }
+  }
 })

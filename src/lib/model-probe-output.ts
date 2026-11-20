@@ -231,15 +231,16 @@ const apiFailureCodes = [
   "transport-error",
 ]
 
-// One short next step per failure category; the summary deduplicates repeated hints.
+// One short next step per failure category, broken into lines of at most 80 columns; the summary
+// deduplicates repeated hints.
 export const probeHint = (code: string): string | undefined => {
   if (code === "protocol-policy-conflict") {
-    return "Protocol policy: review claudeUpstreamApi and the advertised endpoints before changing an existing conversation's route."
+    return "Protocol policy: review claudeUpstreamApi and the advertised endpoints\nbefore changing an existing conversation's route."
   }
 
   // Skipped rows were never sent upstream, so they say nothing about account access.
   if (code === "unsupported-relay-endpoint" || code === "no-advertised-endpoint") {
-    return "Route unavailable: --details distinguishes missing support from account access; skipped models were not sent an inference request."
+    return "Route unavailable: --details distinguishes missing support from account access;\nskipped models were not sent an inference request."
   }
 
   if (code === "probe-timeout" || code === "upstream-timeout-or-HTTP-504") {
@@ -259,7 +260,7 @@ export const probeHint = (code: string): string | undefined => {
   }
 
   if (code === "refusal") {
-    return "Refusal: inspect the failing request's evidence; a short probe does not explain its cause."
+    return "Refusal: inspect the failing request's evidence;\na short probe does not explain its cause."
   }
 
   if (code.includes("budget-exhausted")) {
@@ -271,11 +272,11 @@ export const probeHint = (code: string): string | undefined => {
   }
 
   if (code === "model-not-supported") {
-    return "Model not supported: upstream lists this ID but rejects inference for it; choose another model."
+    return "Model not supported: upstream lists this ID but rejects inference for it;\nchoose another model."
   }
 
   if (apiFailureCodes.includes(code) || /^HTTP-5\d\d$/.test(code)) {
-    return "API failure: the request ID locates the local summary; --details shows evidence on a new probe."
+    return "API failure: the request ID locates the local summary;\n--details shows evidence on a new probe."
   }
 
   return undefined
