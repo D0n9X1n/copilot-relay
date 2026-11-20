@@ -8,6 +8,7 @@ import {
   type ConfiguredModel,
   type ListedModel,
 } from "../../src/lib/model-listing"
+import { displayWidth } from "../../src/lib/terminal"
 
 // The relevant part of a live catalog: the display names come from Copilot.
 const catalog: ListedModel[] = [
@@ -98,7 +99,27 @@ test("a long name is cut but an ID never is", () => {
   ], false, true)
 
   assert.ok(lines[1].startsWith(`  ${longId}  Long`))
-  assert.match(lines[2], /^ {2}short +A display name fa… +– +–$/)
+  // The long ID leaves NAME its narrowest width.
+  assert.match(lines[2], /^ {2}short +A display… +– +–$/)
+  assert.match(renderModelRows([{ id: "short", name: "A display name far longer than the name column allows", chat: true }], false, true)[1], /^ {2}short {2}A display name fa… +– +–$/)
+})
+
+test("slots and marks share the last column, so a listing with both fits 80 columns", () => {
+  const lines = renderModelRows([
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5", chat: true, contextWindow: 1_000_000, price: { input: 4, output: 20 }, slot: "opusModel" },
+    { id: "gpt-6.2-astra", name: "GPT-6.2 Astra", chat: true, contextWindow: 1_050_000, price: { input: 8, output: 40 }, slot: "gptModel" },
+    { id: "text-embedding-ada-002", name: "Embedding V2 Ada", chat: false, unusable: "Not a chat model" },
+  ], false, true)
+
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)} columns: ${line}`)
+  }
+
+  assert.equal(lines[0], "  MODEL                   NAME             COST      CONTEXT  NOTE")
+  assert.equal(lines[1], "  claude-opus-5.5         Claude Opus 5.5  $4/$20    1M [1m]  ◀ opusModel")
+  assert.equal(lines[3], "  text-embedding-ada-002  Embedding V2 A…  –               –  ! not a chat model")
+  // A configured ID that cannot be used shows its slot and its mark.
+  assert.match(renderModelRows([{ id: "ada", chat: false, unusable: "Not a chat model", slot: "gptModel" }], false, true)[1], /◀ gptModel {2}! not a chat model$/)
 })
 
 test("the config guide shows the current routes and warns about values the startup check rejects", () => {

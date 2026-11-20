@@ -1,6 +1,6 @@
 // What `copilot-relay models` prints: each advertised ID next to the config lines that use it,
 // so a reader can tell what to put in gptModel or opusModel.
-import { formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
+import { columnWidths, formatTokens, mark, renderTable, unicodeEnabled, type TableColumn } from "./terminal"
 
 export interface ListedModel {
   // The exact upstream ID, which is the value gptModel or opusModel takes.
@@ -118,35 +118,63 @@ const contextOf = (model: ListedModel): string => {
   return model.contextWindow >= 1_000_000 ? `${size} [1m]` : size
 }
 
+// The table's line budget: a two-space indent, a two-space gutter between columns, and NAME's range.
+const lineWidth = 80
+const indent = 2
+const gutter = 2
+const nameColumn = 1
+const nameMinimum = 10
+const nameMaximum = 18
+
+// The last column: the config key that names this ID, then why it cannot be one, if it cannot.
+const noteOf = (model: ListedModel, unicode: boolean): string => {
+  const parts: string[] = []
+
+  if (model.slot !== undefined) {
+    parts.push(`◀ ${model.slot}`)
+  }
+
+  if (model.unusable !== undefined) {
+    parts.push(`${mark("warn", unicode)} ${lowerFirst(model.unusable)}`)
+  }
+
+  return parts.join("  ")
+}
+
 /**
  * The listing as a table. MODEL is the exact ID, the value config.yaml takes, and is never cut so
- * it can be copied; a long display name is cut instead. NOTE marks an ID that cannot be gptModel or
- * opusModel, and the mark does not rely on color.
+ * it can be copied; a long display name is cut instead. The last column shares one place for the
+ * slot an ID fills and the mark on an ID that cannot be gptModel or opusModel, so a listing with
+ * both stays within 80 columns; the mark does not rely on color.
  */
 export const renderModelRows = (models: ListedModel[], color = false, unicode = unicodeEnabled()): string[] => {
   const columns: Array<TableColumn<ListedModel>> = [
     { header: "MODEL", align: "left", cell: (model) => model.id },
-    { header: "NAME", align: "left", cell: (model) => model.name ?? "", maxWidth: 18 },
+    { header: "NAME", align: "left", cell: (model) => model.name ?? "" },
     { header: "COST", align: "left", cell: costOf },
     { header: "CONTEXT", align: "right", cell: contextOf },
   ]
+  const anyUnusable = models.some((model) => model.unusable !== undefined)
 
-  if (models.some((model) => model.slot !== undefined)) {
-    columns.push({ header: "SLOT", align: "left", cell: (model) => model.slot === undefined ? "" : `◀ ${model.slot}` })
-  }
-
-  if (models.some((model) => model.unusable !== undefined)) {
+  // SLOT when the column holds only slots; NOTE once it also explains a mark.
+  if (anyUnusable || models.some((model) => model.slot !== undefined)) {
     columns.push({
-      header: "NOTE",
+      header: anyUnusable ? "NOTE" : "SLOT",
       align: "left",
-      cell: (model) => model.unusable === undefined ? "" : `${mark("warn", unicode)} ${lowerFirst(model.unusable)}`,
+      cell: (model) => noteOf(model, unicode),
       tone: (model) => model.unusable === undefined ? undefined : "warning",
     })
   }
 
+  // NAME takes the columns the others leave on an 80-column line, between nameMinimum and
+  // nameMaximum; only a long ID pushes a row past 80, since an ID is never cut.
+  const others = columnWidths(columns, models).filter((_width, index) => index !== nameColumn)
+  const room = lineWidth - indent - gutter * (columns.length - 1) - others.reduce((sum, width) => sum + width, 0)
+  columns[nameColumn].maxWidth = Math.min(nameMaximum, Math.max(nameMinimum, room))
+
   const lines = renderTable(columns, models, color)
   // NOTE keeps the reason short so the row fits; this line says what the mark means.
-  if (models.some((model) => model.unusable !== undefined)) {
+  if (anyUnusable) {
     lines.push("", `${mark("warn", unicode)} marks a model that cannot be gptModel or opusModel.`)
   }
 

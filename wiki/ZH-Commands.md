@@ -267,10 +267,11 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 
 以表格列出 Copilot 模型目录公布的聊天模型：确切 ID、显示名称、费用和上下文窗口。COST 是目录报告的费用，
 单位为每百万输入/输出 token 的美元（`$8/$40`）；目录只报告倍率时显示每次调用的高级请求数（`1×`），否则为
-`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。SLOT 标出 `gptModel` 或
-`opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
-计数；`--all` 也会列出它们，在 NOTE 一列标 `!`，表格下的一行说明这个标记表示该模型不能用作
-`gptModel` 或 `opusModel`。列表不验证模型能否工作。
+`–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
+`gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
+计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
+该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内；过长的显示名称也会因此收窄。
+列表不验证模型能否工作。
 令牌缓存提示输出到 stderr，因此 stdout 只有结果。
 
 ```text

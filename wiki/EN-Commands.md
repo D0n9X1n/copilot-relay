@@ -324,12 +324,13 @@ Lists the chat models Copilot's catalog advertises as a table of exact IDs, disp
 names, costs and context windows. COST is what the catalog reports, in USD per
 million input/output tokens (`$8/$40`), or premium requests per call (`1×`) when it
 reports only a multiplier, or `–`. A window of at least 1M is marked `[1m]`, the ID
-suffix Claude Code reads as a 1M model. SLOT marks the model `gptModel` or
-`opusModel` names. Models that are not chat models, such as
+suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
+`gptModel` or `opusModel` names. Models that are not chat models, such as
 embeddings, are left out and counted under the table; `--all` lists them too, marked
-`!` under NOTE, and a line under the table says the mark means a model that cannot
-be `gptModel` or `opusModel`. The listing does not verify
-that a model works. The token-cache notices go to stderr, so stdout holds only the
+`!` in that same column, headed NOTE once it holds a mark, and a line under the
+table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
+one column keeps the table within 80 columns; a long display name is narrowed for
+the same reason. The listing does not verify that a model works. The token-cache notices go to stderr, so stdout holds only the
 answer.
 
 ```text
