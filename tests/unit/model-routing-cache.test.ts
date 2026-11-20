@@ -242,8 +242,8 @@ test("routing walks a catalog only on its first use with a routing", () => {
   assert.equal(catalog.walks, firstUse)
 })
 
-// Each request runs under its own snapshot of the runtime state, so the routing object, and a
-// `models` list inside it, is a fresh copy every time. Equal values must still reuse the cache.
+// Each request gets a fresh routing object from its runtime snapshot. This test also supplies fresh
+// `models` lists to verify that equal values reuse the cache.
 test("requests with fresh copies of equal routing reuse the cached lists", async () => {
   const { snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
   const catalog = new CountingMap([
