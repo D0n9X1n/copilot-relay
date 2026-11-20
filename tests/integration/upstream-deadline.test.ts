@@ -16,7 +16,7 @@ const { createUpstreamDeadline, upstreamDeadlineCounts } = await import("../../s
 const { withUpstreamDeadline } = await import("../../src/lib/deadline")
 const { loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { createServer } = await import("../../src/server")
-const { withRecordedTransport } = await import("../../src/lib/request-trace")
+const { getRequestTrace, withRecordedTransport } = await import("../../src/lib/request-trace")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
 
@@ -302,4 +302,55 @@ test("finished requests leave no trace reachable and barely grow the heap", asyn
   assert.equal(result.sampled, 20)
   assert.equal(result.reachable, 0, "no finished request's trace is still reachable")
   assert.ok(result.growthBytes < 8 * 1024 * 1024, `heap grew ${result.growthBytes} bytes over 2,000 requests`)
+})
+
+const { probeModels } = await import("../../src/lib/model-probe")
+
+const probeModel = { type: "chat", supportedEndpoints: ["/responses"], reasoningEfforts: ["low"] }
+const probeConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
+  ...configFor(upstreamTimeoutMs),
+  modelCatalog: { baseUrl: provider, models: new Map([[model, probeModel]]) },
+})
+
+const probeOnce = async (
+  t: import("node:test").TestContext,
+  config: ProxyConfig,
+  fetch: Parameters<typeof withRecordedTransport>[0]["fetch"],
+): Promise<string> => {
+  const lines: Array<string> = []
+  t.mock.method(console, "log", (line: string) => {
+    lines.push(line)
+  })
+  await withRecordedTransport({ fetch, refresh: noRefresh }, () => probeModels(config, [[model, probeModel]], {
+    maxTokens: 64,
+    timeoutMs: 1000,
+    totalTimeoutMs: 5000,
+  }))
+  t.mock.restoreAll()
+  return lines.join("\n")
+}
+
+test("a probe whose own deadline fires times out without aborting its client trace", async (t) => {
+  const seen: Array<{ upstream: string | undefined; traceAborted: boolean }> = []
+
+  const output = await probeOnce(t, probeConfig(60), async (request) => {
+    const trace = getRequestTrace()
+    await new Promise<void>((resolve) => request.signal?.addEventListener("abort", () => resolve(), { once: true }))
+    seen.push({ upstream: (request.signal?.reason as Error | undefined)?.name, traceAborted: trace?.signal.aborted ?? true })
+    throw request.signal?.reason
+  })
+
+  assert.deepEqual(seen, [{ upstream: "TimeoutError", traceAborted: false }])
+  assert.match(output, /Timed out/)
+  assert.doesNotMatch(output, /Upstream timeout \(504\)/)
+})
+
+test("a real upstream 504 before the probe's deadline is reported as the upstream's timeout", async (t) => {
+  const output = await probeOnce(t, probeConfig(5000), async () => Response.json(
+    { error: { message: "gateway timeout", code: "upstream_timeout" } },
+    { status: 504 },
+  ))
+
+  assert.match(output, /Upstream timeout \(504\)/)
+  assert.doesNotMatch(output, /Timed out/)
 })
