@@ -133,6 +133,33 @@ test("renderTable cuts by terminal columns and never inside a character", () => 
   assert.equal(cut("模型", 4), "模型")
 })
 
+test("supplementary CJK takes two columns and a lone combining mark none", () => {
+  const lines = renderTable(
+    [
+      { header: "ID", align: "left", cell: (row: { id: string }) => row.id },
+      { header: "N", align: "right", cell: () => "1" },
+    ],
+    [{ id: "A" }, { id: "𠀀" }, { id: "\u0301" }],
+    false,
+  )
+
+  assert.deepEqual(lines, ["  ID  N", "  A   1", "  𠀀  1", "  \u0301    1"])
+  assert.equal(
+    renderTable([{ header: "ID", align: "left", cell: () => "𠀀𠀀x", maxWidth: 3 }], [{}], false)[1].trim(),
+    "𠀀…",
+  )
+})
+
+test("a colored last column carries no trailing padding", () => {
+  const lines = renderTable(
+    [{ header: "LABEL", align: "left", cell: (row: { label: string }) => row.label, tone: () => "good" }],
+    [{ label: "AAAAAA" }, { label: "B" }, { label: "" }],
+    true,
+  ).map((line) => stripVTControlCharacters(line))
+
+  assert.deepEqual(lines, ["  LABEL", "  AAAAAA", "  B", ""])
+})
+
 test("rows rendered one at a time with shared widths line up with the header", () => {
   const probeColumns: Array<TableColumn<{ id: string }>> = [
     { header: "MODEL", align: "left", cell: (row) => row.id },

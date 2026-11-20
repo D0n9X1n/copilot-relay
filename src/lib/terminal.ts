@@ -49,11 +49,22 @@ export interface TableColumn<Row> {
 
 const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" })
 
-// East Asian wide and fullwidth ranges and emoji, which a terminal draws two columns wide.
-const wideCharacter = /^[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]|\p{Extended_Pictographic}/u
+// East Asian wide and fullwidth ranges, including the supplementary ideograph planes, and emoji,
+// which a terminal draws two columns wide.
+const wideCharacter = /^(?:[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|[\u{20000}-\u{3fffd}]|\p{Extended_Pictographic})/u
 
-// Terminal columns of one user-perceived character: a combining mark joins the character before it.
-const graphemeWidth = (grapheme: string): number => wideCharacter.test(grapheme) ? 2 : 1
+// A combining mark or zero-width character that a terminal draws on the column before it.
+const zeroWidth = /^[\p{Mn}\p{Me}\u200b-\u200d\u2060\ufeff]+$/u
+
+// Terminal columns of one user-perceived character: a combining mark joins the character before it,
+// and one with nothing to join takes no column.
+const graphemeWidth = (grapheme: string): number => {
+  if (zeroWidth.test(grapheme)) {
+    return 0
+  }
+
+  return wideCharacter.test(grapheme) ? 2 : 1
+}
 
 export const displayWidth = (text: string): number => {
   let width = 0
@@ -124,11 +135,13 @@ export const renderTable = <Row>(
   const widths = columns.map((column, index) =>
     Math.max(minimumWidths[index] ?? 0, displayWidth(column.header), ...shown.map((rowCells) => displayWidth(rowCells[index]))))
 
+  // Padding is trimmed from the last column before color, whose reset would otherwise hide it.
   const line = (texts: Array<string>, tones: Array<TerminalTone | undefined>): string => {
     const padded = texts.map((text, index) => {
-      const cell = pad(text, widths[index], columns[index].align)
+      const full = pad(text, widths[index], columns[index].align)
+      const cell = index === texts.length - 1 ? full.trimEnd() : full
       const tone = tones[index]
-      return tone === undefined ? cell : colorText(cell, tone, color)
+      return tone === undefined || cell === "" ? cell : colorText(cell, tone, color)
     })
     return `  ${padded.join("  ")}`.trimEnd()
   }
