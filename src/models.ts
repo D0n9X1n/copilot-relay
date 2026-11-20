@@ -23,10 +23,9 @@ import {
   type ModelSearch,
 } from "~/lib/model-listing"
 import { isReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
-import { paths } from "~/lib/paths"
+import { homeRelative, paths } from "~/lib/paths"
 import { registerSensitiveOrigin, scrubSensitiveUrls } from "~/lib/redact"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
-import { homeRelative } from "~/status"
 
 // A mistake in how the command was called. Its message replaces the generic connectivity advice.
 class ModelsUsageError extends Error {}

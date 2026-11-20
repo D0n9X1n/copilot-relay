@@ -1,6 +1,4 @@
 // `copilot-relay status`: report whether a relay is running, and whether it works.
-import os from "node:os"
-import path from "node:path"
 
 import { defineCommand } from "citty"
 import type { Agent, RequestInit } from "undici"
@@ -13,7 +11,7 @@ import { getRelayBaseUrl } from "~/lib/address"
 import { readProxyConfig } from "~/lib/config"
 import { findRelayOnPort, RelayInspectionError } from "~/lib/lifecycle"
 import { registerLogSecret, scrubLogSecrets, setLogLevel } from "~/lib/log"
-import { getLogPath, paths } from "~/lib/paths"
+import { getLogPath, homeRelative, paths } from "~/lib/paths"
 import {
   formatUpstreamProxyForDisplay,
   formatUrlForDisplay,
@@ -273,10 +271,6 @@ const stateRow = (
   color: boolean,
   unicode: boolean,
 ): string => `  ${mark(state, unicode)} ${label.padEnd(9)} ${colorText(word, tone, color)}${rest}`
-
-/** A path under the home directory, as the human view prints it: from ~, so it fits a line. */
-export const homeRelative = (target: string, home = os.homedir()): string =>
-  home !== "" && (target === home || target.startsWith(home + path.sep)) ? "~" + target.slice(home.length) : target
 
 // Paths and versions come from a pid file and config another process wrote, so each is cleaned of
 // controls, secrets and sensitive URLs before it is laid out. JSON keeps the full paths.

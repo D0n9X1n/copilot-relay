@@ -9,11 +9,11 @@ import { setupProxyAuth } from "~/lib/auth"
 import { isSetupTarget, runSetup, setupTargets, type SetupOutcome, type SetupTarget } from "~/lib/client-setup"
 import { readProxyConfig } from "~/lib/config"
 import { flushLogs, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
+import { homeRelative } from "~/lib/paths"
 import { registerSensitiveOrigin } from "~/lib/redact"
 import { colorEnabled, heading, mark, renderTable, terminalText, unicodeEnabled } from "~/lib/terminal"
 import type { MarkState, TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher } from "~/lib/upstream-dispatcher"
-import { homeRelative } from "~/status"
 
 const printable = (text: string): string => scrubLogSecrets(terminalText(text))
 

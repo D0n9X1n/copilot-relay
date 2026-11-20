@@ -59,6 +59,13 @@ export const formatLogDate = (date: Date): string =>
 export const getLogPath = (date: Date = new Date()): string =>
   path.join(logsDir, `${logFileBaseName}.${formatLogDate(date)}.log`)
 
+/**
+ * A path under the home directory, as a human view prints it: from ~, so it fits a line. The home
+ * is the one every path here was built from.
+ */
+export const homeRelative = (target: string, home = homeDir): string =>
+  home !== "" && (target === home || target.startsWith(home + path.sep)) ? "~" + target.slice(home.length) : target
+
 export const paths = {
   appDir,
   codexCatalogPath,
