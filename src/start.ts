@@ -15,7 +15,7 @@ import { clearRelayPidFile, writeRelayPidFile } from "~/lib/lifecycle"
 import { cleanupLogs, flushLogs, log, registerLogSecret, setLogLevel } from "~/lib/log"
 import { paths } from "~/lib/paths"
 import { cleanupCaptures, flushCaptures } from "~/lib/request-trace"
-import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds } from "~/lib/models"
+import { defaultReasoningEffort, getExposedModelIds, getUpstreamModelIds, parseModelSelection } from "~/lib/models"
 import { getCachedCopilotModel } from "~/copilot/models"
 import { validateUpstream } from "~/lib/preflight"
 import { formatUpstreamProxyForDisplay, formatUrlForDisplay, registerSensitiveOrigin } from "~/lib/redact"
@@ -154,6 +154,7 @@ export async function startRelay(appConfig?: AppConfig): Promise<void> {
     runtimeState.modelRouting = {
       gptModel: nextConfig.gptModel,
       opusModel: nextConfig.opusModel,
+      models: parseModelSelection(nextConfig.models),
     }
   }
 

@@ -90,3 +90,6 @@ gptModel: gpt-6-astra
 
 # Upstream Copilot model used for requests containing "opus".
 opusModel: claude-opus-5.5
+
+# Extra models offered to clients: auto (newest model of each vendor), empty, or comma-separated Copilot IDs.
+models: auto
