@@ -435,7 +435,7 @@ export const fetchCopilot = async (
         markDiscardedResponse(response)
         await response.body?.cancel()
         signal?.throwIfAborted()
-        await recordedRefresh(() => waitWithSignal(provider.refreshToken!(attemptedToken, attemptedGeneration), signal))
+        await recordedRefresh(() => waitWithSignal(provider.refreshToken!(attemptedToken, attemptedGeneration, signal), signal))
         signal?.throwIfAborted()
         log.info(`${formatRequestId(options.requestId)}Copilot token refresh completed; retrying ${path}`)
         continue

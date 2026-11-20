@@ -141,6 +141,12 @@ export interface ProxyAuthSession {
   source: "github-token"
 }
 
+// One caller waiting on the shared Copilot token exchange.
+interface ExchangeWaiter {
+  resolve: (refreshIn: number) => void
+  reject: (error: unknown) => void
+}
+
 let copilotTokenRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
 // Bound when this module loads, outside any request. A timer created through it carries no
@@ -516,16 +522,59 @@ export const setupProxyAuth = async (
   }
 
   // Concurrent callers (the refresh timer and requests whose token was rejected) share one exchange.
-  let refreshInFlight: Promise<number> | undefined
-  const applyCopilotToken = () => {
-    if (refreshInFlight) {
-      return refreshInFlight
+  // It starts outside any request's async context and holds only the waiters still waiting, so a
+  // request that times out or is cancelled while the exchange is pending leaves nothing behind it:
+  // the exchange keeps its own bound and its other waiters.
+  let exchangeWaiters: Set<ExchangeWaiter> | undefined
+  const applyCopilotToken = (signal?: AbortSignal): Promise<number> => {
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason)
     }
 
-    refreshInFlight = exchangeCopilotToken().finally(() => {
-      refreshInFlight = undefined
+    if (!exchangeWaiters) {
+      const waiters = new Set<ExchangeWaiter>()
+      exchangeWaiters = waiters
+      // The in-flight slot is cleared before any waiter resumes, so a waiter that asks again starts
+      // a new exchange instead of joining the one that just ended.
+      inProcessContext(() => exchangeCopilotToken().then((refreshIn) => {
+        exchangeWaiters = undefined
+        for (const waiter of waiters) {
+          waiter.resolve(refreshIn)
+        }
+      }, (error: unknown) => {
+        exchangeWaiters = undefined
+        for (const waiter of waiters) {
+          waiter.reject(error)
+        }
+      }))
+    }
+
+    const waiters = exchangeWaiters
+    return new Promise<number>((resolve, reject) => {
+      const detach = () => {
+        waiters.delete(waiter)
+        signal?.removeEventListener("abort", abort)
+      }
+
+      const abort = () => {
+        detach()
+        reject(signal?.reason)
+      }
+
+      const waiter: ExchangeWaiter = {
+        resolve: (refreshIn) => {
+          detach()
+          resolve(refreshIn)
+        },
+        reject: (error) => {
+          detach()
+          reject(error)
+        },
+      }
+
+      waiters.add(waiter)
+      signal?.addEventListener("abort", abort, { once: true })
     })
-    return refreshInFlight
   }
 
   const scheduleCopilotTokenRefresh = (refreshIn: number) => {
@@ -592,14 +641,19 @@ export const setupProxyAuth = async (
 
   // The client passes the token and generation its rejected request carried. If either has moved
   // on, a newer token is already in place and there is nothing to refresh.
-  config.refreshCopilotToken = async (rejectedToken, generation) => {
+  // A caller whose signal aborts stops waiting at once, with the signal's reason; the exchange goes on.
+  config.refreshCopilotToken = async (rejectedToken, generation, signal) => {
     if (config.copilotToken !== rejectedToken || (config.copilotTokenGeneration ?? 0) !== generation) {
       return
     }
 
     try {
-      await applyCopilotToken()
+      await applyCopilotToken(signal)
     } catch {
+      if (signal?.aborted) {
+        throw signal.reason
+      }
+
       throw new Error("Copilot token refresh failed; upstream request was not replayed.")
     }
   }

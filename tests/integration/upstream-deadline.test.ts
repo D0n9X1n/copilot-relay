@@ -761,3 +761,31 @@ test("a request whose rejected token triggers the shared refresh leaves its trac
   // The exchange reschedules the periodic refresh timer; that timer must not hold the request.
   assert.equal(result.refreshedReachable, false, "the refreshed request's finished trace is collected")
 })
+
+test("a request that times out waiting on a stalled token exchange leaves its trace unreachable", async () => {
+  const { execFile } = await import("node:child_process")
+  const fixture = path.join(import.meta.dirname, "..", "fixtures", "stalled-exchange-heap.ts")
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile(process.execPath, ["--expose-gc", "--import", "tsx", fixture], {
+      cwd: path.join(import.meta.dirname, "..", ".."),
+      timeout: 60_000,
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }, (error, out) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve(out)
+    })
+  })
+  const result = JSON.parse(stdout.trim().split("\n").at(-1)!) as {
+    status: number
+    exchangeStillOpen: boolean
+    finishedTraceReachable: boolean
+  }
+
+  assert.equal(result.status, 504, "the request's own deadline ended it")
+  assert.equal(result.exchangeStillOpen, true, "the shared exchange is still pending under its own bound")
+  assert.equal(result.finishedTraceReachable, false, "the pending exchange does not hold the finished request")
+})

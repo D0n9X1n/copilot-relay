@@ -11,7 +11,8 @@ export interface ProxyConfig {
   copilotBaseUrl: string
   copilotToken: string | undefined
   copilotTokenGeneration?: number
-  refreshCopilotToken?: (rejectedToken: string, generation: number) => Promise<void>
+  // Refreshes a rejected token; a caller whose signal aborts stops waiting without ending the refresh.
+  refreshCopilotToken?: (rejectedToken: string, generation: number, signal?: AbortSignal) => Promise<void>
   modelCatalog?: CopilotModelCatalog
   upstreamTimeoutMs: number
   vsCodeVersion: string
