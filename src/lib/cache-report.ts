@@ -15,7 +15,17 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { formatLogDate, paths } from "~/lib/paths"
-import { colorText, terminalText, type TerminalTone } from "~/lib/terminal"
+import {
+  formatCount,
+  formatTokens,
+  heading,
+  mark,
+  renderTable,
+  terminalText,
+  unicodeEnabled,
+  type TableColumn,
+  type TerminalTone,
+} from "~/lib/terminal"
 
 const completionRoutes = ["/chat/completions", "/responses", "/v1/messages"] as const
 
@@ -665,29 +675,20 @@ export const resolveCacheOptions = (args: CacheArguments, now: Date): CacheRepor
   }
 }
 
-interface Column {
-  header: string
-  alignRight: boolean
-  cell: (row: CacheRow) => string
-  tone?: (row: CacheRow) => TerminalTone
-}
-
-const formatCount = (value: number): string => value.toLocaleString("en-US")
-
 // Truncated rather than rounded, so a row below the goal never prints as the goal itself. The same
-// integer decides belowGoal, so the rate's color always agrees with the printed rate.
-const formatHitRate = (row: CacheRow): string => {
+// integer decides belowGoal, so the mark always agrees with the printed rate.
+const formatHitRate = (row: CacheRow, unicode: boolean): string => {
   if (row.hitRate === null) {
-    return "-"
+    return mark("off", unicode)
   }
 
   const basisPoints = hitBasisPoints(row.cacheReadTokens, row.totalInputTokens)
+  const rate = `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
 
-  return `${Math.floor(basisPoints / 100)}.${twoDigits(basisPoints % 100)}%`
+  return `${mark(row.belowGoal ? "fail" : "ok", unicode)} ${rate}`
 }
 
-// The rate's color is the table's only mark of a missed goal. Without color, the title states the
-// goal and --json has belowGoal.
+// The mark says whether a row meets the goal; color only adds emphasis to it.
 const hitRateTone = (row: CacheRow): TerminalTone => {
   if (row.hitRate === null) {
     return "muted"
@@ -696,62 +697,77 @@ const hitRateTone = (row: CacheRow): TerminalTone => {
   return row.belowGoal ? "bad" : "good"
 }
 
-const bucketColumns: Record<CacheView, Array<Column>> = {
-  summary: [],
-  hourly: [{ header: "HOUR", alignRight: false, cell: (row) => row.bucket ?? "" }],
-  daily: [{ header: "DAY", alignRight: false, cell: (row) => row.bucket ?? "" }],
+// Models that used more than one route in these rows. A trend names the route only for them, so it
+// stays within five columns.
+const modelsOnSeveralRoutes = (rows: Array<CacheRow>): Set<string> => {
+  const routes = new Map<string, Set<string>>()
+
+  for (const row of rows) {
+    const seen = routes.get(row.model) ?? new Set<string>()
+    seen.add(row.route)
+    routes.set(row.model, seen)
+  }
+
+  return new Set([...routes].filter(([, seen]) => seen.size > 1).map(([model]) => model))
 }
 
-// The table answers whether the cache works for each model and route: what the row is, how many
-// calls its rate rests on, and the rate. The token counts behind the rate are in --json.
-const dataColumns: Array<Column> = [
-  { header: "MODEL", alignRight: false, cell: (row) => row.model },
-  { header: "ROUTE", alignRight: false, cell: (row) => row.route },
-  { header: "REQUESTS", alignRight: true, cell: (row) => formatCount(row.requests) },
-  { header: "HIT RATE", alignRight: true, cell: formatHitRate, tone: hitRateTone },
-]
+// The table answers whether the cache works for each model and route: what the row is, how much
+// traffic its rate rests on, and the rate. The summary has a ROUTE column; a trend leads with the
+// hour or day, shown once for the rows that share it, and names a route only where a model used two.
+const tableColumns = (rows: Array<CacheRow>, view: CacheView, unicode: boolean): Array<TableColumn<CacheRow>> => {
+  const several = modelsOnSeveralRoutes(rows)
+  const model: TableColumn<CacheRow> =
+    view === "summary" ?
+      { header: "MODEL", align: "left", cell: (row) => row.model }
+    : { header: "MODEL", align: "left", cell: (row) => several.has(row.model) ? `${row.model} (${row.route})` : row.model }
 
-const renderTable = (rows: Array<CacheRow>, view: CacheView, color: boolean): Array<string> => {
-  const columns = [...bucketColumns[view], ...dataColumns]
-  const cells = rows.map((row) => columns.map((column) => column.cell(row)))
-  const widths = columns.map((column, index) =>
-    Math.max(column.header.length, ...cells.map((rowCells) => rowCells[index].length)))
-  const pad = (text: string, index: number): string =>
-    columns[index].alignRight ? text.padStart(widths[index]) : text.padEnd(widths[index])
+  const lead: Array<TableColumn<CacheRow>> =
+    view === "summary" ?
+      [model, { header: "ROUTE", align: "left", cell: (row) => row.route }]
+    : [{ header: view === "hourly" ? "HOUR" : "DAY", align: "left", cell: (row) => row.bucket ?? "", repeatBlank: true }, model]
 
-  const header = columns.map((column, index) => pad(column.header, index)).join("  ")
-  const body = rows.map((row, rowIndex) => {
-    const rendered = columns.map((column, index) => {
-      const text = pad(cells[rowIndex][index], index)
-
-      return column.tone === undefined ? text : colorText(text, column.tone(row), color)
-    })
-
-    return `  ${rendered.join("  ")}`
-  })
-
-  return [`  ${header}`, ...body]
+  return [
+    ...lead,
+    { header: "REQUESTS", align: "right", cell: (row) => formatCount(row.requests) },
+    { header: "TOKENS", align: "right", cell: (row) => formatTokens(row.totalInputTokens) },
+    { header: "HIT RATE", align: "right", cell: (row) => formatHitRate(row, unicode), tone: hitRateTone },
+  ]
 }
 
 const viewTitles: Record<CacheView, string> = {
   summary: "Prompt-cache hit rate",
-  hourly: "Prompt-cache hit rate by local hour",
-  daily: "Prompt-cache hit rate by local day",
+  hourly: "Prompt-cache hit rate by hour",
+  daily: "Prompt-cache hit rate by day",
 }
 
 const formatLocalTime = (date: Date): string =>
   `${formatLogDate(date)} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`
 
+// The window in local time, and the model filter, which is the user's own text echoed back.
 const describeScope = (options: CacheReportOptions): string => {
-  const span =
-    options.since === undefined ?
-      "across all retained logs"
-    : `since ${formatLocalTime(options.since)} local time`
-
-  // The filter is the user's own text, echoed back to the terminal.
-  const model = options.model === undefined ? "" : `, for models matching "${terminalText(options.model)}"`
+  const span = options.since === undefined ? "all retained logs" : `since ${formatLocalTime(options.since)}`
+  const model = options.model === undefined ? "" : `, models matching "${terminalText(options.model)}"`
 
   return `${span}${model}`
+}
+
+// One sentence under the table: how many rows with a known rate miss the goal.
+const goalNote = (rows: Array<CacheRow>): string | undefined => {
+  const known = rows.filter((row) => row.hitRate !== null)
+  if (known.length === 0) {
+    return undefined
+  }
+
+  const below = known.filter((row) => row.belowGoal).length
+  if (known.length === 1) {
+    return below === 0 ? "The only row with a known rate meets the goal." : "The only row with a known rate is below the goal."
+  }
+
+  if (below === 0) {
+    return `All ${formatCount(known.length)} rows with a known rate meet the goal.`
+  }
+
+  return `${formatCount(below)} of ${formatCount(known.length)} rows with a known rate ${below === 1 ? "is" : "are"} below the goal.`
 }
 
 // REQUESTS counts the calls that logged no cache read and HIT RATE leaves them out, so a line under
@@ -764,6 +780,7 @@ export const renderCacheReport = (
   rows: Array<CacheRow>,
   options: CacheReportOptions,
   color = false,
+  unicode = unicodeEnabled(),
 ): Array<string> => {
   if (rows.length === 0) {
     return [
@@ -774,15 +791,20 @@ export const renderCacheReport = (
   }
 
   const lines = [
-    `${viewTitles[options.view]} ${describeScope(options)}, goal ${options.goal}%`,
+    heading(viewTitles[options.view], `${describeScope(options)} · goal ${options.goal}%`),
     "",
-    ...renderTable(rows, options.view, color),
+    ...renderTable(tableColumns(rows, options.view, unicode), rows, color),
   ]
 
+  const notes = [goalNote(rows)]
   const unknownCalls = rows.reduce((total, row) => total + row.unknownCacheRequests, 0)
-
   if (unknownCalls > 0) {
-    lines.push("", unknownNote(unknownCalls))
+    notes.push(unknownNote(unknownCalls))
+  }
+
+  const present = notes.filter((note) => note !== undefined)
+  if (present.length > 0) {
+    lines.push("", ...present)
   }
 
   return lines

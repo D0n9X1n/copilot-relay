@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { stripVTControlCharacters } from "node:util"
 
 // paths.ts resolves the home directory when it is imported, so it is redirected first. Node reads
 // USERPROFILE on Windows and HOME elsewhere, so both are set.
@@ -325,19 +326,20 @@ test("a call that logged no cache read is unknown, not a zero read", async () =>
 
   // A row whose calls all have unknown caching has no rate: a dash, gray on a color terminal, never
   // a rate of 0.
-  assert.deepEqual(renderCacheReport(rows, options), [
-    "Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%",
+  assert.deepEqual(renderCacheReport(rows, options, false, true), [
+    "Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%",
     "",
-    "  MODEL            ROUTE              REQUESTS  HIT RATE",
-    "  claude-opus-5-5  /v1/messages              1         -",
-    "  claude-opus-5.5  /chat/completions         3    60.00%",
+    "  MODEL            ROUTE              REQUESTS  TOKENS  HIT RATE",
+    "  claude-opus-5-5  /v1/messages              1       0         –",
+    "  claude-opus-5.5  /chat/completions         3    1.5K  ✗ 60.00%",
     "",
+    "The only row with a known rate is below the goal.",
     "HIT RATE leaves out 2 calls that logged no cache_read_input_tokens.",
   ])
 
-  const colored = renderCacheReport(rows, options, true).join("\n")
-  assert.ok(colored.includes("\u001b[90m       -\u001b[0m"))
-  assert.ok(colored.includes("\u001b[31m  60.00%\u001b[0m"))
+  const colored = renderCacheReport(rows, options, true, true).join("\n")
+  assert.ok(colored.includes("\u001b[90m–\u001b[0m"))
+  assert.ok(colored.includes("\u001b[31m✗ 60.00%\u001b[0m"))
 })
 
 test("hourly and daily trends bucket by local time", async () => {
@@ -377,7 +379,7 @@ test("hourly and daily trends bucket by local time", async () => {
   ])
 })
 
-test("the daily table leads with the local day, and colors only the rate", async () => {
+test("the daily table leads with the local day, marks the rate and colors only the rate", async () => {
   await writeLogs({
     [dated("2026-09-30")]: entries(chatCall("2026-09-30T10:00:00.000Z", "input_tokens=50 cache_read_input_tokens=50")),
     [dated("2026-10-03")]: entries(chatCall("2026-10-03T06:30:00.000Z", "input_tokens=400 cache_read_input_tokens=300")),
@@ -386,17 +388,54 @@ test("the daily table leads with the local day, and colors only the rate", async
   const options: CacheReportOptions = { view: "daily", goal: 95 }
   const rows = await buildCacheReport(options)
 
-  assert.deepEqual(renderCacheReport(rows, options), [
-    "Prompt-cache hit rate by local day across all retained logs, goal 95%",
+  // Each model used one route, so the trend drops the ROUTE column; the summary names it.
+  assert.deepEqual(renderCacheReport(rows, options, false, true), [
+    "Prompt-cache hit rate by day · all retained logs · goal 95%",
     "",
-    "  DAY         MODEL            ROUTE              REQUESTS  HIT RATE",
-    "  2026-09-30  claude-opus-5.5  /chat/completions         1   100.00%",
-    "  2026-10-03  claude-opus-5.5  /chat/completions         1    75.00%",
+    "  DAY         MODEL            REQUESTS  TOKENS   HIT RATE",
+    "  2026-09-30  claude-opus-5.5         1      50  ✓ 100.00%",
+    "  2026-10-03  claude-opus-5.5         1     400   ✗ 75.00%",
+    "",
+    "1 of 2 rows with a known rate is below the goal.",
   ])
 
-  const colored = renderCacheReport(rows, options, true).join("\n")
-  assert.ok(colored.includes("  2026-09-30  claude-opus-5.5  /chat/completions         1  \u001b[32m 100.00%\u001b[0m"))
-  assert.ok(colored.includes("  2026-10-03  claude-opus-5.5  /chat/completions         1  \u001b[31m  75.00%\u001b[0m"))
+  const colored = renderCacheReport(rows, options, true, true).join("\n")
+  assert.ok(colored.includes("  2026-09-30  claude-opus-5.5         1      50  \u001b[32m✓ 100.00%\u001b[0m"))
+  assert.ok(colored.includes("  2026-10-03  claude-opus-5.5         1     400   \u001b[31m✗ 75.00%\u001b[0m"))
+
+  // Without unicode the marks are words.
+  assert.deepEqual(renderCacheReport(rows, options, false, false).slice(3, 5), [
+    "  2026-09-30  claude-opus-5.5         1      50  ok 100.00%",
+    "  2026-10-03  claude-opus-5.5         1     400    x 75.00%",
+  ])
+})
+
+test("an hourly trend shows each hour once, and names the route only for a model that used two", async () => {
+  await writeLogs({
+    [dated("2026-10-03")]: entries(
+      // 12:30 local time: Opus on two routes, GPT on one.
+      chatCall("2026-10-03T07:00:00.000Z", "input_tokens=1000 cache_read_input_tokens=990"),
+      completion("2026-10-03T07:01:00.000Z", "path=/v1/messages http_status=200 body=complete model=claude-opus-5.5 terminal=true input_tokens=10 cache_read_input_tokens=990"),
+      completion("2026-10-03T07:02:00.000Z", "path=/responses http_status=200 body=complete model=gpt-6.2-astra terminal=true input_tokens=2000 cache_read_input_tokens=1000"),
+      // 13:30 local time: GPT only.
+      completion("2026-10-03T08:00:00.000Z", "path=/responses http_status=200 body=complete model=gpt-6.2-astra terminal=true input_tokens=4000000 cache_read_input_tokens=3900000"),
+    ),
+  })
+
+  const options: CacheReportOptions = { view: "hourly", since: lastDay, goal: 95 }
+  const rows = await buildCacheReport(options)
+
+  assert.deepEqual(renderCacheReport(rows, options, false, true), [
+    "Prompt-cache hit rate by hour · since 2026-10-02 17:30 · goal 95%",
+    "",
+    "  HOUR              MODEL                                REQUESTS  TOKENS  HIT RATE",
+    "  2026-10-03 12:00  claude-opus-5.5 (/chat/completions)         1      1K  ✓ 99.00%",
+    "                    claude-opus-5.5 (/v1/messages)              1      1K  ✓ 99.00%",
+    "                    gpt-6.2-astra                               1      2K  ✗ 50.00%",
+    "  2026-10-03 13:00  gpt-6.2-astra                               1      4M  ✓ 97.50%",
+    "",
+    "1 of 4 rows with a known rate is below the goal.",
+  ])
 })
 
 // The suite runs in Asia/Kolkata, which has no daylight saving. These tests need other zones.
@@ -651,30 +690,34 @@ test("--json rows keep one stable key set", async () => {
   ])
 })
 
-test("the table shows requests and hit rate per model and route, the rate in red below the goal", async () => {
+test("the table shows requests, tokens and a marked hit rate per model and route", async () => {
   await writeLogs({ [dated("2026-10-03")]: entries(chatLine, messagesLine, responsesLine) })
 
   const options: CacheReportOptions = { view: "summary", since: lastDay, goal: 95 }
   const rows = await buildCacheReport(options)
 
-  assert.deepEqual(renderCacheReport(rows, options), [
-    "Prompt-cache hit rate since 2026-10-02 17:30 local time, goal 95%",
+  assert.deepEqual(renderCacheReport(rows, options, false, true), [
+    "Prompt-cache hit rate · since 2026-10-02 17:30 · goal 95%",
     "",
-    "  MODEL               ROUTE              REQUESTS  HIT RATE",
-    "  claude-opus-5-5     /v1/messages              1    98.36%",
-    "  claude-opus-5.5     /chat/completions         1    98.38%",
-    "  gpt-5.5-2026-04-23  /responses                1    92.86%",
+    "  MODEL               ROUTE              REQUESTS  TOKENS  HIT RATE",
+    "  claude-opus-5-5     /v1/messages              1   31.7K  ✓ 98.36%",
+    "  claude-opus-5.5     /chat/completions         1   31.4K  ✓ 98.38%",
+    "  gpt-5.5-2026-04-23  /responses                1   19.3K  ✗ 92.86%",
+    "",
+    "1 of 3 rows with a known rate is below the goal.",
   ])
 
-  // On a color terminal the rate below the goal is red, and nothing else marks the row.
-  const colored = renderCacheReport(rows, options, true).join("\n")
-  assert.ok(colored.includes("\u001b[31m  92.86%\u001b[0m"))
-  assert.ok(colored.includes("\u001b[32m  98.38%\u001b[0m"))
-  assert.ok(!colored.includes("below goal"))
+  // Color adds emphasis to the mark and rate; the plain text is the same with color on.
+  const colored = renderCacheReport(rows, options, true, true)
+  assert.deepEqual(colored.map((line) => stripVTControlCharacters(line)), renderCacheReport(rows, options, false, true))
+  assert.ok(colored.join("\n").includes("\u001b[31m✗ 92.86%\u001b[0m"))
+  assert.ok(colored.join("\n").includes("\u001b[32m✓ 98.38%\u001b[0m"))
 
-  // Against a lower goal, no rate is red.
+  // Against a lower goal, no rate is red and the footer says every row meets it.
   const relaxed: CacheReportOptions = { ...options, goal: 90 }
-  assert.ok(!renderCacheReport(await buildCacheReport(relaxed), relaxed, true).join("\n").includes("\u001b[31m"))
+  const relaxedLines = renderCacheReport(await buildCacheReport(relaxed), relaxed, true, true)
+  assert.ok(!relaxedLines.join("\n").includes("\u001b[31m"))
+  assert.equal(relaxedLines.at(-1), "All 3 rows with a known rate meet the goal.")
 })
 
 test("a row on the goal is not flagged, and a row just below it never prints as the goal", async () => {
@@ -733,7 +776,7 @@ test("an empty window says there is no data and where the data would come from",
 
   assert.deepEqual(rows, [])
   assert.deepEqual(renderCacheReport(rows, options), [
-    "No prompt-cache data since 2026-10-02 17:30 local time, for models matching \"opus\".",
+    "No prompt-cache data since 2026-10-02 17:30, models matching \"opus\".",
     `The report reads the upstream completion entries in ${paths.logsDir}.`,
     "They are written at logLevel info or debug, not error, and kept for logRetentionDays.",
   ])

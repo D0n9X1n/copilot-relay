@@ -124,15 +124,15 @@ test("cache --hourly prints one row per hour, model and route, ending in its hit
   const result = await run(["cache", "--hourly", "--goal", "98.37"])
 
   assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^Prompt-cache hit rate by local hour since .+ local time, goal 98\.37%$/m)
-  assert.match(result.stdout, /^ {2}HOUR +MODEL +ROUTE +REQUESTS {2}HIT RATE$/m)
+  assert.match(result.stdout, /^Prompt-cache hit rate by hour · since .+ · goal 98\.37%$/m)
+  assert.match(result.stdout, /^ {2}HOUR +MODEL +REQUESTS +TOKENS +HIT RATE$/m)
 
-  // 98.36% is just under the goal and 98.38% just over it. NO_COLOR is set, so no rate is colored,
-  // and nothing else marks the rows below the goal.
-  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}claude-opus-5-5 .* 98\.36%$/m)
-  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}claude-opus-5\.5 .* 98\.38%$/m)
-  assert.match(result.stdout, /^ {2}\d{4}-\d{2}-\d{2} \d{2}:00 {2}gpt-5\.5-2026-04-23 .* 92\.86%$/m)
-  assert.doesNotMatch(result.stdout, /\u001b\[|below goal/)
+  // 98.36% is just under the goal and 98.38% just over it. NO_COLOR is set, so no rate is colored:
+  // the mark alone says which side of the goal a row is on.
+  assert.match(result.stdout, /claude-opus-5-5 .* (✗|x) 98\.36%$/m)
+  assert.match(result.stdout, /claude-opus-5\.5 .* (✓|ok) 98\.38%$/m)
+  assert.match(result.stdout, /gpt-5\.5-2026-04-23 .* (✗|x) 92\.86%$/m)
+  assert.doesNotMatch(result.stdout, /\u001b\[/)
 })
 
 test("cache explains an unusable flag and exits 1", async () => {
@@ -147,6 +147,6 @@ test("cache says plainly when nothing matches", async () => {
   const result = await run(["cache", "--model", "no-such-model"])
 
   assert.equal(result.code, 0, result.stderr)
-  assert.match(result.stdout, /^No prompt-cache data since .+ local time, for models matching "no-such-model"\.$/m)
+  assert.match(result.stdout, /^No prompt-cache data since .+, models matching "no-such-model"\.$/m)
   assert.match(result.stdout, /written at logLevel info or debug, not error/)
 })
