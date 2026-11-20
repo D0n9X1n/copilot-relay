@@ -3,7 +3,7 @@
 //
 // The relay sends GitHub calls through the same undici dispatcher as Copilot calls, so a
 // test can neither replace the global fetch to fake GitHub nor let a call reach github.com.
-import { createServer, request as forward, type IncomingMessage, type ServerResponse } from "node:http"
+import { createServer, request as forward, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import net from "node:net"
 import type { Duplex } from "node:stream"
 
@@ -123,6 +123,32 @@ export const startFakeGitHub = async (handle: FakeGitHubHandler): Promise<FakeGi
     },
     origin: `http://127.0.0.1:${address.port}`,
     requests,
+  }
+}
+
+/** Resolves once a server has no open connection, checking every 10 ms, or rejects after 5 s. */
+export const waitForNoConnections = async (server: Server): Promise<void> => {
+  const deadline = Date.now() + 5_000
+  for (;;) {
+    const open = await new Promise<number>((resolve, reject) => {
+      server.getConnections((error, count) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        resolve(count)
+      })
+    })
+    if (open === 0) {
+      return
+    }
+
+    if (Date.now() > deadline) {
+      throw new Error(`${open} connection(s) still open`)
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
 

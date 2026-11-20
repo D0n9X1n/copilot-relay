@@ -8,7 +8,7 @@ import os from "node:os"
 import path from "node:path"
 
 import type { ProxyConfig } from "../../src/lib/config"
-import { redirectGitHubTo, refuseExternalConnections, replyJson, startFakeGitHub } from "./network"
+import { redirectGitHubTo, refuseExternalConnections, replyJson, startFakeGitHub, waitForNoConnections } from "./network"
 
 // src/lib/paths reads the home directory on import, so redirect HOME and USERPROFILE (Windows) first.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-refresh-trace-"))
@@ -127,11 +127,14 @@ const refreshed = await send()
 const after = upstreamDeadlineCounts()
 
 // Keep-alive sockets were opened inside a request; closing them leaves only what the relay holds.
+// A socket's close reaches the client a poll phase later, and later still on Windows, so wait until
+// the mock has no connection left, and give each collection round a timer turn.
 await getUpstreamDispatcher().close()
 copilot.closeAllConnections()
+await waitForNoConnections(copilot)
 await flushLogs()
 for (let round = 0; round < 20; round++) {
-  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setTimeout(resolve, 10))
   gc()
 }
 

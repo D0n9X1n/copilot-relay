@@ -9,7 +9,7 @@ import os from "node:os"
 import path from "node:path"
 
 import type { ProxyConfig } from "../../src/lib/config"
-import { redirectGitHubTo, refuseExternalConnections, replyJson, startFakeGitHub } from "./network"
+import { redirectGitHubTo, refuseExternalConnections, replyJson, startFakeGitHub , waitForNoConnections } from "./network"
 
 // src/lib/paths reads the home directory on import, so redirect HOME and USERPROFILE (Windows) first.
 const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-stalled-exchange-"))
@@ -113,11 +113,13 @@ const { status, reference } = await send()
 deadline.dispose()
 await exchangeStarted.promise
 
-// Copilot's keep-alive sockets were opened inside the request; the GitHub response stays open.
+// Copilot's keep-alive sockets were opened inside the request; the GitHub response stays open. A
+// socket's close reaches the client later on Windows, so wait for it and give each round a timer turn.
 copilot.closeAllConnections()
+await waitForNoConnections(copilot)
 await flushLogs()
 for (let round = 0; round < 20; round++) {
-  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setTimeout(resolve, 10))
   gc()
 }
 
