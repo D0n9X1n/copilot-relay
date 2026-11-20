@@ -155,6 +155,12 @@ test("a relay request that needs discovery owns one deadline, disposed when its 
   assert.equal(after.disposed - before.disposed, 1, "disposed when the client body ended")
 })
 
+const probeModel = { type: "chat", supportedEndpoints: ["/responses"], reasoningEfforts: ["low"] }
+const probeConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
+  ...configFor(upstreamTimeoutMs),
+  modelCatalog: { baseUrl: provider, models: new Map([[model, probeModel]]) },
+})
+
 test("a client that cancels after the headers releases the request's deadline at once", async () => {
   runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
   runtimeState.upstreamBaseUrl = provider
@@ -561,12 +567,6 @@ test("finished requests leave no trace reachable and barely grow the heap", asyn
 })
 
 const { probeModels } = await import("../../src/lib/model-probe")
-
-const probeModel = { type: "chat", supportedEndpoints: ["/responses"], reasoningEfforts: ["low"] }
-const probeConfig = (upstreamTimeoutMs: number): ProxyConfig => ({
-  ...configFor(upstreamTimeoutMs),
-  modelCatalog: { baseUrl: provider, models: new Map([[model, probeModel]]) },
-})
 
 const probeOnce = async (
   t: import("node:test").TestContext,
