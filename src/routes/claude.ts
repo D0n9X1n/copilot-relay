@@ -272,16 +272,18 @@ const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: str
   return selection.endpoint && !selection.responsesFallback ? selection.endpoint : undefined
 }
 
+// upstreamModel is the model admission routed and validated; execution never routes the client's
+// name again, so a catalog refreshed during admission cannot send it somewhere else.
 const handleClaudeMessageRequest = async (
   config: ProxyEnv["Variables"]["config"],
   claudePayload: ClaudeMessagesPayload,
+  upstreamModel: string,
   initiator: "agent" | "user",
   requestSignal: AbortSignal | undefined,
   requestId: string,
   writeEvent?: ClaudeStreamEventWriter,
   requestHeaders?: Headers,
 ): Promise<ClaudeResponse | undefined> => {
-  const upstreamModel = translateModelName(claudePayload.model)
   if (shouldUseNativeMessages(config, upstreamModel)) {
     return handleNativeMessages(
       config,
@@ -299,8 +301,9 @@ const handleClaudeMessageRequest = async (
   const toolNameMapper = createClaudeToolNameMapper(decisionPayload.tools, {
     ...getToolNameMapperOptionsForModel(upstreamModel),
   })
+  // An admitted upstream ID is exposed or a slot, so translation routes it to itself.
   const openAIPayload = translateToOpenAI(
-    decisionPayload,
+    { ...decisionPayload, model: upstreamModel },
     undefined,
     toolNameMapper,
     { endpoint: translationEndpoint(config, upstreamModel) },
@@ -586,11 +589,12 @@ claudeRoutes.post("/messages", async (c) => {
   // Every route reads the system prompt without Claude Code's billing line.
   const claudePayload = removeBillingLine(receivedPayload)
   const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
+  let upstreamModel = ""
   try {
     // Rejects a malformed effort control with HTTP 400 before any other work.
     getRequestReasoningEffort(claudePayload)
 
-    const upstreamModel = translateModelName(claudePayload.model)
+    upstreamModel = translateModelName(claudePayload.model)
     const validate = () => {
       if (shouldUseNativeMessages(config, upstreamModel)) {
         validateNativeMessages(claudePayload)
@@ -610,6 +614,9 @@ claudeRoutes.post("/messages", async (c) => {
     requestSignal?.throwIfAborted()
     pinCopilotModelCatalog(config)
 
+    // Discovery can expose the requested model, so route again against the pinned catalog. This
+    // model is the one selected, validated and executed.
+    upstreamModel = translateModelName(claudePayload.model)
     const selection = requireCopilotEndpoint(config, upstreamModel)
 
     validate()
@@ -664,6 +671,7 @@ claudeRoutes.post("/messages", async (c) => {
         await handleClaudeMessageRequest(
           config,
           claudePayload,
+          upstreamModel,
           initiator,
           requestSignal,
           requestId,
@@ -695,6 +703,7 @@ claudeRoutes.post("/messages", async (c) => {
     return c.json(await handleClaudeMessageRequest(
       config,
       claudePayload,
+      upstreamModel,
       initiator,
       requestSignal,
       requestId,
@@ -735,8 +744,9 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     const claudeBeta = c.req.header("claude-beta")
     // Count the system prompt the routes send, without Claude Code's billing line.
     const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
+    const routedModel = translateModelName(claudePayload.model)
     const countPayload =
-      shouldUseNativeMessages(c.get("config"), translateModelName(claudePayload.model)) ?
+      shouldUseNativeMessages(c.get("config"), routedModel) ?
         {
           ...claudePayload,
           // Controls affect native execution, not local advisory token counting.
@@ -753,14 +763,15 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
       : claudePayload
     // Count what the selected route sends, including reminder turns on the Claude chat route.
     const openAIPayload = translateToOpenAI(countPayload, undefined, undefined, {
-      endpoint: translationEndpoint(c.get("config"), translateModelName(claudePayload.model)),
+      endpoint: translationEndpoint(c.get("config"), routedModel),
     })
-    const exposedModels = getExposedModelIds()
     const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
     const hasDiscoveredTokenizer =
       upstreamModel?.tokenizer !== undefined && isSupportedTokenizer(upstreamModel.tokenizer)
+    // The routed model names the count, so an extra Claude model gets the Claude multiplier and an
+    // extra model's own tokenizer loads at its first count.
     const selectedModel = createTokenCountModel(
-      openAIPayload.model === exposedModels[1] ? exposedModels[1] : exposedModels[0],
+      openAIPayload.model,
       hasDiscoveredTokenizer ? upstreamModel?.tokenizer : undefined,
     )
 

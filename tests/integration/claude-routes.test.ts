@@ -26,6 +26,7 @@ const { createServer } = await import("../../src/server")
 const { runtimeState } = await import("../../src/lib/state")
 const { appVersion } = await import("../../src/lib/version")
 const { flushLogs } = await import("../../src/lib/log")
+const { loadedTokenizers } = await import("../../src/lib/tokenizer")
 type ProxyConfig = import("../../src/lib/config").ProxyConfig
 
 test.after(async () => {
@@ -1437,6 +1438,103 @@ test("GET /v1/models returns configured Claude Code models", async () => {
   }
 })
 
+const countTokens = async (app: ReturnType<typeof createTestProxy>, model: string): Promise<{ status: number; tokens: number }> => {
+  const response = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Count the tokens in this sentence, please." }] }),
+  }))
+  const body = await response.json() as { input_tokens: number }
+
+  return { status: response.status, tokens: body.input_tokens }
+}
+
+test("count_tokens counts with the routed model and calls no upstream", async () => {
+  const mock = await startMockCopilot()
+  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: ["claude-sonnet-5"] }
+
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const sonnet = await countTokens(app, "claude-sonnet-5")
+    const haiku = await countTokens(app, "haiku")
+
+    assert.equal(sonnet.status, 200)
+    assert.equal(haiku.status, 200)
+    // claude-sonnet-5 routes to itself and gets the Claude multiplier; haiku routes to gpt-5.5.
+    assert.ok(sonnet.tokens > haiku.tokens, `${sonnet.tokens} > ${haiku.tokens}`)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("an extra model's tokenizer loads at its first count", async () => {
+  const mock = await startMockCopilot()
+  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: ["grok-4.7"] }
+
+  try {
+    const app = createTestProxy(mock.baseUrl, {
+      modelCatalog: { baseUrl: mock.baseUrl, models: new Map([["grok-4.7", { tokenizer: "cl100k_base" }]]) },
+    })
+
+    assert.ok(!loadedTokenizers().includes("cl100k_base"))
+
+    const grok = await countTokens(app, "grok-4.7")
+
+    assert.equal(grok.status, 200)
+    assert.ok(loadedTokenizers().includes("cl100k_base"))
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("GET /v1/models lists the auto selection with each model's limits", async () => {
+  const mock = await startMockCopilot()
+  const windowed = (vendor: string, window?: number) => ({
+    type: "chat",
+    vendor,
+    pickerEnabled: true,
+    ...(window !== undefined && {
+      limits: { max_context_window_tokens: window, max_prompt_tokens: window - 1000, max_output_tokens: 1000 },
+    }),
+  })
+  const catalog = {
+    baseUrl: mock.baseUrl,
+    models: new Map([
+      ["gpt-5.5", windowed("OpenAI", 1_050_000)],
+      ["claude-opus-4.8", windowed("Anthropic")],
+      ["gpt-6.2-astra", windowed("OpenAI", 1_050_000)],
+      ["mai-code-2", windowed("Microsoft")],
+      ["grok-4.7", windowed("xAI", 500_000)],
+    ]),
+  }
+  runtimeState.modelRouting = { gptModel: "gpt-5.5", opusModel: "claude-opus-4.8", models: "auto" }
+  runtimeState.upstreamBaseUrl = mock.baseUrl
+  runtimeState.modelCatalog = catalog
+
+  try {
+    const app = createTestProxy(mock.baseUrl, { modelCatalog: catalog })
+    const response = await app.fetch(new Request("http://localhost/v1/models"))
+    const body = await response.json() as { data: Array<{ id: string; context_window?: number }> }
+
+    assert.equal(response.status, 200)
+    assert.deepEqual(body.data.map((model) => model.id), [
+      "gpt-5.5[1m]",
+      "claude-opus-4.8",
+      "gpt-6.2-astra[1m]",
+      "mai-code-2",
+      "grok-4.7",
+    ])
+    assert.equal(body.data.find((model) => model.id === "grok-4.7")?.context_window, 500_000)
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    delete runtimeState.upstreamBaseUrl
+    delete runtimeState.modelCatalog
+    await mock.close()
+  }
+})
+
 // Why: [1m] is a Claude Code context selector, not a Copilot model ID. The
 // public list should expose it, while the full Messages-to-Responses path must
 // strip it and preserve the configured max effort before touching Copilot.
@@ -1453,8 +1551,18 @@ test("advertises Astra's 1M identity and preserves its cache key and usage", asy
     opusModel: "claude-opus-4.8",
   }
 
+  // [1m] comes from Astra's known window, so the catalog holds it.
+  const catalog = {
+    baseUrl: mock.baseUrl,
+    models: new Map([["gpt-6-astra", {
+      limits: { max_context_window_tokens: 1_050_000, max_prompt_tokens: 922_000, max_output_tokens: 128_000 },
+    }]]),
+  }
+  runtimeState.upstreamBaseUrl = mock.baseUrl
+  runtimeState.modelCatalog = catalog
+
   try {
-    const app = createTestProxy(mock.baseUrl)
+    const app = createTestProxy(mock.baseUrl, { modelCatalog: catalog })
     const modelsResponse = await app.fetch(new Request("http://localhost/v1/models"))
     const models = await modelsResponse.json() as { data: Array<{ id: string }> }
     assert.deepEqual(models.data.map((model) => model.id), [
@@ -1533,6 +1641,8 @@ test("advertises Astra's 1M identity and preserves its cache key and usage", asy
     assert.equal(repeatedUpstream.model, "gpt-6-astra")
     assert.equal(repeatedUpstream.prompt_cache_key, upstream.prompt_cache_key)
   } finally {
+    delete runtimeState.upstreamBaseUrl
+    delete runtimeState.modelCatalog
     await mock.close()
   }
 })

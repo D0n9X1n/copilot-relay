@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import fs from "node:fs/promises"
 import test from "node:test"
 
 import { loadedTokenizers, preloadTokenizers } from "../../src/lib/tokenizer"
@@ -15,4 +16,13 @@ test("startup loads o200k_base and each supported reported tokenizer", async () 
   assert.ok(loaded.includes("o200k_base"))
   assert.ok(loaded.includes("cl100k_base"))
   assert.ok(!loaded.includes("not-a-tokenizer"))
+})
+
+// An extra exposed model's tokenizer loads at its first count, so startup preloads from the two
+// slots only.
+test("startup preloads the tokenizers of the two slots only", async () => {
+  const source = await fs.readFile(new URL("../../src/start.ts", import.meta.url), "utf8")
+  const preloads = source.match(/preloadTokenizers\(([^\n]*)\)/g) ?? []
+
+  assert.deepEqual(preloads, ["preloadTokenizers(getUpstreamModelIds().map((id) => getCachedCopilotModel(config, id)?.tokenizer))"])
 })

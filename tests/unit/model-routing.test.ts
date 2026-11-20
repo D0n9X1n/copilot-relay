@@ -198,6 +198,8 @@ test("routes exposed IDs to themselves and strips every [1m]", () => {
   assert.equal(routeModelId("claude-sonnet-5"), "gpt-6-astra")
   assert.equal(routeModelId("opus[1m]"), "claude-opus-5.5")
   assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5", "grok-4.7"])
+  // Startup preflight and the tokenizer preload read this list: the two slots, never the extras.
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 })
 
 // Why: with no extra models the opus/gpt split is unchanged, except that a slot's own
