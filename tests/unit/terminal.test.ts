@@ -150,6 +150,22 @@ test("supplementary CJK takes two columns and a lone combining mark none", () =>
   )
 })
 
+test("a text-presentation symbol takes one column and an emoji presentation two", () => {
+  const nameColumns: Array<TableColumn<{ name: string }>> = [
+    { header: "NAME", align: "left", cell: (row) => row.name, maxWidth: 18 },
+    { header: "COST", align: "right", cell: () => "1×" },
+  ]
+
+  const lines = renderTable(nameColumns, [{ name: "Acme® Chat Preview" }, { name: "AcmeX Chat Preview" }, { name: "©\ufe0f" }], false)
+
+  assert.deepEqual(lines, [
+    "  NAME                COST",
+    "  Acme® Chat Preview    1×",
+    "  AcmeX Chat Preview    1×",
+    "  ©️                    1×",
+  ])
+})
+
 test("a colored last column carries no trailing padding", () => {
   const lines = renderTable(
     [{ header: "LABEL", align: "left", cell: (row: { label: string }) => row.label, tone: () => "good" }],
