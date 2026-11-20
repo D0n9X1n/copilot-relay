@@ -196,11 +196,12 @@ test("usage prints the plan, the SKU, the reset date and a row per quota, its pe
     "Copilot plan · fixture-plan · resets 2026-11-01",
     "SKU fixture-sku",
     "",
-    "  QUOTA                 LEFT        OVERAGE        CREDITS",
+    "  QUOTA                 LEFT        OVERAGE",
     "  chat                  unlimited   not permitted",
     "  completions           unlimited   not permitted",
-    "  premium_interactions  150 of 300  permitted         12.5",
+    "  premium_interactions  150 of 300  permitted",
     "                        50% left",
+    "                        12.5 credits used",
     "",
   ].join("\n"))
   // One request, the usage request: no Copilot token exchange and no /user lookup.

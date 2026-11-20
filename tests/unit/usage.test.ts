@@ -125,7 +125,8 @@ test("numbers get thousands separators and keep every decimal GitHub sent", () =
   const text = report(premiumOnly({ unlimited: false, entitlement: 1000000, remaining: 919253, percent_remaining: 91.92531, overage_permitted: true, overage_count: 1234 }))
 
   assert.match(text, /^ {2}premium_interactions {2}919,253 of 1,000,000 {2}permitted$/m)
-  assert.match(text, /^ {24}91\.92531% left {8}1,234 used$/m)
+  assert.match(text, /^ {24}91\.92531% left$/m)
+  assert.match(text, /^ {24}1,234 overage used$/m)
 })
 
 test("a tiny nonzero number prints as GitHub sent it, never rounded to zero", () => {
@@ -135,7 +136,7 @@ test("a tiny nonzero number prints as GitHub sent it, never rounded to zero", ()
   assert.match(text, /^ {24}0\.000001% left$/m)
 })
 
-test("a quota with credits and an overage count fits 80 columns, its percent on the line below", () => {
+test("a quota with credits and an overage count fits 80 columns, each detail on its own line", () => {
   const usage = parseCopilotUsage({
     copilot_plan: "fixture-plan",
     quota_reset_date: "2026-11-01",
@@ -151,8 +152,10 @@ test("a quota with credits and an overage count fits 80 columns, its percent on 
     assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
   }
 
-  assert.ok(lines.includes("  premium_interactions  919,253 of 1,000,000  permitted      12,345.6789"))
-  assert.ok(lines.includes("                        91.92531% left        1,234 used"))
+  assert.ok(lines.includes("  premium_interactions  919,253 of 1,000,000  permitted"))
+  assert.ok(lines.includes("                        91.92531% left"))
+  assert.ok(lines.includes("                        1,234 overage used"))
+  assert.ok(lines.includes("                        12,345.6789 credits used"))
 })
 
 test("a low quota with its mark, credits and an overage count still fits 80 columns", () => {
@@ -165,6 +168,33 @@ test("a low quota with its mark, credits and an overage count still fits 80 colu
   for (const line of renderCopilotUsage(usage, false, true)) {
     assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
   }
+})
+
+test("every quota mix fits 80 columns: each detail sits on its own line under the quota", () => {
+  const usage = parseCopilotUsage({
+    quota_snapshots: {
+      chat: { unlimited: true, overage_permitted: true, overage_count: 1234 },
+      completions: { unlimited: true, overage_permitted: false, overage_count: 0 },
+      premium_interactions: { unlimited: false, remaining: 119253, entitlement: 1000000, percent_remaining: 11.92531, overage_permitted: true, overage_count: 1234, credits_used: 12345.67890123456 },
+    },
+  })
+
+  for (const unicode of [true, false]) {
+    for (const line of renderCopilotUsage(usage, false, unicode)) {
+      assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+    }
+  }
+
+  assert.deepEqual(renderCopilotUsage(usage, false, true).slice(2), [
+    "  QUOTA                 LEFT                    OVERAGE",
+    "  chat                  unlimited               permitted",
+    "                        1,234 overage used",
+    "  completions           unlimited               not permitted",
+    "  premium_interactions  ! 119,253 of 1,000,000  permitted",
+    "                        11.92531% left",
+    "                        1,234 overage used",
+    "                        12,345.67890123456 credits used",
+  ])
 })
 
 test("a quota running low is marked, and the mark does not rely on color", () => {
@@ -189,7 +219,8 @@ test("a limited quota prints remaining of entitlement, GitHub's percent and the 
   const text = report(premiumOnly({ unlimited: false, entitlement: 300, remaining: 0, percent_remaining: 0, overage_permitted: true, overage_count: 25 }))
 
   assert.match(text, /^ {2}premium_interactions {2}✗ 0 of 300 {2,}permitted$/m)
-  assert.match(text, /^ {24}0% left {2,}25 used$/m)
+  assert.match(text, /^ {24}0% left$/m)
+  assert.match(text, /^ {24}25 overage used$/m)
 })
 
 test("a token-billed quota adds credits_used", () => {
@@ -204,9 +235,10 @@ test("a token-billed quota adds credits_used", () => {
     credits_used: 12.5,
   }))
 
-  assert.match(text, /^ {2}QUOTA +LEFT +OVERAGE +CREDITS$/m)
-  assert.match(text, /^ {2}premium_interactions {2}150 of 300 {2,}not permitted {2,}12\.5$/m)
+  assert.match(text, /^ {2}QUOTA +LEFT +OVERAGE$/m)
+  assert.match(text, /^ {2}premium_interactions {2}150 of 300 {2,}not permitted$/m)
   assert.match(text, /^ {24}50% left$/m)
+  assert.match(text, /^ {24}12\.5 credits used$/m)
 })
 
 test("numbers print exactly as GitHub sent them, with nothing rounded or derived", () => {

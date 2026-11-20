@@ -13,7 +13,7 @@ import { vscodeVersion } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { withoutLogging } from "~/lib/log"
 import { paths } from "~/lib/paths"
-import { colorText, heading, mark, renderTable, terminalText, unicodeEnabled, type TableColumn, type TerminalTone } from "~/lib/terminal"
+import { colorText, columnWidths, heading, mark, printableCell, renderTable, terminalText, unicodeEnabled, type TableColumn, type TerminalTone } from "~/lib/terminal"
 import { configureUpstreamDispatcher, InvalidProxyEnvironmentError } from "~/lib/upstream-dispatcher"
 
 // The quota ids GitHub sends today. They are always listed first, in this order; any other id the
@@ -176,25 +176,37 @@ const formatPermitted = (snapshot: QuotaSnapshot): string => {
 
 // The overage count GitHub reports, or nothing when it reports none.
 const formatOverageUsed = (snapshot: QuotaSnapshot): string =>
-  snapshot.overage_count === null || snapshot.overage_count === 0 ? "" : `${formatNumber(snapshot.overage_count)} used`
-
-// A quota without a second line keeps its overage count beside the permission.
-const formatOverage = (snapshot: QuotaSnapshot): string => {
-  const used = formatOverageUsed(snapshot)
-  return used === "" ? formatPermitted(snapshot) : `${formatPermitted(snapshot)}, ${used}`
-}
+  snapshot.overage_count === null || snapshot.overage_count === 0 ? "" : `${formatNumber(snapshot.overage_count)} overage used`
 
 interface QuotaRow {
   id: string
   snapshot: QuotaSnapshot | null
-  // The line under a limited quota, holding GitHub's percent left, so the row itself stays narrow.
-  continuation?: boolean
 }
 
-// GitHub's percent_remaining, on its own line under the quota it belongs to.
-const formatPercentLeft = (snapshot: QuotaSnapshot): string => `${formatNumber(snapshot.percent_remaining)}% left`
+// A quota's details below its row, one per line: GitHub's percent left for a limited quota, then the
+// overage used and the credits used when GitHub reports them. They sit outside the table's columns,
+// so a long number never widens the table.
+const quotaDetails = (snapshot: QuotaSnapshot | null): Array<string> => {
+  if (snapshot === null) {
+    return []
+  }
 
-const hasPercentLine = (snapshot: QuotaSnapshot | null): boolean => snapshot !== null && snapshot.unlimited !== true
+  const details: Array<string> = []
+  if (snapshot.unlimited !== true) {
+    details.push(`${formatNumber(snapshot.percent_remaining)}% left`)
+  }
+
+  const used = formatOverageUsed(snapshot)
+  if (used !== "") {
+    details.push(used)
+  }
+
+  if (snapshot.credits_used !== null && snapshot.credits_used !== undefined) {
+    details.push(`${formatNumber(snapshot.credits_used)} credits used`)
+  }
+
+  return details
+}
 
 /** The report as text lines. Kept free of IO, so it is tested without a terminal. */
 export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode = unicodeEnabled()): Array<string> => {
@@ -203,24 +215,14 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
   // The known ids first, in their fixed order, whatever order the object holds its keys in.
   const known: Array<string> = [...knownQuotaIds]
   const ids = [...known, ...Object.keys(usage.quota_snapshots).filter((id) => !known.includes(id))]
-  const rows: Array<QuotaRow> = ids.flatMap((id) => {
-    const snapshot = usage.quota_snapshots[id] ?? null
-    const row: QuotaRow = { id, snapshot }
-    return hasPercentLine(snapshot) ? [row, { id, snapshot, continuation: true }] : [row]
-  })
+  const rows: Array<QuotaRow> = ids.map((id) => ({ id, snapshot: usage.quota_snapshots[id] ?? null }))
 
   const columns: Array<TableColumn<QuotaRow>> = [
-    { header: "QUOTA", align: "left", cell: (row) => row.continuation === true ? "" : row.id },
+    { header: "QUOTA", align: "left", cell: (row) => row.id },
     {
       header: "LEFT",
       align: "left",
-      cell: (row) => {
-        if (row.snapshot === null) {
-          return notReported
-        }
-
-        return row.continuation === true ? formatPercentLeft(row.snapshot) : formatLeft(row.snapshot, unicode)
-      },
+      cell: (row) => row.snapshot === null ? notReported : formatLeft(row.snapshot, unicode),
       tone: (row) => {
         if (row.snapshot === null) {
           return "muted"
@@ -230,39 +232,21 @@ export const renderCopilotUsage = (usage: CopilotUsage, color = false, unicode =
         return state === undefined ? undefined : lowTones[state]
       },
     },
-    {
-      header: "OVERAGE",
-      align: "left",
-      cell: (row) => {
-        if (row.snapshot === null) {
-          return ""
-        }
-
-        // A limited quota has a second line, which carries the overage count so the row stays narrow.
-        if (hasPercentLine(row.snapshot)) {
-          return row.continuation === true ? formatOverageUsed(row.snapshot) : formatPermitted(row.snapshot)
-        }
-
-        return formatOverage(row.snapshot)
-      },
-    },
+    { header: "OVERAGE", align: "left", cell: (row) => row.snapshot === null ? "" : formatPermitted(row.snapshot) },
   ]
 
-  // Only a token-billed quota reports credits, so the column appears only when one does.
-  if (rows.some((row) => row.snapshot?.credits_used !== null && row.snapshot?.credits_used !== undefined)) {
-    columns.push({
-      header: "CREDITS",
-      align: "right",
-      cell: (row) => row.continuation === true || row.snapshot?.credits_used == null ? "" : formatNumber(row.snapshot.credits_used),
-    })
-  }
+  // The table without details, then each quota's details under its row, indented to the LEFT column.
+  const [header, ...body] = renderTable(columns, rows, color)
+  const detailIndent = " ".repeat(2 + columnWidths(columns, rows)[0] + 2)
+  const detailLines = (row: QuotaRow): Array<string> => quotaDetails(row.snapshot).map((detail) => `${detailIndent}${printableCell(detail)}`)
+  const table = [header, ...body.flatMap((line, index) => [line, ...detailLines(rows[index])])]
 
   const lines = [heading("Copilot plan", `${shown(usage.copilot_plan)} · resets ${shown(usage.quota_reset_date)}`)]
   if (usage.access_type_sku !== null) {
     lines.push(`SKU ${usage.access_type_sku}`)
   }
 
-  return [...lines, "", ...renderTable(columns, rows, color)]
+  return [...lines, "", ...table]
 }
 
 // A stalled connection fails with a clear line instead of waiting for the socket timeouts.

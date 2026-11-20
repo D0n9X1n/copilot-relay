@@ -330,8 +330,9 @@ SKU copilot_enterprise_seat
                         91.92531% left
 ```
 
-A limited quota shows what is left of its entitlement, with GitHub's percent left
-on the line below. A quota below 20% left is marked `!`, and below 5% `✗` (`x`
+A limited quota shows what is left of its entitlement. Its details follow on their
+own lines under it: GitHub's percent left, then the overage used and the credits
+used when GitHub reports them. A quota below 20% left is marked `!`, and below 5% `✗` (`x`
 where the terminal cannot show `✗`); color only adds emphasis. Numbers get thousands separators and
 keep every decimal GitHub sent; `--json` prints them as GitHub sent them.
 
