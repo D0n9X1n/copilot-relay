@@ -331,6 +331,54 @@ test("the slots are canonicalized once per catalog and other names every time", 
   assert.equal(normalizeCopilotModelId("gpt-6-astra"), "GPT-6-Astra")
 })
 
+// Why: a slot's pins belong to its routing generation. After a reload replaces the slot, the retired
+// spelling is an ordinary name again, while a request still running on the old routing keeps its pin.
+test("a retired slot loses its pin when routing is reloaded, with and without a catalog", () => {
+  for (const withCatalog of [true, false]) {
+    if (withCatalog) {
+      useCatalog([["retired-slot", 1_000_000], ["replacement-slot", 1_000_000], ["claude-opus-5.5", 1_000_000]])
+    } else {
+      delete runtimeState.modelCatalog
+    }
+
+    runtimeState.modelRouting = { gptModel: "retired-slot", opusModel: "claude-opus-5.5" }
+    const oldSnapshot = snapshotRuntimeState()
+    withRuntimeState(oldSnapshot, () => routeModelId("sonnet"))
+
+    runtimeState.modelRouting = { gptModel: "replacement-slot", opusModel: "claude-opus-5.5" }
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+
+    const before = modelNormalizations()
+    withRuntimeState(snapshotRuntimeState(), () => {
+      normalizeCopilotModelId("retired-slot")
+      normalizeCopilotModelId("retired-slot")
+    })
+    assert.equal(modelNormalizations() - before, 2, `retired slot, catalog ${withCatalog}`)
+
+    // A request still running on the old routing keeps the pin its generation prepared.
+    const oldBefore = modelNormalizations()
+    withRuntimeState(oldSnapshot, () => normalizeCopilotModelId("retired-slot"))
+    assert.equal(modelNormalizations() - oldBefore, 0, `in-flight old routing, catalog ${withCatalog}`)
+  }
+})
+
+// Why: pins live only with a routing generation's preparation, so many reloads with distinct slots
+// leave nothing behind once their routing objects are gone.
+test("distinct slots across many reloads do not keep earlier slots' pins", () => {
+  useCatalog([["claude-opus-5.5", 1_000_000]])
+  for (let index = 0; index < 50; index++) {
+    runtimeState.modelRouting = { gptModel: `reload-slot-${index}`, opusModel: "claude-opus-5.5" }
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  }
+
+  const before = modelNormalizations()
+  for (let index = 0; index < 49; index++) {
+    normalizeCopilotModelId(`reload-slot-${index}`)
+  }
+
+  assert.equal(modelNormalizations() - before, 49)
+})
+
 // Why: no cache is keyed by client-supplied names, so an oversized model name is canonicalized each
 // time it is looked up and kept by nothing once its request settles.
 test("an oversized model name is canonicalized each time and not cached", () => {
