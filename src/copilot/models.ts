@@ -90,12 +90,12 @@ const parseBilling = (billing: unknown): { price?: ModelPrice; multiplier?: numb
 
   if (prices && isPositiveInteger(batchSize) && isPrice(prices.input_price) && isPrice(prices.output_price)) {
     const perMillion = (hundredths: number) => hundredths / 100 * (1_000_000 / batchSize)
-    return {
-      price: {
-        input: perMillion(prices.input_price),
-        output: perMillion(prices.output_price),
-        ...(isPrice(prices.cache_price) && { cache: perMillion(prices.cache_price) }),
-      },
+    const input = perMillion(prices.input_price)
+    const output = perMillion(prices.output_price)
+    const cache = isPrice(prices.cache_price) ? perMillion(prices.cache_price) : undefined
+    // A price too large to convert is no price: fall back to the multiplier, if any.
+    if (isPrice(input) && isPrice(output)) {
+      return { price: { input, output, ...(isPrice(cache) && { cache }) } }
     }
   }
 

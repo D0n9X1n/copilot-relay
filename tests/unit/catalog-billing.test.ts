@@ -106,6 +106,22 @@ test("a model whose prices are all zero, with batch_size 0, costs nothing rather
   assert.deepEqual(models.get("gpt-4.1")?.price, { input: 0, output: 0, cache: 0 })
 })
 
+test("a price that converts to infinity is dropped, and a valid multiplier is used instead", async () => {
+  const models = await loadCatalog([
+    entry("huge-with-multiplier", { multiplier: 0.33, token_prices: { batch_size: 1, default: { input_price: 1e308, output_price: 1 } } }),
+    entry("huge-alone", { token_prices: { batch_size: 1, default: { input_price: 1e308, output_price: 1 } } }),
+    entry("huge-cache", { token_prices: { batch_size: 1, default: { input_price: 0.0008, output_price: 0.004, cache_price: 1e308 } } }),
+  ])
+
+  assert.equal(models.get("huge-with-multiplier")?.price, undefined)
+  assert.equal(models.get("huge-with-multiplier")?.multiplier, 0.33)
+  assert.equal(models.get("huge-alone")?.price, undefined)
+  assert.equal(models.get("huge-alone")?.multiplier, undefined)
+  const huge = models.get("huge-cache")?.price
+  assert.ok(huge !== undefined && Number.isFinite(huge.input) && Number.isFinite(huge.output))
+  assert.equal(huge.cache, undefined)
+})
+
 test("missing or malformed billing leaves cost absent, never zero", async () => {
   const models = await loadCatalog([
     entry("none"),
