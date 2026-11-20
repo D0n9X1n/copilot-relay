@@ -236,7 +236,7 @@ test("catalog parsing keeps missing and malformed metadata unknown; empty, false
     },
     refresh: async () => {},
   }, async () => {
-    const catalog = await loadCopilotModelCatalog(configFor("absent"))
+    const catalog = await loadCopilotModelCatalog(configFor("absent"), undefined)
 
     for (const id of ["absent", "true", "null-item", "mixed", "null-effort", "null-supports"]) {
       assert.deepEqual(catalog.models.get(id), {})

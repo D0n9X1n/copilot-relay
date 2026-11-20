@@ -310,7 +310,7 @@ for (const model of ["gpt-6-astra", "claude-opus-5", "claude-opus-5.5"]) {
 
       try {
         // The catalog fetch stays the only upstream request until the /v1/messages call below.
-        await loadCopilotModelCatalog(config)
+        await loadCopilotModelCatalog(config, undefined)
         const app = createServer(config)
 
         const models = await (await app.fetch(new Request("http://localhost/v1/models"))).json() as {

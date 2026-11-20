@@ -1,5 +1,5 @@
 import { publishCopilotModelCatalog, type ProxyConfig } from "~/lib/config"
-import { getUpstreamDeadline, withOwnedUpstreamDeadline } from "~/lib/deadline"
+import { withUpstreamDeadline } from "~/lib/deadline"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import {
@@ -8,7 +8,6 @@ import {
   type ModelTokenLimits,
   type ReasoningEffort,
 } from "~/lib/models"
-import { getRequestTrace } from "~/lib/request-trace"
 import { getRuntimeState, runtimeState } from "~/lib/state"
 import {
   createCopilotRequestSignal,
@@ -249,12 +248,12 @@ const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): s
 // The x-github-api-version the /models request sends.
 const catalogApiVersion = "2026-06-01"
 
-// The catalog request runs under its caller's deadline: a relay request's, or the one a command or
-// preflight owns. Called outside both, it owns one deadline for the request and its body, and
-// disposes it when the load settles.
+// The catalog request never starts a timer. Its caller passes the signal of the operation it runs
+// in: a relay request's, which the trace's deadline joins, or the deadline a command or preflight
+// owns. Without one, as for a direct embedder, the load is bounded only by the trace if any.
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
-  callerSignal?: AbortSignal,
+  callerSignal: AbortSignal | undefined,
 ): Promise<CopilotModelCatalog> {
   const provider = getCopilotProviderContext(config)
   const pending = pendingCatalogs.get(config)
@@ -262,8 +261,8 @@ export async function loadCopilotModelCatalog(
     return pending.promise
   }
 
-  const load = async () => {
-    const signal = createCopilotRequestSignal(callerSignal, config.upstreamTimeoutMs)
+  const promise = (async () => {
+    const signal = createCopilotRequestSignal(callerSignal)
     const response = await fetchCopilot(
       provider,
       "/models",
@@ -324,10 +323,7 @@ export async function loadCopilotModelCatalog(
     }
 
     return catalog
-  }
-
-  const hasDeadline = getRequestTrace()?.upstreamDeadline !== undefined || getUpstreamDeadline() !== undefined
-  const promise = hasDeadline ? load() : withOwnedUpstreamDeadline(config.upstreamTimeoutMs, load)
+  })()
   pendingCatalogs.set(config, { baseUrl: provider.baseUrl, promise })
 
   try {
@@ -339,9 +335,15 @@ export async function loadCopilotModelCatalog(
   }
 }
 
+// A command's catalog load outside the relay, such as `models` or `setup`: it owns one deadline,
+// disposed once the load has settled.
+export const loadStandaloneModelCatalog = (config: ProxyConfig): Promise<CopilotModelCatalog> =>
+  withUpstreamDeadline(config.upstreamTimeoutMs, (signal) => loadCopilotModelCatalog(config, signal))
+
 export async function ensureCopilotModelCatalog(
   config: ProxyConfig,
   model: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Admission fixes capabilities for every pass, even if discovery omitted the target.
   if (pinnedCatalogs.has(config)) {
@@ -366,7 +368,7 @@ export async function ensureCopilotModelCatalog(
     }
   }
 
-  await loadCopilotModelCatalog(config)
+  await loadCopilotModelCatalog(config, signal)
   if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
     throw new Error("Copilot base URL changed during model discovery; retry the request.")
   }
@@ -376,8 +378,9 @@ export async function boundModelOutputTokens(
   config: ProxyConfig,
   model: string,
   requested: number | null | undefined,
+  signal?: AbortSignal,
 ): Promise<number | null | undefined> {
-  await ensureCopilotModelCatalog(config, model)
+  await ensureCopilotModelCatalog(config, model, signal)
 
   const limits = getCachedCopilotModel(config, model)?.limits
   if (!limits || !isPositiveInteger(requested)) {

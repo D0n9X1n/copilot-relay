@@ -12,13 +12,13 @@ process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
 
-const { createUpstreamDeadline, upstreamDeadlineCounts } = await import("../../src/copilot/client")
-const { withUpstreamDeadline } = await import("../../src/lib/deadline")
-const { loadCopilotModelCatalog } = await import("../../src/copilot/models")
+const { createUpstreamDeadline, upstreamDeadlineCounts } = await import("../../src/lib/deadline")
+const { loadCopilotModelCatalog, loadStandaloneModelCatalog } = await import("../../src/copilot/models")
 const { createServer } = await import("../../src/server")
 const { getRequestTrace, withRecordedTransport } = await import("../../src/lib/request-trace")
 const { runtimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
+const { HTTPError } = await import("../../src/lib/error")
 
 const provider = "https://deadline.invalid"
 const model = "gpt-6-astra"
@@ -187,14 +187,14 @@ test("a stream that stalls after its headers is cut off at the request's deadlin
   })
 })
 
-test("a catalog load inside an operation uses its deadline and starts no timer of its own", async (t) => {
+// A failed reply whose body never ends until its request's signal aborts, as a stalled upstream sends it.
+test("a catalog load given its caller's signal starts no timer of its own", async (t) => {
   const timeouts = t.mock.method(AbortSignal, "timeout")
 
   for (const outcome of ["success", "error", "abort"] as const) {
     const config = configFor(5000)
-    const owner = createUpstreamDeadline(config.upstreamTimeoutMs)
-    const before = upstreamDeadlineCounts()
     const cancel = new AbortController()
+    const before = upstreamDeadlineCounts()
 
     const load = withRecordedTransport({
       fetch: async (request) => {
@@ -206,7 +206,7 @@ test("a catalog load inside an operation uses its deadline and starts no timer o
         return outcome === "success" ? catalog() : new Response("boom", { status: 400 })
       },
       refresh: noRefresh,
-    }, () => withUpstreamDeadline(owner.signal, () => loadCopilotModelCatalog(config, cancel.signal)))
+    }, () => loadCopilotModelCatalog(config, cancel.signal))
 
     if (outcome === "success") {
       await load
@@ -214,26 +214,30 @@ test("a catalog load inside an operation uses its deadline and starts no timer o
       await assert.rejects(load)
     }
 
-    owner.dispose()
-    const after = upstreamDeadlineCounts()
-    assert.equal(after.created - before.created, 0, `${outcome}: the loader creates no deadline of its own`)
+    assert.deepEqual(upstreamDeadlineCounts(), before, `${outcome}: the loader creates no deadline of its own`)
   }
 
-  assert.equal(timeouts.mock.callCount(), 0, "no per-call timer inside an operation")
+  assert.equal(timeouts.mock.callCount(), 0, "no per-call timer")
 })
 
-test("a catalog load outside any request or operation owns one deadline and disposes it", async (t) => {
+test("a standalone catalog load owns one deadline and disposes it once the load has settled", async (t) => {
   const timeouts = t.mock.method(AbortSignal, "timeout")
+
   const before = upstreamDeadlineCounts()
+  await withRecordedTransport({ fetch: async () => catalog(), refresh: noRefresh }, () => loadStandaloneModelCatalog(configFor(5000)))
+  let after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 1, "success: one deadline")
+  assert.equal(after.disposed - before.disposed, 1, "success: disposed")
 
-  await withRecordedTransport({
-    fetch: async () => catalog(),
+  // A reply that never arrives is aborted at the deadline.
+  await assert.rejects(withRecordedTransport({
+    fetch: (request) => new Promise((_resolve, reject) => request.signal?.addEventListener("abort", () => reject(request.signal?.reason), { once: true })),
     refresh: noRefresh,
-  }, () => loadCopilotModelCatalog(configFor(5000)))
+  }, () => loadStandaloneModelCatalog(configFor(30))), (error: InstanceType<typeof HTTPError>) => error.response.status === 504)
+  after = upstreamDeadlineCounts()
+  assert.equal(after.created - before.created, 2, "abort: one deadline")
+  assert.equal(after.disposed - before.disposed, 2, "abort: disposed")
 
-  const after = upstreamDeadlineCounts()
-  assert.equal(after.created - before.created, 1)
-  assert.equal(after.disposed - before.disposed, 1)
   assert.equal(timeouts.mock.callCount(), 0)
 })
 
@@ -353,4 +357,65 @@ test("a real upstream 504 before the probe's deadline is reported as the upstrea
 
   assert.match(output, /Upstream timeout \(504\)/)
   assert.doesNotMatch(output, /Timed out/)
+})
+
+const { validateUpstream } = await import("../../src/lib/preflight")
+const { createChatCompletions } = await import("../../src/copilot/chat")
+
+const nativeMessage = () => Response.json({
+  id: "msg_ok",
+  type: "message",
+  role: "assistant",
+  model: "claude-opus-5.5",
+  content: [{ type: "text", text: "OK" }],
+  stop_reason: "end_turn",
+  stop_sequence: null,
+  usage: { input_tokens: 1, output_tokens: 1 },
+})
+
+test("preflight owns one deadline across discovery and every model check", async (t) => {
+  const timeouts = t.mock.method(AbortSignal, "timeout")
+  runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
+  runtimeState.upstreamBaseUrl = provider
+  const paths: Array<string> = []
+  const before = upstreamDeadlineCounts()
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      if (request.path === "/models") {
+        return catalog()
+      }
+
+      return request.path === "/v1/messages" ? nativeMessage() : completed()
+    },
+    refresh: noRefresh,
+  }, () => validateUpstream(configFor(5000), "low"))
+
+  const after = upstreamDeadlineCounts()
+  assert.deepEqual(paths, ["/models", "/responses", "/v1/messages"])
+  assert.equal(after.created - before.created, 1, "one deadline for the whole preflight")
+  assert.equal(after.disposed - before.disposed, 1)
+  assert.equal(timeouts.mock.callCount(), 0, "no per-call timer")
+})
+
+test("a Copilot call given its caller's signal starts no timer of its own", async (t) => {
+  const timeouts = t.mock.method(AbortSignal, "timeout")
+  const config: ProxyConfig = {
+    ...configFor(500),
+    modelCatalog: { baseUrl: provider, models: new Map([[model, { type: "chat", supportedEndpoints: ["/responses"] }]]) },
+  }
+  const before = upstreamDeadlineCounts()
+
+  await withRecordedTransport({
+    fetch: async () => completed(),
+    refresh: noRefresh,
+  }, () => createChatCompletions(config, {
+    model,
+    max_tokens: 16,
+    messages: [{ role: "user", content: "hello" }],
+  }, { signal: new AbortController().signal, timeoutMs: 500 }))
+
+  assert.deepEqual(upstreamDeadlineCounts(), before)
+  assert.equal(timeouts.mock.callCount(), 0)
 })

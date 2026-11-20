@@ -1,8 +1,6 @@
 // One upstream deadline per operation: a relay request, a CLI command's catalog load, preflight or a
 // model probe. The operation owns the timer and disposes it when it settles, so a finished request
 // holds no timer and nothing that timer would keep alive.
-import { AsyncLocalStorage } from "node:async_hooks"
-
 export interface UpstreamDeadline {
   // Aborts with a TimeoutError when the time runs out; never aborts for a deadline of 0.
   signal: AbortSignal
@@ -43,18 +41,12 @@ export const createUpstreamDeadline = (timeoutMs: number): UpstreamDeadline => {
   }
 }
 
-const operationDeadline = new AsyncLocalStorage<AbortSignal>()
-
-// Runs `run` with `signal` as the upstream deadline every Copilot call inside it uses.
-export const withUpstreamDeadline = <T>(signal: AbortSignal, run: () => T): T => operationDeadline.run(signal, run)
-
-export const getUpstreamDeadline = (): AbortSignal | undefined => operationDeadline.getStore()
-
-// Creates a deadline, runs `run` under it, and disposes it however `run` ends.
-export const withOwnedUpstreamDeadline = async <T>(timeoutMs: number, run: () => Promise<T>): Promise<T> => {
+// Creates a deadline, gives `run` its signal, and disposes it however `run` ends. `run` must have
+// read or cancelled every body it fetched by then: the deadline no longer bounds what is left.
+export const withUpstreamDeadline = async <T>(timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
   const deadline = createUpstreamDeadline(timeoutMs)
   try {
-    return await withUpstreamDeadline(deadline.signal, run)
+    return await run(deadline.signal)
   } finally {
     deadline.dispose()
   }

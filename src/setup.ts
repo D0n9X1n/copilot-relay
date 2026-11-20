@@ -2,8 +2,7 @@
 // Codex app at this relay, on macOS, Linux and Windows.
 import { defineCommand } from "citty"
 
-import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
-import { withOwnedUpstreamDeadline } from "~/lib/deadline"
+import { loadStandaloneModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { getRelayBaseUrl } from "~/lib/address"
 import { readAppConfig } from "~/lib/app-config"
 import { setupProxyAuth, signInLines } from "~/lib/auth"
@@ -136,7 +135,7 @@ export const setup = defineCommand({
           onDeviceCode: (url, code) => console.error(signInLines(url, code).join("\n")),
         })
         // The catalog load owns one upstream deadline, disposed when it settles.
-        return await withOwnedUpstreamDeadline(config.upstreamTimeoutMs, () => loadCopilotModelCatalog(config))
+        return await loadStandaloneModelCatalog(config)
       })
     } catch {
       console.error("Could not read Copilot's model catalog; writing model IDs without names or context sizes.")

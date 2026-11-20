@@ -1,8 +1,7 @@
 import { defineCommand } from "citty"
 
 import { selectCopilotEndpoint } from "~/copilot/endpoint"
-import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
-import { withOwnedUpstreamDeadline } from "~/lib/deadline"
+import { loadStandaloneModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { readAppConfig, type AppConfig } from "~/lib/app-config"
 import { setupProxyAuth, signInLines } from "~/lib/auth"
 import { readProxyConfig, type ProxyConfig } from "~/lib/config"
@@ -241,7 +240,7 @@ export const models = defineCommand({
 
         failure = "Could not fetch upstream model catalog"
         // The catalog load owns one upstream deadline, disposed before any --deep probe starts.
-        const catalog = await withOwnedUpstreamDeadline(config.upstreamTimeoutMs, () => loadCopilotModelCatalog(config))
+        const catalog = await loadStandaloneModelCatalog(config)
         return { appConfig, config, catalog }
       }
 

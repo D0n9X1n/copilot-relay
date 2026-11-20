@@ -153,7 +153,7 @@ responsesRoutes.post("/responses", async (c) => {
   const config = c.get("config")
   const requestId = c.get("requestId")
   const trace = c.get("requestTrace")
-  const signal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
+  const signal = createCopilotRequestSignal(c.req.raw.signal)
 
   let response: Response
   let stream = false
@@ -161,7 +161,7 @@ responsesRoutes.post("/responses", async (c) => {
     const payload = parseCodexPayload(await c.req.text())
     stream = payload.stream === true
 
-    const route = await resolveCodexModel(config, payload.model)
+    const route = await resolveCodexModel(config, payload.model, signal)
     const capabilities = getCachedCopilotModel(config, route.model)
     const subagent = readSubagent(c.req.header("x-openai-subagent"))
     const initiator = getCodexInitiator(payload.input, subagent)
