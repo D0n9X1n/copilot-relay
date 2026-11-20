@@ -236,7 +236,14 @@ export const createServer = (config: ProxyConfig) => {
     // Each request keeps the policy it was admitted with, even across a hot reload.
     const policy = snapshotProxyConfig(config)
     const runtime = snapshotRuntimeState()
-    const trace = await RequestTrace.create(c.get("requestId"), c.req.raw, policy, runtime, !isReplayTransport() && isDebugLogging())
+    const trace = await RequestTrace.create(
+      c.get("requestId"),
+      c.req.raw,
+      policy,
+      runtime,
+      !isReplayTransport() && isDebugLogging(),
+      c.env?.upstreamDeadline,
+    )
     c.set("config", policy)
     c.set("requestTrace", trace)
     c.req.raw = trace.captureRequest(c.req.raw)

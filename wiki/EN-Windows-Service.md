@@ -336,6 +336,12 @@ or `powershell.exe`. Re-register with the `node.exe` action above.
 **`LastTaskResult` is `1`.** Preflight failed: expired auth or no network. Read
 today's log, then `copilot-relay auth`.
 
+**`copilot-relay auth` or `start` stops at the device code until you press
+Enter.** Most likely, though not yet confirmed, the console's QuickEdit mode
+paused output after a click in the window; press Esc or Enter to resume. Sign-in itself is bounded and never waits past the
+device code's expiry. See "Sign-in waits or seems stuck" in
+[Logs and troubleshooting](EN-Logging-Troubleshooting.md).
+
 **`LastTaskResult` is `267009`.** Not an error — `SCHED_S_TASK_RUNNING`, the task
 is currently running.
 

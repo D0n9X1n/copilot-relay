@@ -4,6 +4,7 @@ import type { Stats } from "node:fs"
 import path from "node:path"
 
 import type { ProxyConfig } from "./config"
+import { createUpstreamDeadline } from "./deadline"
 import { sameFile, sameOpenedFile } from "./file-identity"
 import { log, registerLogSecret } from "./log"
 import { formatLogDate, paths } from "./paths"
@@ -433,6 +434,11 @@ export class RequestTrace {
   readonly finished: Promise<void>
   readonly controller = new AbortController()
   readonly signal: AbortSignal
+  // The request's upstream deadline. It covers every Copilot call the request makes and never aborts
+  // the trace itself, so the route still delivers its own timeout error. Released when the client
+  // response settles, not when capture writes finish.
+  upstreamDeadline: AbortSignal | undefined
+  private releaseDeadline: () => void = () => {}
   private resolveFinished!: () => void
   private queue: Promise<void> = Promise.resolve()
   private queuedBytes = 0
@@ -612,6 +618,7 @@ export class RequestTrace {
     this.protectCredential(request.headers.get("x-api-key") ?? undefined)
 
     this.signal = AbortSignal.any([request.signal, this.controller.signal])
+    this.upstreamDeadline = undefined
     this.finished = new Promise((resolve) => {
       this.resolveFinished = resolve
     })
@@ -659,6 +666,7 @@ export class RequestTrace {
         error: errorName(this.signal.reason),
       }
       this.clientSettled = true
+      this.releaseDeadline()
       for (const cancel of this.abortBodies) {
         cancel()
       }
@@ -680,9 +688,23 @@ export class RequestTrace {
     config: ProxyConfig,
     runtime: RuntimeState,
     capture: boolean,
+    // A deadline the caller owns, such as a model probe's; otherwise the trace arms and owns one.
+    upstreamDeadline?: AbortSignal,
   ): Promise<RequestTrace> {
     const trace = new RequestTrace(id, request, config, runtime)
     trace.captureRequested = capture
+    if (upstreamDeadline) {
+      trace.upstreamDeadline = upstreamDeadline
+    } else {
+      const deadline = createUpstreamDeadline(config.upstreamTimeoutMs)
+      trace.upstreamDeadline = deadline.signal
+      trace.releaseDeadline = deadline.dispose
+    }
+
+    // A request already aborted before the trace existed releases it at once.
+    if (trace.clientSettled) {
+      trace.releaseDeadline()
+    }
 
     // Observers retain a handle; awaiting settlement here would deadlock response consumption.
     traceObserver.getStore()?.(trace)
@@ -749,6 +771,7 @@ export class RequestTrace {
       observer.finish()
       this.manifest.outcome = observer.fields
       this.clientSettled = true
+      this.releaseDeadline()
       this.finalizeIfReady()
     }
 

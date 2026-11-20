@@ -12,9 +12,10 @@ import { loadCopilotModelCatalog, resolveModelReasoningEffort } from "~/copilot/
 import { requireCopilotEndpoint } from "~/copilot/endpoint"
 import { createChatCompletions } from "~/copilot/chat"
 import { handleNativeMessages } from "~/copilot/native"
+import { withUpstreamDeadline } from "~/lib/deadline"
 
-const ensureRequiredModels = async (config: ProxyConfig): Promise<void> => {
-  const catalog = await loadCopilotModelCatalog(config)
+const ensureRequiredModels = async (config: ProxyConfig, signal: AbortSignal): Promise<void> => {
+  const catalog = await loadCopilotModelCatalog(config, signal)
   const requiredModels = getUpstreamModelIds()
   const missingModels = requiredModels.filter((model) => !catalog.models.has(model))
 
@@ -53,6 +54,7 @@ const createProbePayload = (model: string) => ({
 const validateModelRequest = async (
   config: ProxyConfig,
   model: string,
+  signal: AbortSignal,
 ): Promise<void> => {
   // Report the effort actually sent. Without a client request this cannot throw: it is
   // the configured default, or undefined for a model that advertises no effort support.
@@ -62,7 +64,7 @@ const validateModelRequest = async (
     const selection = requireCopilotEndpoint(config, model)
 
     if (selection.endpoint === "/v1/messages") {
-      await handleNativeMessages(config, createProbePayload(model), { requestId: randomUUID() })
+      await handleNativeMessages(config, createProbePayload(model), { requestId: randomUUID(), signal })
     } else {
       const response = await createChatCompletions(
         config,
@@ -70,6 +72,7 @@ const validateModelRequest = async (
         {
           client: "generic",
           requestedModel: model,
+          signal,
           timeoutMs: config.upstreamTimeoutMs,
         },
       )
@@ -92,20 +95,24 @@ const validateModelRequest = async (
   }
 }
 
+// Preflight is one operation with one upstream deadline: the catalog load and every model's check
+// share it, and each failed reply's body is read before it is disposed.
 export const validateUpstream = async (
   config: ProxyConfig,
   thinkEffort: ConfiguredReasoningEffort,
 ): Promise<void> => {
   log.info("Running upstream preflight")
-  await ensureRequiredModels(config)
+  await withUpstreamDeadline(config.upstreamTimeoutMs, async (signal) => {
+    await ensureRequiredModels(config, signal)
 
-  // Scope the configured default as this check's fallback rather than an explicit
-  // client control, so a model that advertises no effort support receives none. Each check's
-  // request and result records go to the log file alone; the console gets one line for all.
-  await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
-    for (const model of getUpstreamModelIds()) {
-      await withoutConsoleLogging(() => validateModelRequest(config, model))
-    }
+    // Scope the configured default as this check's fallback rather than an explicit
+    // client control, so a model that advertises no effort support receives none. Each check's
+    // request and result records go to the log file alone; the console gets one line for all.
+    await withRuntimeState({ ...snapshotRuntimeState(), thinkEffort }, async () => {
+      for (const model of getUpstreamModelIds()) {
+        await withoutConsoleLogging(() => validateModelRequest(config, model, signal))
+      }
+    })
   })
 
   log.info(`Preflight OK: ${getUpstreamModelIds().join(", ")}`)

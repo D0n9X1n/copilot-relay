@@ -1917,6 +1917,8 @@ test("POST /v1/messages reports only a typed prompt to Copilot as the person's",
         method: "POST",
       }))
       assert.equal(response.status, 200)
+      // Reading the body to its end settles the request and releases its upstream deadline.
+      await response.text()
       return mock.requests.slice(before).filter((request) => request.path !== "/models")
     }
 

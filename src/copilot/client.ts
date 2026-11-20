@@ -58,14 +58,15 @@ const shouldRetryResponse = (response: Response): boolean =>
   // signals, such as "unsupported_api_for_model", that callers need to inspect.
   response.status >= 500 && response.status <= 599
 
-export const createCopilotRequestSignal = (
-  signal?: AbortSignal,
-  timeoutMs = copilotRequestTimeoutMs,
-): AbortSignal | undefined => {
+// The signal a Copilot call uses: its caller's signal and, inside a relay request, the request's
+// own signal and upstream deadline. It never starts a timer: the operation that owns the call owns
+// the deadline (see ~/lib/deadline) and passes its signal down.
+export const createCopilotRequestSignal = (signal?: AbortSignal): AbortSignal | undefined => {
+  const trace = getRequestTrace()
   const signals = [
     signal,
-    getRequestTrace()?.signal,
-    timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+    trace?.signal,
+    trace?.upstreamDeadline,
   ].filter((value): value is AbortSignal => value !== undefined)
 
   if (signals.length === 0) {
@@ -348,7 +349,7 @@ export const fetchCopilot = async (
   }
 
   const timeoutMs = options.timeoutMs ?? copilotRequestTimeoutMs
-  const signal = createCopilotRequestSignal(options.signal, timeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
   let lastError: unknown
   let transientRetries = 0
   let authRecoveryUsed = false

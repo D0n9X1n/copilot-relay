@@ -195,11 +195,12 @@ interface RelayProcess {
 }
 
 // The argv shape `status` recognizes for a source checkout: node --import tsx src/main.ts start.
-const spawnRelay = (home: RelayHome): RelayProcess => {
+// stdin "pipe" leaves an open stdin that nothing writes to, as a terminal nobody types in.
+const spawnRelay = (home: RelayHome, stdin: "ignore" | "pipe" = "ignore"): RelayProcess => {
   const child = spawn(process.execPath, ["--import", "tsx", entry, "start"], {
     cwd,
     env: home.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [stdin, "pipe", "pipe"],
   })
   let output = ""
   let spawnFailed = false
@@ -398,6 +399,30 @@ test("a relay with an apiKey admits only keyed clients and applies a rotated key
     const headers = JSON.stringify(request.headers)
     assert.ok(!headers.includes(firstKey) && !headers.includes(secondKey), `${request.method} ${request.url}`)
   }
+})
+
+// Why: startup must never wait for input. With an open stdin that nothing writes to, it reaches
+// listening on its own; nobody has to press Enter.
+test("start reaches listening with an open stdin that receives nothing", { timeout: 240_000 }, async (t) => {
+  const upstream = await fakeCopilot(t)
+  const port = await freePort()
+  const home = await relayHome({ tokens: true })
+  t.after(() => removeHome(home.home))
+
+  await fs.writeFile(home.configPath, [
+    "host: 127.0.0.1",
+    `port: ${port}`,
+    `copilotBaseUrl: ${upstream.baseUrl}`,
+    "claudeSetup: false",
+    "codexSetup: false",
+    "gptModel: gpt-fixture-chat",
+    "opusModel: claude-opus-5.5",
+    "",
+  ].join("\n"))
+
+  const relay = spawnRelay(home, "pipe")
+  t.after(() => stopRelay(relay))
+  await waitFor(relay, async () => /copilot-relay listening on/.test(relay.output()))
 })
 
 test("startup warns about a listener beyond loopback without an apiKey and never prints a key", { timeout: 240_000 }, async (t) => {

@@ -71,12 +71,16 @@ export interface CodexRoute {
  * to the configured gptModel, as Claude Code's aliases do. Without a catalog a non-Claude name is
  * forwarded unchanged.
  */
-export const resolveCodexModel = async (config: ProxyConfig, requested: string): Promise<CodexRoute> => {
+export const resolveCodexModel = async (
+  config: ProxyConfig,
+  requested: string,
+  signal?: AbortSignal,
+): Promise<CodexRoute> => {
   const normalized = normalizeCopilotModelId(requested)
 
   // Refreshes the catalog once when it does not list the model, so a newly added model is found,
   // then pins it: the effort clamp later reads the same capabilities that admitted the request.
-  await ensureCopilotModelCatalog(config, normalized)
+  await ensureCopilotModelCatalog(config, normalized, signal)
   pinCopilotModelCatalog(config)
 
   if (isClaudeModelId(normalized)) {

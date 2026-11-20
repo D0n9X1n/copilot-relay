@@ -30,6 +30,7 @@ const {
 } = await import("../../src/claude/web-search")
 const { createClaudeToolNameMapper } = await import("../../src/claude/tool-names")
 const { HTTPError } = await import("../../src/lib/error")
+const { withUpstreamDeadline } = await import("../../src/lib/deadline")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { runtimeState } = await import("../../src/lib/state")
@@ -590,12 +591,12 @@ test("times out hung Claude WebSearch upstream calls", async () => {
   const mock = await startHangingMockCopilot()
   try {
     await assert.rejects(
-      createClaudeWebSearchExecution(
+      withUpstreamDeadline(500, (signal) => createClaudeWebSearchExecution(
         createConfig(mock.baseUrl),
         payload,
         "GitHub Copilot docs",
-        { timeoutMs: 500 },
-      ),
+        { signal, timeoutMs: 500 },
+      )),
       (error: unknown) =>
         error instanceof HTTPError && error.response.status === 504,
     )

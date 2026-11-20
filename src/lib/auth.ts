@@ -6,7 +6,8 @@ import type { ProxyConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
 import { log, registerLogSecret } from "~/lib/log"
 import { ensurePaths, homeRelative, paths } from "~/lib/paths"
-import { fetchUpstream } from "~/lib/upstream-dispatcher"
+import { terminalText } from "~/lib/terminal"
+import { fetchUpstream, type UpstreamRequestInit } from "~/lib/upstream-dispatcher"
 
 const copilotVersion = "0.26.7"
 const editorPluginVersion = `copilot-chat/${copilotVersion}`
@@ -29,6 +30,85 @@ interface DeviceCodeResponse {
 
 interface AccessTokenResponse {
   access_token?: string
+  error?: string
+}
+
+// Each GitHub auth call, body read included, gets this long; a stalled connection then fails
+// instead of holding startup.
+export const authCallTimeoutMs = 30_000
+
+// How long to poll when GitHub's device code reports no usable expires_in.
+export const defaultDeviceFlowSeconds = 900
+
+// The time the device flow waits on, so a test can drive it. `deadline` returns a signal that
+// aborts after `ms`; `sleep` rejects when its signal aborts.
+export interface AuthClock {
+  now: () => number
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>
+  deadline: (ms: number) => AbortSignal
+}
+
+export type AuthFetch = (url: string, init: UpstreamRequestInit) => Promise<Response>
+
+const realClock: AuthClock = {
+  now: () => Date.now(),
+  sleep: (ms, signal) => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason)
+    }
+
+    signal?.addEventListener("abort", onAbort, { once: true })
+  }),
+  deadline: (ms) => AbortSignal.timeout(ms),
+}
+
+const quickEditTipText = "Tip: a click in this window pauses output; press Esc or Enter to resume."
+
+// In a Windows console with QuickEdit on, a click to copy the device code selects text and pauses the
+// process's console writes until Esc or Enter, which looks like sign-in hanging. The tip is shown
+// only on a Windows terminal, the stream that prints the code.
+export const quickEditTip = (
+  stream: { isTTY?: boolean },
+  platform: NodeJS.Platform = process.platform,
+): string | undefined => platform === "win32" && stream.isTTY === true ? quickEditTipText : undefined
+
+// What `setup` and `models --deep` print to stderr for the device code, the tip first.
+export const signInLines = (
+  url: string,
+  code: string,
+  stream: { isTTY?: boolean } = process.stderr,
+  platform: NodeJS.Platform = process.platform,
+): Array<string> => {
+  const tip = quickEditTip(stream, platform)
+  const line = `Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`
+  return tip === undefined ? [line] : [tip, line]
+}
+
+// One GitHub auth call and its JSON body, bounded by `bound` and by the caller's own signal.
+const fetchAuthJson = async <T>(
+  url: string,
+  init: UpstreamRequestInit,
+  bound: AbortSignal,
+  fetch: AuthFetch,
+  failure: string,
+): Promise<T> => {
+  const signal = init.signal ? AbortSignal.any([init.signal, bound]) : bound
+  const response = await fetch(url, { ...init, signal })
+  if (!response.ok) {
+    throw new HTTPError(failure, response)
+  }
+
+  return (await response.json()) as T
 }
 
 interface CopilotTokenResponse {
@@ -66,11 +146,6 @@ const standardHeaders = () => ({
   accept: "application/json",
   "content-type": "application/json",
 })
-
-const sleep = (ms: number) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
 
 const readGitHubToken = async () => {
   await ensurePaths()
@@ -196,35 +271,35 @@ const githubHeaders = (githubToken: string, vsCodeVersion: string) => ({
   "x-vscode-user-agent-library-version": "electron-fetch",
 })
 
-const getDeviceCode = async (): Promise<DeviceCodeResponse> => {
-  const response = await fetchUpstream(`${githubBaseUrl}/login/device/code`, {
+export const getDeviceCode = (clock: AuthClock = realClock, fetch: AuthFetch = fetchUpstream): Promise<DeviceCodeResponse> =>
+  fetchAuthJson<DeviceCodeResponse>(`${githubBaseUrl}/login/device/code`, {
     method: "POST",
     headers: standardHeaders(),
     body: JSON.stringify({
       client_id: githubClientId,
       scope: githubAppScopes,
     }),
-  })
+  }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get device code")
 
-  if (!response.ok) {
-    throw new HTTPError("Failed to get device code", response)
-  }
-
-  return (await response.json()) as DeviceCodeResponse
+// When the device code expires, read once, as soon as the code arrives: time spent printing the
+// prompt, which a paused console can stretch, counts against it.
+export const deviceFlowEndsAt = (deviceCode: DeviceCodeResponse, clock: AuthClock = realClock): number => {
+  const expiresIn = Number.isFinite(deviceCode.expires_in) && deviceCode.expires_in > 0 ?
+      deviceCode.expires_in
+    : defaultDeviceFlowSeconds
+  return clock.now() + expiresIn * 1000
 }
 
-const pollAccessToken = async (
+// One poll's answer. GitHub reports pending, slow_down, access_denied and expired_token in the body,
+// whatever the status, so every body is decoded except a 5xx's, which is retried. Undefined means
+// there is no answer to act on: a network failure, a 5xx, or a body that is not JSON or stalls.
+const pollOnce = async (
   deviceCode: DeviceCodeResponse,
-): Promise<string> => {
-  // GitHub asks clients to poll at `interval`; add a one-second cushion so
-  // long waits do not accidentally trigger OAuth `slow_down` responses.
-  const sleepDuration = (deviceCode.interval + 1) * 1000
-
-  // Device auth is intentionally user-driven: keep polling until the user
-  // finishes authorization in the browser instead of treating pending states
-  // as fatal startup errors.
-  while (true) {
-    const response = await fetchUpstream(`${githubBaseUrl}/login/oauth/access_token`, {
+  bound: AbortSignal,
+  fetch: AuthFetch,
+): Promise<AccessTokenResponse | undefined> => {
+  try {
+    const response = await fetch(`${githubBaseUrl}/login/oauth/access_token`, {
       method: "POST",
       headers: standardHeaders(),
       body: JSON.stringify({
@@ -232,38 +307,85 @@ const pollAccessToken = async (
         device_code: deviceCode.device_code,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       }),
+      signal: bound,
     })
-
-    if (!response.ok) {
-      await sleep(sleepDuration)
-      continue
+    if (response.status >= 500) {
+      await response.body?.cancel().catch(() => {})
+      return undefined
     }
 
-    const json = (await response.json()) as AccessTokenResponse
-    if (json.access_token) {
-      return json.access_token
-    }
-
-    await sleep(sleepDuration)
+    return (await response.json()) as AccessTokenResponse
+  } catch {
+    return undefined
   }
 }
 
-const getGitHubUser = async (
+// Polls until the user authorizes in the browser or the device code expires at `endsAt`. Each poll
+// and each wait is cut to the time left, so the flow never outlives the code. A pending answer waits
+// the interval; slow_down adds five seconds to it for good; a denied or expired code stops at once;
+// a network failure, a 5xx or an unreadable answer is retried at the current interval.
+export const pollAccessToken = async (
+  deviceCode: DeviceCodeResponse,
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
+  endsAt: number = deviceFlowEndsAt(deviceCode, clock),
+): Promise<string> => {
+  let intervalMs = (Number.isFinite(deviceCode.interval) && deviceCode.interval > 0 ? deviceCode.interval : 5) * 1000
+  const timeLeft = () => endsAt - clock.now()
+
+  while (timeLeft() > 0) {
+    const answer = await pollOnce(deviceCode, clock.deadline(Math.min(authCallTimeoutMs, timeLeft())), fetch)
+    if (answer?.access_token) {
+      return answer.access_token
+    }
+
+    if (answer?.error === "access_denied") {
+      throw new Error("GitHub sign-in was denied in the browser. Run copilot-relay auth to try again.")
+    }
+
+    if (answer?.error === "expired_token") {
+      throw new Error("The GitHub device code expired before sign-in finished. Run copilot-relay auth to get a new one.")
+    }
+
+    if (answer?.error === "slow_down") {
+      intervalMs += 5000
+    }
+
+    const wait = Math.min(intervalMs, timeLeft())
+    if (wait <= 0) {
+      break
+    }
+
+    await clock.sleep(wait)
+  }
+
+  throw new Error("GitHub sign-in did not finish before the device code expired. Run copilot-relay auth to try again.")
+}
+
+// The device flow: request a code, fix its expiry, show it with `announce`, then poll until it is
+// used or expires.
+export const signInWithDeviceCode = async (
+  announce: (deviceCode: DeviceCodeResponse) => void,
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
+): Promise<string> => {
+  const deviceCode = await getDeviceCode(clock, fetch)
+  const endsAt = deviceFlowEndsAt(deviceCode, clock)
+  announce(deviceCode)
+  return pollAccessToken(deviceCode, clock, fetch, endsAt)
+}
+
+export const getGitHubUser = (
   githubToken: string,
   vsCodeVersion: string,
   signal?: AbortSignal,
-): Promise<GitHubUserResponse> => {
-  const response = await fetchUpstream(`${githubApiBaseUrl}/user`, {
+  clock: AuthClock = realClock,
+  fetch: AuthFetch = fetchUpstream,
+): Promise<GitHubUserResponse> =>
+  fetchAuthJson<GitHubUserResponse>(`${githubApiBaseUrl}/user`, {
     headers: githubHeaders(githubToken, vsCodeVersion),
-    signal,
-  })
-
-  if (!response.ok) {
-    throw new HTTPError("Failed to get GitHub user", response)
-  }
-
-  return (await response.json()) as GitHubUserResponse
-}
+    ...(signal && { signal }),
+  }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get GitHub user")
 
 const getCopilotToken = async (
   githubToken: string,
@@ -315,16 +437,23 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
     return existingToken
   }
 
-  const deviceCode = await getDeviceCode()
-  if (options.onDeviceCode) {
-    options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
-  } else {
+  const githubToken = await signInWithDeviceCode((deviceCode) => {
+    if (options.onDeviceCode) {
+      options.onDeviceCode(deviceCode.verification_uri, deviceCode.user_code)
+      return
+    }
+
+    // The logger prints this prompt on the stream it writes info to: stdout, unless a command such
+    // as models has sent it to stderr. That stream decides whether the tip is shown.
+    const tip = quickEditTip(log.options.stdout ?? process.stdout)
+    if (tip !== undefined) {
+      log.info(tip)
+    }
+
     log.info(
       `Open ${deviceCode.verification_uri} and enter code ${deviceCode.user_code}`,
     )
-  }
-
-  const githubToken = await pollAccessToken(deviceCode)
+  })
   await writeGitHubToken(githubToken)
   log.info(`GitHub token synced to ${homeRelative(paths.githubTokenPath)}`)
 

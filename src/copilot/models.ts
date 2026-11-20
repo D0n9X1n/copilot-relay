@@ -1,4 +1,5 @@
 import { publishCopilotModelCatalog, type ProxyConfig } from "~/lib/config"
+import { withUpstreamDeadline } from "~/lib/deadline"
 import { HTTPError } from "~/lib/error"
 import { log } from "~/lib/log"
 import {
@@ -13,6 +14,7 @@ import {
   fetchCopilot,
   getCopilotProviderContext,
   readCopilotJson,
+  toCopilotAbortHTTPError,
 } from "./client"
 
 export interface CopilotModel {
@@ -250,8 +252,45 @@ const parseReasoningEfforts = (supports: Record<string, unknown> | undefined): s
 // The x-github-api-version the /models request sends.
 const catalogApiVersion = "2026-06-01"
 
+// A failed reply's body is read here, under the signal that bounds the request, so it never outlives
+// the deadline that owns it. The error carries a copy its handler can read or drop at any time. A
+// timeout or cancel during the read is reported as one, like any other aborted Copilot call.
+const settleErrorResponse = async (
+  response: Response,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): Promise<Response> => {
+  let body: ArrayBuffer | null
+  try {
+    body = await response.arrayBuffer()
+  } catch (error) {
+    const abortError = toCopilotAbortHTTPError(error, signal, timeoutMs)
+    if (abortError) {
+      throw abortError
+    }
+
+    body = null
+  }
+
+  // The copy is already decoded and complete, so the framing headers no longer describe it.
+  const headers = new Headers(response.headers)
+  for (const name of ["content-encoding", "content-length", "transfer-encoding"]) {
+    headers.delete(name)
+  }
+
+  return new Response(body !== null && body.byteLength > 0 ? body : null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
+
+// The catalog request never starts a timer. Its caller passes the signal of the operation it runs
+// in: a relay request's, which the trace's deadline joins, or the deadline a command or preflight
+// owns. Without one, as for a direct embedder, the load is bounded only by the trace if any.
 export async function loadCopilotModelCatalog(
   config: ProxyConfig,
+  callerSignal: AbortSignal | undefined,
 ): Promise<CopilotModelCatalog> {
   const provider = getCopilotProviderContext(config)
   const pending = pendingCatalogs.get(config)
@@ -260,7 +299,7 @@ export async function loadCopilotModelCatalog(
   }
 
   const promise = (async () => {
-    const signal = createCopilotRequestSignal(undefined, config.upstreamTimeoutMs)
+    const signal = createCopilotRequestSignal(callerSignal)
     const response = await fetchCopilot(
       provider,
       "/models",
@@ -272,7 +311,10 @@ export async function loadCopilotModelCatalog(
       { signal, timeoutMs: config.upstreamTimeoutMs, apiVersion: catalogApiVersion },
     )
     if (!response.ok) {
-      throw new HTTPError("Failed to validate upstream models", response)
+      throw new HTTPError(
+        "Failed to validate upstream models",
+        await settleErrorResponse(response, signal, config.upstreamTimeoutMs),
+      )
     }
 
     const payload = await readCopilotJson<unknown>(
@@ -333,9 +375,15 @@ export async function loadCopilotModelCatalog(
   }
 }
 
+// A command's catalog load outside the relay, such as `models` or `setup`: it owns one deadline,
+// disposed once the load has settled, a failed reply's body included.
+export const loadStandaloneModelCatalog = (config: ProxyConfig): Promise<CopilotModelCatalog> =>
+  withUpstreamDeadline(config.upstreamTimeoutMs, (signal) => loadCopilotModelCatalog(config, signal))
+
 export async function ensureCopilotModelCatalog(
   config: ProxyConfig,
   model: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   // Admission fixes capabilities for every pass, even if discovery omitted the target.
   if (pinnedCatalogs.has(config)) {
@@ -360,7 +408,7 @@ export async function ensureCopilotModelCatalog(
     }
   }
 
-  await loadCopilotModelCatalog(config)
+  await loadCopilotModelCatalog(config, signal)
   if (config.modelCatalog.baseUrl !== config.copilotBaseUrl) {
     throw new Error("Copilot base URL changed during model discovery; retry the request.")
   }
@@ -370,8 +418,9 @@ export async function boundModelOutputTokens(
   config: ProxyConfig,
   model: string,
   requested: number | null | undefined,
+  signal?: AbortSignal,
 ): Promise<number | null | undefined> {
-  await ensureCopilotModelCatalog(config, model)
+  await ensureCopilotModelCatalog(config, model, signal)
 
   const limits = getCachedCopilotModel(config, model)?.limits
   if (!limits || !isPositiveInteger(requested)) {

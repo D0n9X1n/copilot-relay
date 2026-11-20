@@ -17,6 +17,7 @@ process.env.USERPROFILE = tempHome
 const { createChatCompletions } = await import("../../src/copilot/chat")
 const { isRetryableFetchError } = await import("../../src/copilot/client")
 const { HTTPError } = await import("../../src/lib/error")
+const { withUpstreamDeadline } = await import("../../src/lib/deadline")
 const { runtimeState } = await import("../../src/lib/state")
 const { log, setLogLevel, flushLogs } = await import("../../src/lib/log")
 const { registerSensitiveOrigin } = await import("../../src/lib/redact")
@@ -306,8 +307,8 @@ test("info logs show requested and effective effort without normal request paylo
 })
 
 // Why: a hung upstream fetch should be aborted instead of leaving the Claude
-// request open forever. Production uses a 180s timeout; this uses a tiny timeout
-// so the regression stays fast.
+// request open forever. The operation that makes the call owns its deadline, 180s in
+// production; this one owns a tiny deadline so the regression stays fast.
 test("times out hung chat completions upstream calls", async () => {
   const mock = await startHangingMockCopilot()
   try {
@@ -321,12 +322,12 @@ test("times out hung chat completions upstream calls", async () => {
     }
 
     await assert.rejects(
-      createChatCompletions(config, {
+      withUpstreamDeadline(500, (signal) => createChatCompletions(config, {
         max_tokens: 16,
         messages: [{ role: "user", content: "hang" }],
         model: "claude-opus-4.8",
         stream: false,
-      }, { client: "claude", requestedModel: "opus", timeoutMs: 500 }),
+      }, { client: "claude", requestedModel: "opus", signal, timeoutMs: 500 })),
       (error: unknown) =>
         error instanceof HTTPError && error.response.status === 504,
     )

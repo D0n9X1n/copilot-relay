@@ -587,7 +587,7 @@ claudeRoutes.post("/messages", async (c) => {
   const initiator = c.env?.relayProbe === true ? "agent" : getClaudeRequestInitiator(receivedPayload)
   // Every route reads the system prompt without Claude Code's billing line.
   const claudePayload = removeBillingLine(receivedPayload)
-  const requestSignal = createCopilotRequestSignal(c.req.raw.signal, config.upstreamTimeoutMs)
+  const requestSignal = createCopilotRequestSignal(c.req.raw.signal)
   let upstreamModel = ""
   try {
     // Rejects a malformed effort control with HTTP 400 before any other work.
@@ -611,7 +611,7 @@ claudeRoutes.post("/messages", async (c) => {
 
     // Discover, then pin, then select: every later pass reuses the capabilities that
     // admitted this request, and capability errors stay HTTP 400 before SSE opens.
-    await ensureCopilotModelCatalog(config, upstreamModel)
+    await ensureCopilotModelCatalog(config, upstreamModel, requestSignal)
     requestSignal?.throwIfAborted()
     pinCopilotModelCatalog(config)
 

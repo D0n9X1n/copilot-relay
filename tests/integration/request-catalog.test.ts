@@ -444,7 +444,7 @@ test("concurrent request traces discover independently while same-config callers
     refresh: async () => {
       throw new Error("Unexpected credential refresh")
     },
-  }, () => Promise.allSettled([loadCopilotModelCatalog(first), loadCopilotModelCatalog(first)]))))
+  }, () => Promise.allSettled([loadCopilotModelCatalog(first, undefined), loadCopilotModelCatalog(first, undefined)]))))
 
   try {
     await started.promise

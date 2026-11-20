@@ -2,10 +2,10 @@
 // Codex app at this relay, on macOS, Linux and Windows.
 import { defineCommand } from "citty"
 
-import { loadCopilotModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
+import { loadStandaloneModelCatalog, type CopilotModelCatalog } from "~/copilot/models"
 import { getRelayBaseUrl } from "~/lib/address"
 import { readAppConfig } from "~/lib/app-config"
-import { setupProxyAuth } from "~/lib/auth"
+import { setupProxyAuth, signInLines } from "~/lib/auth"
 import { isSetupTarget, runSetup, setupTargets, type SetupOutcome, type SetupTarget } from "~/lib/client-setup"
 import { readProxyConfig } from "~/lib/config"
 import { flushLogs, registerLogSecret, scrubLogSecrets, setLogLevel, withoutConsoleLogging } from "~/lib/log"
@@ -163,9 +163,10 @@ export const setup = defineCommand({
       catalog = await withoutConsoleLogging(async () => {
         // Logging is off here, which would hide the sign-in prompt, so the code is printed directly.
         await setupProxyAuth(config, {
-          onDeviceCode: (url, code) => console.error(`Sign in: open ${terminalText(url)} and enter ${terminalText(code)}.`),
+          onDeviceCode: (url, code) => console.error(signInLines(url, code).join("\n")),
         })
-        return await loadCopilotModelCatalog(config)
+        // The catalog load owns one upstream deadline, disposed when it settles.
+        return await loadStandaloneModelCatalog(config)
       })
     } catch {
       console.error("Could not read Copilot's model catalog; writing model IDs without names or context sizes.")

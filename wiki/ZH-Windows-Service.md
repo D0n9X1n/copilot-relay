@@ -310,6 +310,11 @@ Unregister-ScheduledTask -TaskName "copilot-relay" -Confirm:$false
 **`LastTaskResult` 是 `1`。** 启动前校验失败：鉴权过期或没有网络。看当天日志，然后执行
 `copilot-relay auth`。
 
+**`copilot-relay auth` 或 `start` 停在设备码，按 Enter 才继续。** 最可能（尚未确认）
+的原因是在窗口里点了一下，控制台的快速编辑模式暂停了输出；按 Esc 或 Enter 即可恢复。登录本身有时间上限，不会
+超过设备码的有效期。详见[日志与问题排查](ZH-Logging-Troubleshooting.md)中的“登录一直等待
+或看起来卡住”。
+
 **`LastTaskResult` 是 `267009`。** 不是错误 —— `SCHED_S_TASK_RUNNING`，任务正在运行。
 
 **`LastTaskResult` 是 `267011`。** `SCHED_S_TASK_NOT_SCHEDULED` —— 按计划运行所需的某个

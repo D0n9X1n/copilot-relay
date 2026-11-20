@@ -57,7 +57,7 @@ const loadCatalog = async (data: Array<unknown>) => {
   }
 
   try {
-    return (await loadCopilotModelCatalog(config)).models
+    return (await loadCopilotModelCatalog(config, undefined)).models
   } finally {
     server.closeAllConnections()
     await new Promise<void>((resolve) => server.close(() => resolve()))

@@ -688,7 +688,7 @@ export const createClaudeWebSearchExecution = async (
   options: { requestId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<WebSearchExecutionResult> => {
   const backendModel = getWebSearchBackendModel(config)
-  const signal = createCopilotRequestSignal(options.signal, options.timeoutMs)
+  const signal = createCopilotRequestSignal(options.signal)
   const backend = getCachedCopilotModel(config, backendModel)
   const hasIncompatibleType = backend?.type !== undefined && backend.type !== "chat"
   const excludesResponses = backend?.supportedEndpoints !== undefined

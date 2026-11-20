@@ -1,4 +1,5 @@
 import { advertisesNoReasoningEffort, type CopilotModel } from "~/copilot/models"
+import { createUpstreamDeadline } from "~/lib/deadline"
 import type { ProxyConfig } from "~/lib/config"
 import { log, scrubLogSecrets, withoutConsoleLogging, withoutLogging } from "~/lib/log"
 import { RequestTrace, withTraceObserver, type RequestDiagnostic } from "~/lib/request-trace"
@@ -260,7 +261,11 @@ export async function probeModels(
         row.status = "SKIPPED"
         row.detail = "unsupported-effort"
       } else {
-        const signal = AbortSignal.any([controller.signal, totalDeadline, AbortSignal.timeout(timeoutMs)])
+        // The probe owns one upstream deadline. It reaches the relay through the in-process binding,
+        // never as the request's signal, so a timeout ends the upstream call without aborting the
+        // client trace. The request's own signal carries only the interrupt and the command-wide cap.
+        const probeDeadline = createUpstreamDeadline(timeoutMs)
+        const signal = AbortSignal.any([controller.signal, totalDeadline])
         runtimeState.modelRouting = { gptModel: id, opusModel: id }
         const started = performance.now()
         row.sent = true
@@ -291,7 +296,7 @@ export async function probeModels(
                 messages: [{ role: "user", content: "Reply with OK only." }],
               }),
             }),
-            { relayProbe: true },
+            { relayProbe: true, upstreamDeadline: probeDeadline.signal },
           )
           const body: unknown = await response.json().catch(() => undefined)
           return { response, body }
@@ -303,16 +308,16 @@ export async function probeModels(
           const { response, body } = await withoutLogging(() => withTraceObserver(observeTrace, sendProbe))
           completedFetch = true
           row.status = "FAIL"
-          if (signal.aborted) {
-            if (controller.signal.aborted) {
-              row.status = "NOT_TESTED"
-              row.detail = "cancelled"
-            } else if (totalDeadline.aborted) {
-              row.status = "NOT_TESTED"
-              row.detail = "total-deadline"
-            } else {
-              row.detail = "probe-timeout"
-            }
+          if (controller.signal.aborted) {
+            row.status = "NOT_TESTED"
+            row.detail = "cancelled"
+          } else if (totalDeadline.aborted) {
+            row.status = "NOT_TESTED"
+            row.detail = "total-deadline"
+          } else if (!response.ok && probeDeadline.signal.aborted) {
+            // The relay answers its own deadline with 504; only the fired probe deadline tells it
+            // apart from a 504 the upstream sent.
+            row.detail = "probe-timeout"
           } else if (!response.ok) {
             row.detail = httpCategory(response.status)
 
@@ -380,8 +385,10 @@ export async function probeModels(
             row.detail = "total-deadline"
           } else {
             row.status = "FAIL"
-            row.detail = signal.aborted ? "probe-timeout" : "network-or-invalid-response"
+            row.detail = probeDeadline.signal.aborted ? "probe-timeout" : "network-or-invalid-response"
           }
+        } finally {
+          probeDeadline.dispose()
         }
 
         row.latency = Math.round(performance.now() - started)
