@@ -258,15 +258,11 @@ const validateManifest = (value: unknown): CaptureManifest => {
   )
   requireValid(runtime.thinkEffort === undefined || isConfiguredReasoningEffort(runtime.thinkEffort))
   if (runtime.modelRouting !== undefined) {
+    // A capture from a release with a models selection may carry it; replay routes by the two slots.
     requireValid(
       record(runtime.modelRouting)
       && text(runtime.modelRouting.gptModel)
-      && text(runtime.modelRouting.opusModel)
-      && (
-        runtime.modelRouting.models === undefined
-        || runtime.modelRouting.models === "auto"
-        || Array.isArray(runtime.modelRouting.models) && runtime.modelRouting.models.every((id: unknown) => text(id))
-      ),
+      && text(runtime.modelRouting.opusModel),
     )
   }
 
@@ -819,7 +815,10 @@ export const replayCapture = async (target: string): Promise<ReplayResult> => {
       }),
     }
     const runtime = {
-      modelRouting: manifest.runtime.modelRouting,
+      modelRouting: manifest.runtime.modelRouting && {
+        gptModel: manifest.runtime.modelRouting.gptModel,
+        opusModel: manifest.runtime.modelRouting.opusModel,
+      },
       thinkEffort: manifest.runtime.thinkEffort,
       debug: false,
       modelCatalog: catalog,

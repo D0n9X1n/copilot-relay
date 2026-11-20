@@ -527,11 +527,10 @@ test("auth troubleshooting sends users to a probe that reaches upstream", () => 
   }
 })
 
-// Why: Claude Code's gateway discovery keeps only Claude IDs, so a non-Claude
-// model reaches /model only through a user-written modelPicker. Both language
-// guides must give the same complete picker, one row per model `models: auto`
-// exposes against the dated catalog, each non-Claude row naming a model Claude
-// Code already knows in behavesAs.
+// Why: Claude Code's gateway discovery keeps only Claude IDs, so the GPT slot
+// reaches /model by its own name only through a user-written modelPicker. Both
+// language guides must give the same picker, one row per slot, the non-Claude
+// row naming a model Claude Code already knows in behavesAs.
 test("Models guides give the same Claude Code picker in both languages", () => {
   const examples = ["EN-Models.md", "ZH-Models.md"].map((name) => {
     const page = readPage(name)
@@ -544,7 +543,7 @@ test("Models guides give the same Claude Code picker in both languages", () => {
 
     const options = settings.modelPicker.options as Record<string, unknown>[]
 
-    assert.deepEqual(options.map((option) => option.model), ["opus[1m]", "gpt-6.2-astra[1m]", "mai-code-2[1m]", "grok-4.7"])
+    assert.deepEqual(options.map((option) => option.model), ["opus[1m]", "gpt-6.2-astra[1m]"])
     for (const option of options.filter((entry) => entry.model !== "opus[1m]")) {
       assert.equal(typeof option.behavesAs, "string", `${name}: ${String(option.model)} needs behavesAs`)
     }
@@ -552,7 +551,8 @@ test("Models guides give the same Claude Code picker in both languages", () => {
     assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "claude-opus-5.5[1m]")
 
     assert.match(page, /https:\/\/code\.claude\.com\/docs\/en\/settings-reference#modelpicker/)
-    assert.match(page, /^models: auto$/m)
+    assert.doesNotMatch(page, /^models: /m)
+    assert.match(page, /^gptModel: gpt-6\.2-astra$/m)
     return settings
   })
 
@@ -664,7 +664,7 @@ test("both Copilot app guides give the provider settings that reach a relay rout
       "export COPILOT_PROVIDER_TYPE=openai",
       "export COPILOT_PROVIDER_WIRE_API=responses",
       "export COPILOT_PROVIDER_API_KEY=",
-      "export COPILOT_MODEL=gpt-6-astra",
+      "export COPILOT_MODEL=gpt-6.2-astra",
     ]) {
       assert(posix.includes(line), `${name} shell example must set ${line}`)
     }
@@ -675,7 +675,7 @@ test("both Copilot app guides give the provider settings that reach a relay rout
       '$env:COPILOT_PROVIDER_TYPE = "openai"',
       '$env:COPILOT_PROVIDER_WIRE_API = "responses"',
       "$env:COPILOT_PROVIDER_API_KEY = ",
-      '$env:COPILOT_MODEL = "gpt-6-astra"',
+      '$env:COPILOT_MODEL = "gpt-6.2-astra"',
     ]) {
       assert(powershell.includes(line), `${name} PowerShell example must set ${line}`)
     }

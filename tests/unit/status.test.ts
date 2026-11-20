@@ -65,7 +65,6 @@ const baseConfig = toStatusConfig({
   logLevel: "info",
   logRetentionDays: 3,
   opusModel: "claude-opus-5",
-  models: "auto",
   port: 4142,
   thinkEffort: "max",
   upstreamTimeoutSeconds: 180,
@@ -546,7 +545,6 @@ test("renders every resolved config key", () => {
     ["upstreamTimeoutSeconds", "180"],
     ["gptModel", "gpt-5.6-sol"],
     ["opusModel", "claude-opus-5"],
-    ["models", "auto"],
   ]
 
   for (const [key, value] of expected) {
@@ -622,7 +620,7 @@ test("keeps the --json config key set stable when optional keys are unset", () =
     config: Record<string, unknown>
   }
 
-  assert.equal(Object.keys(parsed.config).length, 16)
+  assert.equal(Object.keys(parsed.config).length, 15)
   assert.ok("webSearchBackend" in parsed.config)
   assert.equal(parsed.config.webSearchBackend, null)
   assert.ok("upstreamProxy" in parsed.config)
@@ -645,7 +643,6 @@ test("passes config values through unchanged except unset optional keys", () => 
     logLevel: "debug" as const,
     logRetentionDays: 7,
     opusModel: "opus-x",
-    models: "auto",
     port: 4199,
     thinkEffort: "low" as const,
     upstreamTimeoutSeconds: 42,
@@ -675,7 +672,6 @@ const secretUrlConfig = {
   logLevel: "info" as const,
   logRetentionDays: 3,
   opusModel: "claude-opus-5",
-  models: "auto",
   port: 4142,
   thinkEffort: "max" as const,
   upstreamTimeoutSeconds: 180,
@@ -732,7 +728,7 @@ test("hides copilot base url path, query and fragment in --json output", () => {
 
   const parsed = JSON.parse(serialized) as { config: Record<string, unknown> }
   // Key set and count must not shift just because one value is now redacted.
-  assert.equal(Object.keys(parsed.config).length, 16)
+  assert.equal(Object.keys(parsed.config).length, 15)
   assert.ok(String(parsed.config.copilotBaseUrl).includes("https://gateway.example"))
 })
 
@@ -796,7 +792,6 @@ test("keeps key order and exit codes unchanged under redaction", () => {
     "webSearchBackend",
     "gptModel",
     "opusModel",
-    "models",
   ]
   const positions = order.map((key) => out.indexOf(`    ${key.padEnd(24)}`))
 

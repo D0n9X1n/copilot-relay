@@ -501,7 +501,7 @@ test("capture metadata never records the relay apiKey, whichever header carried 
 const traceCatalog = {
   baseUrl: config.copilotBaseUrl,
   models: new Map([
-    ["claude-test", { limits: { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 }, vendor: "Anthropic" }],
+    ["claude-test", { limits: { max_context_window_tokens: 1000, max_prompt_tokens: 900, max_output_tokens: 8 } }],
     ["gpt-test", { type: "chat", supportedEndpoints: ["/responses"] }],
   ]),
 }

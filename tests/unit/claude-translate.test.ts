@@ -237,3 +237,19 @@ for (const [argumentsText, reason] of [
     assert.ok(!caught.message.includes(argumentsText), "argument text must not be echoed")
   })
 }
+
+test("translateToOpenAI sends the admitted model instead of routing the payload's name again", () => {
+  runtimeState.modelRouting = { gptModel: "gpt-6.2-astra", opusModel: "claude-opus-5.5" }
+  try {
+    const payload = translateToOpenAI(
+      { model: "opus", max_tokens: 16, messages: [{ role: "user", content: "hi" }] },
+      undefined,
+      undefined,
+      { upstreamModel: "gpt-6.2-astra" },
+    )
+
+    assert.equal(payload.model, "gpt-6.2-astra")
+  } finally {
+    delete runtimeState.modelRouting
+  }
+})

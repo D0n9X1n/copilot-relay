@@ -3,9 +3,8 @@
 The relay serves the OpenAI Responses API at `POST /v1/responses`, the only wire
 API Codex speaks. Codex CLI, the Codex app, and the IDE extension read the same
 `~/.codex/config.toml` and run the same `codex app-server`, so one setup covers all
-three. Codex offers the same exposed models Claude Code does, `gptModel`,
-`opusModel` and the models the `models` key selects (see [Models](EN-Models.md)),
-and needs no ChatGPT sign-in.
+three. Codex offers the same two models Claude Code does, `gptModel` and
+`opusModel` (see [Models](EN-Models.md)), and needs no ChatGPT sign-in.
 
 This was checked with Codex CLI 0.164.0 against a live relay: `codex exec` turns on
 GPT-6 Astra and on Claude Opus 5.5 each created a file with `apply_patch`, ran a
@@ -21,15 +20,15 @@ has run here.
 
 `start` writes two things:
 
-- `~/.copilot-relay/codex-models.json`: the model list Codex shows, holding the
-  exposed models as plain Copilot IDs without `[1m]`, with `gptModel` first as the
-  default.
+- `~/.copilot-relay/codex-models.json`: the model list Codex shows, holding
+  `gptModel` and `opusModel` as plain Copilot IDs without `[1m]`, with `gptModel`
+  first as the default.
 - In `~/.codex/config.toml`:
 
 ```toml
 model_provider = "copilot-relay"
 model_catalog_json = "/Users/you/.copilot-relay/codex-models.json"
-model = "gpt-6-astra"
+model = "gpt-6.2-astra"
 
 [model_providers.copilot-relay]
 # Written by copilot-relay start (codexSetup); edits in this table are replaced on the next start.
@@ -69,9 +68,10 @@ work.
 
 ## Models
 
-The list holds the exposed models: `gptModel` and `opusModel` from `config.yaml`,
-then the models the `models` key selects, as plain Copilot IDs. Change any of them
-and restart the relay to change the list; see [Models](EN-Models.md).
+The list holds `gptModel` and `opusModel` from `config.yaml`, as plain Copilot IDs,
+one entry when both name the same model. Change either and restart the relay to
+change the list; see [Models](EN-Models.md). A Codex `model` setting that is one of
+them is kept; any other is replaced by `gptModel`.
 
 - A model Codex ships itself, such as `gpt-6-astra`, keeps Codex's own entry: its
   tuned instructions, `apply_patch` tool and reasoning levels.

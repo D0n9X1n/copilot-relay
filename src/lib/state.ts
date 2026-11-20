@@ -18,13 +18,31 @@ export const runtimeState: RuntimeState = {}
 const requestState = new AsyncLocalStorage<RuntimeState>()
 export const getRuntimeState = (): RuntimeState => requestState.getStore() ?? runtimeState
 
+// Each routing object's generation: one identity shared by the routing a reload publishes and every
+// request's copy of it, so work prepared for one generation is reused by all of its copies. It is kept
+// beside the object rather than on it, so the routing keeps its two fields in captures and replays.
+const routingGenerations = new WeakMap<ModelRoutingConfig, object>()
+
+export const routingGeneration = (routing: ModelRoutingConfig): object => {
+  const known = routingGenerations.get(routing)
+  if (known !== undefined) {
+    return known
+  }
+
+  const generation = {}
+  routingGenerations.set(routing, generation)
+  return generation
+}
+
 export const snapshotRuntimeState = (): RuntimeState => {
   const state = getRuntimeState()
-
-  return {
-    ...state,
-    ...(state.modelRouting && { modelRouting: { ...state.modelRouting } }),
+  if (state.modelRouting === undefined) {
+    return { ...state }
   }
+
+  const modelRouting = { ...state.modelRouting }
+  routingGenerations.set(modelRouting, routingGeneration(state.modelRouting))
+  return { ...state, modelRouting }
 }
 
 export const withRuntimeState = <T>(state: RuntimeState, run: () => T): T => requestState.run(state, run)

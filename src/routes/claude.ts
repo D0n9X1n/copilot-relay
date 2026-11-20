@@ -12,7 +12,6 @@ import {
 import { removeBillingLine } from "~/claude/billing-line"
 import { getClaudeRequestInitiator } from "~/claude/initiator"
 import {
-  translateModelName,
   translateToClaude,
   translateToOpenAI,
   validateClaudeMessages,
@@ -39,7 +38,7 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getExposedModelIds, getRequestReasoningEffort, normalizeCopilotModelId } from "~/lib/models"
+import { getRequestReasoningEffort, getSlotModelIds, normalizeCopilotModelId, routeModelSlot, slotModelId } from "~/lib/models"
 import { getClaudeTurnEffort, UpstreamToolInputError } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
@@ -306,7 +305,7 @@ const handleClaudeMessageRequest = async (
     { ...decisionPayload, model: upstreamModel },
     undefined,
     toolNameMapper,
-    { endpoint: translationEndpoint(config, upstreamModel) },
+    { endpoint: translationEndpoint(config, upstreamModel), upstreamModel },
   )
   // Stream the preamble while waiting for a search call or terminal; an earlier ordinary tool does not rule search out.
   const canStreamWebSearchDecision = shouldLetModelDecideWebSearch && !!writeEvent
@@ -562,7 +561,7 @@ const handleClaudeMessageRequest = async (
 claudeRoutes.get("/models", (c) =>
   c.json({
     object: "list",
-    data: getExposedModelIds().map((id) => {
+    data: getSlotModelIds().map((id) => {
       const limits = getCachedCopilotModel(c.get("config"), id)?.limits
       return {
         id,
@@ -594,7 +593,9 @@ claudeRoutes.post("/messages", async (c) => {
     // Rejects a malformed effort control with HTTP 400 before any other work.
     getRequestReasoningEffort(claudePayload)
 
-    upstreamModel = translateModelName(claudePayload.model)
+    // One routing decision per request: the slot is chosen here and never again.
+    const slot = routeModelSlot(claudePayload.model)
+    upstreamModel = slotModelId(slot)
     const validate = () => {
       if (shouldUseNativeMessages(config, upstreamModel)) {
         validateNativeMessages(claudePayload)
@@ -614,9 +615,9 @@ claudeRoutes.post("/messages", async (c) => {
     requestSignal?.throwIfAborted()
     pinCopilotModelCatalog(config)
 
-    // Discovery can expose the requested model, so route again against the pinned catalog. This
+    // Discovery can replace the catalog and so the slot's wire spelling; the slot itself stays. This
     // model is the one selected, validated and executed.
-    upstreamModel = translateModelName(claudePayload.model)
+    upstreamModel = slotModelId(slot)
     const selection = requireCopilotEndpoint(config, upstreamModel)
 
     validate()
@@ -744,7 +745,7 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     const claudeBeta = c.req.header("claude-beta")
     // Count the system prompt the routes send, without Claude Code's billing line.
     const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
-    const routedModel = translateModelName(claudePayload.model)
+    const routedModel = slotModelId(routeModelSlot(claudePayload.model))
     const countPayload =
       shouldUseNativeMessages(c.get("config"), routedModel) ?
         {
@@ -764,6 +765,7 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     // Count what the selected route sends, including reminder turns on the Claude chat route.
     const openAIPayload = translateToOpenAI(countPayload, undefined, undefined, {
       endpoint: translationEndpoint(c.get("config"), routedModel),
+      upstreamModel: routedModel,
     })
     const upstreamModel = getCachedCopilotModel(c.get("config"), openAIPayload.model)
     const hasDiscoveredTokenizer =

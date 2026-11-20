@@ -204,8 +204,7 @@ const configRowOrder: Record<keyof StatusConfig, number> = {
   webSearchBackend: 11,
   gptModel: 12,
   opusModel: 13,
-  models: 14,
-  claudeUpstreamApi: 15,
+  claudeUpstreamApi: 14,
 }
 
 const configRowKeys = (
@@ -218,7 +217,6 @@ const unsetConfigText: Partial<Record<keyof StatusConfig, string>> = {
   apiKey: "(unset — clients need no key)",
   upstreamProxy: "(unset — connects directly)",
   webSearchBackend: "(unset — uses gptModel)",
-  models: "(empty — gptModel and opusModel only)",
 }
 
 /**

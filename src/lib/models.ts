@@ -1,19 +1,15 @@
 // Config-driven model routing and think-effort validation.
 import type { CopilotModel } from "~/copilot/models"
-import { getRuntimeState } from "~/lib/state"
+import { getRuntimeState, routingGeneration } from "~/lib/state"
 import { HTTPError } from "~/lib/error"
 
 export const configurableReasoningEfforts = ["low", "medium", "high", "xhigh", "max"] as const
 export type ConfiguredReasoningEffort = typeof configurableReasoningEfforts[number]
 export type ReasoningEffort = "none" | ConfiguredReasoningEffort
 
-export type ModelSelection = "auto" | Array<string>
-
 export interface ModelRoutingConfig {
   gptModel: string
   opusModel: string
-  // Extra exposed models; absent means none.
-  models?: ModelSelection
 }
 
 export interface ModelTokenLimits {
@@ -26,7 +22,7 @@ export interface ModelTokenLimits {
 export const defaultReasoningEffort: ConfiguredReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
-  gptModel: "gpt-6-astra",
+  gptModel: "gpt-6.2-astra",
   opusModel: "claude-opus-5.5",
 }
 
@@ -88,13 +84,13 @@ export const resolveReasoningEffort = (
   requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
 // A catalog fetched before a reload switched upstreams does not describe this one's models.
-const currentCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
+const currentCopilotCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
   const state = getRuntimeState()
   return state.modelCatalog?.baseUrl === state.upstreamBaseUrl ? state.modelCatalog?.models : undefined
 }
 
 // The ID Copilot receives: every [1m] stripped, in the current catalog's casing.
-export const normalizeCopilotModelId = (model: string): string => canonicalModelId(model, currentCatalog())
+export const normalizeCopilotModelId = (model: string): string => canonicalModelId(model, currentCopilotCatalog())
 
 export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
 
@@ -104,7 +100,7 @@ export const isClaudeModelId = (model: string): boolean => model.startsWith("cla
  * unknown window leaves the ID as given. [1m] overrides Claude Code's numeric context setting.
  */
 export const normalizeClaudeModelId = (model: string, contextWindowTokens?: number): string => {
-  const catalog = currentCatalog()
+  const catalog = currentCopilotCatalog()
   const canonical = canonicalModelId(model, catalog)
   const contextWindow = contextWindowTokens ?? catalog?.get(canonical)?.limits?.max_context_window_tokens
   if (contextWindow === undefined) {
@@ -117,121 +113,105 @@ export const normalizeClaudeModelId = (model: string, contextWindowTokens?: numb
 const getConfiguredModelRouting = (): ModelRoutingConfig =>
   getRuntimeState().modelRouting ?? defaultModelRouting
 
-export const getModelRouting = (): ModelRoutingConfig => {
-  const routing = getConfiguredModelRouting()
-  return {
-    ...routing,
-    gptModel: normalizeCopilotModelId(routing.gptModel),
-    opusModel: normalizeCopilotModelId(routing.opusModel),
-  }
-}
-
-interface ExposedModels {
-  catalog: ReadonlyMap<string, CopilotModel> | undefined
+// The two slots in wire spelling, with their lowercase forms for matching a requested name.
+interface PreparedSlots {
   gptModel: string
   opusModel: string
-  models: ModelSelection | undefined
-  upstream: Array<string>
-  claude: Array<string>
-  // Each upstream ID by its lowercase form; the list is deduplicated case-insensitively.
-  byLowercase: Map<string, string>
+  gptKey: string
+  opusKey: string
 }
 
-// The last computed exposed lists. They depend only on the catalog Map and the three routing values,
-// so those are the key: a published catalog is replaced rather than changed, and the routing object
-// is not the key because every request's runtime snapshot copies it.
-let exposedCache: ExposedModels | undefined
-
-const sameSelection = (left: ModelSelection | undefined, right: ModelSelection | undefined): boolean => {
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((id, index) => id === right[index])
-  }
-
-  return left === right
+interface GenerationSlots {
+  byCatalog: WeakMap<ReadonlyMap<string, CopilotModel>, PreparedSlots>
+  withoutCatalog?: PreparedSlots
 }
 
-const exposedModels = (): ExposedModels => {
-  const catalog = currentCatalog()
+// Prepared slots per routing generation and catalog. Every request routes on its own copy of the
+// routing, and copies share their generation, so the slots are normalized once per reload and catalog
+// rather than once per request. Both keys are weak: a generation's entry goes with its last request.
+const preparedSlots = new WeakMap<object, GenerationSlots>()
+let preparations = 0
+
+// Test hook: how many times the slots have been normalized.
+export const slotPreparations = (): number => preparations
+
+const prepareSlots = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel> | undefined): PreparedSlots => {
+  preparations++
+  const gptModel = pinSlotSpelling(routing.gptModel, catalog)
+  const opusModel = pinSlotSpelling(routing.opusModel, catalog)
+  return { gptModel, opusModel, gptKey: gptModel.toLowerCase(), opusKey: opusModel.toLowerCase() }
+}
+
+const getPreparedSlots = (): PreparedSlots => {
   const routing = getConfiguredModelRouting()
-  const cached = exposedCache
-  if (
-    cached !== undefined
-    && cached.catalog === catalog
-    && cached.gptModel === routing.gptModel
-    && cached.opusModel === routing.opusModel
-    && sameSelection(cached.models, routing.models)
-  ) {
-    return cached
+  const catalog = currentCopilotCatalog()
+  const generation = routingGeneration(routing)
+  let slots = preparedSlots.get(generation)
+  if (slots === undefined) {
+    slots = { byCatalog: new WeakMap() }
+    preparedSlots.set(generation, slots)
   }
 
-  const upstream = resolveExposedModels(routing, catalog)
-
-  // A slot keeps its configured spelling here, so a configured [1m] survives while the window is unknown.
-  const slots = [routing.gptModel, routing.opusModel]
-  const claude = upstream.map((id) => {
-    const slot = slots.find((configured) => canonicalModelId(configured, catalog).toLowerCase() === id.toLowerCase())
-    return normalizeClaudeModelId(slot ?? id)
-  })
-
-  // The selection is copied, so changing the configured list in place still misses the cache.
-  exposedCache = {
-    catalog,
-    gptModel: routing.gptModel,
-    opusModel: routing.opusModel,
-    models: Array.isArray(routing.models) ? [...routing.models] : routing.models,
-    upstream,
-    claude,
-    byLowercase: new Map(upstream.map((id) => [id.toLowerCase(), id])),
+  if (catalog === undefined) {
+    slots.withoutCatalog ??= prepareSlots(routing, undefined)
+    return slots.withoutCatalog
   }
-  return exposedCache
+
+  let prepared = slots.byCatalog.get(catalog)
+  if (prepared === undefined) {
+    prepared = prepareSlots(routing, catalog)
+    slots.byCatalog.set(catalog, prepared)
+  }
+
+  return prepared
 }
 
-// Copies, so a caller cannot change the cached lists.
-export const getExposedUpstreamModelIds = (): Array<string> => [...exposedModels().upstream]
+export const getModelRouting = (): ModelRoutingConfig => {
+  const slots = getPreparedSlots()
+  return { gptModel: slots.gptModel, opusModel: slots.opusModel }
+}
 
-export const getExposedModelIds = (): Array<string> => [...exposedModels().claude]
+/**
+ * The models clients are offered: gptModel, then opusModel unless it is the same model, each as
+ * Claude Code sees it. A slot keeps its configured spelling, so a configured [1m] survives while the
+ * window is unknown.
+ */
+export const getSlotModelIds = (): Array<string> => {
+  const routing = getConfiguredModelRouting()
+  const slots = getPreparedSlots()
+  const gpt = normalizeClaudeModelId(routing.gptModel)
+  return slots.opusKey === slots.gptKey ? [gpt] : [gpt, normalizeClaudeModelId(routing.opusModel)]
+}
 
-// Preflight and the tokenizer preload cover only the two slots; extra models load on first use.
+// Preflight and the tokenizer preload cover the two slots.
 export const getUpstreamModelIds = (): Array<string> => {
-  const routing = getModelRouting()
-  return [routing.gptModel, routing.opusModel]
+  const slots = getPreparedSlots()
+  return [slots.gptModel, slots.opusModel]
 }
 
-// An exposed ID goes to itself. Any other name with "opus" goes to opusModel and the rest to
-// gptModel, so Claude Code's picker aliases keep a predictable route.
-export const routeModelId = (model: string): string => {
-  const exposedSet = exposedModels()
-  const requested = canonicalModelId(model.trim(), exposedSet.catalog).toLowerCase()
-  const exposed = exposedSet.byLowercase.get(requested)
-  if (exposed !== undefined) {
-    return exposed
+export type ModelSlot = "gptModel" | "opusModel"
+
+// A slot's own name reaches that slot, opusModel checked first; any other name with "opus" goes to
+// opusModel and the rest to gptModel, so Claude Code's picker aliases keep a predictable route.
+export const routeModelSlot = (model: string): ModelSlot => {
+  const slots = getPreparedSlots()
+  const requested = model.trim().replace(/\[1m\]/gi, "").toLowerCase()
+  if (requested === slots.opusKey) {
+    return "opusModel"
   }
 
-  const routing = getModelRouting()
-  return requested.includes("opus") ? routing.opusModel : routing.gptModel
+  if (requested === slots.gptKey) {
+    return "gptModel"
+  }
+
+  return requested.includes("opus") ? "opusModel" : "gptModel"
 }
 
-const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
-const invalidModelsMessage = "Invalid models: expected auto, empty, or comma-separated Copilot model IDs"
+// A slot's ID in the current catalog's spelling. After discovery replaces the catalog it reads the
+// same slot again, so a chosen slot keeps its route and takes the refreshed spelling.
+export const slotModelId = (slot: ModelSlot): string => getPreparedSlots()[slot]
 
-// The message never repeats the value: it is logged at startup and on reload.
-export const parseModelSelection = (value: string): ModelSelection => {
-  const trimmed = value.trim()
-  if (trimmed.toLowerCase() === "auto") {
-    return "auto"
-  }
-
-  if (trimmed === "") {
-    return []
-  }
-
-  const ids = trimmed.split(",").map((id) => id.trim())
-  if (ids.some((id) => !modelIdPattern.test(id) || id.toLowerCase() === "auto")) {
-    throw new Error(invalidModelsMessage)
-  }
-
-  return ids
-}
+export const routeModelId = (model: string): string => slotModelId(routeModelSlot(model))
 
 // Each catalog's keys by their lowercase form, built on first use. A published catalog is never
 // changed in place, so an index stays valid for as long as its catalog lives.
@@ -256,101 +236,44 @@ const catalogIndex = (catalog: ReadonlyMap<string, CopilotModel>): Map<string, s
   return index
 }
 
+// The slots' spellings are pinned per catalog when the slots are prepared, so the names every request
+// uses are canonicalized once. canonicalModelId depends only on its input and the catalog Map, and a
+// published catalog is replaced rather than changed, so a pin stays valid for as long as its catalog
+// lives. Any other name is canonicalized each time and never kept: a client-supplied name must not
+// outlive its request.
+const pinnedByCatalog = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
+const pinnedWithoutCatalog = new Map<string, string>()
+let normalizations = 0
+
+// Test hook: how many IDs have been canonicalized without a pin.
+export const modelNormalizations = (): number => normalizations
+
+const computeCanonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  normalizations++
+  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
+  return catalog === undefined ? lower : catalogIndex(catalog).get(lower) ?? lower
+}
+
 // Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
 // IDs are lowercase, so an ID the catalog does not list is lowercased.
 export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
-  if (catalog === undefined) {
-    return lower
-  }
-
-  return catalogIndex(catalog).get(lower) ?? lower
+  const pinned = (catalog === undefined ? pinnedWithoutCatalog : pinnedByCatalog.get(catalog))?.get(id)
+  return pinned ?? computeCanonicalModelId(id, catalog)
 }
 
-interface Candidate {
-  id: string
-  model: CopilotModel
-  version: Array<number>
-}
-
-const pickerCategories = ["powerful", "versatile", "lightweight"]
-
-const categoryRank = (model: CopilotModel): number => {
-  const rank = pickerCategories.indexOf(model.pickerCategory ?? "")
-  return rank === -1 ? pickerCategories.length : rank
-}
-
-// Positive when left is newer: versions compare as number tuples, so 10 > 9 and 6.2 > 6.
-const compareVersions = (left: Array<number>, right: Array<number>): number => {
-  for (let index = 0; index < Math.max(left.length, right.length); index++) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0)
-    if (difference !== 0) {
-      return difference
-    }
+// Pins a slot's configured spelling, its wire spelling and their [1m] forms for this catalog, so other
+// names cannot evict them. Only a catalog's own pins are read, so a refreshed catalog computes afresh.
+const pinSlotSpelling = (configured: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  let pins = pinnedWithoutCatalog
+  if (catalog !== undefined) {
+    pins = pinnedByCatalog.get(catalog) ?? new Map()
+    pinnedByCatalog.set(catalog, pins)
   }
 
-  return 0
-}
-
-const isBetterPick = (left: Candidate, right: Candidate): boolean => {
-  const byVersion = compareVersions(left.version, right.version)
-  if (byVersion !== 0) {
-    return byVersion > 0
+  const canonical = pins.get(configured) ?? computeCanonicalModelId(configured, catalog)
+  for (const spelling of [configured, canonical, `${configured}[1m]`, `${canonical}[1m]`]) {
+    pins.set(spelling, canonical)
   }
 
-  const byCategory = categoryRank(right.model) - categoryRank(left.model)
-  if (byCategory !== 0) {
-    return byCategory > 0
-  }
-
-  return left.id < right.id
-}
-
-/** The newest picker-enabled chat model of each vendor except Experimental, in catalog order. */
-export const selectNewestPerVendor = (catalog: ReadonlyMap<string, CopilotModel>): Array<string> => {
-  const best = new Map<string, Candidate>()
-  for (const [id, model] of catalog) {
-    const vendor = model.vendor
-    const version = /\d+(?:\.\d+)*/.exec(id)?.[0].split(".").map(Number)
-    const eligible = model.pickerEnabled === true && model.type === "chat" && vendor !== "Experimental"
-    if (!eligible || vendor === undefined || version === undefined) {
-      continue
-    }
-
-    const candidate = { id, model, version }
-    const current = best.get(vendor)
-    if (current === undefined || isBetterPick(candidate, current)) {
-      best.set(vendor, candidate)
-    }
-  }
-
-  const winners = new Set([...best.values()].map((candidate) => candidate.id))
-  return [...catalog.keys()].filter((id) => winners.has(id))
-}
-
-/**
- * The upstream IDs clients are offered: gptModel, opusModel, then the selection, deduplicated
- * case-insensitively in catalog casing. A listed ID the catalog lacks is skipped; without a
- * catalog, auto adds nothing and every listed ID is kept, lowercased.
- */
-export const resolveExposedModels = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel> | undefined): Array<string> => {
-  const selected = routing.models === "auto" ? selectNewestPerVendor(catalog ?? new Map()) : routing.models ?? []
-  const present = selected.filter((id) => catalog === undefined || catalog.has(canonicalModelId(id, catalog)))
-  const exposed: Array<string> = []
-  for (const id of [routing.gptModel, routing.opusModel, ...present]) {
-    const canonical = canonicalModelId(id, catalog)
-    if (!exposed.some((known) => known.toLowerCase() === canonical.toLowerCase())) {
-      exposed.push(canonical)
-    }
-  }
-
-  return exposed
-}
-
-export const findMissingModels = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, CopilotModel>): Array<string> => {
-  if (!Array.isArray(routing.models)) {
-    return []
-  }
-
-  return routing.models.filter((id) => !catalog.has(canonicalModelId(id, catalog)))
+  return canonical
 }

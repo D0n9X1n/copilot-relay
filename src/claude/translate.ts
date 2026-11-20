@@ -46,6 +46,9 @@ export interface TranslateToOpenAIOptions {
   // on /responses. Only a Claude model sent to /chat/completions with no such fallback
   // gets in-place reminder turns and copilot_cache_control marks.
   endpoint?: CopilotEndpoint
+  // The model admission routed, in wire spelling. Given, it is sent as is and the payload's model is
+  // not routed again.
+  upstreamModel?: string
 }
 
 export function translateToOpenAI(
@@ -54,7 +57,7 @@ export function translateToOpenAI(
   toolNameMapper?: ClaudeToolNameMapper,
   options: TranslateToOpenAIOptions = {},
 ): ChatCompletionsPayload {
-  const model = translateModelName(payload.model)
+  const model = options.upstreamModel ?? translateModelName(payload.model)
   const mapper = toolNameMapper ?? createClaudeToolNameMapper(payload.tools, {
     ...getToolNameMapperOptionsForModel(model),
   })

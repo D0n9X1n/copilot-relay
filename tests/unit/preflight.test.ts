@@ -53,6 +53,8 @@ const startMockCopilot = async (
         data: modelIds.map((id) => ({
           id,
           ...(id.startsWith("claude-") && options.supportedEndpoints && { supported_endpoints: options.supportedEndpoints }),
+          // As the live catalog lists it for the default gptModel.
+          ...(id === "gpt-6.2-astra" && { supported_endpoints: ["/responses", "ws:/responses"] }),
         })),
       }))
       return
@@ -179,13 +181,12 @@ test("preflight uses canonical upstream model ids", async () => {
   }
 })
 
-test("preflight probes the two slots and names selected IDs the catalog lacks", async (t) => {
+test("preflight probes only the two slots, even when the catalog lists more", async (t) => {
   const { log } = await import("../../src/lib/log")
   const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-4.8", "grok-4.7"])
   runtimeState.modelRouting = {
     gptModel: "gpt-6-astra",
     opusModel: "claude-opus-4.8",
-    models: ["grok-4.7", "not-in-catalog"],
   }
   runtimeState.upstreamBaseUrl = mock.baseUrl
   runtimeState.thinkEffort = "max"
@@ -207,8 +208,7 @@ test("preflight probes the two slots and names selected IDs the catalog lacks", 
       request.path === "/models" ? [] : [(request.body as { model?: string }).model]
     )
     assert.deepEqual(probedModels, ["gpt-6-astra", "claude-opus-4.8"])
-    assert.ok(logged.some((line) => /Selected models not in Copilot's catalog, skipped: not-in-catalog$/.test(line)), logged.join("\n"))
-    assert.equal(logged.some((line) => /grok-4\.7/.test(line) && /skipped/.test(line)), false)
+    assert.equal(logged.some((line) => /grok-4\.7/.test(line)), false)
     assert.equal(logged.some((line) => line.includes("test-token")), false)
   } finally {
     delete runtimeState.upstreamBaseUrl
@@ -217,7 +217,7 @@ test("preflight probes the two slots and names selected IDs the catalog lacks", 
 })
 
 test("fresh default preflight probes Opus 5.5 without a context alias", async () => {
-  const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"])
+  const mock = await startMockCopilot(["gpt-6.2-astra", "claude-opus-5.5"])
   runtimeState.thinkEffort = "max"
 
   try {
@@ -239,7 +239,7 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
   test(`preflight probes native Claude with configured effort and 16 tokens in ${claudeUpstreamApi} mode`, async () => {
     // Auto mode needs the catalog to advertise /v1/messages; messages mode goes
     // native without it.
-    const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"], {
+    const mock = await startMockCopilot(["gpt-6.2-astra", "claude-opus-5.5"], {
       supportedEndpoints: claudeUpstreamApi === "auto" ? ["/v1/messages"] : ["/chat/completions"],
     })
     runtimeState.thinkEffort = "max"
@@ -267,7 +267,7 @@ for (const failure of [
   { name: "malformed success", nativeStatus: 200, nativeBody: { choices: [] }, expected: /Invalid native message response/ },
 ]) {
   test(`preflight preserves native ${failure.name} instead of passing the chat endpoint`, async () => {
-    const mock = await startMockCopilot(["gpt-6-astra", "claude-opus-5.5"], {
+    const mock = await startMockCopilot(["gpt-6.2-astra", "claude-opus-5.5"], {
       ...failure, supportedEndpoints: ["/v1/messages"],
     })
 
