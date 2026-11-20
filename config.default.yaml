@@ -83,10 +83,11 @@ webSearchBackend:
 # Explicit alternatives: auto, messages.
 claudeUpstreamApi: chat-completions
 
-# Model routing: requests containing "opus" use opusModel; all others use gptModel.
+# Model routing for Claude requests: a model name equal to gptModel or opusModel uses that model;
+# any other name containing "opus" uses opusModel, and the rest use gptModel.
 #
 # Upstream Copilot model used for non-Opus requests.
 gptModel: gpt-6.2-astra
 
-# Upstream Copilot model used for requests containing "opus".
+# Upstream Copilot model used for Opus requests.
 opusModel: claude-opus-5.5

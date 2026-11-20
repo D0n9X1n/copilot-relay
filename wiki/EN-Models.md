@@ -1,8 +1,9 @@
 # Choose models for each agent
 
-The relay serves two Copilot models: `gptModel` and `opusModel`. Every client
-request reaches one of them, so Claude Code, Codex and Copilot CLI share one
-predictable pair. This page covers the rule, how to pick the two models, the 1M
+The relay serves two Copilot models: `gptModel` and `opusModel`. Every Claude
+request reaches one of them, so Claude Code always works with one predictable pair;
+Codex and the Copilot apps are offered the same two and can also ask for another
+model the catalog lists. This page covers the rule, how to pick the two models, the 1M
 context window, cost, and what to set in each client. Every other key is in
 [Configuration](EN-Configuration.md).
 
