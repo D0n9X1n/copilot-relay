@@ -43,6 +43,8 @@ export interface FetchCopilotOptions {
   requestId?: string
   signal?: AbortSignal
   timeoutMs?: number
+  // The x-github-api-version to send instead of the default; the model catalog asks for a newer one.
+  apiVersion?: string
 }
 
 interface CopilotRequestInit {
@@ -232,7 +234,7 @@ const buildHeaders = (
   headers.set("editor-plugin-version", editorPluginVersion)
   headers.set("user-agent", userAgent)
   headers.set("openai-intent", "conversation-panel")
-  headers.set("x-github-api-version", apiVersion)
+  headers.set("x-github-api-version", options.apiVersion ?? apiVersion)
   headers.set("x-request-id", upstreamRequestId)
   headers.set("x-vscode-user-agent-library-version", "electron-fetch")
 

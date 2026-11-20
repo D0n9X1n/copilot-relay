@@ -90,13 +90,31 @@ const pad = (text: string, width: number, align: "left" | "right"): string => {
   return align === "right" ? spaces + text : text + spaces
 }
 
+const tableCell = <Row>(column: TableColumn<Row>, row: Row): string =>
+  cutCell(printableCell(column.cell(row)), column.maxWidth)
+
+/**
+ * Each column's width: its header and widest cell, and at least the given minimum. A table printed
+ * one row at a time computes these once and passes them to every renderTable call, so its rows line
+ * up with the header.
+ */
+export const columnWidths = <Row>(columns: Array<TableColumn<Row>>, rows: Array<Row>, minimums: Array<number> = []): Array<number> =>
+  columns.map((column, index) =>
+    Math.max(minimums[index] ?? 0, displayWidth(column.header), ...rows.map((row) => displayWidth(tableCell(column, row)))))
+
 /**
  * Lines of a table: a two-space indent and gutter, headers as given, every column as wide as its
- * widest cell. Color is applied after padding, so the plain text is the same with color on or off,
- * and the last column carries no trailing spaces.
+ * widest cell or the given widths, whichever is wider, so an ID is never cut. Color is applied after
+ * padding, so the plain text is the same with color on or off, and the last column carries no
+ * trailing spaces.
  */
-export const renderTable = <Row>(columns: Array<TableColumn<Row>>, rows: Array<Row>, color: boolean): Array<string> => {
-  const cells = rows.map((row) => columns.map((column) => cutCell(printableCell(column.cell(row)), column.maxWidth)))
+export const renderTable = <Row>(
+  columns: Array<TableColumn<Row>>,
+  rows: Array<Row>,
+  color: boolean,
+  minimumWidths: Array<number> = [],
+): Array<string> => {
+  const cells = rows.map((row) => columns.map((column) => tableCell(column, row)))
   const shown = cells.map((rowCells, rowIndex) =>
     rowCells.map((cell, columnIndex) => {
       const repeated = rowIndex > 0 && cells[rowIndex - 1][columnIndex] === cell
@@ -104,7 +122,7 @@ export const renderTable = <Row>(columns: Array<TableColumn<Row>>, rows: Array<R
     }))
 
   const widths = columns.map((column, index) =>
-    Math.max(displayWidth(column.header), ...shown.map((rowCells) => displayWidth(rowCells[index]))))
+    Math.max(minimumWidths[index] ?? 0, displayWidth(column.header), ...shown.map((rowCells) => displayWidth(rowCells[index]))))
 
   const line = (texts: Array<string>, tones: Array<TerminalTone | undefined>): string => {
     const padded = texts.map((text, index) => {

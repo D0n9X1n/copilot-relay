@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util"
 import { registerLogSecret } from "../../src/lib/log"
 import { registerSensitiveOrigin } from "../../src/lib/redact"
 import {
+  columnWidths,
   formatCount,
   formatTokens,
   heading,
@@ -130,6 +131,32 @@ test("renderTable cuts by terminal columns and never inside a character", () => 
   assert.equal(cut("😀x", 2), "…")
   assert.equal(cut("ééé", 2), "é…")
   assert.equal(cut("模型", 4), "模型")
+})
+
+test("rows rendered one at a time with shared widths line up with the header", () => {
+  const probeColumns: Array<TableColumn<{ id: string }>> = [
+    { header: "MODEL", align: "left", cell: (row) => row.id },
+    { header: "STATUS", align: "left", cell: () => "ok" },
+  ]
+  const widths = columnWidths(probeColumns, [{ id: "claude-opus-5.5" }], [8, 6])
+
+  const header = renderTable(probeColumns, [], false, widths)[0]
+  const first = renderTable(probeColumns, [{ id: "gpt-6.2-astra" }], false, widths)[1]
+  const second = renderTable(probeColumns, [{ id: "claude-opus-5.5" }], false, widths)[1]
+
+  assert.deepEqual([header, first, second], [
+    "  MODEL            STATUS",
+    "  gpt-6.2-astra    ok",
+    "  claude-opus-5.5  ok",
+  ])
+})
+
+test("a shared width narrower than an ID widens the line rather than cutting the ID", () => {
+  const idColumns: Array<TableColumn<{ id: string }>> = [{ header: "MODEL", align: "left", cell: (row) => row.id }]
+
+  const line = renderTable(idColumns, [{ id: "a-very-long-model-id-that-must-stay-copyable" }], false, [5])[1]
+
+  assert.equal(line, "  a-very-long-model-id-that-must-stay-copyable")
 })
 
 test("printableCell removes controls, then registered secrets and sensitive URLs", () => {
