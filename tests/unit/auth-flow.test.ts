@@ -244,3 +244,37 @@ test("auth names the signed-in user, or says the lookup failed without failing a
   assert.equal(authOutcomeLine("octocat"), "Logged in as octocat")
   assert.equal(authOutcomeLine(undefined), "Logged in; GitHub user unavailable")
 })
+
+test("access_denied and expired_token on an error status stop the flow at once", async () => {
+  for (const error of ["access_denied", "expired_token"]) {
+    const { clock, sleeps } = fakeClock()
+    const { fetch, calls } = scriptedFetch([json({ error }, 400), json({ error }, 400), json({ error }, 400)])
+
+    await assert.rejects(pollAccessToken({ ...deviceCode, expires_in: 5 }, clock, fetch), (thrown: Error) => {
+      assert.match(thrown.message, error === "access_denied" ? /denied/ : /expired before sign-in/)
+      return true
+    })
+    assert.equal(calls.length, 1, `${error}: one poll`)
+    assert.deepEqual(sleeps, [])
+  }
+})
+
+test("pending and slow_down on an error status are read like any other answer", async () => {
+  const { clock, sleeps } = fakeClock()
+  const { fetch } = scriptedFetch([
+    json({ error: "slow_down" }, 400),
+    json({ error: "authorization_pending" }, 400),
+    json({ access_token: "gho_token" }),
+  ])
+
+  assert.equal(await pollAccessToken(deviceCode, clock, fetch), "gho_token")
+  assert.deepEqual(sleeps, [10000, 10000])
+})
+
+test("a 5xx is retried even when its body names a terminal state", async () => {
+  const { clock, sleeps } = fakeClock()
+  const { fetch } = scriptedFetch([json({ error: "access_denied" }, 502), json({ access_token: "gho_token" })])
+
+  assert.equal(await pollAccessToken(deviceCode, clock, fetch), "gho_token")
+  assert.deepEqual(sleeps, [5000])
+})

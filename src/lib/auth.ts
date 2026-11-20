@@ -281,10 +281,40 @@ export const getDeviceCode = (clock: AuthClock = realClock, fetch: AuthFetch = f
     }),
   }, clock.deadline(authCallTimeoutMs), fetch, "Failed to get device code")
 
-// Polls until the user authorizes in the browser or the device code expires. Each poll and each wait
-// is cut to the time left, so the flow never outlives the code. A pending answer waits the interval;
-// slow_down adds five seconds to it for good; a denied or expired code stops at once; a network
-// failure or an error status is retried at the current interval.
+// One poll's answer. GitHub reports pending, slow_down, access_denied and expired_token in the body,
+// whatever the status, so every body is decoded except a 5xx's, which is retried. Undefined means
+// there is no answer to act on: a network failure, a 5xx, or a body that is not JSON or stalls.
+const pollOnce = async (
+  deviceCode: DeviceCodeResponse,
+  bound: AbortSignal,
+  fetch: AuthFetch,
+): Promise<AccessTokenResponse | undefined> => {
+  try {
+    const response = await fetch(`${githubBaseUrl}/login/oauth/access_token`, {
+      method: "POST",
+      headers: standardHeaders(),
+      body: JSON.stringify({
+        client_id: githubClientId,
+        device_code: deviceCode.device_code,
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+      }),
+      signal: bound,
+    })
+    if (response.status >= 500) {
+      await response.body?.cancel().catch(() => {})
+      return undefined
+    }
+
+    return (await response.json()) as AccessTokenResponse
+  } catch {
+    return undefined
+  }
+}
+
+// Polls until the user authorizes in the browser or the device code expires. Each poll
+// and each wait is cut to the time left, so the flow never outlives the code. A pending answer waits
+// the interval; slow_down adds five seconds to it for good; a denied or expired code stops at once;
+// a network failure, a 5xx or an unreadable answer is retried at the current interval.
 export const pollAccessToken = async (
   deviceCode: DeviceCodeResponse,
   clock: AuthClock = realClock,
@@ -298,22 +328,7 @@ export const pollAccessToken = async (
   const timeLeft = () => endsAt - clock.now()
 
   while (timeLeft() > 0) {
-    let answer: AccessTokenResponse | undefined
-    try {
-      answer = await fetchAuthJson<AccessTokenResponse>(`${githubBaseUrl}/login/oauth/access_token`, {
-        method: "POST",
-        headers: standardHeaders(),
-        body: JSON.stringify({
-          client_id: githubClientId,
-          device_code: deviceCode.device_code,
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        }),
-      }, clock.deadline(Math.min(authCallTimeoutMs, timeLeft())), fetch, "GitHub device authorization poll failed")
-    } catch {
-      // A network failure, an error status or a stalled body: try again at the current interval.
-      answer = undefined
-    }
-
+    const answer = await pollOnce(deviceCode, clock.deadline(Math.min(authCallTimeoutMs, timeLeft())), fetch)
     if (answer?.access_token) {
       return answer.access_token
     }
