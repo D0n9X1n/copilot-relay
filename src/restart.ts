@@ -6,6 +6,7 @@ import { readProxyConfig } from "~/lib/config"
 import { cleanupLogs, log, setLogLevel } from "~/lib/log"
 import { stopExistingRelay } from "~/lib/lifecycle"
 import { startRelay } from "./start"
+import { describeStopped } from "./stop"
 
 export const restart = defineCommand({
   meta: {
@@ -17,9 +18,10 @@ export const restart = defineCommand({
     setLogLevel(appConfig.logLevel)
     await cleanupLogs(appConfig.logRetentionDays)
 
-    const stopped = await stopExistingRelay(readProxyConfig(appConfig))
-    if (stopped.length > 0) {
-      log.info(`Stopped copilot-relay pid(s): ${stopped.join(", ")}`)
+    // The same outcome line stop prints.
+    const outcome = describeStopped(await stopExistingRelay(readProxyConfig(appConfig)))
+    if (outcome !== undefined) {
+      log.info(outcome)
     }
 
     log.info("Starting copilot-relay")
