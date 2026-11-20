@@ -31,6 +31,9 @@ async function fixture(
     apiKey?: string;
     gptModel?: string;
     deviceAuth?: boolean
+    // Runs the command as on a Windows console: which of stdout and stderr is a terminal.
+    windowsTerminal?: { stdout: boolean; stderr: boolean }
+    githubUserFails?: boolean
   } = {},
 ) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "relay-models-"))
@@ -56,7 +59,7 @@ async function fixture(
   const unexpectedGitHub: Array<string> = []
   const github = await startFakeGitHub((url, _request, response) => {
     if (url.href === "https://api.github.com/user") {
-      replyJson(response, { login: "test" })
+      replyJson(response, options.githubUserFails ? { message: "unavailable" } : { login: "test" }, options.githubUserFails ? 500 : 200)
     } else if (url.href === "https://api.github.com/copilot_internal/v2/token") {
       replyJson(response, { token: newToken, refresh_in: 86400 })
     } else if (options.deviceAuth && url.href === "https://github.com/login/device/code") {
@@ -124,6 +127,11 @@ async function fixture(
       globalThis.fetch = async () => {
         throw new Error("UNEXPECTED_NETWORK_ACCESS");
       };
+      ${options.windowsTerminal ? `
+        Object.defineProperty(process, "platform", { value: "win32" });
+        process.stdout.isTTY = ${options.windowsTerminal.stdout};
+        process.stderr.isTTY = ${options.windowsTerminal.stderr};
+      ` : ''}
       ${options.interrupt ? `
         process.stdin.once("data", () => {
           if (!process.emit("SIGINT")) throw new Error("PROBE_INTERRUPT_HANDLER_NOT_READY");
@@ -871,6 +879,58 @@ test("quiet deep setup still presents device login instructions once", async (t)
   assert.match(result.output, /Sign in: open https:\/\/github.com\/login\/device/)
   assert.doesNotMatch(result.output, /DEVICE_PRIVATE|Using cached|token synced|Next Copilot token refresh/)
 })
+
+const quickEditTipLine = "Tip: a click in this window pauses output; press Esc or Enter to resume."
+
+// The lines of one stream that hold the tip or the device code, in the order they were written.
+const signInOrder = (stream: string): Array<string> => stream.split("\n").flatMap((line) => {
+  if (line.includes(quickEditTipLine)) {
+    return ["tip"]
+  }
+
+  return line.includes("FIXTURE-CODE") ? ["code"] : []
+})
+
+const deviceCatalogHandler = async (req: IncomingMessage, res: ServerResponse) => {
+  if (req.method === "GET") {
+    return respond(res, deepCatalog)
+  }
+
+  respond(res, probeReply(await requestBody(req)))
+}
+
+// The QuickEdit tip goes on the stream that prints the device code, and only when that stream is a
+// Windows terminal: stderr for models, where the logger is sent to stderr, and for models --deep.
+for (const args of [["models"], ["models", "--deep"]]) {
+  for (const terminal of [{ stdout: false, stderr: true }, { stdout: true, stderr: false }]) {
+    test(`${args.join(" ")} shows the QuickEdit tip only when stderr is a Windows terminal: ${JSON.stringify(terminal)}`, async (t) => {
+      const harness = await fixture(t, deviceCatalogHandler, { deep: args.includes("--deep"), deviceAuth: true, windowsTerminal: terminal })
+
+      const result = await harness.run(args)
+
+      assert.equal(result.code, 0, result.output)
+      assert.deepEqual(signInOrder(result.stdout), [], "nothing about sign-in on stdout")
+      assert.deepEqual(signInOrder(result.stderr), terminal.stderr ? ["tip", "code"] : ["code"])
+    })
+  }
+}
+
+// auth prints the code with the logger on stdout, so stdout decides the tip; it always reports
+// the sign-in's outcome, naming the user when the lookup works.
+for (const terminal of [{ stdout: true, stderr: false }, { stdout: false, stderr: true }]) {
+  for (const githubUserFails of [false, true]) {
+    test(`auth prints the tip on a stdout terminal and reports its outcome: ${JSON.stringify(terminal)} user lookup ${githubUserFails ? "fails" : "works"}`, async (t) => {
+      const harness = await fixture(t, deviceCatalogHandler, { deviceAuth: true, windowsTerminal: terminal, githubUserFails })
+
+      const result = await harness.run(["auth"])
+
+      assert.equal(result.code, 0, result.output)
+      assert.deepEqual(signInOrder(result.stdout), terminal.stdout ? ["tip", "code"] : ["code"])
+      assert.deepEqual(signInOrder(result.stderr), [])
+      assert.match(result.stdout, githubUserFails ? /Logged in; GitHub user unavailable/ : /Logged in as test/)
+    })
+  }
+}
 
 for (const logLevel of ["info", "debug"] as const) {
   test(`deep details report safe refusal evidence with capture ${logLevel}`, async (t) => {

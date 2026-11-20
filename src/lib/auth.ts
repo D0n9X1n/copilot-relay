@@ -443,8 +443,9 @@ const ensureGitHubToken = async (options: AuthOptions = {}) => {
       return
     }
 
-    // The logger writes this prompt to stdout, so stdout decides whether the tip is shown.
-    const tip = quickEditTip(process.stdout)
+    // The logger prints this prompt on the stream it writes info to: stdout, unless a command such
+    // as models has sent it to stderr. That stream decides whether the tip is shown.
+    const tip = quickEditTip(log.options.stdout ?? process.stdout)
     if (tip !== undefined) {
       log.info(tip)
     }
