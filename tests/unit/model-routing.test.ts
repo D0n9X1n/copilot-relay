@@ -44,21 +44,23 @@ test("configured effort choices exclude none without removing request-level supp
   assert.equal(isReasoningEffort("none"), true)
 })
 
-// Why: [1m] overrides Claude Code's numeric context setting, so it is added only where the
-// model's own catalog window reaches 1M; Copilot always receives the plain catalog ID.
-test("adds [1m] only for a known non-Claude window of 1M or more", () => {
+// Why: a model whose own catalog window reaches 1M is offered only as its 1M version, Claude
+// models included; Copilot always receives the plain catalog ID.
+test("offers a model with a known 1M window only as its [1m] version", () => {
   useCatalog([
     ["gpt-6.2-astra", 1_050_000],
     ["grok-4.7", 500_000],
     ["mai-code-2", undefined],
     ["claude-opus-5.5", 1_000_000],
+    ["claude-haiku-4.5", 200_000],
   ])
 
   assert.equal(normalizeClaudeModelId("GPT-6.2-ASTRA[1M][1m]"), "gpt-6.2-astra[1m]")
   assert.equal(normalizeClaudeModelId("grok-4.7[1m]"), "grok-4.7")
   assert.equal(normalizeClaudeModelId("mai-code-2"), "mai-code-2")
   assert.equal(normalizeClaudeModelId("not-listed[1m]"), "not-listed[1m]")
-  assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
+  assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5[1m]")
+  assert.equal(normalizeClaudeModelId("claude-haiku-4.5[1m]"), "claude-haiku-4.5")
   assert.equal(normalizeCopilotModelId("GROK-4.7[1M][1m]"), "grok-4.7")
   assert.equal(normalizeCopilotModelId("gpt-6-astra[2m]"), "gpt-6-astra[2m]")
 
@@ -94,7 +96,7 @@ test("defaults to Astra and keeps the Opus lane separate", () => {
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 
   useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5"])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]"])
 })
 
 // Why: a configured [1m] is the user's statement about the window, so it survives while the
@@ -110,7 +112,7 @@ test("keeps a configured [1m] until the catalog reports the window", () => {
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 
   useCatalog([["gpt-6-astra", 500_000], ["claude-opus-5.5", 1_000_000]])
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra", "claude-opus-5.5[1m]"])
 })
 
 // Why: model discovery is consumed by Claude Code while availability checks are
@@ -197,7 +199,7 @@ test("routes exposed IDs to themselves and strips every [1m]", () => {
   assert.equal(routeModelId("GROK-4.7[1M][1m]"), "grok-4.7")
   assert.equal(routeModelId("claude-sonnet-5"), "gpt-6-astra")
   assert.equal(routeModelId("opus[1m]"), "claude-opus-5.5")
-  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5", "grok-4.7"])
+  assert.deepEqual(getExposedModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]", "grok-4.7"])
   // Startup preflight and the tokenizer preload read this list: the two slots, never the extras.
   assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
 })

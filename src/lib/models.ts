@@ -99,17 +99,13 @@ export const normalizeCopilotModelId = (model: string): string => canonicalModel
 export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
 
 /**
- * The ID Claude Code sees. [1m] overrides Claude's numeric context setting, so a non-Claude ID gets
- * it only when its own known window is at least 1M; a smaller known window shows the plain ID, and
- * an unknown window leaves the ID as given. Claude IDs are left as given.
+ * The ID Claude Code sees. A model whose own known window is at least 1M is offered only as its 1M
+ * version, `<id>[1m]`, Claude models included; a smaller known window shows the plain ID, and an
+ * unknown window leaves the ID as given. [1m] overrides Claude Code's numeric context setting.
  */
 export const normalizeClaudeModelId = (model: string, contextWindowTokens?: number): string => {
   const catalog = currentCatalog()
   const canonical = canonicalModelId(model, catalog)
-  if (isClaudeModelId(canonical)) {
-    return model
-  }
-
   const contextWindow = contextWindowTokens ?? catalog?.get(canonical)?.limits?.max_context_window_tokens
   if (contextWindow === undefined) {
     return model

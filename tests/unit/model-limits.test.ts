@@ -134,7 +134,7 @@ test("catalog requests are deduplicated and retain model limits and tokenizer", 
       getCachedCopilotModel(config, "claude-opus-5.5"),
       { limits: opus55Limits, tokenizer: "o200k_base" }
     )
-    assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
+    assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5[1m]")
 
     for (const [model, maximum] of [
       ["gpt-6-astra", 128_000],
