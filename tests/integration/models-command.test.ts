@@ -942,7 +942,7 @@ for (const logLevel of ["info", "debug"] as const) {
       const replayed = await harness.run(["replay", id])
 
       assert.equal(replayed.code, 0, replayed.output)
-      assert.match(replayed.stdout, /^MATCH$/m)
+      assert.match(replayed.stdout, /^ {2}(?:✓|ok) MATCH {7}the relay reproduces the recording$/m)
     } else {
       assert.match(result.stdout, /capture=off/)
       assert.doesNotMatch(result.stdout, /Offline replay:/)
