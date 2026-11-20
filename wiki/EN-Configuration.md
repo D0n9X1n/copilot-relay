@@ -913,8 +913,10 @@ beyond it; see [Require a client key](#require-a-client-key) and
 
 ### Choose models in the picker
 
-`claudeSetup` does not write `model`, `availableModels` or `modelPicker`, and
-preserves the ones you set. To pick between Opus, GPT and the other exposed models
+`claudeSetup` sets `model` to `gptModel`'s Claude Code ID only when neither `model`
+nor `ANTHROPIC_MODEL` is set. It keeps the model settings you have, changing only
+their `[1m]` to match each model's own window, and it never writes `availableModels`
+or `modelPicker`. To pick between Opus, GPT and the other exposed models
 in `/model`, add a `modelPicker` to your user `~/.claude/settings.json` as
 [Models](EN-Models.md) shows; it also explains why Claude Code's gateway model
 discovery does not list the non-Claude models.

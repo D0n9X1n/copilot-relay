@@ -63,8 +63,10 @@ models: auto
 **Claude Messages 路由上的路由规则。** 请求中的模型名如果是某个暴露的模型（不区分大小写，
 带不带 `[1m]` 均可），就发往该模型。其他包含 `opus` 的名称发往 `opusModel`，其余名称
 （例如 Claude Code 的 `sonnet` 或 `haiku` 别名）发往 `gptModel`。未暴露的目录模型无法通过
-这个路由访问。Codex 的路由（`POST /v1/responses`）不同：它转发 Copilot 模型目录列出的任何
-模型；见 [Codex](ZH-Codex.md)。
+这个路由访问。Codex 的路由（`POST /v1/responses`）不同：对于 Copilot 模型目录列出的模型，只要它
+提供 Codex 所需的端点（Claude 模型为 `/v1/messages`，其他模型为 `/responses`），中继就转发；
+否则返回 HTTP 400 `relay_unsupported_endpoint`。你在 `models` 中列出、但两种端点都不提供的模型
+仍会出现在 Codex 的列表中，但在 Codex 中使用会失败；见 [Codex](ZH-Codex.md)。
 
 **`[1m]`。** Claude Code 把模型 ID 末尾的 `[1m]` 理解为一百万 token 的 context 窗口。任何
 ID（无论是否为 Claude），只要它自己在目录中的窗口至少为 1,000,000 token，中继就加上这个

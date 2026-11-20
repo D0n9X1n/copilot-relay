@@ -75,7 +75,10 @@ any case and with or without `[1m]`, goes to that model. Any other name containi
 `opus` goes to `opusModel`, and every other name, such as Claude Code's `sonnet` or
 `haiku` aliases, goes to `gptModel`. A catalog model that is not exposed is not
 reached through this route. Codex's route (`POST /v1/responses`) is different: it
-forwards any model Copilot's catalog lists; see [Codex](EN-Codex.md).
+forwards a model Copilot's catalog lists when that model serves the endpoint Codex
+needs (`/v1/messages` for a Claude model, `/responses` for any other) and answers
+HTTP 400 `relay_unsupported_endpoint` otherwise. A model you list in `models` that
+serves neither is still offered to Codex but fails there; see [Codex](EN-Codex.md).
 
 **`[1m]`.** Claude Code reads `[1m]` at the end of a model ID as a one-million-token
 context window. The relay adds it to every ID, Claude or not, whose own catalog

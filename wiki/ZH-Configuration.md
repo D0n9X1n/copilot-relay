@@ -772,7 +772,9 @@ CLAUDE_CODE_AUTO_MODE_SERVER=0
 
 ### 在模型选择器中选择模型
 
-`claudeSetup` 不写入 `model`、`availableModels` 或 `modelPicker`，并保留你设置的值。要在
+只有在 `model` 和 `ANTHROPIC_MODEL` 都未设置时，`claudeSetup` 才把 `model` 设为 `gptModel` 的
+Claude Code ID。它保留你已有的模型设置，只按各模型自己的窗口调整其中的 `[1m]`，并且从不写入
+`availableModels` 或 `modelPicker`。要在
 `/model` 中选择 Opus、GPT 和其他暴露的模型，请按[为每个客户端选择模型](ZH-Models.md)的说明，
 在用户级 `~/.claude/settings.json` 中添加 `modelPicker`；该页也解释了为什么 Claude Code 的
 网关模型发现不会列出非 Claude 模型。
