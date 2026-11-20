@@ -474,8 +474,11 @@ credentials, writes no token, config or new capture, and does not read
 
 The result names the verdict with a mark and what it means, the recorded request,
 and one row per upstream exchange with its status, outcome and token counts. A
-`DIFF` lists each differing field by path and a fixed reason under the table; it
-never quotes request or response text.
+`DIFF` lists the differing fields by path and a fixed reason under the table; it
+never quotes request or response text. A path is never cut: one too long to sit
+beside its reason on an 80-column line prints on its own line, with the reason
+indented under it. The first 30 differences are listed and the rest are counted
+(`… and 15 more`).
 
 ```text
 Replay · POST /v1/messages

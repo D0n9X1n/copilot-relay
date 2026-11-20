@@ -15,6 +15,7 @@ import { createServer } from "./server"
 import {
   colorEnabled,
   colorText,
+  displayWidth,
   formatCount,
   heading,
   mark,
@@ -1005,6 +1006,10 @@ const verdictViews: Record<ReplayResult["verdict"], { state: MarkState; tone: Te
 const labelWidth = 14
 // Differences after this many are counted rather than listed, so a large diff stays readable.
 const shownDifferences = 30
+// A line's budget: a two-space indent and a two-space gutter between columns.
+const lineWidth = 80
+const indent = 2
+const gutter = 2
 
 const tokens = (exchange: ReplayExchange, key: string): string => {
   const value = exchange.usage[key]
@@ -1041,6 +1046,37 @@ const describeRequest = (summary: NonNullable<ReplayResult["summary"]>): string 
 }
 
 /**
+ * The differences, each path beside its fixed reason. A path is the field's identity, so it is never
+ * cut: one too long to sit beside its reason on an 80-column line prints on its own line, with the
+ * reason indented under it. After the first shownDifferences, the rest are counted.
+ */
+const renderDifferences = (differences: ReplayResult["differences"], unicode: boolean): string[] => {
+  const shown = differences.slice(0, shownDifferences).map((difference) => ({
+    path: printableCell(difference.path),
+    reason: printableCell(difference.reason),
+  }))
+  const reasonWidth = Math.max(...shown.map((difference) => displayWidth(difference.reason)))
+  const pathRoom = lineWidth - indent - gutter - reasonWidth
+  const fits = (path: string): boolean => displayWidth(path) <= pathRoom
+  const pathWidth = Math.max(0, ...shown.filter((difference) => fits(difference.path)).map((difference) => displayWidth(difference.path)))
+  const lines: string[] = []
+
+  for (const { path, reason } of shown) {
+    if (fits(path)) {
+      lines.push(`  ${path}${" ".repeat(pathWidth - displayWidth(path))}  ${reason}`)
+    } else {
+      lines.push(`  ${path}`, `    ${reason}`)
+    }
+  }
+
+  if (differences.length > shownDifferences) {
+    lines.push(`  ${unicode ? "…" : "..."} and ${formatCount(differences.length - shownDifferences)} more`)
+  }
+
+  return lines
+}
+
+/**
  * The replay result as text lines: the verdict and what it means, the recorded request, a table of
  * its upstream exchanges, and each difference by path and fixed reason. Paths and reasons come from
  * the comparison and never quote payload text. Kept free of IO, so it is tested directly.
@@ -1068,16 +1104,7 @@ export const renderReplay = (result: ReplayResult, color = false, unicode = unic
   }
 
   if (result.differences.length > 0) {
-    const shown = result.differences.slice(0, shownDifferences)
-    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "")
-    lines.push(...renderTable([
-      { header: "", align: "left", cell: (difference: ReplayResult["differences"][number]) => difference.path, maxWidth: 48 },
-      { header: "", align: "left", cell: (difference) => difference.reason, maxWidth: 26 },
-    ], shown, color).slice(1))
-
-    if (result.differences.length > shownDifferences) {
-      lines.push(`  … and ${formatCount(result.differences.length - shownDifferences)} more`)
-    }
+    lines.push("", heading(`Differences (${formatCount(result.differences.length)})`), "", ...renderDifferences(result.differences, unicode))
   }
 
   return lines.map((line) => printableCell(line).trimEnd())

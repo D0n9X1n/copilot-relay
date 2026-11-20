@@ -83,3 +83,36 @@ test("a long list of differences is cut, and every line fits 80 columns", () => 
     assert.ok(displayWidth(stripVTControlCharacters(line)) <= 80, line)
   }
 })
+
+test("a difference path is never cut; one too long to sit beside its reason gets its own line", () => {
+  const name = "upstream[0].request.body.tools[0].function.parameters.name"
+  const description = "upstream[0].request.body.tools[0].function.parameters.description"
+  const nested = "upstream[0].request.body.tools[0].function.parameters.properties.location.description"
+  const lines = renderReplay({
+    ...matched,
+    verdict: "DIFF",
+    exitCode: 2,
+    differences: [name, description, nested].map((path) => ({ path, reason: "Value differs" })),
+  }, false, true)
+
+  // name fits beside its reason; description and nested would pass 80 columns, so each takes a line.
+  assert.deepEqual(lines.slice(-7), [
+    "Differences (3)",
+    "",
+    `  ${name}  Value differs`,
+    `  ${description}`,
+    "    Value differs",
+    `  ${nested}`,
+    "    Value differs",
+  ])
+  for (const line of lines) {
+    assert.ok(displayWidth(line) <= 80 || line.trim() === nested, `${displayWidth(line)}: ${line}`)
+  }
+})
+
+test("without Unicode the count of differences not listed ends in ASCII dots", () => {
+  const differences = Array.from({ length: 45 }, (_, index) => ({ path: `client.body[${index}].data`, reason: "Value differs" }))
+  const lines = renderReplay({ ...matched, verdict: "DIFF", exitCode: 2, differences }, false, false)
+
+  assert.equal(lines.at(-1), "  ... and 15 more")
+})
