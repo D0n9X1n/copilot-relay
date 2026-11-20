@@ -27,6 +27,11 @@ test.after(async () => {
   await fs.rm(home, { recursive: true, force: true })
 })
 
+// The fixtures route to these two models, whatever the shipped default is.
+test.beforeEach(() => {
+  runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
+})
+
 // runtimeState is process-wide: clear what a test may set so the next one starts clean.
 test.afterEach(() => {
   delete runtimeState.modelRouting

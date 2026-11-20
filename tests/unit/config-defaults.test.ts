@@ -74,7 +74,7 @@ test("applies defaults only to absent keys", async () => {
 
   assert.equal(config.port, 5000)
   assert.equal(config.opusModel, "claude-opus-5.5")
-  assert.equal(config.gptModel, "gpt-6-astra")
+  assert.equal(config.gptModel, "gpt-6.2-astra")
   assert.equal(config.logRetentionDays, 3)
 })
 
@@ -83,7 +83,7 @@ test("uses shipped defaults for a fresh install", async () => {
   const config = await readAppConfig()
 
   assert.equal(config.opusModel, "claude-opus-5.5")
-  assert.equal(config.gptModel, "gpt-6-astra")
+  assert.equal(config.gptModel, "gpt-6.2-astra")
   assert.equal(Object.hasOwn(config, "models"), false)
   assert.doesNotMatch(await readConfigFile(), /^models:/m)
 })

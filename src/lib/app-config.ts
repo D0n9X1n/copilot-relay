@@ -53,7 +53,7 @@ const defaultConfig: AppConfig = {
   claudeSetup: true,
   codexSetup: true,
   copilotBaseUrl: "https://api.githubcopilot.com",
-  gptModel: "gpt-6-astra",
+  gptModel: "gpt-6.2-astra",
   host: "127.0.0.1",
   logLevel: "info",
   logRetentionDays: 3,

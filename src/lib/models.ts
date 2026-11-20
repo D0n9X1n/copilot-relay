@@ -22,7 +22,7 @@ export interface ModelTokenLimits {
 export const defaultReasoningEffort: ConfiguredReasoningEffort = "max"
 
 export const defaultModelRouting: ModelRoutingConfig = {
-  gptModel: "gpt-6-astra",
+  gptModel: "gpt-6.2-astra",
   opusModel: "claude-opus-5.5",
 }
 

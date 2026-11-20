@@ -90,16 +90,16 @@ test("keeps the verified Opus 5.5 upstream ID without context aliases", () => {
   assert.equal(normalizeClaudeModelId("claude-opus-5.5"), "claude-opus-5.5")
 })
 
-test("defaults to Astra and keeps the Opus lane separate", () => {
+test("defaults to GPT-6.2 Astra and keeps the Opus lane separate", () => {
   assert.deepEqual(defaultModelRouting, {
-    gptModel: "gpt-6-astra",
+    gptModel: "gpt-6.2-astra",
     opusModel: "claude-opus-5.5",
   })
-  assert.deepEqual(getSlotModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
-  assert.deepEqual(getUpstreamModelIds(), ["gpt-6-astra", "claude-opus-5.5"])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6.2-astra", "claude-opus-5.5"])
+  assert.deepEqual(getUpstreamModelIds(), ["gpt-6.2-astra", "claude-opus-5.5"])
 
-  useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
-  assert.deepEqual(getSlotModelIds(), ["gpt-6-astra[1m]", "claude-opus-5.5[1m]"])
+  useCatalog([["gpt-6.2-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
+  assert.deepEqual(getSlotModelIds(), ["gpt-6.2-astra[1m]", "claude-opus-5.5[1m]"])
 })
 
 // Why: a configured [1m] is the user's statement about the window, so it survives while the
