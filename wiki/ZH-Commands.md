@@ -270,7 +270,7 @@ copilot-relay models --deep --model claude-opus-5.5    # 测试一个模型
 `–`。窗口不小于 1M 的标为 `[1m]`，这是 Claude Code 识别 1M 模型的 ID 后缀。最后一列 SLOT 标出
 `gptModel` 或 `opusModel` 指定的模型。不是聊天模型的（例如 embeddings）不列出，只在表格下
 计数；`--all` 也会列出它们，在同一列标 `!`，这一列含有标记时标题为 NOTE；表格下的一行说明这个标记表示
-该模型不能用作 `gptModel` 或 `opusModel`。共用一列让表格保持在 80 列以内：这一列使用其他列留下的宽度；
+该模型不能用作 `gptModel` 或 `opusModel`。ID 短于约 50 列时，共用一列让表格保持在 80 列以内（ID 从不截断）：这一列使用其他列留下的宽度；
 比这更宽的说明从不截断，而是完整地打印在该行下方单独缩进的一行，因此槽位及其 `!` 总会显示。没有名称时
 省略 NAME 列，所有说明都在行下方时省略 NOTE 列。COST 和 CONTEXT 右对齐。
 终端不支持 Unicode 时标记为 ASCII：`<` 代替 `◀`，`x` 代替 `×`，`-` 代替 `–`。

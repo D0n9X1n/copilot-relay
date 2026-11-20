@@ -329,8 +329,8 @@ suffix Claude Code reads as a 1M model. The last column, SLOT, marks the model
 embeddings, are left out and counted under the table; `--all` lists them too, marked
 `!` in that same column, headed NOTE once it holds a mark, and a line under the
 table says the mark means a model that cannot be `gptModel` or `opusModel`. Sharing
-one column keeps the table within 80 columns: the column gets the room the others
-leave, and a note wider than that is never cut but printed whole on its own
+one column keeps the table within 80 columns while IDs are under about 50 columns
+(an ID is never cut): the column gets the room the others leave, and a note wider than that is never cut but printed whole on its own
 indented line under its row, so a slot and its `!` always show. NAME is left out
 when no model has a name, and NOTE when every note is under its row. COST and
 CONTEXT are right-aligned. Without Unicode the marks are ASCII: `<` for `◀`, `x` for

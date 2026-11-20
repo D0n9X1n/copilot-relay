@@ -156,3 +156,24 @@ test("with color on, the verdict keeps its color", () => {
 
   assert.equal(lines[2], "  \u001b[32m✓ MATCH\u001b[0m       the relay reproduces the recording")
 })
+
+test("details under a row wrap in printable ASCII within 80 columns", () => {
+  const lines = renderReplay({
+    ...matched,
+    summary: {
+      ...matched.summary!,
+      outcome: "refusal",
+      exchanges: [
+        { order: 1, path: "/chat/completions", status: 200, outcome: "refusal", usage: { input_tokens: 1_000_000, output_tokens: 64_000, cache_read_input_tokens: 950_000, cache_creation_input_tokens: 50_000 }, refusalCategory: "reasoning_extraction" },
+        { order: 2, path: "/chat/completions", status: 200, outcome: "content_filter", usage: { input_tokens: 10, output_tokens: 5 } },
+      ],
+    },
+  }, false, false)
+  const table = lines.slice(lines.findIndex((line) => line.trimStart().startsWith("#")))
+
+  assert.ok(table.some((line) => line.includes("refusal reasoning_extraction")), lines.join("\n"))
+  for (const line of table) {
+    assert.ok(displayWidth(line) <= 80, `${displayWidth(line)}: ${line}`)
+    assert.ok(!line.includes("·"), line)
+  }
+})

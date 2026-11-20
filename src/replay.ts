@@ -1083,8 +1083,20 @@ const renderExchanges = (exchanges: Array<ReplayExchange>, color: boolean): stri
     })
     lines.push(row)
 
-    if (details.length > 0) {
-      lines.push(under + details.join(" · "))
+    // Details wrap under the first, two spaces apart, and are never split.
+    let current = ""
+    for (const detail of details) {
+      const candidate = current === "" ? under + detail : `${current}  ${detail}`
+      if (current !== "" && displayWidth(candidate) > lineWidth) {
+        lines.push(current)
+        current = under + detail
+      } else {
+        current = candidate
+      }
+    }
+
+    if (current !== "") {
+      lines.push(current)
     }
   }
 
