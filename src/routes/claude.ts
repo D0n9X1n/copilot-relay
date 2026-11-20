@@ -43,7 +43,7 @@ import { getClaudeTurnEffort, UpstreamToolInputError } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
 import { createChatCompletions } from "~/copilot/chat"
-import { createCopilotRequestSignal } from "~/copilot/client"
+import { createCopilotRequestSignal, throwIfRequestAborted } from "~/copilot/client"
 import { isChatStreamDone, isEmptyChatStreamEvent, readChatChunk, type ChatStreamEvent } from "~/copilot/stream"
 import {
   ensureCopilotModelCatalog,
@@ -612,7 +612,7 @@ claudeRoutes.post("/messages", async (c) => {
     // Discover, then pin, then select: every later pass reuses the capabilities that
     // admitted this request, and capability errors stay HTTP 400 before SSE opens.
     await ensureCopilotModelCatalog(config, upstreamModel, requestSignal)
-    requestSignal?.throwIfAborted()
+    throwIfRequestAborted(requestSignal, config.upstreamTimeoutMs)
     pinCopilotModelCatalog(config)
 
     // Discovery can replace the catalog and so the slot's wire spelling; the slot itself stays. This

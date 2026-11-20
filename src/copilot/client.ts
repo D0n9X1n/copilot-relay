@@ -134,6 +134,22 @@ export const toCopilotAbortHTTPError = (
   )
 }
 
+// A route's own abort checkpoint, between upstream calls. An expired request deadline throws the same
+// 504 upstream_timeout HTTPError a timed-out Copilot call does, so the route answers it the same way;
+// a caller's cancel is rethrown unchanged. The deadline can expire before any upstream call, since it
+// starts when the request is admitted, while its body may still be uploading.
+export const throwIfRequestAborted = (signal: AbortSignal | undefined, timeoutMs: number): void => {
+  if (!signal?.aborted) {
+    return
+  }
+
+  if (getAbortName(signal.reason) === "TimeoutError") {
+    throw toCopilotAbortHTTPError(signal.reason, signal, timeoutMs)
+  }
+
+  throw signal.reason
+}
+
 // Copilot answers a prompt over the model's max_prompt_tokens with HTTP 400, this code and this
 // wording. The native /v1/messages route can carry Anthropic's own wording instead.
 const copilotPromptTooLongPattern = /^prompt token count of (\d+) exceeds the limit of (\d+)$/

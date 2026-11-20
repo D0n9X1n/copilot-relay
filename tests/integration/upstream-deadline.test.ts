@@ -237,6 +237,55 @@ test("a request rejected before any upstream call disposes its deadline with its
   assert.equal(after.disposed - before.disposed, 1)
 })
 
+// A request whose JSON body arrives in two parts, the second after `ms`, so the deadline armed at
+// admission can expire while the upload is still in progress.
+const slowUpload = (route: string, payload: Record<string, unknown>, ms: number) => {
+  const text = JSON.stringify(payload)
+  const half = Math.floor(text.length / 2)
+  return new Request(`http://127.0.0.1${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    duplex: "half",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(text.slice(0, half)))
+        setTimeout(() => {
+          controller.enqueue(encoder.encode(text.slice(half)))
+          controller.close()
+        }, ms)
+      },
+    }),
+  } as RequestInit)
+}
+
+const catalogCases = [
+  { name: "no cached catalog", config: () => configFor(20) },
+  { name: "a fresh catalog", config: () => ({ ...probeConfig(20), modelCatalog: { baseUrl: provider, models: new Map([[model, probeModel]]), fetchedAt: Date.now() } }) },
+]
+
+for (const { name, config } of catalogCases) {
+  test(`a message request whose deadline expires during the upload answers 504 upstream_timeout, with ${name}`, async () => {
+    runtimeState.modelRouting = { gptModel: model, opusModel: "claude-opus-5.5" }
+    runtimeState.upstreamBaseUrl = provider
+    const app = createServer(config())
+    const before = upstreamDeadlineCounts()
+
+    await withRecordedTransport({
+      fetch: async () => assert.fail("no upstream call after the deadline"),
+      refresh: noRefresh,
+    }, async () => {
+      const response = await app.fetch(slowUpload("/v1/messages", { model, max_tokens: 64, messages: [{ role: "user", content: "hello" }] }, 100))
+      const body = await response.text()
+      assert.equal(response.status, 504, body)
+      assert.equal((JSON.parse(body) as { error: { code: string } }).error.code, "upstream_timeout")
+    })
+
+    const after = upstreamDeadlineCounts()
+    assert.equal(after.created - before.created, 1)
+    assert.equal(after.disposed - before.disposed, 1, "the deadline is disposed with the response")
+  })
+}
+
 test("the WebSearch passes share one deadline, and a turn that crosses it times out", async () => {
   const opus = "claude-opus-4.8"
   runtimeState.modelRouting = { gptModel: model, opusModel: opus }
