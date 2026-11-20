@@ -934,14 +934,16 @@ the rules.
 token, print a device code and wait for you to enter it at the URL shown. Each
 call to GitHub, response body included, gets 30 seconds. The wait as a whole ends
 when the device code expires: GitHub's `expires_in`, or 15 minutes when GitHub
-sends none. A denied sign-in or an expired code stops at once with a message that
-says so, and a network error or a GitHub error status is retried at the polling
-interval. Sign-in therefore never waits forever.
+sends none, counted from when the code arrives, so time spent showing it counts
+too. A denied sign-in or an expired code stops at once with a message that says
+so, whatever HTTP status GitHub answers with; a network error or a GitHub 5xx is
+retried at the polling interval. Sign-in therefore never waits forever.
 
-**Windows: output stops until you press Enter.** That is QuickEdit mode in the
-Windows console, not the relay. A click in the window, such as one to select the
-device code, starts a selection and pauses every program writing to that console
-until the selection ends. Press **Esc** or **Enter** and output resumes. On a
+**Windows: output stops until you press Enter.** The likely cause, not yet
+confirmed on a Windows console, is QuickEdit mode rather than the relay. A click
+in the window, such as one to select the device code, starts a selection that
+pauses every program writing to that console until the selection ends. If that
+is what happened, **Esc** or **Enter** ends the selection and output resumes. On a
 Windows terminal the relay prints this reminder above the code:
 
 ```text

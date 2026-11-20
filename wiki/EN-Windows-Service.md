@@ -333,8 +333,8 @@ or `powershell.exe`. Re-register with the `node.exe` action above.
 today's log, then `copilot-relay auth`.
 
 **`copilot-relay auth` or `start` stops at the device code until you press
-Enter.** The console's QuickEdit mode paused output after a click in the window;
-press Esc or Enter to resume. Sign-in itself is bounded and never waits past the
+Enter.** Most likely, though not yet confirmed, the console's QuickEdit mode
+paused output after a click in the window; press Esc or Enter to resume. Sign-in itself is bounded and never waits past the
 device code's expiry. See "Sign-in waits or seems stuck" in
 [Logs and troubleshooting](EN-Logging-Troubleshooting.md).
 
