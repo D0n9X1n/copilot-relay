@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import test from "node:test"
 import assert from "node:assert/strict"
 
@@ -11,7 +12,6 @@ import {
   isConfiguredReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
-  canonicalMemoSize,
   modelNormalizations,
   routeModelId,
   slotPreparations,
@@ -311,25 +311,52 @@ test("a slot the warm catalog omits is normalized once per generation and catalo
   assert.equal(modelNormalizations() - beforeWithout, 0)
 })
 
-test("canonicalization is memoized per catalog and bounded at 256 names", () => {
+test("the slots are canonicalized once per catalog and other names every time", () => {
+  runtimeState.modelRouting = { gptModel: "GPT-6-ASTRA[1m]", opusModel: "claude-opus-5.5" }
   useCatalog([["gpt-6-astra", 1_050_000], ["claude-opus-5.5", 1_000_000]])
-  const catalog = runtimeState.modelCatalog?.models
-  normalizeCopilotModelId("GPT-6-ASTRA[1m]")
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
   const before = modelNormalizations()
 
-  assert.equal(normalizeCopilotModelId("GPT-6-ASTRA[1m]"), "gpt-6-astra")
-  assert.equal(modelNormalizations() - before, 0)
-
-  for (let index = 0; index < 300; index++) {
-    normalizeCopilotModelId(`unknown-model-${index}`)
+  for (const spelling of ["GPT-6-ASTRA[1m]", "gpt-6-astra", "gpt-6-astra[1m]", "claude-opus-5.5"]) {
+    assert.equal(normalizeCopilotModelId(spelling), spelling.startsWith("claude") ? "claude-opus-5.5" : "gpt-6-astra")
   }
 
-  assert.ok(canonicalMemoSize(catalog) <= 256, String(canonicalMemoSize(catalog)))
-  assert.equal(normalizeCopilotModelId("Unknown-Model-299[1m]"), "unknown-model-299")
+  assert.equal(modelNormalizations() - before, 0)
+
+  assert.equal(normalizeCopilotModelId("Unknown-Model[1m]"), "unknown-model")
+  assert.equal(normalizeCopilotModelId("Unknown-Model[1m]"), "unknown-model")
+  assert.equal(modelNormalizations() - before, 2)
 
   // A refreshed catalog is a new map, so its spelling is computed afresh.
   useCatalog([["GPT-6-Astra", 1_050_000]])
   assert.equal(normalizeCopilotModelId("gpt-6-astra"), "GPT-6-Astra")
+})
+
+// Why: no cache is keyed by client-supplied names, so an oversized model name is gone once its
+// request settles.
+test("an oversized model name is not retained after its request", () => {
+  const script = `
+    const { normalizeCopilotModelId, routeModelId } = await import(${JSON.stringify(new URL("../../src/lib/models.ts", import.meta.url).href)})
+    const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import(${JSON.stringify(new URL("../../src/lib/state.ts", import.meta.url).href)})
+    runtimeState.modelRouting = { gptModel: "gpt-6-astra", opusModel: "claude-opus-5.5" }
+    runtimeState.upstreamBaseUrl = "https://fixture.invalid"
+    runtimeState.modelCatalog = { baseUrl: "https://fixture.invalid", models: new Map([["gpt-6-astra", {}], ["claude-opus-5.5", {}]]) }
+    withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+    const sample = () => { globalThis.gc(); globalThis.gc(); return process.memoryUsage().heapUsed }
+    const before = sample()
+    withRuntimeState(snapshotRuntimeState(), () => {
+      const name = "x".repeat(1024 * 1024) + "-model"
+      routeModelId(name)
+      normalizeCopilotModelId(name)
+    })
+    process.stdout.write(String(sample() - before))
+  `
+  const output = execFileSync(process.execPath, ["--expose-gc", "--import", "tsx", "--input-type=module", "-e", script], {
+    cwd: new URL("../..", import.meta.url),
+    encoding: "utf8",
+  })
+
+  assert.ok(Number(output) < 64 * 1024, `heap grew by ${output} bytes`)
 })
 
 test("a snapshot keeps the two-field routing shape", () => {
