@@ -18,7 +18,7 @@ process.env.CONSOLA_LEVEL = "0"
 const { snapshotProxyConfig } = await import("../../src/lib/config")
 const { boundModelOutputTokens, ensureCopilotModelCatalog, loadCopilotModelCatalog } = await import("../../src/copilot/models")
 const { createServer, startServer } = await import("../../src/server")
-const { normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
+const { modelNormalizations, normalizeClaudeModelId, routeModelId, resolveReasoningEffort } = await import("../../src/lib/models")
 const { RequestTrace, withRecordedTransport, withRequestTrace, withTraceObserver } = await import("../../src/lib/request-trace")
 const { runtimeState, snapshotRuntimeState, withRuntimeState } = await import("../../src/lib/state")
 const { flushLogs } = await import("../../src/lib/log")
@@ -525,14 +525,24 @@ test("a refreshed catalog's spelling of the chosen slot reaches the native reque
       throw new Error("Unexpected credential refresh")
     },
   }, async () => {
-    const response = await app.fetch(new Request("http://127.0.0.1/v1/messages", {
+    const post = () => app.fetch(new Request("http://127.0.0.1/v1/messages", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "opus", max_tokens: 64, messages: [{ role: "user", content: "hello" }] }),
     }))
+    const response = await post()
 
     assert.equal(response.status, 200, await response.clone().text())
     assert.deepEqual(requests.map((request) => request.path), ["/models", "/v1/messages"])
     assert.equal(requests.at(-1)?.body.model, "claude-opus-5.5-Lab")
+
+    // A warm request on the same catalog takes the native route with no slot normalization.
+    const before = modelNormalizations()
+    const warm = await post()
+
+    assert.equal(warm.status, 200, await warm.clone().text())
+    assert.deepEqual(requests.map((request) => request.path), ["/models", "/v1/messages", "/v1/messages"])
+    assert.equal(requests.at(-1)?.body.model, "claude-opus-5.5-Lab")
+    assert.equal(modelNormalizations() - before, 0)
   })
 })

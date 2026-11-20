@@ -11,6 +11,7 @@ import {
   isConfiguredReasoningEffort,
   normalizeClaudeModelId,
   normalizeCopilotModelId,
+  modelNormalizations,
   routeModelId,
   slotPreparations,
 } from "../../src/lib/models"
@@ -283,6 +284,19 @@ test("a cold routing source snapshotted many times prepares once", () => {
   }
 
   assert.equal(slotPreparations() - before, 1)
+})
+
+test("a slot the warm catalog omits is normalized once per generation and catalog", () => {
+  runtimeState.modelRouting = { gptModel: "GPT-NOT-LISTED[1m]", opusModel: "claude-opus-5.5" }
+  useCatalog([["claude-opus-5.5", 1_000_000]])
+  withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet"))
+  const before = modelNormalizations()
+
+  for (let index = 0; index < 100; index++) {
+    assert.equal(withRuntimeState(snapshotRuntimeState(), () => routeModelId("sonnet")), "gpt-not-listed")
+  }
+
+  assert.equal(modelNormalizations() - before, 0)
 })
 
 test("a snapshot keeps the two-field routing shape", () => {

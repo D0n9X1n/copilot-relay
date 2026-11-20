@@ -2425,6 +2425,26 @@ test("warm requests do not normalize the admitted model again", async () => {
 
       assert.equal(modelNormalizations() - before, 0, `${model}${webSearch ? " with WebSearch" : ""}`)
     }
+
+    await countTokens(app, "sonnet")
+    const beforeCount = modelNormalizations()
+    for (let index = 0; index < 100; index++) {
+      assert.equal((await countTokens(app, "sonnet")).status, 200)
+    }
+
+    assert.equal(modelNormalizations() - beforeCount, 0, "count_tokens")
+
+    // An explicit webSearchBackend is raw text, not an admitted slot, even spelled like one.
+    const explicit = createTestProxy(mock.baseUrl, {
+      modelCatalog: catalog,
+      claudeUpstreamApi: "chat-completions",
+      webSearchBackend: "gpt-5.5",
+    })
+    await (await post(explicit, "sonnet", true)).text()
+    const beforeExplicit = modelNormalizations()
+    await (await post(explicit, "sonnet", true)).text()
+
+    assert.ok(modelNormalizations() - beforeExplicit > 0, "explicit webSearchBackend is normalized")
   } finally {
     delete runtimeState.upstreamBaseUrl
     delete runtimeState.modelCatalog

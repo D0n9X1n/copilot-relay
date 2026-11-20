@@ -12,7 +12,6 @@ import {
 import { removeBillingLine } from "~/claude/billing-line"
 import { getClaudeRequestInitiator } from "~/claude/initiator"
 import {
-  translateModelName,
   translateToClaude,
   translateToOpenAI,
   validateClaudeMessages,
@@ -39,7 +38,7 @@ import { resolveWebSearchStreamDecision } from "~/claude/web-search-stream"
 import type { ProxyEnv } from "~/lib/config"
 import { HTTPError, ProxyNotImplementedError } from "~/lib/error"
 import { log } from "~/lib/log"
-import { getRequestReasoningEffort, getSlotModelIds, normalizeCopilotModelId, routeModelSlot, slotModelId } from "~/lib/models"
+import { admitSlot, getRequestReasoningEffort, getSlotModelIds, normalizeCopilotModelId, routeModelSlot } from "~/lib/models"
 import { getClaudeTurnEffort, UpstreamToolInputError } from "~/claude/utils"
 import { getTokenCount, isSupportedTokenizer, type TokenizerModel } from "~/lib/tokenizer"
 import type { ChatCompletionChunk, ChatCompletionResponse } from "~/copilot/types"
@@ -596,7 +595,7 @@ claudeRoutes.post("/messages", async (c) => {
 
     // One routing decision per request: the slot is chosen here and never again.
     const slot = routeModelSlot(claudePayload.model)
-    upstreamModel = slotModelId(slot)
+    upstreamModel = admitSlot(slot)
     const validate = () => {
       if (shouldUseNativeMessages(config, upstreamModel)) {
         validateNativeMessages(claudePayload)
@@ -618,7 +617,7 @@ claudeRoutes.post("/messages", async (c) => {
 
     // Discovery can replace the catalog and so the slot's wire spelling; the slot itself stays. This
     // model is the one selected, validated and executed.
-    upstreamModel = slotModelId(slot)
+    upstreamModel = admitSlot(slot)
     const selection = requireCopilotEndpoint(config, upstreamModel)
 
     validate()
@@ -746,7 +745,8 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     const claudeBeta = c.req.header("claude-beta")
     // Count the system prompt the routes send, without Claude Code's billing line.
     const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
-    const routedModel = translateModelName(claudePayload.model)
+    // Admitted like a message request, so later lookups take the slot as already normalized.
+    const routedModel = admitSlot(routeModelSlot(claudePayload.model))
     const countPayload =
       shouldUseNativeMessages(c.get("config"), routedModel) ?
         {

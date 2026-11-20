@@ -2,9 +2,16 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import type { ConfiguredReasoningEffort } from "~/lib/models"
 import type { ModelRoutingConfig } from "~/lib/models"
-import type { CopilotModelCatalog } from "~/copilot/models"
+import type { CopilotModel, CopilotModelCatalog } from "~/copilot/models"
+
+// The slot IDs a request admitted, in the wire spelling of the catalog they were prepared for.
+export interface AdmittedModels {
+  catalog: ReadonlyMap<string, CopilotModel> | undefined
+  ids: ReadonlySet<string>
+}
 
 export interface RuntimeState {
+  admitted?: AdmittedModels
   debug?: boolean
   modelRouting?: ModelRoutingConfig
   modelCatalog?: CopilotModelCatalog

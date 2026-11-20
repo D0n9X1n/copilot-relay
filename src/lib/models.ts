@@ -84,13 +84,23 @@ export const resolveReasoningEffort = (
   requested ?? getRuntimeState().thinkEffort ?? defaultReasoningEffort
 
 // A catalog fetched before a reload switched upstreams does not describe this one's models.
-const currentCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
+export const currentCopilotCatalog = (): ReadonlyMap<string, CopilotModel> | undefined => {
   const state = getRuntimeState()
   return state.modelCatalog?.baseUrl === state.upstreamBaseUrl ? state.modelCatalog?.models : undefined
 }
 
-// The ID Copilot receives: every [1m] stripped, in the current catalog's casing.
-export const normalizeCopilotModelId = (model: string): string => canonicalModelId(model, currentCatalog())
+// The ID Copilot receives: every [1m] stripped, in the current catalog's casing. A slot this request
+// admitted is already in that spelling, so for the catalog that admitted it the ID is returned as is.
+const canonicalInCurrentCatalog = (model: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
+  const admitted = getRuntimeState().admitted
+  if (admitted !== undefined && admitted.catalog === catalog && admitted.ids.has(model)) {
+    return model
+  }
+
+  return canonicalModelId(model, catalog)
+}
+
+export const normalizeCopilotModelId = (model: string): string => canonicalInCurrentCatalog(model, currentCopilotCatalog())
 
 export const isClaudeModelId = (model: string): boolean => model.startsWith("claude-")
 
@@ -100,8 +110,8 @@ export const isClaudeModelId = (model: string): boolean => model.startsWith("cla
  * unknown window leaves the ID as given. [1m] overrides Claude Code's numeric context setting.
  */
 export const normalizeClaudeModelId = (model: string, contextWindowTokens?: number): string => {
-  const catalog = currentCatalog()
-  const canonical = canonicalModelId(model, catalog)
+  const catalog = currentCopilotCatalog()
+  const canonical = canonicalInCurrentCatalog(model, catalog)
   const contextWindow = contextWindowTokens ?? catalog?.get(canonical)?.limits?.max_context_window_tokens
   if (contextWindow === undefined) {
     return model
@@ -144,7 +154,7 @@ const prepareSlots = (routing: ModelRoutingConfig, catalog: ReadonlyMap<string, 
 
 const getPreparedSlots = (): PreparedSlots => {
   const routing = getConfiguredModelRouting()
-  const catalog = currentCatalog()
+  const catalog = currentCopilotCatalog()
   const generation = routingGeneration(routing)
   let slots = preparedSlots.get(generation)
   if (slots === undefined) {
@@ -213,6 +223,17 @@ export const slotModelId = (slot: ModelSlot): string => getPreparedSlots()[slot]
 
 export const routeModelId = (model: string): string => slotModelId(routeModelSlot(model))
 
+/**
+ * Records a slot this request admitted, with the default WebSearch backend (the GPT slot), for the
+ * current catalog, so later lookups within the request take them as already normalized. Called again
+ * after discovery replaces the catalog. Only the request's own runtime snapshot is changed.
+ */
+export const admitSlot = (slot: ModelSlot): string => {
+  const prepared = getPreparedSlots()
+  getRuntimeState().admitted = { catalog: currentCopilotCatalog(), ids: new Set([prepared[slot], prepared.gptModel]) }
+  return prepared[slot]
+}
+
 // Each catalog's keys by their lowercase form, built on first use. A published catalog is never
 // changed in place, so an index stays valid for as long as its catalog lives.
 const catalogIndexes = new WeakMap<ReadonlyMap<string, CopilotModel>, Map<string, string>>()
@@ -244,11 +265,6 @@ export const modelNormalizations = (): number => normalizations
 // Every [1m] is stripped, then the catalog key matching case-insensitively wins. Copilot catalog
 // IDs are lowercase, so an ID the catalog does not list is lowercased.
 export const canonicalModelId = (id: string, catalog: ReadonlyMap<string, CopilotModel> | undefined): string => {
-  // An ID that is already a catalog key, as every admitted ID is, is returned as is.
-  if (catalog?.has(id) === true) {
-    return id
-  }
-
   normalizations++
   const lower = id.replace(/\[1m\]/gi, "").toLowerCase()
   if (catalog === undefined) {
