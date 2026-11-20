@@ -714,20 +714,53 @@ const modelsOnSeveralRoutes = (rows: Array<CacheRow>): Set<string> => {
   return new Set([...routes].filter(([, seen]) => seen.size > 1).map(([model]) => model))
 }
 
+// An hour's label in the trend: "MM-DD HH:00" for the first hour of each day and "HH:00" after it, so
+// the column stays narrow. A repeated hour keeps its UTC offset. The bucket itself is unchanged in JSON.
+const hourLabels = (rows: Array<CacheRow>): Map<CacheRow, string> => {
+  const labels = new Map<CacheRow, string>()
+  let day = ""
+  let bucket = ""
+  for (const row of rows) {
+    const [date = "", ...rest] = (row.bucket ?? "").split(" ")
+    const time = rest.join(" ")
+    if (row.bucket === bucket) {
+      labels.set(row, "")
+    } else if (date === day) {
+      labels.set(row, time)
+    } else {
+      labels.set(row, `${date.slice(5)} ${time}`)
+    }
+
+    day = date
+    bucket = row.bucket ?? ""
+  }
+
+  // A later hour lines up under the time of the first, so labels are right-aligned to the widest one.
+  const width = Math.max(0, ...[...labels.values()].map((label) => label.length))
+  for (const [row, label] of labels) {
+    labels.set(row, label === "" ? "" : label.padStart(width))
+  }
+
+  return labels
+}
+
 // The table answers whether the cache works for each model and route: what the row is, how much
 // traffic its rate rests on, and the rate. The summary has a ROUTE column; a trend leads with the
 // hour or day, shown once for the rows that share it, and names a route only where a model used two.
 const tableColumns = (rows: Array<CacheRow>, view: CacheView, unicode: boolean): Array<TableColumn<CacheRow>> => {
   const several = modelsOnSeveralRoutes(rows)
+  const hours = hourLabels(rows)
   const model: TableColumn<CacheRow> =
     view === "summary" ?
       { header: "MODEL", align: "left", cell: (row) => row.model }
     : { header: "MODEL", align: "left", cell: (row) => several.has(row.model) ? `${row.model} (${row.route})` : row.model }
 
-  const lead: Array<TableColumn<CacheRow>> =
-    view === "summary" ?
-      [model, { header: "ROUTE", align: "left", cell: (row) => row.route }]
-    : [{ header: view === "hourly" ? "HOUR" : "DAY", align: "left", cell: (row) => row.bucket ?? "", repeatBlank: true }, model]
+  const leads: Record<CacheView, Array<TableColumn<CacheRow>>> = {
+    summary: [model, { header: "ROUTE", align: "left", cell: (row) => row.route }],
+    hourly: [{ header: "HOUR", align: "left", cell: (row) => hours.get(row) ?? "" }, model],
+    daily: [{ header: "DAY", align: "left", cell: (row) => row.bucket ?? "", repeatBlank: true }, model],
+  }
+  const lead = leads[view]
 
   return [
     ...lead,

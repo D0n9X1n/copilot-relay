@@ -27,6 +27,7 @@ const {
 } = await import("../../src/lib/cache-report")
 const { flushLogs } = await import("../../src/lib/log")
 const { paths } = await import("../../src/lib/paths")
+const { displayWidth } = await import("../../src/lib/terminal")
 const { RequestTrace, recordedFetch, withRequestTrace } = await import("../../src/lib/request-trace")
 type CacheArguments = import("../../src/lib/cache-report").CacheArguments
 type CacheReportOptions = import("../../src/lib/cache-report").CacheReportOptions
@@ -428,14 +429,19 @@ test("an hourly trend shows each hour once, and names the route only for a model
   assert.deepEqual(renderCacheReport(rows, options, false, true), [
     "Prompt-cache hit rate by hour · last 24 h · goal 95%",
     "",
-    "  HOUR              MODEL                                REQUESTS  TOKENS  HIT RATE",
-    "  2026-10-03 12:00  claude-opus-5.5 (/chat/completions)         1      1K  ✓ 99.00%",
-    "                    claude-opus-5.5 (/v1/messages)              1      1K  ✓ 99.00%",
-    "                    gpt-6.2-astra                               1      2K  ✗ 50.00%",
-    "  2026-10-03 13:00  gpt-6.2-astra                               1      4M  ✓ 97.50%",
+    "  HOUR         MODEL                                REQUESTS  TOKENS  HIT RATE",
+    "  10-03 12:00  claude-opus-5.5 (/chat/completions)         1      1K  ✓ 99.00%",
+    "               claude-opus-5.5 (/v1/messages)              1      1K  ✓ 99.00%",
+    "               gpt-6.2-astra                               1      2K  ✗ 50.00%",
+    "        13:00  gpt-6.2-astra                               1      4M  ✓ 97.50%",
     "",
     "1 of 4 rows with a known rate is below the goal.",
   ])
+
+  // A model on two routes fits 80 columns: the day is printed once and each later hour alone.
+  for (const line of renderCacheReport(rows, options, false, true)) {
+    assert.ok(displayWidth(line) <= 80, line)
+  }
 })
 
 // The suite runs in Asia/Kolkata, which has no daylight saving. These tests need other zones.

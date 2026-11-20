@@ -191,6 +191,8 @@ the printed `HIT RATE` is below the goal.
 
 `--hourly` and `--daily` lead with an `HOUR` or `DAY` column in local time,
 matching the dates in the log file names, shown once for the rows that share it.
+`HOUR` gives the month and day with the first hour of each day, such as
+`10-03 12:00`, and the time alone after it; `--json` keeps the full date.
 They leave out `ROUTE`, which the summary shows; a model that used more than one
 route in the window gets the route after its name, such as
 `claude-opus-5.5 (/v1/messages)`.
@@ -198,10 +200,10 @@ route in the window gets the route after its name, such as
 ```text
 Prompt-cache hit rate by hour · last 24 h · goal 95%
 
-  HOUR              MODEL               REQUESTS  TOKENS  HIT RATE
-  2026-10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
-                    claude-opus-5.5            2   31.4K  ✓ 98.38%
-                    gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
+  HOUR         MODEL               REQUESTS  TOKENS  HIT RATE
+  10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
+               claude-opus-5.5            2   31.4K  ✓ 98.38%
+               gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
 ```
 
 When clocks go back, a local hour that happens twice gets one row per real hour,

@@ -152,16 +152,17 @@ HIT RATE leaves out 1 call that logged no cache_read_input_tokens.
 打印出的 `HIT RATE` 低于目标时，它才标记为 `✗`，且一定标记为 `✗`。
 
 `--hourly` 和 `--daily` 以一列本地时间的 `HOUR` 或 `DAY` 开头，与日志文件名中的日期一致；
-共用同一小时或同一天的行只显示一次。它们不显示汇总中的 `ROUTE`；在时间窗口内用过不止一条路由的模型，
+共用同一小时或同一天的行只显示一次。`HOUR` 在每天的第一个小时显示月和日，例如 `10-03 12:00`，
+之后只显示时间；`--json` 仍保留完整日期。它们不显示汇总中的 `ROUTE`；在时间窗口内用过不止一条路由的模型，
 会在名称后加上路由，例如 `claude-opus-5.5 (/v1/messages)`。
 
 ```text
 Prompt-cache hit rate by hour · last 24 h · goal 95%
 
-  HOUR              MODEL               REQUESTS  TOKENS  HIT RATE
-  2026-10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
-                    claude-opus-5.5            2   31.4K  ✓ 98.38%
-                    gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
+  HOUR         MODEL               REQUESTS  TOKENS  HIT RATE
+  10-03 12:00  claude-opus-5-5            1   31.7K  ✓ 98.36%
+               claude-opus-5.5            2   31.4K  ✓ 98.38%
+               gpt-5.5-2026-04-23         1   19.3K  ✗ 92.86%
 ```
 
 时钟回拨时，重复出现的本地小时按每个真实小时各占一行，并以各自的 UTC 偏移量结尾，例如
