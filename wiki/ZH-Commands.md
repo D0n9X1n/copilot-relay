@@ -295,7 +295,8 @@ Copilot chat models · 4 of 6
 `gptModel` 和 `opusModel` 行，并对启动检查会拒绝的值给出警告。`--deep` 检查
 `--model` 给出的 ID，或目录中的每个条目。它只向能够探测、且在总超时之前轮到的条目发送真实请求；
 其他条目只得到一个状态，不发送请求。这些请求经过在命令自身进程内构建的中继管线，而不是正在运行的
-中继，并会消耗 Copilot 用量。其他所有选项都需要 `--deep`，搜索也不能与它同时使用：先找到 ID，再用
+中继，并会消耗 Copilot 用量。`--details`、`--model`、`--effort`、`--max-tokens`、`--timeout` 和
+`--total-timeout` 需要 `--deep`；`--all` 不需要。搜索不能与 `--deep` 同时使用：先找到 ID，再用
 `--deep --model <id>` 测试。它像 `start` 一样加载 `config.yaml` 并登录；加 `--deep` 时，设备码提示
 输出到 stderr。
 

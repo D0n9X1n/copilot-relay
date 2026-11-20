@@ -360,8 +360,9 @@ would reject.
 request only to an entry it can probe before the total timeout; the other entries
 get a status without a request. The requests go through a relay pipeline built
 inside the command's own process rather than a running relay, and consume Copilot
-usage. Every other option requires `--deep`, and a search cannot be combined with
-it: find the ID first, then test it with `--deep --model <id>`. It loads
+usage. `--details`, `--model`, `--effort`, `--max-tokens`, `--timeout` and
+`--total-timeout` require `--deep`; `--all` does not. A search cannot be combined
+with `--deep`: find the ID first, then test it with `--deep --model <id>`. It loads
 `config.yaml` and signs in as `start` does; with `--deep`, the device-code prompt
 goes to stderr.
 
