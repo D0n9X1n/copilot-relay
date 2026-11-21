@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="670" height="501" viewBox="0 0 670 501">
+  <rect width="670" height="501" rx="10" fill="#0d1117"/>
+  <path d="M0 10a10 10 0 0 1 10-10h650a10 10 0 0 1 10 10v24h-670z" fill="#161b22"/>
+  <rect x="0.5" y="0.5" width="669" height="500" rx="10" fill="none" stroke="#30363d"/>
+  <circle cx="20" cy="17" r="6" fill="#ff5f57"/><circle cx="40" cy="17" r="6" fill="#febc2e"/><circle cx="60" cy="17" r="6" fill="#28c840"/>
+  <text x="335" y="21" text-anchor="middle" fill="#8b949e" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="12">copilot-relay models</text>
+  <g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#e6edf3" xml:space="preserve">
+    <text x="20" y="54"><tspan font-weight="bold">$</tspan> copilot-relay models</text>
+    <text x="20" y="73"><tspan font-weight="bold">Copilot chat models</tspan> · 9 of 9</text>
+    <text x="20" y="92"></text>
+    <text x="20" y="111">  <tspan font-weight="bold">MODEL</tspan>              <tspan font-weight="bold">NAME</tspan>                    <tspan font-weight="bold">COST</tspan>    <tspan font-weight="bold">CONTEXT</tspan>  <tspan font-weight="bold">SLOT</tspan></text>
+    <text x="20" y="130">  claude-haiku-5.5   <tspan fill="#6e7681">Claude Haiku 5.5</tspan>   <tspan fill="#2a9d4a">$0.1/$0.5</tspan>       200K</text>
+    <text x="20" y="149">  <tspan font-weight="bold">claude-opus-5.5</tspan>    <tspan fill="#6e7681">Claude Opus 5.5</tspan>       <tspan fill="#c55c21">$4/$20</tspan>    1M [1m]  ◀ opusModel</text>
+    <text x="20" y="168">  claude-sonnet-5.5  <tspan fill="#6e7681">Claude Sonnet 5.5</tspan>     <tspan fill="#ad7806">$2/$10</tspan>    1M [1m]</text>
+    <text x="20" y="187">  gpt-4.1            <tspan fill="#6e7681">GPT-4.1</tspan>                <tspan fill="#2a9d4a">$0/$0</tspan>       128K</text>
+    <text x="20" y="206">  gpt-5.3-codex      <tspan fill="#6e7681">GPT-5.3 Codex</tspan>      <tspan fill="#b96b13">$1.75/$14</tspan>       400K</text>
+    <text x="20" y="225">  gpt-6-luna         <tspan fill="#6e7681">GPT-6 Luna</tspan>         <tspan fill="#2a9d4a">$0.1/$0.5</tspan>       400K</text>
+    <text x="20" y="244">  gpt-6.1-terra      <tspan fill="#6e7681">GPT-6.1 Terra</tspan>          <tspan fill="#8f830e">$1/$5</tspan>       400K</text>
+    <text x="20" y="263">  <tspan font-weight="bold">gpt-6.2-astra</tspan>      <tspan fill="#6e7681">GPT-6.2 Astra</tspan>         <tspan fill="#d73a3a">$8/$40</tspan>  1.1M [1m]  ◀ gptModel</text>
+    <text x="20" y="282">  grok-4.7           <tspan fill="#6e7681">Grok 4.7</tspan>               <tspan fill="#978109">$2/$6</tspan>       500K</text>
+    <text x="20" y="301"></text>
+    <text x="20" y="320"><tspan fill="#6e7681">Inference, tool, and effort compatibility are not verified by this listing.</tspan></text>
+    <text x="20" y="339"><tspan fill="#6e7681">Test one with copilot-relay models --deep --model &lt;id&gt;</tspan></text>
+    <text x="20" y="358"><tspan fill="#6e7681">(a real request, so it consumes Copilot usage).</tspan></text>
+    <text x="20" y="377"></text>
+    <text x="20" y="396">Config file: ~/.copilot-relay/config.yaml</text>
+    <text x="20" y="415">  gptModel: gpt-6.2-astra     # requests without &quot;opus&quot; in the model name</text>
+    <text x="20" y="434">  opusModel: claude-opus-5.5  # requests with &quot;opus&quot; in the model name</text>
+    <text x="20" y="453">Set gptModel or opusModel to a chat model ID exactly as listed.</text>
+    <text x="20" y="472">A running relay uses the change for new requests; a restart rechecks it.</text>
+  </g>
+</svg>
