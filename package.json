@@ -36,6 +36,7 @@
   "scripts": {
     "build": "tsdown",
     "prepack": "npm run build",
+    "screenshot": "node --import tsx scripts/readme-screenshot.ts",
     "start": "node dist/main.js",
     "test": "npm run test:unit && npm run test:integration",
     "test:integration": "node --import ./scripts/test-bootstrap.mjs --import tsx --test \"tests/integration/**/*.test.ts\"",

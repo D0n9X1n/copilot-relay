@@ -300,6 +300,15 @@ matching nothing. In-repo, that change and its doc update land in the same
 review. Treat a user-visible path, flag, or command change as incomplete until
 `wiki/` reflects it.
 
+### The README screenshot
+
+The README shows `.github/assets/models.svg`, a terminal window drawn from real
+`copilot-relay models` output. `npm run screenshot` regenerates it: it runs the
+CLI from `src/` against a stand-in catalog with Copilot's prices, in a throwaway
+home with 24-bit color forced and every outside connection refused, and draws the
+colored output as SVG. Regenerate it in the same change as any change to what
+`models` prints, so the picture stays true.
+
 ### Verifying a wiki change
 
 A merged doc change is not done until the publish workflow succeeded **and** the
