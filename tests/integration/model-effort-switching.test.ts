@@ -336,7 +336,7 @@ function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
   return messages.flatMap((message): Message[] => {
     // The Claude chat route sends operator text as an in-place reminder turn.
     if (message.role === "system" && model.startsWith("claude-")) {
-      const text = typeof message.content === "string" ? message.content : message.content.map((block) => block.text).join("\n\n")
+      const text = typeof message.content === "string" ? message.content : message.content.map((block) => block.type === "text" ? block.text : "").join("\n\n")
       return text.trim() ? [{ role: "user", content: `<system-reminder>\n${text}\n</system-reminder>` }] : []
     }
 
@@ -345,7 +345,7 @@ function expectedHistory(messages: ClaudeMessage[], model: string): Message[] {
     }
 
     if (message.role === "system") {
-      const text = message.content.map((block) => block.text).join("\n\n")
+      const text = message.content.map((block) => block.type === "text" ? block.text : "").join("\n\n")
       return text ? [{ role: "system", content: text }] : []
     }
 
@@ -787,4 +787,45 @@ for (const model of [opus, gpt]) {
       assert.equal(calls, 1, "do not retry using another model or effort")
     })
   }
+}
+
+for (const model of [opus, gpt]) {
+  test(`an effort switch on a tool-change message waits for the next user turn on the wire, model=${model}`, async () => {
+    const app = createServer(config())
+    const sent: Array<{ effort?: string; tools: Array<string> }> = []
+    const addition = {
+      type: "tool_addition",
+      tool: { type: "tool_definition", definition: { name: "EnterWorktree", description: "Fixture.", input_schema: { type: "object", properties: {} } } },
+    }
+    const history = [
+      { role: "user", content: "First." },
+      { role: "assistant", content: "Earlier answer." },
+      { role: "system", content: [{ type: "text", text: "EnterWorktree is now available." }, addition], output_config: { effort: "high" } },
+    ]
+
+    await withRecordedTransport({
+      refresh: async () => {},
+      fetch: async (request) => {
+        const body = JSON.parse(request.body!) as WireBody
+        const responses = model.startsWith("gpt-")
+        sent.push({
+          effort: responses ? body.reasoning?.effort : body.reasoning_effort,
+          tools: (body.tools ?? []).map((tool) => responses ? tool.name! : tool.function!.name),
+        })
+        return Response.json(responses
+          ? { id: "resp", created_at: 1, model, status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }
+          : { id: "chat", created: 1, model, choices: [{ index: 0, message: { role: "assistant", content: "OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })
+      },
+    }, async () => {
+      for (const messages of [history, [...history, { role: "user", content: "Continue." }]]) {
+        const response = await post(app, { model: selector(model), max_tokens: 256, output_config: { effort: "low" }, messages } as unknown as ClaudeMessagesPayload)
+        assert.equal(response.status, 200, await response.clone().text())
+        await response.text()
+      }
+    })
+
+    // Before the next user turn the request's own effort applies; after it, the switch does.
+    assert.deepEqual(sent.map((request) => request.effort), ["low", "high"])
+    assert.ok(sent.every((request) => request.tools.includes("EnterWorktree")))
+  })
 }

@@ -241,13 +241,19 @@ const buildSearchInput = (
     .flatMap((message) => {
       const text = textFromMessageContent(message.content)
 
-      // Skip an empty control message, as the chat translation does.
+      // Skip an empty control message and a message of only tool changes, as the chat
+      // translation does.
+      if (message.role === "system" && Array.isArray(message.content) && message.content.length > 0
+        && message.content.every((block) => block.type !== "text")) {
+        return []
+      }
+
       if (
         message.role === "system"
         && message.output_config !== undefined
         && (typeof message.content === "string"
           ? message.content.length === 0
-          : message.content.every((block) => block.text.length === 0))
+          : message.content.every((block) => block.type !== "text" || block.text.length === 0))
       ) {
         return []
       }

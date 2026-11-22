@@ -11,6 +11,7 @@ import {
 } from "~/claude/types"
 import { removeBillingLine } from "~/claude/billing-line"
 import { getClaudeRequestInitiator } from "~/claude/initiator"
+import { foldClaudeToolChanges } from "~/claude/tool-changes"
 import {
   translateToClaude,
   translateToOpenAI,
@@ -275,7 +276,7 @@ const translationEndpoint = (config: ProxyEnv["Variables"]["config"], model: str
 // name again, so a catalog refreshed during admission cannot send it somewhere else.
 const handleClaudeMessageRequest = async (
   config: ProxyEnv["Variables"]["config"],
-  claudePayload: ClaudeMessagesPayload,
+  receivedPayload: ClaudeMessagesPayload,
   upstreamModel: string,
   initiator: "agent" | "user",
   requestSignal: AbortSignal | undefined,
@@ -286,12 +287,15 @@ const handleClaudeMessageRequest = async (
   if (shouldUseNativeMessages(config, upstreamModel)) {
     return handleNativeMessages(
       config,
-      { ...claudePayload, model: upstreamModel },
+      { ...receivedPayload, model: upstreamModel },
       { requestId, initiator, signal: requestSignal, headers: requestHeaders },
       writeEvent,
     )
   }
 
+  // Tools defined by value in a system message join tools[] before anything reads the tool list:
+  // WebSearch detection, the name mapper, translation and the search limit.
+  const claudePayload = foldClaudeToolChanges(receivedPayload)
   const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
   const decisionPayload =
     shouldLetModelDecideWebSearch ?
@@ -746,8 +750,12 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     // Count the system prompt the routes send, without Claude Code's billing line.
     const claudePayload = removeBillingLine(await c.req.json<ClaudeMessagesPayload>())
     const routedModel = slotModelId(routeModelSlot(claudePayload.model))
-    const countPayload =
-      shouldUseNativeMessages(c.get("config"), routedModel) ?
+    const nativeRoute = shouldUseNativeMessages(c.get("config"), routedModel)
+    // Validate the messages as the selected route would, before reading them, so a malformed
+    // message or tool definition is a 400 rather than a failed count.
+    validateClaudeMessages(claudePayload.messages, nativeRoute)
+    const routePayload =
+      nativeRoute ?
         {
           ...claudePayload,
           // Controls affect native execution, not local advisory token counting.
@@ -762,6 +770,8 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
           }),
         }
       : claudePayload
+    // Count the tools the route sends, tools defined by value included.
+    const countPayload = foldClaudeToolChanges(routePayload)
     // Count what the selected route sends, including reminder turns on the Claude chat route.
     const openAIPayload = translateToOpenAI(countPayload, undefined, undefined, {
       endpoint: translationEndpoint(c.get("config"), routedModel),
@@ -783,10 +793,10 @@ claudeRoutes.post("/messages/count_tokens", async (c) => {
     // Claude Code already accounts for MCP tool payloads differently. For
     // non-MCP local tools, add a small Claude-family overhead to avoid
     // under-reporting context use in the UI.
-    if (claudePayload.tools && claudePayload.tools.length > 0) {
+    if (countPayload.tools && countPayload.tools.length > 0) {
       let hasMcpTools = false
       if (claudeBeta?.startsWith("claude-code")) {
-        hasMcpTools = claudePayload.tools.some((tool) =>
+        hasMcpTools = countPayload.tools.some((tool) =>
           tool.name.startsWith("mcp__"),
         )
       }

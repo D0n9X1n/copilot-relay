@@ -21,6 +21,7 @@ import {
   type ClaudeMessage,
   type ClaudeMessagesPayload,
   type ClaudeResponse,
+  type ClaudeSystemContentBlock,
   type ClaudeTextBlock,
   type ClaudeThinkingBlock,
   type ClaudeTool,
@@ -110,12 +111,69 @@ export function validateClaudeMessages(messages: ClaudeMessage[], native = false
       throw invalidMessage("Translated system controls support only output_config.effort with low, medium, high, xhigh, or max; other controls require the native Messages route.")
     }
 
-    if (typeof message.content !== "string" && (!Array.isArray(message.content)
-      || message.content.some((block) => !block || block.type !== "text" || typeof block.text !== "string"))) {
+    if (typeof message.content === "string") {
+      continue
+    }
+
+    if (!Array.isArray(message.content)) {
       throw invalidMessage("System message content must contain only text.")
+    }
+
+    for (const block of message.content as Array<unknown>) {
+      validateSystemContentBlock(block)
     }
   }
 }
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+// A definition must be a client tool with its input schema: the translated routes send it as an
+// OpenAI function. A typed server tool, such as web_search, cannot be defined in a message here;
+// its 400 names tool_addition, so Claude Code retries with the tool declared another way.
+const isToolDefinition = (value: unknown): boolean =>
+  isPlainObject(value)
+  && typeof value.name === "string"
+  && isPlainObject(value.input_schema)
+  && (value.type === undefined || value.type === "custom")
+  && (value.description === undefined || typeof value.description === "string")
+
+// A system message holds text, or the mid-conversation tool changes Claude Code sends: a tool added
+// by value or by reference, or a tool removed by reference. A malformed change names its block type,
+// which is the wording Claude Code recognizes when it retries without the change.
+function validateSystemContentBlock(block: unknown): void {
+  if (!isPlainObject(block)) {
+    throw invalidMessage("System message content must contain only text.")
+  }
+
+  if (block.type === "text" && typeof block.text === "string") {
+    return
+  }
+
+  if (block.type !== "tool_addition" && block.type !== "tool_removal") {
+    throw invalidMessage("System message content must contain only text.")
+  }
+
+  const tool = block.tool
+  const isReference = isPlainObject(tool) && tool.type === "tool_reference" && typeof tool.name === "string"
+  const isDefinition = isPlainObject(tool) && tool.type === "tool_definition" && isToolDefinition(tool.definition)
+  if (block.type === "tool_removal" && !isReference) {
+    throw invalidMessage("A tool_removal block must name a tool with a tool_reference.")
+  }
+
+  if (block.type === "tool_addition" && !isReference && !isDefinition) {
+    throw invalidMessage("A tool_addition block must hold a tool_reference with a name, or a tool_definition of a client tool with a name and an input_schema.")
+  }
+}
+
+// The text a system message's blocks carry. Tool changes carry none.
+const systemTextBlocks = (content: Array<ClaudeSystemContentBlock>): Array<ClaudeTextBlock> =>
+  content.filter((block): block is ClaudeTextBlock => block.type === "text")
+
+// A system message whose only blocks are tool changes: the translated routes send its tools in
+// tools[], so it adds no message of its own.
+const holdsOnlyToolChanges = (content: string | Array<ClaudeSystemContentBlock>): boolean =>
+  Array.isArray(content) && content.length > 0 && systemTextBlocks(content).length === 0
 
 function translateClaudeMessagesToOpenAI(
   claudeMessages: Array<ClaudeMessage>,
@@ -182,18 +240,25 @@ function translateClaudeMessage(
       return handleUserMessage(message)
     case "assistant":
       return handleAssistantMessage(message, toolNameMapper)
-    case "system":
-      // An empty control message carries only effort, which getClaudeTurnEffort reads.
+    case "system": {
+      // An empty control message carries only effort, which getClaudeTurnEffort reads. A message
+      // that holds only tool changes adds nothing either: its tools travel in tools[].
+      if (holdsOnlyToolChanges(message.content)) {
+        return []
+      }
+
+      const content = typeof message.content === "string" ? message.content : systemTextBlocks(message.content)
       if (
         message.output_config !== undefined
-        && (typeof message.content === "string"
-          ? message.content.length === 0
-          : message.content.every((block) => block.text.length === 0))
+        && (typeof content === "string"
+          ? content.length === 0
+          : content.every((block) => block.text.length === 0))
       ) {
         return []
       }
 
-      return claudeChatRoute ? toSystemReminder(message.content) : handleSystemPrompt(message.content)
+      return claudeChatRoute ? toSystemReminder(content) : handleSystemPrompt(content)
+    }
     default:
       throw invalidMessage("Unsupported message role.")
   }

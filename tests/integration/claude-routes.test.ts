@@ -284,6 +284,26 @@ const startMockCopilot = async (
         return
       }
 
+      // A test that names a function call gets it on a non-streaming chat request too.
+      if (options.functionCall && !payload.stream) {
+        response.end(JSON.stringify({
+          id: "chat_function_call",
+          created: 1,
+          model: payload.model,
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{ id: "call_chat_tool", type: "function", function: options.functionCall }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }))
+        return
+      }
+
       // The recompose pass after a search. Emitting a client tool call here is
       // the behavior a tool-less recompose pass would prevent: with no tools on the wire the model
       // could only describe what it intended to do. Non-streaming only: the
@@ -2464,3 +2484,277 @@ test("warm requests repeat no model canonicalization on any route", async () => 
     await mock.close()
   }
 })
+
+// Claude Code surfaces a deferred tool partway through a conversation with a system message that
+// carries the tool by value or by reference beside its announcement text.
+const surfacedDefinition = (name: string, extra: object = {}) => ({
+  name,
+  description: `${name} fixture.`,
+  input_schema: { type: "object", properties: {} },
+  ...extra,
+})
+const surfacedBy = (definition: object) => ({ type: "tool_addition", tool: { type: "tool_definition", definition } })
+
+test("POST /v1/messages accepts mid-conversation tool changes and sends a tool defined by value upstream", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    for (const stream of [false, true]) {
+      const response = await app.fetch(new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "anthropic-beta": "mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15",
+        },
+        body: JSON.stringify({
+          model: "opus",
+          stream,
+          max_tokens: 16,
+          tools: [surfacedDefinition("Read"), surfacedDefinition("LSP", { defer_loading: true })],
+          messages: [
+            { role: "user", content: "Continue the work." },
+            {
+              role: "system",
+              content: [
+                { type: "text", text: "The following tools just became available: EnterWorktree, LSP" },
+                surfacedBy(surfacedDefinition("EnterWorktree")),
+                { type: "tool_addition", tool: { type: "tool_reference", name: "LSP" } },
+              ],
+            },
+            { role: "assistant", content: "OK" },
+            { role: "user", content: "Next." },
+            { role: "system", content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "LSP" } }] },
+          ],
+        }),
+      }))
+
+      assert.equal(response.status, 200, await response.clone().text())
+      await response.text()
+    }
+
+    const sent = mock.requests.filter((request) => request.path === "/chat/completions")
+    assert.equal(sent.length, 2)
+    for (const request of sent) {
+      const body = request.body as { tools?: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: unknown }> }
+      assert.deepEqual(body.tools?.map((tool) => tool.function.name), ["Read", "LSP", "EnterWorktree"])
+      assert.deepEqual(body.messages.map((message) => message.role), ["user", "user", "assistant", "user"])
+      assert.match(String(body.messages[1]?.content), /<system-reminder>\nThe following tools just became available: EnterWorktree, LSP\n<\/system-reminder>/)
+    }
+  } finally {
+    await mock.close()
+  }
+})
+
+test("a WebSearch defined by value is run by the relay and keeps its max_uses", async () => {
+  // The model asks for two searches in one turn; max_uses 1 allows one retrieval.
+  const paths: Array<string> = []
+  const searchInputs: Array<string> = []
+  const server = createHttpServer(async (request, response) => {
+    const path = request.url ?? "/"
+    const body = await readJsonBody(request) as Record<string, unknown>
+    paths.push(path)
+    response.setHeader("content-type", "application/json")
+
+    if (path === "/responses") {
+      searchInputs.push(JSON.stringify(body.input))
+      response.end(JSON.stringify({
+        id: "resp_search",
+        created_at: 1,
+        model: "gpt-5.5",
+        status: "completed",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Copilot docs - https://docs.github.com/copilot" }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      }))
+      return
+    }
+
+    const call = (id: string, query: string) => ({ id, type: "function", function: { name: "WebSearch", arguments: JSON.stringify({ query }) } })
+    const firstPass = paths.filter((seen) => seen === "/chat/completions").length === 1
+    response.end(JSON.stringify({
+      id: "chat_search",
+      created: 1,
+      model: "claude-opus-4.8",
+      choices: [{
+        index: 0,
+        message: firstPass
+          ? { role: "assistant", content: null, tool_calls: [call("call_a", "copilot docs"), call("call_b", "copilot pricing")] }
+          : { role: "assistant", content: "Done." },
+        finish_reason: firstPass ? "tool_calls" : "stop",
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }))
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  try {
+    const app = createTestProxy(`http://127.0.0.1:${address.port}`)
+    const response = await app.fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "opus",
+        max_tokens: 16,
+        messages: [
+          { role: "user", content: "Hi." },
+          { role: "system", content: [{ type: "text", text: "WebSearch is now available." }, surfacedBy({ name: "WebSearch", description: "Search the web.", input_schema: { type: "object", properties: { query: { type: "string" } } }, max_uses: 1 })] },
+          { role: "system", content: [surfacedBy(surfacedDefinition("EnterWorktree"))] },
+          { role: "user", content: "search the web for copilot docs and pricing" },
+        ],
+      }),
+    }))
+    const body = await response.json() as { content: Array<{ type: string; content?: unknown }> }
+
+    assert.equal(response.status, 200)
+    // The relay bridged both calls: no client tool_use reaches the client.
+    assert.equal(body.content.some((block) => block.type === "tool_use"), false)
+    const results = body.content.filter((block) => block.type === "web_search_tool_result")
+    assert.equal(results.length, 2)
+    assert.equal((results[1]?.content as { error_code?: string }).error_code, "max_uses_exceeded")
+    // One retrieval ran; its input carries the announcement text and no tool-only system turn.
+    assert.equal(searchInputs.length, 1)
+    assert.match(searchInputs[0] ?? "", /WebSearch is now available/)
+    assert.doesNotMatch(searchInputs[0] ?? "", /system: \\n/)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
+
+test("other blocks in a system message still return 400 beside valid tool changes, before any upstream call", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const cases: Array<[unknown, RegExp]> = [
+      [{ type: "image", source: { type: "base64", media_type: "image/png", data: "" } }, /System message content must contain only text/],
+      [{ type: "tool_addition", tool: { type: "tool_definition", definition: { name: 7, input_schema: {} } } }, /tool_addition/],
+      [{ type: "tool_removal", tool: { type: "tool_definition", definition: surfacedDefinition("X") } }, /tool_removal/],
+      [{ type: "tool_addition" }, /tool_addition/],
+      [{ type: "tool_addition", tool: null }, /tool_addition/],
+    ]
+
+    for (const [block, message] of cases) {
+      for (const route of ["/v1/messages", "/v1/messages/count_tokens"]) {
+        const response = await app.fetch(new Request(`http://localhost${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "opus",
+            max_tokens: 16,
+            messages: [
+              { role: "user", content: "Hi." },
+              { role: "system", content: [surfacedBy(surfacedDefinition("EnterWorktree")), block] },
+            ],
+          }),
+        }))
+        const body = await response.json() as { error: { type: string; message: string } }
+
+        assert.equal(response.status, 400, `${route} ${JSON.stringify(block)}`)
+        assert.equal(body.error.type, "invalid_request_error")
+        assert.match(body.error.message, message)
+      }
+    }
+
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+test("count_tokens counts a tool defined by value the same as one declared in tools[]", async () => {
+  const mock = await startMockCopilot()
+  try {
+    const app = createTestProxy(mock.baseUrl)
+    const count = async (payload: object, beta?: string): Promise<number> => {
+      const response = await app.fetch(new Request("http://localhost/v1/messages/count_tokens", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(beta && { "claude-beta": beta }) },
+        body: JSON.stringify({ model: "opus", max_tokens: 16, ...payload }),
+      }))
+      assert.equal(response.status, 200)
+      return (await response.json() as { input_tokens: number }).input_tokens
+    }
+
+    for (const name of ["EnterWorktree", "mcp__fixture__lookup"]) {
+      const tool = surfacedDefinition(name)
+      const user = { role: "user", content: "Count the tokens in this sentence, please." }
+      const inline = await count({ messages: [user, { role: "system", content: [surfacedBy(tool)] }] }, "claude-code-20250219")
+      const declared = await count({ tools: [tool], messages: [user, { role: "system", content: [] }] }, "claude-code-20250219")
+      const none = await count({ messages: [user] }, "claude-code-20250219")
+
+      assert.equal(inline, declared, name)
+      assert.ok(inline > none, `${name}: ${inline} > ${none}`)
+    }
+
+    assert.equal(mock.requests.length, 0)
+  } finally {
+    await mock.close()
+  }
+})
+
+for (const [model, route] of [["opus", "/chat/completions"], ["default", "/responses"]] as const) {
+  test(`a long tool name defined by value keeps its own wire name and maps back on ${route}`, async () => {
+    // The inline name is longer than any model allows. A top-level tool already uses the name it
+    // would shorten to, so the mapper must give the inline tool a different wire name.
+    const inline = `mcp__${"fixture_server_".repeat(10)}lookup`
+    const schema = { type: "object", properties: {} }
+    const messages = [
+      { role: "user", content: "Hi." },
+      { role: "system", content: [surfacedBy({ name: inline, input_schema: schema })] },
+      { role: "user", content: "Use the lookup." },
+    ]
+    const wireNames = async (tools: Array<object>): Promise<Array<string>> => {
+      let names: Array<string> = []
+      const probe = await startMockCopilot(undefined, (request) => {
+        if (request.path !== route) {
+          return
+        }
+
+        const body = request.body as { tools: Array<{ name?: string; function?: { name: string } }> }
+        names = body.tools.map((tool) => tool.function?.name ?? tool.name ?? "")
+      })
+      try {
+        await (await createTestProxy(probe.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model, max_tokens: 32, tools, messages }),
+        }))).text()
+      } finally {
+        await probe.close()
+      }
+
+      return names
+    }
+
+    // The wire name the inline tool takes when nothing else is declared.
+    const [alone] = await wireNames([])
+    assert.ok(alone && alone.length < inline.length)
+    // Reserve that wire name for a top-level tool; the inline tool must move to another one.
+    const names = await wireNames([{ name: alone, input_schema: schema }])
+    assert.equal(names.length, 2)
+    assert.equal(names[0], alone)
+    assert.notEqual(names[1], alone)
+
+    // The model calls the inline tool by its wire name; the client sees the original name.
+    const calling = await startMockCopilot(undefined, undefined, {
+      functionCall: { name: names[1]!, arguments: "{}" },
+    })
+    try {
+      const response = await createTestProxy(calling.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, max_tokens: 32, tools: [{ name: alone, input_schema: schema }], messages }),
+      }))
+      const body = await response.json() as { content: Array<{ type: string; name?: string }> }
+
+      assert.equal(response.status, 200)
+      assert.equal(body.content.find((block) => block.type === "tool_use")?.name, inline)
+    } finally {
+      await calling.close()
+    }
+  })
+}

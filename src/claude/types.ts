@@ -115,9 +115,20 @@ export interface ClaudeAssistantMessage {
   content: string | Array<ClaudeAssistantContentBlock>
 }
 
+// A mid-conversation tool change. A tool_definition carries a whole tool and needs no entry in
+// tools[]; a tool_reference names a tool already declared there.
+export interface ClaudeToolChangeBlock {
+  type: "tool_addition" | "tool_removal"
+  tool:
+    | { type: "tool_definition"; definition: ClaudeTool }
+    | { type: "tool_reference"; name: string }
+}
+
+export type ClaudeSystemContentBlock = ClaudeTextBlock | ClaudeToolChangeBlock
+
 export interface ClaudeSystemMessage {
   role: "system"
-  content: string | Array<ClaudeTextBlock>
+  content: string | Array<ClaudeSystemContentBlock>
   output_config?: { effort: ReasoningEffort }
   clear_at?: "next_user_message"
 }

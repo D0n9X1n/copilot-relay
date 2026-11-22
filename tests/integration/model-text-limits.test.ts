@@ -174,6 +174,8 @@ for (const claudeUpstreamApi of ["auto", "messages"] as const) {
         { ...payload, output_config: undefined, reasoning_effort: "invalid" },
         { ...payload, messages: [{ role: "system", content: [{ type: "image", source: {} }], clear_at: "next_user_message" }] },
         { ...payload, messages: [{ role: "unsupported", content: "invalid role" }] },
+        { ...payload, messages: null },
+        { ...payload, messages: [null] },
       ]) {
         const rejected = await post(invalid)
 
