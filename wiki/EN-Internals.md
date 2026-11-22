@@ -308,6 +308,52 @@ only when `output_config` has exactly one key, `effort`, with a value of `low`,
 `isEffortOnlyControl` in `src/claude/utils.ts` is shared by validation and effort
 selection so accepted switches cannot silently disappear.
 
+#### Mid-conversation tool changes
+
+Claude Code can change the offered tools partway through a conversation. It does this after
+compaction and in background sessions, when it surfaces a deferred tool such as `EnterWorktree`.
+It appends a `role: "system"` message that holds its announcement text plus one or more of these
+blocks:
+
+- `tool_addition` holding a `tool_definition`: a whole tool, absent from `tools[]` (beta
+  `inline-tools-2026-09-15`);
+- `tool_addition` holding a `tool_reference`: a tool already in `tools[]` with
+  `defer_loading: true` (beta `mid-conversation-tool-changes-2026-07-01`);
+- `tool_removal` holding a `tool_reference`.
+
+`validateClaudeMessages` accepts text and these blocks on every route and rejects every other
+block type in a system message. A definition must be a client tool: a string `name`, an object
+`input_schema`, no `type` other than `custom`, and a `description` that is a string when present.
+A typed server tool such as `web_search` cannot be defined in a message. A reference needs a
+string `name`. A malformed change is a 400 that names its block
+type. That is the wording Claude Code recognises when it retries a request without the change.
+Its other recovery checks do not match the generic "System message content must contain only
+text." message, so a session that got that 400 kept getting it.
+
+The native route forwards the blocks and the client's `anthropic-beta` header unchanged; Copilot's
+`/v1/messages` accepts all three shapes. Chat Completions and Responses have no such block, so
+`foldClaudeToolChanges` in `src/claude/tool-changes.ts` builds the tool list those routes send.
+Each tool defined by value replaces a tool of the same name in place, or is appended in the
+order it first appears. `handleClaudeMessageRequest` and the `count_tokens` route fold once,
+after validation, before WebSearch detection, the tool-name mapper and translation. Claude Code's
+client `WebSearch` defined by value is therefore run by the relay like a declared one, and its
+`max_uses` holds.
+
+References and removals change nothing on these routes. The translated routes already send
+every declared tool, deferred or not, and a list that only grows keeps the cached prefix that
+starts with it. A removed tool therefore stays offered there. When the model calls it, Claude
+Code answers that the tool is not available, which is the handling Anthropic recommends for
+removals. Honouring a removal would change `tools[]` at the front of the cached prompt on every
+removal.
+
+Messages are never rewritten. Translation reads only a system message's text blocks. A message
+that holds only tool changes adds no message, and `markMessageBreakpoints`, which reads the
+original blocks, moves its breakpoint to the previous message. An empty `content: []` keeps its
+existing translation. An `output_config.effort` on the same message still takes effect at the
+next user turn. On 2026-11-22 an isolated relay replayed the real failing request on the chat
+route: a tool defined by value folded into `tools[]`, and four warm requests read 99.9% of
+their input from cache.
+
 Upstream tool-call `arguments` become Claude `tool_use.input` through
 `parseUpstreamToolInput` in `src/claude/utils.ts`, shared by `translateToClaude`
 and the streaming `translateChunkToClaudeEvents`. Copilot sends an empty string,

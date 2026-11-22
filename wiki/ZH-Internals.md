@@ -265,6 +265,47 @@ assistant 续写提示。它保持 `role: system`，但上游解析为 Claude �
 校验和 effort 选择共用 `src/claude/utils.ts` 的 `isEffortOnlyControl`，避免已被接受的
 切换被静默忽略。
 
+#### 对话中途的工具变更
+
+Claude Code 可以在对话进行到一半时改变提供给模型的工具。它在压缩之后和后台会话中这样做，
+用于暴露 `EnterWorktree` 这类延迟加载的工具。它会追加一条 `role: "system"` 消息，里面是
+它的说明文本，外加以下一个或多个块：
+
+- 包含 `tool_definition` 的 `tool_addition`：完整的工具定义，`tools[]` 里没有它
+  （beta `inline-tools-2026-09-15`）；
+- 包含 `tool_reference` 的 `tool_addition`：`tools[]` 中已声明、带 `defer_loading: true`
+  的工具（beta `mid-conversation-tool-changes-2026-07-01`）；
+- 包含 `tool_reference` 的 `tool_removal`。
+
+`validateClaudeMessages` 在所有路由上都接受文本和这些块，system 消息里的其他任何块类型
+都会被拒绝。定义必须是客户端工具：字符串 `name`、对象 `input_schema`，`type` 只能省略或为
+`custom`，如果有 `description`，它必须是字符串。`web_search` 这类带类型的服务端工具不能在
+消息里定义。
+引用必须有字符串 `name`。
+格式错误的变更返回 400，错误信息会写出块类型。Claude Code 正是靠这种措辞识别错误，
+然后去掉变更重试请求。它的其他恢复检查都匹配不上通用的
+"System message content must contain only text." 消息，所以收到过这个 400 的会话
+之后会一直收到它。
+
+原生路由原样转发这些块和客户端的 `anthropic-beta` 头；Copilot 的 `/v1/messages` 接受
+全部三种形状。Chat Completions 和 Responses 没有这种块，所以由 `src/claude/tool-changes.ts`
+的 `foldClaudeToolChanges` 生成这两条路由发送的工具列表。每个按值定义的工具会原地替换
+同名工具，没有同名工具时按首次出现的顺序追加。`handleClaudeMessageRequest` 和
+`count_tokens` 路由在校验之后、WebSearch 检测、工具名映射和翻译之前折叠一次。因此按值
+定义的 Claude Code 客户端 `WebSearch` 也会像已声明的一样由 relay 执行，它的 `max_uses`
+照样生效。
+
+引用和移除在这些路由上不做任何改变。翻译路由本来就会发送每一个已声明的工具，不论是否
+延迟加载；工具列表只增不减，以它开头的缓存前缀就能保持不变。因此被移除的工具在这些
+路由上仍然提供给模型。模型调用它时，Claude Code 会回答该工具不可用，这正是 Anthropic
+对移除建议的处理方式。如果真的执行移除，每次移除都会改变缓存提示词最前面的 `tools[]`。
+
+消息本身从不改写。翻译只读取 system 消息里的文本块。只含工具变更的消息不会生成任何消息，
+`markMessageBreakpoints` 读取的是原始块，会把它的缓存断点移到上一条消息。空的
+`content: []` 仍按原来的方式翻译。同一条消息上的 `output_config.effort` 依然在下一个
+user 回合生效。2026-11-22 在隔离的 relay 上，用 chat 路由重放了真实的失败请求：按值定义的
+工具被折叠进 `tools[]`，四个热请求各有 99.9% 的输入来自缓存。
+
 上游 tool call 的 `arguments` 通过 `src/claude/utils.ts` 的 `parseUpstreamToolInput`
 转换为 Claude 的 `tool_use.input`，`translateToClaude` 与流式的
 `translateChunkToClaudeEvents` 共用该函数。对于不接受参数的工具，Copilot 发送空字符串
