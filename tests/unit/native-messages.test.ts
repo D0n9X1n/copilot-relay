@@ -807,3 +807,49 @@ test("native runs every search of a turn and restores each from history", async 
     assert.equal(JSON.stringify(next).includes("server_tool_use"), false)
   })
 })
+
+test("native forwards mid-conversation tool changes and their betas unchanged", async () => {
+  const definition = { name: "EnterWorktree", description: "Create a git worktree.", input_schema: { type: "object", properties: {} } }
+  const tools = [
+    { name: "Read", description: "Read a file.", input_schema: { type: "object", properties: {} } },
+    { name: "LSP", description: "Language server.", input_schema: { type: "object", properties: {} }, defer_loading: true },
+  ]
+  const messages = [
+    { role: "user", content: "Hello" },
+    {
+      role: "system",
+      content: [
+        { type: "text", text: "EnterWorktree is now available." },
+        { type: "tool_addition", tool: { type: "tool_definition", definition } },
+        { type: "tool_addition", tool: { type: "tool_reference", name: "LSP" } },
+      ],
+    },
+    { role: "assistant", content: "OK" },
+    { role: "user", content: "Continue" },
+    { role: "system", content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "LSP" } }] },
+  ]
+  const betas = "mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15"
+  const payload = { model: "claude-opus-5.5", max_tokens: 32, tools, messages }
+  const original = structuredClone(payload)
+  let sent: { messages: unknown, tools: unknown } | undefined
+
+  await withRecordedTransport({
+    fetch: async (request) => {
+      assert.equal(request.path, "/v1/messages")
+      assert.equal(new Headers(request.headers).get("anthropic-beta"), betas)
+      sent = JSON.parse(request.body!)
+      return Response.json(message([{ type: "text", text: "OK" }]))
+    },
+    refresh: async () => {
+      throw new Error("Unexpected refresh")
+    },
+  }, () => handleNativeMessages(
+    config,
+    payload as never,
+    { requestId: "native-tool-changes", headers: new Headers({ "anthropic-beta": betas }) },
+  ))
+
+  assert.deepEqual(sent?.messages, original.messages)
+  assert.deepEqual(sent?.tools, original.tools)
+  assert.deepEqual(payload, original)
+})

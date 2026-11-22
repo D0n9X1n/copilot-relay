@@ -12,6 +12,7 @@ process.env.USERPROFILE = home
 process.env.CONSOLA_LEVEL = "0"
 
 const { translateToOpenAI } = await import("../../src/claude/translate")
+const { foldClaudeToolChanges } = await import("../../src/claude/tool-changes")
 const { buildResponsesRequestPayload } = await import("../../src/copilot/responses")
 const { runtimeState } = await import("../../src/lib/state")
 const { createServer: createRelay } = await import("../../src/server")
@@ -522,3 +523,138 @@ for (const responsesStatus of [200, 400]) {
     assert.equal(status, responsesStatus)
   })
 }
+
+// Claude Code surfaces a deferred tool mid-conversation with a system message that holds its
+// announcement text and a tool-change block.
+const surfacedTool = { name: "EnterWorktree", description: "Create a git worktree.", input_schema: { type: "object", properties: {} } }
+const toolAddition = { type: "tool_addition", tool: { type: "tool_definition", definition: surfacedTool } }
+
+test("a tool change in a system turn keeps its text as the reminder and adds the tool on the Claude chat route", () => {
+  const translated = translateToOpenAI(foldClaudeToolChanges(claudeCode({
+    model: "opus",
+    max_tokens: 32,
+    tools: [{ name: "Read", input_schema: { type: "object", properties: {} } }],
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "system", content: [{ type: "text", text: "EnterWorktree is now available." }, toolAddition] },
+    ],
+  })), undefined, undefined, chatRoute)
+
+  assert.deepEqual(translated.messages, [{ role: "user", content: "Hi" }, reminder("EnterWorktree is now available.")])
+  assert.deepEqual(translated.tools?.map((tool) => tool.function.name), ["Read", "EnterWorktree"])
+})
+
+test("a tool-only system turn adds no message, and its breakpoint marks the previous message", () => {
+  const payload = claudeCode({
+    model: "opus",
+    max_tokens: 32,
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "system", content: [{ ...toolAddition, cache_control: { type: "ephemeral" } }] },
+    ],
+  })
+
+  assert.deepEqual(translateToOpenAI(foldClaudeToolChanges(payload), undefined, undefined, chatRoute).messages, [
+    { role: "user", content: "Hi", copilot_cache_control: { type: "ephemeral" } },
+  ])
+
+  // Off the Claude chat route a tool-only turn does not become an empty system message either.
+  for (const [model, options] of [["gpt-6-astra", chatRoute], ["gpt-6-astra", { endpoint: "/responses" }], ["opus", {}]] as const) {
+    assert.deepEqual(translateToOpenAI(foldClaudeToolChanges({ ...payload, model }), undefined, undefined, options).messages, [{ role: "user", content: "Hi" }])
+  }
+})
+
+test("a tool change keeps the system role for its text off the Claude chat route", () => {
+  const translated = translateToOpenAI(foldClaudeToolChanges(claudeCode({
+    model: "gpt-6-astra",
+    max_tokens: 32,
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "system", content: [{ type: "text", text: "Now available." }, toolAddition] },
+    ],
+  })), undefined, undefined, { endpoint: "/responses" })
+
+  assert.deepEqual(translated.messages, [{ role: "user", content: "Hi" }, { role: "system", content: "Now available." }])
+  assert.deepEqual(translated.tools?.map((tool) => tool.function.name), ["EnterWorktree"])
+})
+
+test("a legacy empty system turn keeps today's translation", () => {
+  const messages: ClaudeMessagesPayload["messages"] = [{ role: "user", content: "Hi" }, { role: "system", content: [] }]
+
+  assert.deepEqual(translateToOpenAI({ model: "gpt-6-astra", max_tokens: 32, messages }, undefined, undefined, chatRoute).messages, [
+    { role: "user", content: "Hi" },
+    { role: "system", content: "" },
+  ])
+})
+
+test("an effort control beside a tool change waits for the next user turn", () => {
+  const payload = claudeCode({
+    model: "opus",
+    max_tokens: 32,
+    output_config: { effort: "low" },
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello" },
+      { role: "system", content: [toolAddition], output_config: { effort: "high" } },
+    ],
+  })
+
+  // Pending: no user turn follows the control yet, so the request's own effort applies.
+  assert.equal(translateToOpenAI(foldClaudeToolChanges(payload), undefined, undefined, chatRoute).reasoning_effort, "low")
+})
+
+test("an effort control beside a tool change still sets the next turn's effort", () => {
+  const translated = translateToOpenAI(foldClaudeToolChanges(claudeCode({
+    model: "opus",
+    max_tokens: 32,
+    output_config: { effort: "low" },
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello" },
+      { role: "system", content: [toolAddition], output_config: { effort: "high" } },
+      { role: "user", content: "Continue" },
+    ],
+  })), undefined, undefined, chatRoute)
+
+  assert.equal(translated.reasoning_effort, "high")
+  assert.deepEqual(translated.messages, [
+    { role: "user", content: "Hi" },
+    { role: "assistant", content: "Hello" },
+    { role: "user", content: "Continue" },
+  ])
+})
+
+// Upstream request bodies recorded from the relay before tool changes were accepted. A request
+// without a tool change must still serialize to these exact bytes on every translated route.
+const legacyUpstreamBytes: Record<string, string> = {
+  "gpt-chat": "{\"model\":\"gpt-6.2-astra\",\"messages\":[{\"role\":\"system\",\"content\":\"Stable prompt.\"},{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"system\",\"content\":\"\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"toolu_1\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"/a\\\"}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"toolu_1\",\"content\":\"A.\"},{\"role\":\"system\",\"content\":\"Operator note.\"},{\"role\":\"user\",\"content\":\"Continue\"}],\"max_tokens\":32,\"reasoning_effort\":\"high\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a file.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"file_path\":{\"type\":\"string\"}}}}}]}",
+  "claude-chat": "{\"model\":\"claude-opus-5.5\",\"messages\":[{\"role\":\"system\",\"content\":\"Stable prompt.\",\"copilot_cache_control\":{\"type\":\"ephemeral\"}},{\"role\":\"user\",\"content\":\"Hi\"},{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"id\":\"toolu_1\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"/a\\\"}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"toolu_1\",\"content\":\"A.\"},{\"role\":\"user\",\"content\":\"<system-reminder>\\nOperator note.\\n</system-reminder>\"},{\"role\":\"user\",\"content\":\"Continue\"}],\"max_tokens\":32,\"reasoning_effort\":\"high\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"Read\",\"description\":\"Read a file.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"file_path\":{\"type\":\"string\"}}}}}]}",
+  "gpt-responses": "{\"model\":\"gpt-6.2-astra\",\"input\":[{\"role\":\"system\",\"content\":\"Stable prompt.\"},{\"role\":\"user\",\"content\":\"Hi\"},{\"type\":\"function_call\",\"call_id\":\"toolu_1\",\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"/a\\\"}\"},{\"type\":\"function_call_output\",\"call_id\":\"toolu_1\",\"output\":\"A.\"},{\"role\":\"system\",\"content\":\"Operator note.\"},{\"role\":\"user\",\"content\":\"Continue\"}],\"max_output_tokens\":32,\"prompt_cache_key\":\"cr-sys-910f1301d18108d5ea86b251bcd59d7f\",\"tools\":[{\"type\":\"function\",\"name\":\"Read\",\"description\":\"Read a file.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"file_path\":{\"type\":\"string\"}}},\"strict\":false}],\"reasoning\":{\"effort\":\"high\"}}"
+}
+
+test("a request without tool changes serializes to the same upstream bytes as before", () => {
+  const payload = claudeCode({
+    model: "gpt-6-astra",
+    max_tokens: 32,
+    system: [{ type: "text", text: "Stable prompt.", cache_control: { type: "ephemeral" } }],
+    tools: [{ name: "Read", description: "Read a file.", input_schema: { type: "object", properties: { file_path: { type: "string" } } } }],
+    messages: [
+      { role: "user", content: "Hi" },
+      { role: "system", content: [] },
+      { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/a" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "A." }] },
+      { role: "system", content: [{ type: "text", text: "Operator note." }], output_config: { effort: "high" } },
+      { role: "user", content: "Continue" },
+    ],
+  })
+
+  for (const [label, model, endpoint] of [
+    ["gpt-chat", "gpt-6-astra", "/chat/completions"],
+    ["claude-chat", "opus", "/chat/completions"],
+    ["gpt-responses", "gpt-6-astra", "/responses"],
+  ] as const) {
+    const chat = translateToOpenAI(foldClaudeToolChanges({ ...payload, model }), undefined, undefined, { endpoint })
+    const body = endpoint === "/responses" ? buildResponsesRequestPayload(chat, "high") : chat
+    assert.equal(JSON.stringify(body), legacyUpstreamBytes[label], label)
+  }
+})
