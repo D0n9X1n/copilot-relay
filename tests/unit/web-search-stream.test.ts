@@ -184,3 +184,27 @@ test("reassembles split tool call arguments when accumulating", () => {
   assert.equal(response.choices[0]?.message.content, "thinking")
   assert.equal(response.choices[0]?.finish_reason, "tool_calls")
 })
+
+test("a client tool that shares a search name streams through instead of being taken for a search", async () => {
+  const { createWebSearchResolver } = await import("../../src/claude/web-search")
+  const tools = [
+    { name: "WebSearch", input_schema: { type: "object" } },
+    { name: "web_search", description: "A client lookup.", input_schema: { type: "object" } },
+  ]
+  const clientMapper = createClaudeToolNameMapper(tools)
+  const resolver = createWebSearchResolver(tools)
+
+  const clientCall = await resolveWebSearchStreamDecision(
+    sse([textChunk("Looking."), toolChunk(clientMapper.toOpenAI("web_search"))]),
+    clientMapper,
+    resolver.isSearch,
+  )
+  const searchCall = await resolveWebSearchStreamDecision(
+    sse([textChunk("Searching."), toolChunk(clientMapper.toOpenAI("WebSearch"))]),
+    clientMapper,
+    resolver.isSearch,
+  )
+
+  assert.equal(clientCall.decision.kind, "streamed")
+  assert.equal(searchCall.decision.kind, "webSearch")
+})

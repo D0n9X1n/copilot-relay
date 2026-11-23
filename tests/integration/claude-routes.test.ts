@@ -2758,3 +2758,152 @@ for (const [model, route] of [["opus", "/chat/completions"], ["default", "/respo
     }
   })
 }
+
+// A client tool may share a search name with Claude Code's WebSearch. The relay runs only the
+// declared search tool, so a call to the client tool reaches the client and starts no retrieval.
+const clientNamedSearch = { name: "web_search", description: "A client lookup.", input_schema: { type: "object", properties: { query: { type: "string" } } } }
+const claudeWebSearch = { name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } }
+
+const startClientSearchCopilot = async () => {
+  const retrievals: Array<unknown> = []
+  const decisions: Array<{ path: string; stream?: boolean }> = []
+  const server = createHttpServer(async (request, response) => {
+    const path = request.url ?? "/"
+    const body = await readJsonBody(request) as Record<string, any>
+    const call = { name: "web_search", arguments: JSON.stringify({ query: "copilot docs" }) }
+
+    if (path === "/responses" && (body.tools ?? []).some((tool: { type?: string }) => tool.type === "web_search_preview")) {
+      retrievals.push(body)
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify({ id: "resp_search", created_at: 1, model: "gpt-5.5", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Docs https://example.com/docs" }] }], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }))
+      return
+    }
+
+    decisions.push({ path, stream: body.stream })
+    if (path === "/responses") {
+      const item = { type: "function_call", call_id: "call_client", ...call }
+      response.setHeader("content-type", "application/json")
+      response.end(JSON.stringify({ id: "resp_decision", created_at: 1, model: body.model, status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } }))
+      return
+    }
+
+    const toolCall = { index: 0, id: "call_client", type: "function", function: call }
+    if (body.stream) {
+      response.setHeader("content-type", "text/event-stream")
+      for (const chunk of [
+        { id: "c", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "Looking it up." }, finish_reason: null }] },
+        { id: "c", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta: { tool_calls: [toolCall] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ]) {
+        response.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      }
+
+      response.end("data: [DONE]\n\n")
+      return
+    }
+
+    response.setHeader("content-type", "application/json")
+    response.end(JSON.stringify({ id: "c", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "call_client", type: "function", function: call }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }))
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    retrievals,
+    decisions,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }),
+  }
+}
+
+for (const [model, stream] of [["opus", false], ["opus", true], ["default", false]] as const) {
+  test(`a call to a client tool named web_search reaches the client, model=${model}, stream=${stream}`, async () => {
+    const mock = await startClientSearchCopilot()
+    try {
+      for (const placement of ["top-level", "inline"] as const) {
+        const response = await createTestProxy(mock.baseUrl).fetch(new Request("http://localhost/v1/messages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model,
+            stream,
+            max_tokens: 64,
+            tools: placement === "top-level" ? [claudeWebSearch, clientNamedSearch] : [claudeWebSearch],
+            messages: placement === "top-level"
+              ? [{ role: "user", content: "search the web for copilot docs" }]
+              : [{ role: "user", content: "Hi." }, { role: "system", content: [surfacedBy(clientNamedSearch)] }, { role: "user", content: "search the web for copilot docs" }],
+          }),
+        }))
+        const text = await response.text()
+
+        assert.equal(response.status, 200, text)
+        // The client receives its own tool call, not a relay-run search.
+        assert.match(text, /"type":"tool_use"[^}]*"name":"web_search"|"name":"web_search"[^}]*"type":"tool_use"/)
+        assert.doesNotMatch(text, /server_tool_use|web_search_tool_result/)
+      }
+
+      assert.equal(mock.retrievals.length, 0)
+      // A streamed decision is forwarded as a stream, not buffered for a search decision.
+      assert.ok(mock.decisions.every((decision) => decision.stream === (model === "opus" ? stream : decision.stream)))
+    } finally {
+      await mock.close()
+    }
+  })
+}
+
+test("a streamed call to a client tool named web_search is forwarded before the stream ends", async () => {
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const server = createHttpServer(async (request, response) => {
+    const body = await readJsonBody(request) as Record<string, any>
+    response.setHeader("content-type", "text/event-stream")
+    const call = { index: 0, id: "call_client", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: "docs" }) } }
+    // The tool call comes first, so only a search decision would hold it back.
+    response.write(`data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }] })}\n\n`)
+    await held
+    response.write(`data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`)
+    response.end("data: [DONE]\n\n")
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve)
+  })
+  const address = server.address()
+  assert.ok(address && typeof address === "object")
+
+  try {
+    const response = await createTestProxy(`http://127.0.0.1:${address.port}`).fetch(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "opus",
+        stream: true,
+        max_tokens: 64,
+        tools: [claudeWebSearch, clientNamedSearch],
+        messages: [{ role: "user", content: "search the web for docs" }],
+      }),
+    }))
+    const reader = response.body!.getReader()
+    // The relay forwards the client's call while the upstream still holds its terminal.
+    const first = await withTimeout(reader.read(), 2000, "the client tool call was held back as a search decision")
+    assert.match(new TextDecoder().decode(first.value), /message_start/)
+
+    release()
+    let rest = ""
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      rest += new TextDecoder().decode(chunk.value)
+    }
+
+    assert.doesNotMatch(rest, /server_tool_use/)
+  } finally {
+    release()
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})

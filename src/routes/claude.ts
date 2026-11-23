@@ -29,8 +29,8 @@ import {
   createClaudeWebSearchResponse,
   createFinalWebSearchPayload,
   getClaudeWebSearchToolCallsFromChatResponse,
+  createWebSearchResolver,
   hasClaudeWebSearch,
-  isClaudeWebSearchToolName,
   mergeWebSearchAndFinalResponse,
   prepareClaudeWebSearchDecisionPayload,
   runClaudeWebSearches,
@@ -297,6 +297,9 @@ const handleClaudeMessageRequest = async (
   // WebSearch detection, the name mapper, translation and the search limit.
   const claudePayload = foldClaudeToolChanges(receivedPayload)
   const shouldLetModelDecideWebSearch = hasClaudeWebSearch(claudePayload)
+  // Each call is a search only when the tool it names is one, so a client tool that shares a
+  // search name reaches the client.
+  const searchResolver = createWebSearchResolver(claudePayload.tools)
   const decisionPayload =
     shouldLetModelDecideWebSearch ?
       prepareClaudeWebSearchDecisionPayload(claudePayload)
@@ -352,7 +355,7 @@ const handleClaudeMessageRequest = async (
       await resolveWebSearchStreamDecision(
         response,
         toolNameMapper,
-        isClaudeWebSearchToolName,
+        searchResolver.isSearch,
         // Emit while classifying so a turn that never searches streams in real
         // time. Copilot often writes a preamble before calling a tool, so the
         // classifier cannot treat text as proof that no search is coming.
@@ -378,7 +381,7 @@ const handleClaudeMessageRequest = async (
 
   if (isNonStreamingResponse(effectiveResponse)) {
     const webSearchToolCalls = shouldLetModelDecideWebSearch ?
-      getClaudeWebSearchToolCallsFromChatResponse(effectiveResponse, toolNameMapper)
+      getClaudeWebSearchToolCallsFromChatResponse(effectiveResponse, toolNameMapper, searchResolver)
     : []
     let claudeResponse: ClaudeResponse
 
@@ -386,7 +389,7 @@ const handleClaudeMessageRequest = async (
       const searches = await runClaudeWebSearches(
         config,
         claudePayload,
-        webSearchToolCalls.map((call) => call.query),
+        webSearchToolCalls.map(({ query, tool }) => ({ query, tool })),
         { requestId, signal: requestSignal, timeoutMs: config.upstreamTimeoutMs },
       )
       const searchResponse = createClaudeWebSearchResponse(searches)
@@ -432,7 +435,7 @@ const handleClaudeMessageRequest = async (
       } else {
         const finalResponse = await createChatCompletions(
           config,
-          createFinalWebSearchPayload(openAIPayload, searches, toolNameMapper),
+          createFinalWebSearchPayload(openAIPayload, searches, toolNameMapper, searchResolver.isSearch),
           {
             client: "claude",
             // The final pass after a search is the relay's own, whoever started the request.

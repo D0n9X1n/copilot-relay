@@ -12,6 +12,7 @@ import { validateClaudeMessages } from "~/claude/translate"
 import { getClaudeTurnEffort } from "~/claude/utils"
 import {
   createClaudeWebSearchResponse,
+  createWebSearchResolver,
   hasClaudeWebSearch,
   isClaudeWebSearchTool,
   isClaudeWebSearchToolName,
@@ -237,6 +238,32 @@ export function validateNativeModelEffort(
   }
 }
 
+// Client tools a system message defines by value, other than search tools. Native forwards them
+// unchanged, so they are not in tools[]; their names still decide that a call is the client's, not
+// a bridged search. An inline search tool such as WebSearch is left out: it neither starts a search
+// on its own nor takes a name away from a search tool declared in tools[].
+const inlineClientToolNames = (messages: Array<ClaudeMessage>): Set<string> => {
+  const names = new Set<string>()
+  for (const message of messages) {
+    if (message.role !== "system" || !Array.isArray(message.content)) {
+      continue
+    }
+
+    for (const block of message.content) {
+      if (block.type === "tool_addition" && block.tool.type === "tool_definition" && !isClaudeWebSearchTool(block.tool.definition)) {
+        names.add(block.tool.definition.name)
+      }
+    }
+  }
+
+  return names
+}
+
+// Native search starts only from a search tool declared in tools[], as before; a client tool,
+// declared there or defined inline, keeps its own calls.
+const nativeSearchResolver = (payload: ClaudeMessagesPayload) =>
+  createWebSearchResolver(payload.tools, inlineClientToolNames(payload.messages))
+
 export function validateNativeMessages(payload: ClaudeMessagesPayload): void {
   validateClaudeMessages(payload.messages, true)
 
@@ -244,7 +271,7 @@ export function validateNativeMessages(payload: ClaudeMessagesPayload): void {
   // tool there could demand a second search, which the bridge refuses.
   if (hasClaudeWebSearch(payload) && (
     payload.tool_choice?.type === "any"
-    || payload.tool_choice?.type === "tool" && isClaudeWebSearchToolName(payload.tool_choice.name ?? "")
+    || payload.tool_choice?.type === "tool" && nativeSearchResolver(payload).isSearch(payload.tool_choice.name ?? "")
   )) {
     throw invalidRequest("Native bridge-managed WebSearch requires automatic tool choice.")
   }
@@ -582,6 +609,7 @@ export async function handleNativeMessages(
 ): Promise<ClaudeResponse | undefined> {
   const signal = createCopilotRequestSignal(options.signal)
   const canSearch = hasClaudeWebSearch(payload)
+  const searchResolver = nativeSearchResolver(payload)
   const request = { ...payload, stream: Boolean(write) }
 
   // Withhold tool blocks until the terminal confirms their inputs are executable, and hold
@@ -616,7 +644,7 @@ export async function handleNativeMessages(
   )
 
   const searches = canSearch && message.stop_reason === "tool_use"
-    ? message.content.filter((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))
+    ? message.content.filter((block) => block.type === "tool_use" && searchResolver.isSearch(block.name ?? ""))
     : []
   if (searches.length === 0) {
     if (!write) {
@@ -659,7 +687,7 @@ export async function handleNativeMessages(
   const executions = await runClaudeWebSearches(
     config,
     { ...payload, messages: normalizeNativeHistory(payload.messages) },
-    searches.map((searchCall) => String(searchCall.input!.query)),
+    searches.map((searchCall) => ({ query: String(searchCall.input!.query), tool: searchResolver.resolve(searchCall.name!)! })),
     { ...options, signal },
   )
   const searchMessage = createClaudeWebSearchResponse(executions)
@@ -750,7 +778,7 @@ export async function handleNativeMessages(
     } : undefined,
   )
 
-  if (finalMessage.content.some((block) => block.type === "tool_use" && isClaudeWebSearchToolName(block.name ?? ""))) {
+  if (finalMessage.content.some((block) => block.type === "tool_use" && searchResolver.isSearch(block.name ?? ""))) {
     throw new Error("Repeated bridge-managed search is unsupported.")
   }
 
