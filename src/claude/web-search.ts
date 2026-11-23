@@ -82,6 +82,8 @@ export interface WebSearchExecutionResult {
 export interface ClaudeWebSearchToolCall {
   query: string
   toolCall: ToolCall
+  // The declared search tool the call runs, whose max_uses it counts against.
+  tool: ClaudeTool
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -103,6 +105,41 @@ export const hasClaudeWebSearch = (payload: ClaudeMessagesPayload): boolean =>
 
 export const isClaudeWebSearchToolName = (name: string): boolean =>
   name === "web_search" || name === claudeCodeWebSearchToolName
+
+export interface WebSearchResolver {
+  // The declared search tool a call to this name runs, or undefined when the call is not a search.
+  resolve(name: string): ClaudeTool | undefined
+  isSearch(name: string): boolean
+}
+
+// Decides each call from the tool it names. Tool names are unique in a request, so a declared name
+// points at one tool, and that call is a search only when the tool is one. A client tool that
+// merely shares a search name goes back to the client. A search name no tool declares still runs
+// with the first declared search tool, as the bridge has always done. clientToolNames lists client
+// tools declared outside tools[], such as those a system message defines; they can only make a
+// name a client call, never start a search.
+export const createWebSearchResolver = (
+  tools: Array<ClaudeTool> | undefined,
+  clientToolNames: ReadonlySet<string> = new Set(),
+): WebSearchResolver => {
+  const firstSearchTool = tools?.find(isClaudeWebSearchTool)
+  const resolve = (name: string): ClaudeTool | undefined => {
+    // A client tool defined later in the conversation owns its name, even one a declared tool
+    // had before it was removed.
+    if (clientToolNames.has(name)) {
+      return undefined
+    }
+
+    const declared = tools?.find((tool) => tool.name === name)
+    if (declared) {
+      return isClaudeWebSearchTool(declared) ? declared : undefined
+    }
+
+    return isClaudeWebSearchToolName(name) ? firstSearchTool : undefined
+  }
+
+  return { resolve, isSearch: (name) => resolve(name) !== undefined }
+}
 
 // Without an explicit backend, the GPT slot, which routing has already normalized.
 export const getWebSearchBackendModel = (config: ProxyConfig): string => {
@@ -206,6 +243,7 @@ const getQueryFromToolArguments = (value: string): string | undefined => {
 export const getClaudeWebSearchToolCallsFromChatResponse = (
   response: ChatCompletionResponse,
   toolNameMapper: ClaudeToolNameMapper,
+  resolver: WebSearchResolver,
 ): Array<ClaudeWebSearchToolCall> => {
   if (response.choices.some((choice) => choice.finish_reason !== "tool_calls" || choice.message.refusal)) {
     return []
@@ -213,10 +251,10 @@ export const getClaudeWebSearchToolCallsFromChatResponse = (
 
   return response.choices
     .flatMap((choice) => choice.message.tool_calls ?? [])
-    .filter((call) => isClaudeWebSearchToolName(toolNameMapper.toClaude(call.function.name)))
     .flatMap((toolCall) => {
-      const query = getQueryFromToolArguments(toolCall.function.arguments)
-      return query ? [{ query, toolCall }] : []
+      const tool = resolver.resolve(toolNameMapper.toClaude(toolCall.function.name))
+      const query = tool && getQueryFromToolArguments(toolCall.function.arguments)
+      return query ? [{ query, toolCall, tool }] : []
     })
 }
 
@@ -787,10 +825,9 @@ export const createClaudeWebSearchExecution = async (
 // only this many; the rest return an error result instead of a search.
 export const maxSearchesPerTurn = 5
 
-// The searches a turn may run: the advertised tool's max_uses when it sets a lower one.
-const searchLimit = (payload: ClaudeMessagesPayload): number => {
-  const tool = payload.tools?.find(isClaudeWebSearchTool) as (ClaudeTool & { max_uses?: unknown }) | undefined
-  const maxUses = tool?.max_uses
+// The searches a tool allows in one turn: its max_uses when it sets a lower one.
+const toolSearchLimit = (tool: ClaudeTool): number => {
+  const maxUses = (tool as ClaudeTool & { max_uses?: unknown }).max_uses
   return typeof maxUses === "number" && Number.isSafeInteger(maxUses) && maxUses >= 0 ?
       Math.min(maxUses, maxSearchesPerTurn)
     : maxSearchesPerTurn
@@ -807,21 +844,40 @@ const createSkippedSearchExecution = (query: string, model: string, limit: numbe
   skipped: true,
 })
 
+// A search call: its query and the declared search tool it called, whose max_uses it counts against.
+export interface ClaudeWebSearchCall {
+  query: string
+  tool: ClaudeTool
+}
+
 /**
- * Runs the searches of one turn in parallel, in the order they were asked for. Searches past the
- * turn's limit (maxSearchesPerTurn, or the tool's lower max_uses) are not run and come back as
- * skipped results with no sources.
+ * Runs the searches of one turn in parallel, in the order they were asked for. Each call counts
+ * against the max_uses of the tool it called, and the turn against maxSearchesPerTurn; a call past
+ * either limit is not run and comes back as a skipped result with no sources.
  */
 export const runClaudeWebSearches = async (
   config: ProxyConfig,
   payload: ClaudeMessagesPayload,
-  queries: Array<string>,
+  calls: Array<ClaudeWebSearchCall>,
   options: { requestId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<Array<WebSearchExecutionResult>> => {
-  const limit = searchLimit(payload)
-  return await Promise.all(queries.map(async (query, index) => {
-    if (index >= limit) {
-      return createSkippedSearchExecution(query, getWebSearchBackendModel(config), limit)
+  const runsPerTool = new Map<ClaudeTool, number>()
+  let runsThisTurn = 0
+  const plans = calls.map(({ query, tool }) => {
+    const toolLimit = toolSearchLimit(tool)
+    const toolRuns = runsPerTool.get(tool) ?? 0
+    if (toolRuns >= toolLimit || runsThisTurn >= maxSearchesPerTurn) {
+      return { query, skippedAt: toolRuns >= toolLimit ? toolLimit : maxSearchesPerTurn }
+    }
+
+    runsPerTool.set(tool, toolRuns + 1)
+    runsThisTurn += 1
+    return { query, skippedAt: undefined }
+  })
+
+  return await Promise.all(plans.map(async ({ query, skippedAt }) => {
+    if (skippedAt !== undefined) {
+      return createSkippedSearchExecution(query, getWebSearchBackendModel(config), skippedAt)
     }
 
     return await createClaudeWebSearchExecution(config, payload, query, options)
@@ -984,11 +1040,13 @@ const createWebSearchResultContextMessage = (
   }
 }
 
+// The final pass names its tools with the upstream names, so each is mapped back before asking.
 const isWebSearchTool = (
   tool: Tool,
   toolNameMapper: ClaudeToolNameMapper,
+  isSearch: (name: string) => boolean,
 ): boolean =>
-  isClaudeWebSearchToolName(toolNameMapper.toClaude(tool.function.name))
+  isSearch(toolNameMapper.toClaude(tool.function.name))
 
 // The search already ran, so re-advertising it would let the model select it a
 // second time. The final response is never re-checked for a web-search call, so
@@ -998,12 +1056,13 @@ const isWebSearchTool = (
 const removeWebSearchTool = (
   tools: ChatCompletionsPayload["tools"],
   toolNameMapper: ClaudeToolNameMapper,
+  isSearch: (name: string) => boolean,
 ): ChatCompletionsPayload["tools"] => {
   if (!tools || tools.length === 0) {
     return undefined
   }
 
-  const remaining = tools.filter((tool) => !isWebSearchTool(tool, toolNameMapper))
+  const remaining = tools.filter((tool) => !isWebSearchTool(tool, toolNameMapper, isSearch))
   // An empty array is not the same as an absent field upstream.
   return remaining.length > 0 ? remaining : undefined
 }
@@ -1012,6 +1071,7 @@ const normalizeFinalToolChoice = (
   toolChoice: ChatCompletionsPayload["tool_choice"],
   tools: ChatCompletionsPayload["tools"],
   toolNameMapper: ClaudeToolNameMapper,
+  isSearch: (name: string) => boolean,
 ): ChatCompletionsPayload["tool_choice"] => {
   if (!tools || tools.length === 0) {
     return undefined
@@ -1026,9 +1086,7 @@ const normalizeFinalToolChoice = (
   if (
     toolChoice
     && typeof toolChoice === "object"
-    && isClaudeWebSearchToolName(
-      toolNameMapper.toClaude(toolChoice.function.name),
-    )
+    && isSearch(toolNameMapper.toClaude(toolChoice.function.name))
   ) {
     return "auto"
   }
@@ -1040,8 +1098,9 @@ export const createFinalWebSearchPayload = (
   payload: ChatCompletionsPayload,
   searches: Array<WebSearchExecutionResult>,
   toolNameMapper: ClaudeToolNameMapper,
+  isSearch: (name: string) => boolean,
 ): ChatCompletionsPayload => {
-  const tools = removeWebSearchTool(payload.tools, toolNameMapper)
+  const tools = removeWebSearchTool(payload.tools, toolNameMapper, isSearch)
 
   // payload.messages is passed through untouched. An earlier version rewrote
   // tool messages to developer messages and stripped assistant tool_calls,
@@ -1057,6 +1116,7 @@ export const createFinalWebSearchPayload = (
       payload.tool_choice,
       tools,
       toolNameMapper,
+      isSearch,
     ),
     messages: [
       ...payload.messages,

@@ -853,3 +853,185 @@ test("native forwards mid-conversation tool changes and their betas unchanged", 
   assert.deepEqual(sent?.tools, original.tools)
   assert.deepEqual(payload, original)
 })
+
+// A client tool that only shares a search name is the client's: the relay must not run it.
+const nativeSearchTool = { name: "WebSearch", input_schema: { type: "object" } }
+const clientNamedSearchTool = { name: "web_search", description: "A client tool.", input_schema: { type: "object", properties: {} } }
+const inlineClientSearch = {
+  role: "system" as const,
+  content: [{ type: "tool_addition", tool: { type: "tool_definition", definition: clientNamedSearchTool } }],
+}
+
+for (const placement of ["top-level", "inline"] as const) {
+  test(`native returns a call to a ${placement} client tool named web_search to the client`, async () => {
+    const paths: Array<string> = []
+    const decision = message([
+      { type: "tool_use", id: "toolu_client_search", name: "web_search", input: { query: "reference" } },
+    ], "tool_use")
+    const payload = {
+      model: "claude-opus-5.5",
+      max_tokens: 512,
+      tools: placement === "top-level" ? [nativeSearchTool, clientNamedSearchTool] : [nativeSearchTool],
+      messages: placement === "top-level"
+        ? [{ role: "user" as const, content: "Look it up." }]
+        : [{ role: "user" as const, content: "Look it up." }, inlineClientSearch],
+    }
+
+    const response = await withRecordedTransport({
+      fetch: async (request) => {
+        paths.push(request.path)
+        return Response.json(decision)
+      },
+      refresh: async () => {},
+    }, () => handleNativeMessages(config, payload as never, { requestId: `client-search-${placement}` }))
+
+    assert.deepEqual(paths, ["/v1/messages"])
+    assert.equal(response?.stop_reason, "tool_use")
+    assert.deepEqual(response?.content.map((block: any) => [block.type, block.name]), [["tool_use", "web_search"]])
+  })
+}
+
+test("native accepts a tool_choice naming a client tool that shares a search name", async () => {
+  const payload = {
+    model: "claude-opus-5.5",
+    max_tokens: 512,
+    tools: [nativeSearchTool, clientNamedSearchTool],
+    tool_choice: { type: "tool", name: "web_search" },
+    messages: [{ role: "user" as const, content: "Look it up." }],
+  }
+
+  const response = await withRecordedTransport({
+    fetch: async () => Response.json(message([{ type: "text", text: "OK" }])),
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, payload as never, { requestId: "client-search-choice" }))
+  assert.equal(response?.stop_reason, "end_turn")
+
+  // A choice naming the real search tool is still refused.
+  await assert.rejects(
+    withRecordedTransport({ fetch: async () => Response.json(message([])), refresh: async () => {} },
+      () => handleNativeMessages(config, { ...payload, tool_choice: { type: "tool", name: "WebSearch" } } as never, { requestId: "search-choice" })),
+    /Native bridge-managed WebSearch requires automatic tool choice/,
+  )
+})
+
+test("an inline WebSearch alone does not start a native search", async () => {
+  const paths: Array<string> = []
+  const payload = {
+    model: "claude-opus-5.5",
+    max_tokens: 512,
+    tools: [{ name: "Read", input_schema: { type: "object" } }],
+    messages: [
+      { role: "user" as const, content: "Look it up." },
+      { role: "system" as const, content: [{ type: "tool_addition", tool: { type: "tool_definition", definition: nativeSearchTool } }] },
+    ],
+  }
+
+  const response = await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      return Response.json(message([{ type: "tool_use", id: "toolu_inline_search", name: "WebSearch", input: { query: "reference" } }], "tool_use"))
+    },
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, payload as never, { requestId: "inline-search" }))
+
+  assert.deepEqual(paths, ["/v1/messages"])
+  assert.deepEqual(response?.content.map((block: any) => block.type), ["tool_use"])
+})
+
+test("after a real search, a follow-up call to the client web_search reaches the client", async () => {
+  const paths: Array<string> = []
+  const decision = message([{ type: "tool_use", id: "toolu_search", name: "WebSearch", input: { query: "reference" } }], "tool_use")
+  const followUp = message([{ type: "tool_use", id: "toolu_client_search", name: "web_search", input: { query: "more" } }], "tool_use")
+  const payload = {
+    model: "claude-opus-5.5",
+    max_tokens: 512,
+    tools: [nativeSearchTool, clientNamedSearchTool],
+    messages: [{ role: "user" as const, content: "Look it up." }],
+  }
+
+  const response = await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      if (request.path === "/responses") {
+        return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Reference https://example.com/reference" }] }], usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+
+      return Response.json(paths.filter((path) => path === "/v1/messages").length === 1 ? decision : followUp)
+    },
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, payload as never, { requestId: "follow-up-client-search" }))
+
+  assert.deepEqual(paths, ["/v1/messages", "/responses", "/v1/messages"])
+  assert.equal(response?.content.at(-1)?.type, "tool_use")
+  assert.equal((response?.content.at(-1) as { name?: string }).name, "web_search")
+})
+
+test("an inline WebSearch beside a top-level server web_search keeps WebSearch bridged with that tool's quota", async () => {
+  const paths: Array<string> = []
+  const serverSearchTool = { name: "web_search", type: "web_search_20250305", max_uses: 1 }
+  const decision = message([
+    { type: "tool_use", id: "toolu_one", name: "WebSearch", input: { query: "one" } },
+    { type: "tool_use", id: "toolu_two", name: "WebSearch", input: { query: "two" } },
+  ], "tool_use")
+  const payload = {
+    model: "claude-opus-5.5",
+    max_tokens: 512,
+    tools: [serverSearchTool],
+    messages: [
+      { role: "user" as const, content: "Look it up." },
+      { role: "system" as const, content: [{ type: "tool_addition", tool: { type: "tool_definition", definition: nativeSearchTool } }] },
+    ],
+  }
+
+  const response = await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      if (request.path === "/responses") {
+        return Response.json({ id: "resp_search", model: "gpt-test", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+
+      return Response.json(paths.filter((path) => path === "/v1/messages").length === 1 ? decision : message([{ type: "text", text: "Done." }]))
+    },
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, payload as never, { requestId: "inline-websearch-beside-server" }))
+
+  // WebSearch resolves to the declared server tool, so its max_uses of 1 runs one retrieval.
+  assert.deepEqual(paths.filter((path) => path === "/responses").length, 1)
+  assert.ok(response?.content.some((block: any) => block.type === "server_tool_use"))
+})
+
+test("a client web_search defined after the server web_search is removed keeps its own calls", async () => {
+  const paths: Array<string> = []
+  const serverSearchTool = { name: "web_search", type: "web_search_20250305" }
+  const payload = {
+    model: "claude-opus-5.5",
+    max_tokens: 512,
+    tools: [serverSearchTool, { name: "Read", input_schema: { type: "object" } }],
+    messages: [
+      { role: "user" as const, content: "Hi." },
+      { role: "system" as const, content: [{ type: "tool_removal", tool: { type: "tool_reference", name: "web_search" } }] },
+      { role: "assistant" as const, content: "OK" },
+      { role: "user" as const, content: "Look it up." },
+      inlineClientSearch,
+    ],
+  }
+  const call = message([{ type: "tool_use", id: "toolu_client_search", name: "web_search", input: { query: "reference" } }], "tool_use")
+
+  const response = await withRecordedTransport({
+    fetch: async (request) => {
+      paths.push(request.path)
+      return Response.json(call)
+    },
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, payload as never, { requestId: "redefined-client-search" }))
+
+  assert.deepEqual(paths, ["/v1/messages"])
+  assert.deepEqual(response?.content.map((block: any) => [block.type, block.name]), [["tool_use", "web_search"]])
+
+  // A tool_choice naming the client replacement is accepted too.
+  const pinned = await withRecordedTransport({
+    fetch: async () => Response.json(message([{ type: "text", text: "OK" }])),
+    refresh: async () => {},
+  }, () => handleNativeMessages(config, { ...payload, tool_choice: { type: "tool", name: "web_search" } } as never, { requestId: "redefined-client-choice" }))
+  assert.equal(pinned?.stop_reason, "end_turn")
+})

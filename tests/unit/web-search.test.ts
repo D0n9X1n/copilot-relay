@@ -23,6 +23,7 @@ const {
   createClaudeWebSearchExecution,
   createClaudeWebSearchResponse,
   createFinalWebSearchPayload,
+  createWebSearchResolver,
   getClaudeWebSearchToolCallsFromChatResponse,
   getWebSearchBackendModel,
   maxSearchesPerTurn,
@@ -377,7 +378,7 @@ for (const source of ["annotation", "action", "text", "call-unreported"] as cons
       assert.equal(search.results[0]?.url, `https://example.com/${source === "text" || source === "call-unreported" ? "fallback" : "source"}`)
 
       const mapper = createClaudeToolNameMapper([])
-      const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, [search], mapper)
+      const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, [search], mapper, () => false)
       assert.equal(final.messages.at(-1)?.role, "user")
       const context = String(final.messages.at(-1)?.content)
       assert.match(context, expectedProvenance(source))
@@ -647,7 +648,7 @@ const createFinalPayloadFixture = (
 
   return {
     mapper,
-    result: createFinalWebSearchPayload(basePayload, [searchExecution], mapper),
+    result: createFinalWebSearchPayload(basePayload, [searchExecution], mapper, createWebSearchResolver(tools).isSearch),
   }
 }
 
@@ -819,7 +820,7 @@ test("a turn with several searches returns a call and result for each, and count
 
 test("the final pass after several searches gets every query and its sources", () => {
   const mapper = createClaudeToolNameMapper(clientTools)
-  const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, twoSearches, mapper)
+  const final = createFinalWebSearchPayload({ model: "opus", messages: [] }, twoSearches, mapper, createWebSearchResolver(clientTools).isSearch)
   const context = String(final.messages.at(-1)?.content)
 
   assert.match(context, /Search 1 of 2\..*\nQuery: tokio/s)
@@ -850,15 +851,17 @@ test("every WebSearch call in a decision is returned, in order", () => {
         ],
       },
     }],
-  } as never, mapper)
+  } as never, mapper, createWebSearchResolver(clientTools))
 
   assert.deepEqual(calls.map((call) => [call.toolCall.id, call.query]), [["a", "one"], ["c", "two"]])
+  assert.ok(calls.every((call) => call.tool?.name === "WebSearch"))
 })
 
 test("searches past the per-turn limit are reported, not run", async () => {
   const config = { ...createConfig("https://fixture.invalid"), modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([[getWebSearchBackendModel(createConfig("https://fixture.invalid")), { type: "embeddings" }]]) } }
   const queries = Array.from({ length: maxSearchesPerTurn + 2 }, (_, index) => `q${index}`)
-  const searches = await runClaudeWebSearches(config as never, { model: "opus", max_tokens: 1, messages: [{ role: "user", content: "hi" }] }, queries)
+  const tool = { name: "WebSearch", input_schema: { type: "object" } }
+  const searches = await runClaudeWebSearches(config as never, { model: "opus", max_tokens: 1, messages: [{ role: "user", content: "hi" }], tools: [tool] }, queries.map((query) => ({ query, tool })))
 
   assert.equal(searches.length, queries.length)
   assert.deepEqual(searches.map((search) => search.query), queries)
@@ -874,7 +877,7 @@ test("a WebSearch tool's max_uses lowers the searches a turn runs", async () => 
     messages: [{ role: "user" as const, content: "hi" }],
     tools: [{ name: "web_search", type: "web_search_20250305", max_uses: 1 } as never],
   }
-  const searches = await runClaudeWebSearches(config as never, payload, ["a", "b", "c"])
+  const searches = await runClaudeWebSearches(config as never, payload, ["a", "b", "c"].map((query) => ({ query, tool: payload.tools[0]! })))
   const results = createClaudeWebSearchResponse(searches).content.filter((block) => block.type === "web_search_tool_result")
 
   assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [false, true, true])
@@ -896,4 +899,109 @@ test("a search whose text names no source still lists its sources for the client
   assert.match(text, /Tokio - https:\/\/tokio\.rs/)
   const named = createClaudeWebSearchResponse([{ ...searchExecution, text: "See https://tokio.rs" }])
   assert.equal((named.content.find((block) => block.type === "text") as { text: string }).text, "See https://tokio.rs")
+})
+
+// Tool names are unique in a request, so a called name points at one declared tool.
+const serverSearch = { name: "web_search", type: "web_search_20250305", max_uses: 1 } as ClaudeTool
+const clientSearch = { name: "WebSearch", input_schema: { type: "object", properties: { query: { type: "string" } } } } as ClaudeTool
+const clientNamedSearch = { name: "web_search", description: "A client tool.", input_schema: { type: "object", properties: {} } } as ClaudeTool
+const searchConfig = () => ({ ...createConfig("https://fixture.invalid"), modelCatalog: { baseUrl: "https://fixture.invalid", models: new Map([[getWebSearchBackendModel(createConfig("https://fixture.invalid")), { type: "embeddings" }]]) } })
+
+test("a call resolves to the declared tool it names, and only a search tool is a search", () => {
+  const resolver = createWebSearchResolver([clientSearch, clientNamedSearch])
+
+  assert.equal(resolver.resolve("WebSearch"), clientSearch)
+  // A declared client tool that only shares a search name is not a search.
+  assert.equal(resolver.resolve("web_search"), undefined)
+  assert.equal(resolver.isSearch("web_search"), false)
+  assert.equal(resolver.resolve("Read"), undefined)
+})
+
+test("an undeclared search name resolves to the first declared search tool", () => {
+  const resolver = createWebSearchResolver([{ name: "Read", input_schema: {} }, clientSearch])
+
+  assert.equal(resolver.resolve("web_search"), clientSearch)
+  assert.equal(resolver.resolve("WebSearch"), clientSearch)
+  assert.equal(createWebSearchResolver([{ name: "Read", input_schema: {} }]).resolve("web_search"), undefined)
+  assert.equal(createWebSearchResolver(undefined).isSearch("WebSearch"), false)
+})
+
+test("a client tool declared outside tools[] makes its name a client call, never a search", () => {
+  const resolver = createWebSearchResolver([clientSearch], new Set(["web_search"]))
+
+  assert.equal(resolver.isSearch("web_search"), false)
+  assert.equal(resolver.resolve("WebSearch"), clientSearch)
+  // A search name alone, with no search tool in tools[], starts nothing.
+  assert.equal(createWebSearchResolver([], new Set(["Lookup"])).isSearch("WebSearch"), false)
+})
+
+const runFor = async (tools: Array<ClaudeTool>, calls: Array<{ query: string; tool: ClaudeTool }>) =>
+  await runClaudeWebSearches(searchConfig() as never, { model: "opus", max_tokens: 1, messages: [{ role: "user" as const, content: "hi" }], tools }, calls)
+
+test("each search counts against the max_uses of the tool it called", async () => {
+  // web_search allows one; WebSearch sets no limit. The early skip leaves room for the sibling.
+  const tools = [clientSearch, serverSearch]
+  const resolver = createWebSearchResolver(tools)
+  const searches = await runFor(tools, [
+    ["a", "web_search"],
+    ["b", "web_search"],
+    ["c", "WebSearch"],
+    ["d", "WebSearch"],
+  ].map(([query, name]) => ({ query: query!, tool: resolver.resolve(name!)! })))
+
+  assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [false, true, false, false])
+  assert.equal(searches[1]!.text, "Not searched: this turn allows at most 1 web searches.")
+})
+
+test("only searches that run use up the turn, and the sixth is blocked by the turn alone", async () => {
+  const unlimited = { ...serverSearch, max_uses: undefined } as ClaudeTool
+  const calls = [
+    { query: "x", tool: { ...serverSearch, max_uses: 0 } as ClaudeTool },
+    ...Array.from({ length: maxSearchesPerTurn + 1 }, (_, index) => ({ query: `q${index}`, tool: index % 2 === 0 ? clientSearch : unlimited })),
+  ]
+  const searches = await runFor([clientSearch, unlimited], calls)
+
+  assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [true, false, false, false, false, false, true])
+  assert.equal(searches[0]!.text, "Not searched: this turn allows at most 0 web searches.")
+  assert.equal(searches.at(-1)!.text, `Not searched: this turn allows at most ${maxSearchesPerTurn} web searches.`)
+})
+
+test("a direct call and an undeclared-alias call to one tool share its quota", async () => {
+  const limited = { ...clientSearch, max_uses: 1 } as ClaudeTool
+  const resolver = createWebSearchResolver([limited])
+  const searches = await runFor([limited], [
+    { query: "direct", tool: resolver.resolve("WebSearch")! },
+    { query: "alias", tool: resolver.resolve("web_search")! },
+  ])
+
+  assert.deepEqual(searches.map((search) => Boolean(search.skipped)), [false, true])
+})
+
+test("an absent or invalid max_uses allows the turn's limit", async () => {
+  for (const maxUses of [undefined, -1, 1.5, "2"]) {
+    const tool = { ...clientSearch, max_uses: maxUses } as ClaudeTool
+    const searches = await runFor([tool], Array.from({ length: maxSearchesPerTurn + 1 }, (_, index) => ({ query: `q${index}`, tool })))
+
+    assert.equal(searches.filter((search) => search.skipped).length, 1, String(maxUses))
+  }
+})
+
+test("the final pass removes and un-pins only tools that resolve to a search", () => {
+  const tools = [clientSearch, clientNamedSearch]
+  const mapper = createClaudeToolNameMapper(tools)
+  const payload = {
+    model: "claude-opus-5.5",
+    messages: [{ role: "user", content: "hi" }],
+    tools: [
+      { type: "function", function: { name: mapper.toOpenAI("WebSearch"), parameters: {} } },
+      { type: "function", function: { name: mapper.toOpenAI("web_search"), parameters: {} } },
+    ],
+    tool_choice: { type: "function", function: { name: mapper.toOpenAI("web_search") } },
+  } as unknown as ChatCompletionsPayload
+  const resolver = createWebSearchResolver(tools)
+  const final = createFinalWebSearchPayload(payload, [], mapper, resolver.isSearch)
+
+  assert.deepEqual(final.tools?.map((tool) => mapper.toClaude(tool.function.name)), ["web_search"])
+  assert.deepEqual(final.tool_choice, { type: "function", function: { name: mapper.toOpenAI("web_search") } })
+  assert.equal(createFinalWebSearchPayload({ ...payload, tool_choice: "required" }, [], mapper, resolver.isSearch).tool_choice, "auto")
 })

@@ -836,6 +836,10 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 - **没有搜索** —— 这个回合和普通流式流没有区别
 - **有搜索** —— 响应被累积起来，原样交给桥接路径
 
+只有当路由的 `createWebSearchResolver` 把调用的名字解析为搜索工具时，这次工具调用才算搜索
+（见下文"原生 WebSearch 历史"）。调用一个与搜索名同名的已声明客户端工具，例如客户端
+`web_search`，流会继续下去。没有任何工具声明的搜索名，仍像以前一样开始累积。
+
 **文本永远不能作为判据。** Copilot 经常在调用工具之前先写一段开场白（"我这就去
 搜索。"）。把已经出现的内容当成"不会有搜索"的证据，会让随后的 `web_search` 调用逃过
 拦截，以一个名为 `WebSearch` 的**客户端** `tool_use` 抵达 Claude Code —— 这是一个
@@ -851,9 +855,21 @@ Claude WebSearch 由中继托管执行：中继通过 Copilot `/responses` 加
 `handleNativeMessages` 仍通过 Copilot Responses 检索，会话本身保持原生 Claude。
 原生 bridge 搜索只支持自动选择：`validateNativeMessages` 对声明 WebSearch 时强制
 `any`、显式强制搜索或无法识别的 bridge 历史，在上游操作/SSE 之前返回 HTTP 400 JSON，
-流式调用也一样。`runClaudeWebSearches` 并行执行一回合的搜索调用，最多
-`maxSearchesPerTurn`（5）次，因为每次都是一次 premium `/responses` 请求，工具设置了更低的 `max_uses` 时以它为准；之后的
-调用返回 `max_uses_exceeded` 的 `web_search_tool_result` 错误。在 chat 路由上，搜索的文本连同其中未提到的来源保留在
+流式调用也一样。`runClaudeWebSearches` 并行执行一回合的搜索调用。每次调用计入它所调用的
+工具：该工具的 `max_uses` 是非负整数时以它为准，否则为 5。整个回合最多
+`maxSearchesPerTurn`（5）次，因为每次搜索都是一次 premium `/responses` 请求；只有实际执行的
+搜索才计入这个上限。超出任一限制的调用返回 `max_uses_exceeded` 的 `web_search_tool_result` 错误。
+
+只有当调用所指的工具本身是搜索工具时，这次调用才算搜索。`src/claude/web-search.ts` 的
+`createWebSearchResolver` 把被调用的名字映射到声明该名字的工具（一个请求里的工具名唯一）。
+名字属于客户端工具时，例如带 `input_schema` 的客户端 `web_search`，这次调用就是客户端的：
+它作为 `tool_use` 交回客户端，不发起检索，指定它的 `tool_choice` 也会被接受。没有任何工具
+声明的搜索名，仍按以前的方式用第一个已声明的搜索工具执行。流式判断、调用提取、翻译路由的最终
+回答以及原生路由的各项检查都使用同一个 resolver。
+
+在原生路由上，只有 `tools[]` 中声明的搜索工具才会启动搜索。system 消息内联定义的客户端工具
+只把它的名字标记为客户端调用。内联的 `WebSearch` 既不会自行启动搜索，也不会抢走已声明
+搜索工具的名字。在 chat 路由上，搜索的文本连同其中未提到的来源保留在
 回复中，所以把客户端工具交回、没有最终回答的回合仍保留来源；原生路由把来源保存在它还原的结果
 block 中。每个调用有自己的标记，结果 block 按调用顺序跟在决策
 之后，`normalizeNativeHistory` 把所有标记还原到同一个 `tool_result` 回合。拿到结果后再次请求

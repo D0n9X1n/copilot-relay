@@ -1017,6 +1017,11 @@ each consumed chunk as it goes:
 - **no search** — the turn is indistinguishable from an ordinary stream
 - **search** — the response is accumulated and handed to the bridge path unchanged
 
+A tool call counts as a search when the route's `createWebSearchResolver` resolves its name to a
+search tool (see "Native WebSearch history" below). A call to a declared client tool that shares a
+search name, such as a client `web_search`, keeps the stream going. A search name no tool declares
+starts accumulation, as before.
+
 **Text never settles the question.** Copilot routinely writes a preamble ("I'll
 search for that now.") before calling the tool. Treating content as proof that no
 search is coming lets the later `web_search` call escape unintercepted and reach
@@ -1035,9 +1040,23 @@ stays native Claude. Native bridge search supports automatic selection only:
 `validateNativeMessages` rejects forced `any` with WebSearch advertised, an
 explicitly forced search, or unrecognized bridge history with HTTP 400 JSON before
 upstream work/SSE, even for streaming callers. `runClaudeWebSearches` runs a turn's search calls in
-parallel, at most `maxSearchesPerTurn` (5), since each is a premium `/responses`
-request, or the tool's lower `max_uses`; later calls return a `max_uses_exceeded`
-`web_search_tool_result` error. On the chat route the searches' text, with any
+parallel. Each call counts against the tool it called: its `max_uses` when that is a non-negative
+integer, otherwise 5. The whole turn is capped at `maxSearchesPerTurn` (5), because each search is
+a premium `/responses` request, and only searches that run count toward that cap. A call past
+either limit returns a `max_uses_exceeded` `web_search_tool_result` error.
+
+A call is a search only when the tool it names is a search tool.
+`createWebSearchResolver` in `src/claude/web-search.ts` maps a called name to the declared tool
+that name belongs to, since tool names are unique in a request. A name that belongs to a client
+tool, such as a client `web_search` with an `input_schema`, is that client's call: it goes back to
+the client as a `tool_use`, starts no retrieval, and a `tool_choice` naming it is accepted. A
+search name that no tool declares still runs with the first declared search tool, as before. The
+same resolver drives the streaming decision, call extraction, the translated final pass and the
+native checks.
+
+On native, search starts only from a search tool declared in `tools[]`. A client tool defined
+inline by a system message only marks its name as a client call. An inline `WebSearch` neither
+starts a search nor takes a name away from a declared search tool. On the chat route the searches' text, with any
 source it does not already name, stays in the reply, so a turn that hands client
 tools back without a final pass keeps its sources; the native route keeps them in
 the result blocks it restores. Each call gets
